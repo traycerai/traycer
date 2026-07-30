@@ -822,6 +822,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           registerActivation={false}
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
+          profileAdmission={null}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>

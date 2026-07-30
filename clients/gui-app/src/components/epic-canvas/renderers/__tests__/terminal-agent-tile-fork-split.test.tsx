@@ -1,0 +1,301 @@
+import "../../../../../__tests__/test-browser-apis";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+
+let mockBinding: WorktreeBinding | null = null;
+let mockBindingResolved = true;
+
+const tileMocks = vi.hoisted(() => ({
+  openProps: [] as unknown[],
+  forkProfileSupported: true,
+}));
+
+vi.mock("@/lib/host", () => {
+  const entry = {
+    hostId: "test-host",
+    label: "Test host",
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:1/rpc",
+    version: null,
+    status: "available",
+  };
+  return {
+    useHostBinding: () => null,
+    useHostClient: () => ({
+      request: () => new Promise(() => {}),
+      getActiveHostId: () => "host-test",
+      getRequestContextUserId: () => "user-test",
+      onChange: () => () => undefined,
+    }),
+    useHostDirectory: () => ({
+      findById: () => entry,
+      onChange: () => ({ dispose: () => undefined }),
+    }),
+  };
+});
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: () => ({
+    request: () => new Promise(() => {}),
+    getActiveHostId: () => "host-test",
+    getRequestContextUserId: () => "user-test",
+    onChange: () => () => undefined,
+  }),
+}));
+
+vi.mock("@/lib/host-error-toast", () => ({
+  toastFromHostError: vi.fn(),
+}));
+
+vi.mock(
+  "@/components/home/host-workspace-selector/host-workspace-selector",
+  () => ({
+    HostWorkspaceSelector: () => (
+      <div data-testid="host-workspace-selector">Local</div>
+    ),
+    ActiveHostWorkspaceControls: () => null,
+  }),
+);
+
+vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
+  useAgentStopControls: () => ({ self: null, descendants: [] }),
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useOpenEpicId: () => "epic-test",
+  useEpicTerminalAgent: () => ({
+    id: "agent-1",
+    harnessType: "claude" as const,
+    title: "Claude agent",
+    parentId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    hostId: "host-test",
+    harnessSessionId: "harness-session-1",
+    terminalAgentArgs: null,
+    terminalShellCommand: "claude",
+    terminalShellArgs: ["--continue"],
+    workspaceFolders: ["/tmp/workspace"],
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+  }),
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
+  useTerminalList: () => ({
+    data: { sessions: [] },
+    isFetching: false,
+    refetch: () => Promise.resolve({ data: { sessions: [] } }),
+  }),
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-create-mutation", () => ({
+  useTerminalCreate: () => ({
+    isError: false,
+    isIdle: true,
+    isSuccess: false,
+    error: null,
+    reset: () => undefined,
+    mutate: () => undefined,
+  }),
+}));
+
+vi.mock("@/hooks/agent/use-prepare-tui-launch-mutation", () => ({
+  useAgentStartTerminalSession: () => ({
+    isError: false,
+    isPending: false,
+    isIdle: true,
+    error: null,
+    reset: () => undefined,
+    mutateAsync: () => new Promise(() => {}),
+  }),
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
+  useTerminalKillFor: () => ({
+    mutate: vi.fn(),
+  }),
+}));
+
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
+
+vi.mock("@/stores/epics/canvas/store", () => ({
+  useEpicCanvasStore: (selector: (s: unknown) => unknown) =>
+    selector({
+      closeCanvasTab: () => undefined,
+    }),
+}));
+
+vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
+  useWorktreeGetBinding: () => ({
+    data: mockBindingResolved ? { binding: mockBinding } : undefined,
+    isSuccess: mockBindingResolved,
+  }),
+}));
+
+vi.mock("@/hooks/worktree/use-worktree-set-local-mutation", () => ({
+  useWorktreeSetLocal: () => ({
+    mutate: () => undefined,
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
+  useTuiForkProfileSupported: () => tileMocks.forkProfileSupported,
+}));
+
+// Capture fork-dialog open props; the dialog body is not under test here.
+vi.mock("../terminal-agent-fork-dialog", () => ({
+  TerminalAgentForkDialog: (props: unknown) => {
+    const dialogProps = props as { readonly open: boolean };
+    if (dialogProps.open) tileMocks.openProps.push(props);
+    return null;
+  },
+}));
+
+import { TuiAgentTile } from "../tui-agent-tile";
+import { TabHostProvider } from "../../tab-host-provider";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+
+function withQueryClient(node: ReactNode): ReactNode {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <TabHostProvider hostId="test-host">{node}</TabHostProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+}
+
+function renderTile(): void {
+  render(
+    withQueryClient(
+      <TuiAgentTile
+        viewTabId="tab-test"
+        node={{
+          id: "agent-1",
+          instanceId: "inst-agent-1",
+          type: "terminal-agent",
+          name: "claude",
+          hostId: "test-host",
+        }}
+        tileId="tile-1"
+        isActive
+      />,
+    ),
+  );
+}
+
+function lastForkTargetIntent(): string {
+  expect(tileMocks.openProps.length).toBeGreaterThan(0);
+  const props = tileMocks.openProps[tileMocks.openProps.length - 1] as {
+    readonly target: { readonly intent: string } | null;
+  };
+  if (props.target === null) {
+    throw new Error("expected fork dialog target");
+  }
+  return props.target.intent;
+}
+
+async function openContinueMenuItem(): Promise<HTMLElement> {
+  const trigger = screen.getByRole("button", { name: "More fork options" });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  fireEvent.click(trigger);
+  return waitFor(() =>
+    screen.getByRole("menuitem", {
+      name: "Continue under another profile…",
+    }),
+  );
+}
+
+describe("<TuiAgentTile /> fork split button", () => {
+  beforeEach(() => {
+    mockBinding = { entries: [] };
+    mockBindingResolved = true;
+    tileMocks.openProps.length = 0;
+    tileMocks.forkProfileSupported = true;
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("opens the fork dialog with intent fork from the main Fork button", () => {
+    renderTile();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+
+    expect(lastForkTargetIntent()).toBe("fork");
+  });
+
+  it("opens the fork dialog with intent continue from the chevron menu item", async () => {
+    renderTile();
+
+    const item = await openContinueMenuItem();
+    fireEvent.click(item);
+
+    await waitFor(() => {
+      expect(lastForkTargetIntent()).toBe("continue");
+    });
+  });
+
+  it("disables Continue under another profile on an old host with update guidance", async () => {
+    tileMocks.forkProfileSupported = false;
+    renderTile();
+
+    const item = await openContinueMenuItem();
+    if (!(item instanceof HTMLElement)) {
+      throw new Error("expected continue menu item");
+    }
+    // Radix marks disabled items with data-disabled / aria-disabled.
+    expect(
+      item.getAttribute("data-disabled") === "" ||
+        item.getAttribute("aria-disabled") === "true" ||
+        (item instanceof HTMLButtonElement && item.disabled),
+    ).toBe(true);
+    expect(tooltipTextNear(item)).toBe(
+      "Update Traycer host to continue this session under another profile.",
+    );
+
+    fireEvent.click(item);
+    expect(tileMocks.openProps).toHaveLength(0);
+  });
+
+  it("keeps the main Fork button available when continue-under-profile is unsupported", () => {
+    tileMocks.forkProfileSupported = false;
+    renderTile();
+
+    const fork = screen.getByRole("button", { name: "Fork" });
+    if (!(fork instanceof HTMLButtonElement)) {
+      throw new Error("expected Fork button");
+    }
+    expect(fork.disabled).toBe(false);
+    fireEvent.click(fork);
+    expect(lastForkTargetIntent()).toBe("fork");
+  });
+});

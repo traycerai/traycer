@@ -30,23 +30,49 @@ const dialogMocks = vi.hoisted(() => ({
   // tests can assert the dialog reads `providers.list` from the RIGHT host
   // client (its own `hostClient` prop) and never a decoy/other one.
   providersByClient: new Map<unknown, unknown>(),
+  forkProfileSupported: true,
+  toast: vi.fn<(message: string) => void>(),
 }));
 
-vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgentForClient: () => ({
-    create: dialogMocks.create,
+vi.mock("@/hooks/agent/use-create-tui-agent", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/agent/use-create-tui-agent")>();
+  return {
+    ...actual,
+    useCreateTuiAgentForClient: () => ({
+      create: dialogMocks.create,
+      isPending: false,
+    }),
+  };
+});
+
+// Bulk fork-admission preflight is stubbed so continue-mode tests that open
+// the dialog don't hit the partially-mocked `use-host-query` module below
+// (which only implements `useHostQuery`, not the mutation-lifecycle helper).
+vi.mock("@/hooks/agent/use-validate-tui-fork-profile-mutation", () => ({
+  useValidateTuiForkProfile: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ verdicts: [] }),
     isPending: false,
   }),
+}));
+
+vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
+  useTuiForkProfileSupported: () => dialogMocks.forkProfileSupported,
+}));
+
+vi.mock("sonner", () => ({
+  toast: (message: string) => {
+    dialogMocks.toast(message);
+  },
 }));
 
 // The dialog validates its seeded profileId against live `providers.list`
 // read from its OWN `hostClient` prop (see resolve-seeded-profile-id.ts /
 // use-resolved-seeded-profile-id.ts) via `useHostQuery` directly - not the
 // app-wide active host. Every case in this file passes `hostClient={null}`,
-// and `dialogMocks.providersByClient` has no entry for `null`, so
-// `useHostQuery` returns no data here and every seed holds its profileId
-// verbatim (no profiles to judge against) - exactly this file's existing
-// expectation for every case.
+// and `dialogMocks.providersByClient` has no entry for `null` unless a test
+// seeds one - so `useHostQuery` returns no data by default and every seed
+// holds its profileId verbatim (no profiles to judge against).
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
     readonly client: unknown;
@@ -58,12 +84,60 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
+// Stub picker that still exposes the toolbar store so continue-mode title
+// tests can flip the selected profile without pulling in the full picker.
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: () => (
-    <button type="button" aria-label="Harness picker">
-      Claude Opus
-    </button>
-  ),
+  HarnessModelPicker: (props: {
+    readonly store: {
+      readonly getState: () => {
+        readonly selection: {
+          readonly harnessId: string;
+          readonly modelSlug: string;
+          readonly profileId: string | null;
+        };
+        readonly setSelection: (next: {
+          readonly harnessId: string;
+          readonly modelSlug: string;
+          readonly profileId: string | null;
+        }) => void;
+      };
+    };
+  }) => {
+    const selection = props.store.getState().selection;
+    return (
+      <div>
+        <button type="button" aria-label="Harness picker">
+          Claude Opus
+        </button>
+        <button
+          type="button"
+          aria-label="Select Work profile"
+          onClick={() =>
+            props.store.getState().setSelection({
+              harnessId: selection.harnessId,
+              modelSlug: selection.modelSlug,
+              profileId: "work-profile",
+            })
+          }
+        >
+          Select Work
+        </button>
+        <button
+          type="button"
+          aria-label="Select ambient profile"
+          onClick={() =>
+            props.store.getState().setSelection({
+              harnessId: selection.harnessId,
+              modelSlug: selection.modelSlug,
+              profileId: null,
+            })
+          }
+        >
+          Select ambient
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({
@@ -120,12 +194,18 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
+import { TuiForkProfileRejectedError } from "@/hooks/agent/use-create-tui-agent";
 import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
 
 describe("<TerminalAgentForkDialog />", () => {
   afterEach(() => {
     dialogMocks.create.mockReset();
     dialogMocks.providersByClient.clear();
+    dialogMocks.forkProfileSupported = true;
+    dialogMocks.toast.mockReset();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
@@ -165,7 +245,7 @@ describe("<TerminalAgentForkDialog />", () => {
     render(
       <TerminalAgentForkDialog
         open
-        target={{ sourceAgent: sourceAgent(), workspaceSeed }}
+        target={{ sourceAgent: sourceAgent(), workspaceSeed, intent: "fork" }}
         epicId="epic-test"
         tabId="tab-test"
         hostId="host-test"
@@ -201,6 +281,7 @@ describe("<TerminalAgentForkDialog />", () => {
         target={{
           sourceAgent: sourceAgent(),
           workspaceSeed: workspaceSeedForFolder(REPO_A),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -256,6 +337,7 @@ describe("<TerminalAgentForkDialog />", () => {
         target={{
           sourceAgent: { ...sourceAgent(), id: "other-source-agent" },
           workspaceSeed: workspaceSeedForFolder(REPO_B),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -301,6 +383,7 @@ describe("<TerminalAgentForkDialog />", () => {
         target={{
           sourceAgent: sourceAgent(),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -384,6 +467,7 @@ describe("<TerminalAgentForkDialog />", () => {
             target={{
               sourceAgent: sourceAgent(),
               workspaceSeed: emptyWorkspaceSeed(),
+              intent: "fork",
             }}
             epicId="epic-test"
             tabId="tab-test"
@@ -433,6 +517,7 @@ describe("<TerminalAgentForkDialog />", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("work-profile"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -459,6 +544,7 @@ describe("<TerminalAgentForkDialog />", () => {
         target={{
           sourceAgent: sourceAgent(),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -485,6 +571,7 @@ describe("<TerminalAgentForkDialog />", () => {
         target={{
           sourceAgent: sourceAgentWithTerminalArgs("--from-source"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -506,6 +593,234 @@ describe("<TerminalAgentForkDialog />", () => {
           terminalAgentArgs: "--from-source",
         }),
       );
+    });
+  });
+
+  it("renders continue-mode title, harness label, helper, and CTA copy", () => {
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "continue",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Continue under another profile" }),
+    ).toBeDefined();
+    expect(screen.getByText("Continue under")).toBeDefined();
+    expect(
+      screen.getByText("Choose which profile to continue this session under."),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
+  });
+
+  it.each([
+    {
+      subcode: "SCOPE_MISMATCH" as const,
+      expected:
+        "Can't continue this session under the default profile. It doesn't share conversation history with the default profile. Choose a shared profile, or start a new terminal agent.",
+    },
+    {
+      subcode: "TARGET_PROFILE_UNAVAILABLE" as const,
+      expected:
+        "Can't continue this session under the default profile. That profile isn't available right now - it may be signed out, still finishing setup, or no longer supported. Choose a different profile, or start a new terminal agent.",
+    },
+    {
+      subcode: "FORK_SOURCE_NOT_FOUND" as const,
+      expected:
+        "Can't continue this session - the source terminal agent couldn't be identified. Close and reopen this tab, then try again.",
+    },
+    {
+      subcode: "FORK_SOURCE_AMBIGUOUS" as const,
+      expected:
+        "Can't continue this session - the source terminal agent couldn't be identified. Close and reopen this tab, then try again.",
+    },
+  ])(
+    "shows an inline rejection alert for preflight subcode $subcode without closing",
+    async ({
+      subcode,
+      expected,
+    }: {
+      readonly subcode: TuiForkProfileAdmissionSubcode;
+      readonly expected: string;
+    }) => {
+      const onOpenChange = vi.fn();
+      dialogMocks.create.mockRejectedValueOnce(
+        new TuiForkProfileRejectedError(subcode, `preflight ${subcode}`),
+      );
+      render(
+        <TerminalAgentForkDialog
+          open
+          target={{
+            sourceAgent: sourceAgent(),
+            workspaceSeed: emptyWorkspaceSeed(),
+            intent: "continue",
+          }}
+          epicId="epic-test"
+          tabId="tab-test"
+          hostId="host-test"
+          hostClient={null}
+          onOpenChange={onOpenChange}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("alert").textContent).toContain(expected);
+      });
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
+      // Dialog stays interactive: Cancel and title input remain available.
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
+      const titleInput = screen.getByRole("textbox", {
+        name: "Fork terminal agent title",
+      });
+      if (!(titleInput instanceof HTMLInputElement)) {
+        throw new Error("expected title input");
+      }
+      expect(titleInput.disabled).toBe(false);
+      fireEvent.change(titleInput, { target: { value: "Still editable" } });
+      expect(titleInput.value).toBe("Still editable");
+    },
+  );
+
+  it("shows residueNote from a late prepareLaunch SCOPE_MISMATCH HostRpcError", async () => {
+    const onOpenChange = vi.fn();
+    dialogMocks.create.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "E_INVALID_ARGUMENT",
+        message:
+          "SCOPE_MISMATCH: profiles don't share history. Local worktree residue may remain.",
+        requestId: "req-test",
+        method: "agent.tui.prepareLaunch",
+        fatalDetails: null,
+      }),
+    );
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "continue",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain(
+        "Can't continue this session under the default profile.",
+      );
+      expect(alert.textContent).toContain(
+        "profiles don't share history. Local worktree residue may remain.",
+      );
+    });
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("updates the live default title when the picker profile changes, and freezes after typing", async () => {
+    seedClaudeProviders([
+      ambientProfile("Terminal account"),
+      managedProfile("work-profile", "Work"),
+    ]);
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    expectTextInputValue("Fork terminal agent title", "Fork - Source terminal");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select Work profile" }),
+    );
+
+    await waitFor(() => {
+      expectTextInputValue(
+        "Fork terminal agent title",
+        "Continue · Work - Source terminal",
+      );
+    });
+
+    // User-typed title freezes through further profile switches.
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Fork terminal agent title" }),
+      { target: { value: "My custom title" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select ambient profile" }),
+    );
+    expectTextInputValue("Fork terminal agent title", "My custom title");
+  });
+
+  it("toasts Claude cross-profile lossiness after a successful fork", async () => {
+    seedClaudeProviders([
+      ambientProfile("Terminal account"),
+      managedProfile("work-profile", "Work"),
+    ]);
+    dialogMocks.create.mockResolvedValue("forked-agent");
+    const onOpenChange = vi.fn();
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "continue",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select Work profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "work-profile" }),
+      );
+    });
+    await waitFor(() => {
+      expect(dialogMocks.toast).toHaveBeenCalledWith(
+        "Continuing under Work - TodoWrite history and rewind state from the original session won't carry over.",
+      );
+    });
+    await waitFor(() => {
+      expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
 });
@@ -626,4 +941,68 @@ function workspaceSeedForFolder(
     },
     intent: { entries: [localIntentEntry(folder.path, true)] },
   };
+}
+
+function ambientProfile(label: string): ProviderProfile {
+  return {
+    profileId: "ambient",
+    kind: "ambient",
+    authType: "oauth",
+    label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
+
+function managedProfile(profileId: string, label: string): ProviderProfile {
+  return {
+    profileId,
+    kind: "managed",
+    authType: "oauth",
+    label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
+
+function seedClaudeProviders(profiles: ReadonlyArray<ProviderProfile>): void {
+  // `useProvidersListForClient(null, …)` keys the providers map under the
+  // same `null` client reference every case in this file passes as hostClient.
+  dialogMocks.providersByClient.set(null, [
+    {
+      providerId: "claude-code",
+      label: "Claude Code",
+      available: true,
+      authType: "oauth",
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      profiles,
+    },
+  ]);
 }

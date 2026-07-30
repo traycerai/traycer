@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useStore } from "zustand";
+import { toast } from "sonner";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
@@ -26,6 +28,19 @@ import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
 } from "@/hooks/agent/use-create-tui-agent";
+import { useValidateTuiForkProfile } from "@/hooks/agent/use-validate-tui-fork-profile-mutation";
+import { useTuiForkProfileSupported } from "@/hooks/agent/use-tui-fork-profile-support";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import {
+  profileCommitId,
+  profileDisplayLabel,
+  type ProfileRowAdmission,
+} from "@/components/providers/provider-profile-model";
+import {
+  resolveTuiForkRejectionView,
+  type TuiForkRejectionView,
+} from "@/lib/tui-fork-profile-rejection";
 import { displayTitle } from "@/lib/display-title";
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
@@ -38,6 +53,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { cn } from "@/lib/utils";
 
 // `pendingForkTerminalAgentStagingKey` is per-EPIC, so every terminal-agent
 // tile in an epic shares one staging slot. Two dialog bodies can therefore be
@@ -47,9 +63,23 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 // bails. Mirrors `chat-fork-dialog.tsx`.
 const activeTerminalForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
+const EMPTY_FORK_PROFILES: ReadonlyArray<ProviderProfile> = [];
+const EMPTY_FORK_ADMISSION: ReadonlyMap<string | null, ProfileRowAdmission> =
+  new Map();
+
+/**
+ * `"fork"` is today's plain sibling-session fork. `"continue"` is the T5
+ * intent flag riding the SAME dialog (tech plan UX package): title/CTA copy
+ * change and the profile strip gets emphasis + bulk-admission row disabling,
+ * but the submit path, workspace handling, and every other mechanism are
+ * identical - this is a presentation flag, not a second dialog.
+ */
+export type TerminalAgentForkIntent = "fork" | "continue";
+
 export interface TerminalAgentForkDialogTarget {
   readonly sourceAgent: TuiAgentProjection;
   readonly workspaceSeed: ForkWorkspaceSeed;
+  readonly intent: TerminalAgentForkIntent;
 }
 
 type TerminalAgentForkStatus = "idle" | CreateTuiAgentStatus;
@@ -80,14 +110,13 @@ export function TerminalAgentForkDialog(props: TerminalAgentForkDialogProps) {
 function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   const { hostClient, hostId, epicId, onOpenChange, open, tabId, target } =
     props;
+  const intent: TerminalAgentForkIntent = target?.intent ?? "fork";
   const titleInputId = useId();
   const argsInputId = useId();
   const [titleState, setTitleState] = useState(() => ({
     open,
-    title:
-      open && target !== null
-        ? terminalForkDefaultTitle(target.sourceAgent)
-        : "",
+    touched: false,
+    draft: "",
   }));
   const stagingKey = useMemo(
     () => pendingForkTerminalAgentStagingKey(epicId),
@@ -115,28 +144,144 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     true,
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
+  const validateForkProfile = useValidateTuiForkProfile(hostClient);
+  const validateForkProfileMutateAsync = validateForkProfile.mutateAsync;
+  const forkProfileSupported = useTuiForkProfileSupported(hostId);
   const [status, setStatus] = useState<TerminalAgentForkStatus>("idle");
+  const [rejection, setRejection] = useState<TuiForkRejectionView | null>(null);
   const modelResolved = useStore(
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
+  const currentProfileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const agentMode = useStore(toolbarStore, (s) => s.agentMode);
   const setAgentMode = useStore(toolbarStore, (s) => s.setAgentMode);
+
+  // `providers.list` for the SOURCE harness, read from this dialog's own
+  // fixed `hostClient` (never the app-wide active host - mirrors
+  // `useResolvedSeededProfileId`'s host-scoping rule). Feeds three things:
+  // the bulk fork-admission preflight's candidate list (continue mode), the
+  // live "profile changed" default-title label, and the rejection alert's
+  // {target,source}Label copy - all three need the same profile-label
+  // resolution, so one query serves all of them.
+  const dialogActive = open && target !== null;
+  const providersQuery = useProvidersListForClient(hostClient, {
+    enabled: dialogActive,
+    subscribed: dialogActive,
+  });
+  const sourceHarnessProfiles = useMemo<ReadonlyArray<ProviderProfile>>(() => {
+    if (target === null) return EMPTY_FORK_PROFILES;
+    const providerId = guiHarnessIdToProviderId(target.sourceAgent.harnessId);
+    if (providerId === null) return EMPTY_FORK_PROFILES;
+    const provider = providersQuery.data?.providers.find(
+      (candidate) => candidate.providerId === providerId,
+    );
+    return provider?.profiles ?? EMPTY_FORK_PROFILES;
+  }, [providersQuery.data, target]);
+
+  const sourceTuiAgentId = target?.sourceAgent.id ?? null;
+  // Only continue mode proactively disables unshared rows (tech plan UX
+  // package scopes bulk-admission picker behavior to continue mode); a
+  // manual cross-profile pick in plain fork mode still gets caught by
+  // `use-create-tui-agent.ts`'s own preflight at submit time, surfaced via
+  // the rejection alert below - it just isn't pre-disabled in the picker.
+  const admissionActive =
+    dialogActive &&
+    intent === "continue" &&
+    forkProfileSupported &&
+    sourceTuiAgentId !== null &&
+    sourceHarnessProfiles.length > 0;
+  // The fetched map is masked to empty at render time (below) whenever
+  // `admissionActive` is false, so the effect never needs to synchronously
+  // reset it itself - only the in-flight request's own resolution writes here.
+  const [fetchedAdmission, setFetchedAdmission] =
+    useState<ReadonlyMap<string | null, ProfileRowAdmission>>(
+      EMPTY_FORK_ADMISSION,
+    );
+  useEffect(() => {
+    if (!admissionActive) return;
+    let cancelled = false;
+    void validateForkProfileMutateAsync({
+      epicId,
+      sourceTuiAgentId,
+      targetProfileIds: sourceHarnessProfiles.map(profileCommitId),
+    })
+      .then((result) => {
+        if (cancelled) return;
+        setFetchedAdmission(
+          new Map(
+            result.verdicts.map((verdict) => [
+              verdict.targetProfileId,
+              {
+                disabled: !verdict.admitted,
+                reason:
+                  verdict.message ??
+                  (verdict.admitted
+                    ? null
+                    : "This profile can't continue this session."),
+              },
+            ]),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedAdmission(EMPTY_FORK_ADMISSION);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    admissionActive,
+    epicId,
+    sourceHarnessProfiles,
+    sourceTuiAgentId,
+    validateForkProfileMutateAsync,
+  ]);
+  const admissionByProfileId = admissionActive
+    ? fetchedAdmission
+    : EMPTY_FORK_ADMISSION;
+
+  // Live default title (tech plan UX package: "profile-changed default
+  // title"): reactive to the CURRENT picker selection, not frozen at
+  // open-time, so switching profiles in the strip updates the title for as
+  // long as the user hasn't typed their own.
   const defaultTitle =
-    target === null ? "" : terminalForkDefaultTitle(target.sourceAgent);
+    target === null
+      ? ""
+      : terminalForkDefaultTitle({
+          sourceAgent: target.sourceAgent,
+          profileLabel:
+            currentProfileId === target.sourceAgent.profileId
+              ? null
+              : resolveForkProfileLabel(
+                  sourceHarnessProfiles,
+                  currentProfileId,
+                ),
+        });
   if (open !== titleState.open) {
-    setTitleState({
+    // A fresh open resets to the (now live) default; a close leaves the
+    // draft/touched state exactly as it was so the closing dialog doesn't
+    // flash back to the default mid-animation (matches prior behavior).
+    setTitleState((current) => ({
       open,
-      title: open && target !== null ? defaultTitle : titleState.title,
-    });
-    // Clear the transient submit status when the dialog closes (incl. an
-    // external close mid-submit). Adjusted during render on the `open` prop
-    // transition rather than in an effect.
-    if (!open && status !== "idle") setStatus("idle");
+      touched: open ? false : current.touched,
+      draft: open ? "" : current.draft,
+    }));
+    if (!open) {
+      // Clear the transient submit status/alert when the dialog closes
+      // (incl. an external close mid-submit). Adjusted during render on the
+      // `open` prop transition rather than in an effect.
+      if (status !== "idle") setStatus("idle");
+      if (rejection !== null) setRejection(null);
+    }
   }
-  const title = titleState.title;
+  const title = titleState.touched ? titleState.draft : defaultTitle;
   const setTitle = useCallback((nextTitle: string): void => {
-    setTitleState((current) => ({ ...current, title: nextTitle }));
+    setTitleState((current) => ({
+      ...current,
+      touched: true,
+      draft: nextTitle,
+    }));
   }, []);
   const trimmedTitle = title.trim();
   const sourceSessionId = target?.sourceAgent.harnessSessionId ?? null;
@@ -204,6 +349,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     // `canSubmit` already implies `target !== null && sourceSessionId !== null`,
     // and TS narrows both from it for the rest of this callback.
     if (!canSubmit) return;
+    setRejection(null);
     const launchWorkspace = readSeededLaunchWorkspace({
       stagingKey,
       seedIntent: target.workspaceSeed.intent,
@@ -221,6 +367,18 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         : "forking-session",
     );
     const toolbar = toolbarStore.getState();
+    const submittedProfileId = toolbar.selection.profileId;
+    // Claude cross-profile disclosure moment (tech plan UX package): the
+    // forked session's TodoWrite/rewind state is provider-account-scoped and
+    // does not follow a profile switch. Gated to Claude - the only harness
+    // this feature admits cross-profile forks for at all.
+    const crossProfileClaudeFork =
+      submittedProfileId !== target.sourceAgent.profileId &&
+      target.sourceAgent.harnessId === "claude";
+    const targetLabel = resolveForkProfileLabel(
+      sourceHarnessProfiles,
+      submittedProfileId,
+    );
     void createAgent
       .create({
         epicId,
@@ -236,7 +394,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         reasoningEffort:
           toolbar.reasoning.length > 0 ? toolbar.reasoning : null,
         agentMode: toolbar.agentMode,
-        profileId: toolbar.selection.profileId,
+        profileId: submittedProfileId,
         forkSourceHarnessSessionId: sourceSessionId,
         sourceTuiAgentId: target.sourceAgent.id,
         sourceProfileId: target.sourceAgent.profileId,
@@ -256,11 +414,29 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             source: "direct_ui",
             harness: target.sourceAgent.harnessId,
           });
+          // No trivial persisted field exists to drive a tile-side one-time
+          // notice (tech plan UX package's documented fallback), so the
+          // cross-profile lossiness disclosure fires as a toast here instead.
+          if (crossProfileClaudeFork) {
+            toast(
+              `Continuing under ${targetLabel} - TodoWrite history and rewind state from the original session won't carry over.`,
+            );
+          }
           clearTerminalForkWorkspace(stagingKey);
           onOpenChange(false);
         }
       })
-      .catch(() => undefined)
+      .catch((caught: unknown) => {
+        const sourceLabel = resolveForkProfileLabel(
+          sourceHarnessProfiles,
+          target.sourceAgent.profileId,
+        );
+        const view = resolveTuiForkRejectionView(caught, {
+          targetLabel,
+          sourceLabel,
+        });
+        if (view !== null) setRejection(view);
+      })
       .finally(() => setStatus("idle"));
   }, [
     argsDraft,
@@ -269,6 +445,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     createAgent,
     epicId,
     onOpenChange,
+    sourceHarnessProfiles,
     sourceSessionId,
     stagingKey,
     tabId,
@@ -277,13 +454,34 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     trimmedTitle,
   ]);
 
+  const crossProfileClaudeHint =
+    intent === "continue" &&
+    target !== null &&
+    target.sourceAgent.harnessId === "claude" &&
+    currentProfileId !== target.sourceAgent.profileId;
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]">
         <DialogHeader>
-          <DialogTitle>Fork terminal agent</DialogTitle>
+          <DialogTitle>
+            {intent === "continue"
+              ? "Continue under another profile"
+              : "Fork terminal agent"}
+          </DialogTitle>
         </DialogHeader>
         <div className="flex min-w-0 flex-col gap-2">
+          {rejection !== null ? (
+            <div
+              role="alert"
+              className="flex flex-col gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive"
+            >
+              <p>{rejection.message}</p>
+              {rejection.residueNote !== null ? (
+                <p className="text-muted-foreground">{rejection.residueNote}</p>
+              ) : null}
+            </div>
+          ) : null}
           <label htmlFor={titleInputId} className="flex min-w-0 flex-col gap-2">
             <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
               Title
@@ -301,9 +499,19 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
           </label>
           <section className="flex min-w-0 flex-col gap-2">
             <div className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
-              Harness
+              {intent === "continue" ? "Continue under" : "Harness"}
             </div>
-            <div className="flex min-w-0 items-center gap-2">
+            {intent === "continue" ? (
+              <p className="text-ui-xs text-muted-foreground">
+                Choose which profile to continue this session under.
+              </p>
+            ) : null}
+            <div
+              className={cn(
+                "flex min-w-0 items-center gap-2 rounded-md",
+                intent === "continue" && "ring-1 ring-ring/40",
+              )}
+            >
               <HarnessModelPicker
                 key={terminalForkModelPickerKey(target)}
                 store={toolbarStore}
@@ -314,6 +522,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 registerActivation={false}
                 createProfileHostId={hostId}
                 runTargetHostId={hostId}
+                profileAdmission={admissionByProfileId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -324,6 +533,12 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 />
               </div>
             </div>
+            {crossProfileClaudeHint ? (
+              <p className="text-ui-xs text-muted-foreground">
+                Heads up: TodoWrite history and rewind state from this session
+                won't carry over to the new profile.
+              </p>
+            ) : null}
           </section>
           <label htmlFor={argsInputId} className="flex min-w-0 flex-col gap-2">
             <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
@@ -383,7 +598,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 variant={undefined}
               />
             ) : null}
-            {terminalForkButtonLabel(status)}
+            {terminalForkButtonLabel(status, intent)}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -411,14 +626,17 @@ function terminalForkStatusLabel(status: CreateTuiAgentStatus): string {
   }
 }
 
-function terminalForkButtonLabel(status: TerminalAgentForkStatus): string {
+function terminalForkButtonLabel(
+  status: TerminalAgentForkStatus,
+  intent: TerminalAgentForkIntent,
+): string {
   switch (status) {
     case "idle":
-      return "Fork";
+      return intent === "continue" ? "Continue" : "Fork";
     case "preparing-workspace":
       return "Preparing";
     case "forking-session":
-      return "Forking";
+      return intent === "continue" ? "Continuing" : "Forking";
     case "starting-terminal":
       return "Starting terminal";
   }
@@ -441,8 +659,36 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
   };
 }
 
-function terminalForkDefaultTitle(agent: TuiAgentProjection): string {
-  return `Fork - ${displayTitle(agent.title, "agent")}`;
+/**
+ * Tech plan UX package's "profile-changed default title":
+ * `Continue · {profileLabel} - {sourceTitle}` once the picker's live
+ * selection differs from the source's own profile, else the plain
+ * `Fork - {sourceTitle}`. `profileLabel === null` is the caller's signal for
+ * "no change" - it never independently re-derives that comparison.
+ */
+function terminalForkDefaultTitle(input: {
+  readonly sourceAgent: TuiAgentProjection;
+  readonly profileLabel: string | null;
+}): string {
+  const sourceTitle = displayTitle(input.sourceAgent.title, "agent");
+  if (input.profileLabel === null) {
+    return `Fork - ${sourceTitle}`;
+  }
+  return `Continue · ${input.profileLabel} - ${sourceTitle}`;
+}
+
+/** Best-effort label for a profile id against a resolved profile list -
+ *  used for the default-title and rejection-alert copy, both of which need
+ *  a readable name even before `providers.list` has settled. */
+function resolveForkProfileLabel(
+  profiles: ReadonlyArray<ProviderProfile>,
+  profileId: string | null,
+): string {
+  const match = profiles.find(
+    (profile) => profileCommitId(profile) === profileId,
+  );
+  if (match !== undefined) return profileDisplayLabel(match);
+  return profileId === null ? "the default profile" : "this profile";
 }
 
 function terminalForkModelPickerKey(

@@ -15,6 +15,7 @@ import {
   profileDisplayLabel,
   profileAuthStatusText,
   profileRowStatusSuffix,
+  type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
 import {
   profileUsageAccessibleStatus,
@@ -26,7 +27,7 @@ import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usag
 import { ProfileUsageCompactMeter } from "@/components/providers/profile-usage-compact-meter";
 import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const PROFILE_DROPDOWN_KEYS = new Set([
@@ -76,6 +77,14 @@ interface ProfileDropdownProps {
   /** Picker-only cached usage presentation. Settings passes `null`, which
    *  preserves the identity-only rows and mounts no usage observers/sidecar. */
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
+  /** Per-row admission override keyed by `profileCommitId` (the TUI continue-
+   *  under-another-profile dialog's bulk fork-admission preflight). `null`
+   *  for every other caller - no row is overridden, matching today's
+   *  behavior exactly. */
+  readonly admissionByProfileId: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
 }
 
 /**
@@ -99,6 +108,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     contentContainer,
     onCloseAutoFocus,
     usagePresentation,
+    admissionByProfileId,
   } = props;
   const activeProfile =
     profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
@@ -204,6 +214,8 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           const shortcutHint = shortcutHintForIndex(index);
           const usageEntry = usagePresentation?.entries.get(commitId);
           const selected = commitId === activeProfileId;
+          const admission = admissionByProfileId?.get(commitId) ?? null;
+          const rowDisabled = admission?.disabled === true;
           const accessibleLabel = profileRowAccessibleLabel({
             label,
             profile,
@@ -211,7 +223,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
             statusSuffix,
             usageEntry,
           });
-          return (
+          const row = (
             <DropdownMenuItem
               key={profile.profileId}
               ref={(node) => {
@@ -219,10 +231,14 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                   setPreviewAnchor(node);
                 }
               }}
+              disabled={rowDisabled}
               aria-label={accessibleLabel}
               aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
               aria-current={selected ? "true" : undefined}
-              className={cn("pr-1.5", statusSuffix !== null && "opacity-60")}
+              className={cn(
+                "pr-1.5",
+                (statusSuffix !== null || rowDisabled) && "opacity-60",
+              )}
               onFocus={(event) => preview(commitId, event.currentTarget)}
               onPointerMove={(event) => preview(commitId, event.currentTarget)}
               onSelect={() => onSelectProfile(commitId)}
@@ -263,6 +279,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               </span>
             </DropdownMenuItem>
           );
+          return admissionTooltipRow(profile.profileId, admission, row);
         })}
         <DropdownMenuSeparator />
         <TooltipWrapper
@@ -297,6 +314,28 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         />
       ) : null}
     </DropdownMenu>
+  );
+}
+
+/** Wraps a disabled-with-reason row in a tooltip; passes an admitted (or
+ *  reasonless) row through unchanged. Split out of the row `.map()` purely to
+ *  keep that callback's branch count down. */
+function admissionTooltipRow(
+  key: string,
+  admission: ProfileRowAdmission | null,
+  row: ReactNode,
+): ReactNode {
+  if (admission === null || admission.reason === null) return row;
+  return (
+    <TooltipWrapper
+      key={key}
+      label={admission.reason}
+      side="right"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="flex w-full">{row}</span>
+    </TooltipWrapper>
   );
 }
 
