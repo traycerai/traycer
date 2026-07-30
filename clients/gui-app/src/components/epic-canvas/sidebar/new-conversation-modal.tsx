@@ -832,6 +832,8 @@ export function NewConversationModalBody(props: {
           reasoningEffort: launch.reasoningEffort,
           agentMode: launch.agentMode,
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           worktreeIntent,
           workspaceMode,

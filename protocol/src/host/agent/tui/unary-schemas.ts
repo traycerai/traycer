@@ -106,6 +106,24 @@ export type PrepareTuiLaunchRequest = z.infer<
   typeof prepareTuiLaunchRequestSchema
 >;
 
+// ─── `agent.tui.prepareLaunch@1.1` - + stable fork-source agent id ────────
+//
+// Additive minor bump (tech plan governing mechanism 2, "source identity"
+// decision). `forkSourceTuiAgentId` lets a new client name the fork source by
+// its own stable artifact id, so the resolver can validate the exact tuple
+// `{id, epic, harness, session, user, host}` directly instead of scanning
+// every TUI agent in the epic for a `(harnessId, harnessSessionId, hostId,
+// userId)` match (`resolveForkSourceTuiAgentStrict`). `null` - the
+// v1.0-upgraded default - keeps that strict-scan fallback for old clients;
+// never the fail-open missing⇒ambient shape. The response is unchanged.
+export const prepareTuiLaunchRequestSchemaV11 =
+  prepareTuiLaunchRequestSchema.extend({
+    forkSourceTuiAgentId: z.string().nullable().default(null),
+  });
+export type PrepareTuiLaunchRequestV11 = z.infer<
+  typeof prepareTuiLaunchRequestSchemaV11
+>;
+
 export const prepareTuiLaunchResponseSchema = z.object({
   harnessId: tuiHarnessIdSchema,
   // `null` when the harness hasn't allocated a CLI-resumable id yet (Codex
@@ -129,6 +147,65 @@ export const prepareTuiLaunchResponseSchema = z.object({
 });
 export type PrepareTuiLaunchResponse = z.infer<
   typeof prepareTuiLaunchResponseSchema
+>;
+
+// ─── `agent.tui.validateForkProfile@1.0` - preflight fork-profile admission ─
+//
+// Optional (non-floor) capability: read-only admission check that runs the
+// SAME continuation-scope guard core `agent.tui.prepareLaunch` enforces
+// authoritatively (`tui-fork-scope-guard.ts`) ahead of any client-side
+// worktree/binding work, so a doomed cross-profile fork can be rejected
+// before the client does anything it would need to roll back. This call is
+// advisory only - prepareLaunch re-runs the same guard at the top of its own
+// resolver (TOCTOU-safe) and remains the sole authority.
+//
+// Its negotiated presence in the RPC manifest IS the capability signal for
+// cross-profile fork UI (see `useHostSupportsMethod`) - there is no separate
+// capability flag to check. A caller sends every candidate target profile it
+// wants a verdict for in one round trip, so the SAME call serves both a
+// single pre-submit check (a one-element array) and the profile picker's
+// per-row admission (many elements) without a second wire method.
+export const validateTuiForkProfileRequestSchema = z.object({
+  epicId: z.string(),
+  sourceTuiAgentId: z.string(),
+  targetProfileIds: z.array(z.string().nullable()).min(1),
+});
+export type ValidateTuiForkProfileRequest = z.infer<
+  typeof validateTuiForkProfileRequestSchema
+>;
+
+// Mirrors `TuiForkScopeGuardSubcode` in the host's `tui-fork-scope-guard.ts`
+// (kept as an independent literal union here - the wire schema must not
+// import host domain code).
+export const tuiForkProfileAdmissionSubcodeSchema = z.enum([
+  "SCOPE_MISMATCH",
+  "FORK_SOURCE_NOT_FOUND",
+  "FORK_SOURCE_AMBIGUOUS",
+]);
+export type TuiForkProfileAdmissionSubcode = z.infer<
+  typeof tuiForkProfileAdmissionSubcodeSchema
+>;
+
+// One verdict per requested `targetProfileId`, same order as the request.
+// `subcode`/`message` are non-null only when `admitted` is false - the same
+// subcode/message pair `TuiForkScopeGuardError` throws with, reshaped as data
+// instead of an exception since the bulk picker needs N independent verdicts
+// rather than a single throw.
+export const tuiForkProfileAdmissionVerdictSchema = z.object({
+  targetProfileId: z.string().nullable(),
+  admitted: z.boolean(),
+  subcode: tuiForkProfileAdmissionSubcodeSchema.nullable(),
+  message: z.string().nullable(),
+});
+export type TuiForkProfileAdmissionVerdict = z.infer<
+  typeof tuiForkProfileAdmissionVerdictSchema
+>;
+
+export const validateTuiForkProfileResponseSchema = z.object({
+  verdicts: z.array(tuiForkProfileAdmissionVerdictSchema),
+});
+export type ValidateTuiForkProfileResponse = z.infer<
+  typeof validateTuiForkProfileResponseSchema
 >;
 
 // ─── `agent.tui.generateTitle@1.0` - hook-driven title generation ──────────

@@ -238,6 +238,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         agentMode: toolbar.agentMode,
         profileId: toolbar.selection.profileId,
         forkSourceHarnessSessionId: sourceSessionId,
+        sourceTuiAgentId: target.sourceAgent.id,
+        sourceProfileId: target.sourceAgent.profileId,
         onStatusChange: setStatus,
         worktreeIntent,
         workspaceMode: deriveWorkspaceMode(

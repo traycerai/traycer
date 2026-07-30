@@ -380,6 +380,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Read-only cross-profile fork-admission preflight; no host-side state
+  // changes, but each call answers a specific candidate profile so requests
+  // are not superseded by one another.
+  "agent.tui.validateForkProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Generating a title writes the result to the terminal-agent record.
   "agent.tui.generateTitle": {
     mode: "fifo",

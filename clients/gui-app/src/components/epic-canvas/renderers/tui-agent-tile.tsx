@@ -316,6 +316,10 @@ function TuiAgentTileLive(
         tuiAgentId: agent.id,
         harnessSessionId: agent.harnessSessionId,
         forkSourceHarnessSessionId: null,
+        // `null`: a reopen/reattach carries no wire-level fork-source id -
+        // the resolver's strict-scan fallback (or persisted pending-fork
+        // provenance) is what applies here, never this field.
+        forkSourceTuiAgentId: null,
         // Raw per-agent override: `null` keeps provider Settings as the
         // fallback, while `""` and non-empty strings are durable overrides.
         terminalAgentArgs: agent.terminalAgentArgs,

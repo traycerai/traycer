@@ -67,9 +67,21 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+// Real `useHostSupportsMethod` fails closed (no negotiated manifest exists
+// under jsdom), which would silently skip the preflight in every test here.
+// Stubbed `true` so the ordering test below can actually exercise the
+// preflight-before-worktree path; harmless for every other test in this file
+// since none of them combine a non-null `sourceTuiAgentId` with a
+// `profileId` that differs from `sourceProfileId` (the other half of
+// `resolveForkProfilePreflightTarget`'s gate).
+vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
+  useTuiForkProfileSupported: () => true,
+}));
+
 import { toast } from "sonner";
 import {
   type CreateTuiAgentStatus,
+  TuiForkProfileRejectedError,
   useCreateTuiAgent,
 } from "@/hooks/agent/use-create-tui-agent";
 import { peekPreparedTerminalAgentLaunch } from "@/stores/terminals/prepared-terminal-agent-launch-store";
@@ -225,6 +237,8 @@ describe("useCreateTuiAgent", () => {
           reasoningEffort: null,
           agentMode: "regular",
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           workspaceMode: "inherit",
           worktreeIntent: intent,
@@ -319,6 +333,8 @@ describe("useCreateTuiAgent", () => {
           reasoningEffort: null,
           agentMode: "regular",
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           workspaceMode: "inherit",
           worktreeIntent: intent,
@@ -372,6 +388,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -446,6 +464,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -520,6 +540,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: "high",
         agentMode: "regular",
         forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: null,
         onStatusChange: (nextStatus) => statuses.push(nextStatus),
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -621,6 +643,139 @@ describe("useCreateTuiAgent", () => {
     queryClient.clear();
   });
 
+  it("cross-profile fork preflight rejection dispatches NOTHING - no worktree.create, no prepareLaunch, no createTuiAgent, no placeholder", async () => {
+    const calls: CapturedCall[] = [];
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "agent.tui.validateForkProfile") {
+        return Promise.resolve({
+          verdicts: [
+            {
+              targetProfileId: "profile-b",
+              admitted: false,
+              subcode: "SCOPE_MISMATCH",
+              message:
+                "harness 'claude' source profile 'profile-a' and target profile 'profile-b' do not share a continuation scope.",
+            },
+          ],
+        });
+      }
+      // Every other method is a bug if reached from this test - a rejected
+      // preflight must short-circuit BEFORE any of them dispatch.
+      return Promise.reject(
+        new Error(`unexpected call to ${method} after preflight rejection`),
+      );
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    // An explicit worktree intent is present precisely to prove it is never
+    // dispatched - the preflight must reject BEFORE `dispatchWorktreeIntent`
+    // (tech plan governing mechanism 2, T3 client ordering).
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: WORKSPACE_PATH,
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "traycer/cross-profile-fork",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+
+    let caught: unknown = null;
+    await act(async () => {
+      try {
+        await result.current.create({
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          parentId: "source-parent",
+          title: "Continue - profile-b",
+          placement: { kind: "active-tile" },
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          agentMode: "regular",
+          forkSourceHarnessSessionId: "source-harness-session",
+          sourceTuiAgentId: "source-tui-agent-id",
+          sourceProfileId: "profile-a",
+          onStatusChange: null,
+          workspaceMode: "inherit",
+          worktreeIntent: intent,
+          terminalAgentArgs: null,
+          profileId: "profile-b",
+        });
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(TuiForkProfileRejectedError);
+    expect((caught as TuiForkProfileRejectedError).subcode).toBe(
+      "SCOPE_MISMATCH",
+    );
+
+    const methodOrder = calls.map((call) => call.method);
+    expect(methodOrder).toEqual(["agent.tui.validateForkProfile"]);
+    expect(methodOrder).not.toContain("worktree.create");
+    expect(methodOrder).not.toContain("agent.tui.prepareLaunch");
+    expect(methodOrder).not.toContain("epic.createTuiAgent");
+    // Nothing created: no placeholder tab, no pending-create mark.
+    expect(hookMocks.openTileInTab).not.toHaveBeenCalled();
+    expect(hookMocks.openTileInPane).not.toHaveBeenCalled();
+    expect(hookMocks.markArtifactPendingCreate).not.toHaveBeenCalled();
+    expect(hookMocks.unmarkArtifactPendingCreate).not.toHaveBeenCalled();
+
+    queryClient.clear();
+  });
+
+  it("same-profile fork skips the preflight round trip entirely (no agent.tui.validateForkProfile call)", async () => {
+    const { calls } = setupSequencedMock();
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Fork - same profile",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "profile-a",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        profileId: "profile-a",
+      });
+    });
+
+    expect(calls.map((c) => c.method)).not.toContain(
+      "agent.tui.validateForkProfile",
+    );
+
+    queryClient.clear();
+  });
+
   it("opens the canvas tab placeholder BEFORE agent.tui.prepareLaunch blocks on setup", async () => {
     // Acceptance: "landing Worktree-mode terminal-agent navigates and
     // opens/persists a terminal-agent placeholder before setup
@@ -684,6 +839,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -767,6 +924,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -845,6 +1004,8 @@ describe("useCreateTuiAgent", () => {
           reasoningEffort: null,
           agentMode: "regular",
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           workspaceMode: "inherit",
           worktreeIntent: intent,
@@ -903,6 +1064,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -943,6 +1106,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -995,6 +1160,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1043,6 +1210,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1120,6 +1289,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1210,6 +1381,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1269,6 +1442,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1314,6 +1489,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -1357,6 +1534,8 @@ describe("useCreateTuiAgent", () => {
         reasoningEffort: null,
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,
