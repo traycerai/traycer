@@ -186,6 +186,7 @@ function readySupportSnapshot(): DesktopSupportSnapshot {
     ],
     links: [],
     supportEmail: "support@traycer.ai",
+    privateDeliveryAvailable: true,
   };
 }
 
@@ -200,7 +201,12 @@ function makeSupportBridge(overrides: {
     revealLog:
       overrides.revealLog ??
       ((target) => Promise.resolve({ target, path: `/tmp/${target}.log` })),
-    submitReport: vi.fn(() => Promise.resolve({ reportId: "report-1" })),
+    submitReport: vi.fn(() =>
+      Promise.resolve({
+        status: "delivered" as const,
+        reportId: "report-1",
+      }),
+    ),
     tailLog:
       overrides.tailLog ??
       ((input) =>
@@ -210,6 +216,16 @@ function makeSupportBridge(overrides: {
           lines: [`line-one-${input.target}`, `line-two-${input.target}`],
           truncated: false,
         })),
+    freezeEvidence: () => Promise.resolve({ reportId: "report-1" }),
+    discardFrozenEvidence: () => Promise.resolve(),
+    readFrozenLogTail: (input) =>
+      Promise.resolve<DesktopSupportLogTailResult>({
+        target: input.target,
+        path: `/tmp/${input.target}.log`,
+        lines: [],
+        truncated: false,
+      }),
+    saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
   };
 }
 

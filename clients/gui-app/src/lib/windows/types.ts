@@ -191,6 +191,7 @@ export interface DesktopSupportSnapshot {
   readonly logs: readonly DesktopSupportLogDescriptor[];
   readonly links: readonly DesktopSupportLinkDescriptor[];
   readonly supportEmail: string;
+  readonly privateDeliveryAvailable: boolean;
 }
 
 export interface DesktopSupportRevealLogResult {
@@ -203,6 +204,50 @@ export interface DesktopSupportLogTailResult {
   readonly path: string;
   readonly lines: readonly string[];
   readonly truncated: boolean;
+}
+
+export interface DesktopSupportFreezeEvidenceResult {
+  readonly reportId: string;
+}
+
+export interface DesktopSupportReadFrozenLogTailInput {
+  readonly draftId: number;
+  readonly target: DesktopSupportLogTarget;
+}
+
+export interface DesktopSupportSaveDiagnosticBundleResult {
+  readonly path: string;
+}
+
+export interface DesktopPrivateDiagnosticsCause {
+  readonly type: string;
+  readonly message: string;
+  readonly stack: string | null;
+  readonly componentStack: string | null;
+  readonly errorCode: string | null;
+  readonly sourceAction: string | null;
+  readonly timestamp: number;
+}
+
+export interface DesktopPrivateDiagnosticsSession {
+  readonly routeTemplate: string | null;
+  readonly hostId: string | null;
+  readonly epicId: string | null;
+  readonly tabId: string | null;
+  readonly artifactId: string | null;
+  readonly chatId: string | null;
+  readonly agentId: string | null;
+  readonly harness: string | null;
+  readonly model: string | null;
+  readonly profileId: string | null;
+  readonly profileMode: string | null;
+  readonly providerVersion: string | null;
+  readonly providerClass: "bundled" | "custom" | null;
+}
+
+export interface DesktopPrivateDiagnostics {
+  readonly cause: DesktopPrivateDiagnosticsCause | null;
+  readonly session: DesktopPrivateDiagnosticsSession | null;
 }
 
 export interface DesktopMenuBridge {
@@ -318,19 +363,26 @@ export interface DesktopHostControllerStatusBridge {
 }
 
 export interface DesktopReportIssueForm {
+  readonly draftId: number;
   readonly title: string;
   readonly whatHappened: string;
   readonly stepsToReproduce: string;
   readonly expectedBehavior: string;
   readonly actualBehavior: string;
+  readonly privateDiagnostics?: DesktopPrivateDiagnostics;
+  readonly fingerprint?: string;
+  readonly correlationId?: string;
 }
 
-export interface DesktopSubmitReportResult {
-  // `null` when the diagnostics upload never reached Sentry. The issue is
-  // still filed, but without a Support Report row - there is nothing to look
-  // up, and advertising an id that resolves to nothing is the bug being fixed.
-  readonly reportId: string | null;
-}
+// Four states, not a nullable id: "no DSN" and "flush timed out" used to
+// collapse onto the same `reportId: null`, which claimed failure for reports
+// that may have arrived. `failed` is reserved for definite non-delivery;
+// `unconfirmed` never claims failure and never claims delivery.
+export type DesktopSubmitReportResult =
+  | { readonly status: "delivered"; readonly reportId: string }
+  | { readonly status: "unconfirmed"; readonly reportId: string }
+  | { readonly status: "unavailable" }
+  | { readonly status: "failed"; readonly reason: "error" };
 
 export interface DesktopSupportBridge {
   getSnapshot(): Promise<DesktopSupportSnapshot>;
@@ -344,6 +396,14 @@ export interface DesktopSupportBridge {
     readonly target: DesktopSupportLogTarget;
     readonly tailLines: number;
   }): Promise<DesktopSupportLogTailResult>;
+  freezeEvidence(draftId: number): Promise<DesktopSupportFreezeEvidenceResult>;
+  discardFrozenEvidence(draftId: number): Promise<void>;
+  readFrozenLogTail(
+    input: DesktopSupportReadFrozenLogTailInput,
+  ): Promise<DesktopSupportLogTailResult>;
+  saveDiagnosticBundle(
+    form: DesktopReportIssueForm,
+  ): Promise<DesktopSupportSaveDiagnosticBundleResult>;
 }
 
 export interface DesktopPowerBridge {

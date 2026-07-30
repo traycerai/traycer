@@ -733,6 +733,7 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties;
   readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
     | { readonly outcome: "confirmed"; readonly blocker: null }
+    | { readonly outcome: "unconfirmed"; readonly blocker: null }
     | { readonly outcome: "failed"; readonly blocker: AnalyticsBlocker }
     | { readonly outcome: "unavailable"; readonly blocker: null };
   readonly [AnalyticsEvent.ReportIssuePublicOpenAttempted]: null;
@@ -1507,7 +1508,7 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.ReportIssuePrivateSubmit],
     "outcome",
-    new Set(["confirmed", "failed", "unavailable"]),
+    new Set(["confirmed", "unconfirmed", "failed", "unavailable"]),
   ),
 ]);
 
@@ -1623,7 +1624,7 @@ function analyticsPropertiesAreRelationallyValid(
   if (event === AnalyticsEvent.ReportIssuePrivateSubmit) {
     return analyticsOutcomeBlockerPairIsValid(
       properties,
-      new Set(["confirmed", "unavailable"]),
+      new Set(["confirmed", "unconfirmed", "unavailable"]),
     );
   }
   if (event === AnalyticsEvent.WorktreesBulkDeleted) {
@@ -1945,22 +1946,35 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
 }
 
 /**
- * Maps today's nullable `reportId` into honest private-submit outcomes.
- * Non-null means the private sink confirmed a report id (`confirmed`);
- * null means private delivery was unavailable or unconfirmed (`unavailable`).
- * Definite submit failures stay on the mutation error path (`failed`) and
- * are not derived from reportId presence. Ticket 04 re-maps this when the
- * four-state delivery result lands.
+ * Maps the four-state delivery result onto private-submit analytics
+ * outcomes. `unconfirmed` never claims failure and never claims delivery -
+ * it gets its own outcome rather than collapsing onto `confirmed` or
+ * `failed`. A structured `failed` result (capture threw, DSN rejected) has no
+ * `Error` to classify, so it gets a fixed `unknown` blocker; a thrown
+ * exception from the mutation itself still goes through
+ * `analyticsBlockerFromError` on the `onError` path.
  */
-export function reportIssuePrivateSubmitPropertiesFromReportId(
-  reportId: string | null,
+export function reportIssuePrivateSubmitPropertiesFromResult(
+  result:
+    | { readonly status: "delivered" }
+    | { readonly status: "unconfirmed" }
+    | { readonly status: "unavailable" }
+    | { readonly status: "failed" },
 ):
   | { readonly outcome: "confirmed"; readonly blocker: null }
-  | { readonly outcome: "unavailable"; readonly blocker: null } {
-  if (reportId === null) {
-    return { outcome: "unavailable", blocker: null };
+  | { readonly outcome: "unconfirmed"; readonly blocker: null }
+  | { readonly outcome: "unavailable"; readonly blocker: null }
+  | { readonly outcome: "failed"; readonly blocker: AnalyticsBlocker } {
+  switch (result.status) {
+    case "delivered":
+      return { outcome: "confirmed", blocker: null };
+    case "unconfirmed":
+      return { outcome: "unconfirmed", blocker: null };
+    case "unavailable":
+      return { outcome: "unavailable", blocker: null };
+    case "failed":
+      return { outcome: "failed", blocker: "unknown" };
   }
-  return { outcome: "confirmed", blocker: null };
 }
 
 /**

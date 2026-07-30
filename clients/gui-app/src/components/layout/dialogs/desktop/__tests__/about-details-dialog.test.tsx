@@ -28,6 +28,10 @@ function unavailableSupport(): DesktopSupportBridge {
     revealLog: vi.fn(),
     submitReport: vi.fn(),
     tailLog: vi.fn(),
+    freezeEvidence: vi.fn(),
+    discardFrozenEvidence: vi.fn(),
+    readFrozenLogTail: vi.fn(),
+    saveDiagnosticBundle: vi.fn(),
   };
 }
 

@@ -4,9 +4,12 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
+  SupportReadFrozenLogTailInput,
   SupportRevealLogResult,
+  SupportSaveDiagnosticBundleResult,
   SupportSnapshot,
   SupportSubmitReportRequest,
   SupportSubmitReportResult,
@@ -43,6 +46,14 @@ export interface SupportBridgeSurface {
       readonly target: SupportLogTarget;
       readonly tailLines: number;
     }): Promise<SupportLogTailResult>;
+    freezeEvidence(draftId: number): Promise<SupportFreezeEvidenceResult>;
+    discardFrozenEvidence(draftId: number): Promise<void>;
+    readFrozenLogTail(
+      input: SupportReadFrozenLogTailInput,
+    ): Promise<SupportLogTailResult>;
+    saveDiagnosticBundle(
+      form: SupportSubmitReportRequest,
+    ): Promise<SupportSaveDiagnosticBundleResult>;
   };
 }
 
@@ -106,6 +117,26 @@ export function buildSupportBridge(): SupportBridgeSurface {
           RunnerHostInvoke.supportTailLog,
           input,
         ) as Promise<SupportLogTailResult>,
+      freezeEvidence: (draftId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportFreezeEvidence,
+          draftId,
+        ) as Promise<SupportFreezeEvidenceResult>,
+      discardFrozenEvidence: (draftId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportDiscardFrozenEvidence,
+          draftId,
+        ),
+      readFrozenLogTail: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportReadFrozenLogTail,
+          input,
+        ) as Promise<SupportLogTailResult>,
+      saveDiagnosticBundle: (form) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportSaveDiagnosticBundle,
+          form,
+        ) as Promise<SupportSaveDiagnosticBundleResult>,
     },
   };
 }

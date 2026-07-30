@@ -38,6 +38,7 @@ function readySnapshot(): DesktopSupportSnapshot {
     logs: [{ target: "desktop", label: "Desktop", path: "/tmp/desktop.log" }],
     links: [],
     supportEmail: "support@traycer.ai",
+    privateDeliveryAvailable: true,
   };
 }
 
@@ -48,6 +49,10 @@ function unavailableSupport(): DesktopSupportBridge {
     revealLog: vi.fn(),
     submitReport: vi.fn(),
     tailLog: vi.fn(),
+    freezeEvidence: vi.fn(),
+    discardFrozenEvidence: vi.fn(),
+    readFrozenLogTail: vi.fn(),
+    saveDiagnosticBundle: vi.fn(),
   };
 }
 
@@ -58,6 +63,10 @@ function supportWithFailingTail(): DesktopSupportBridge {
     submitReport: vi.fn(),
     tailLog: () =>
       Promise.reject(new Error("secret-log-path-should-never-render")),
+    freezeEvidence: vi.fn(),
+    discardFrozenEvidence: vi.fn(),
+    readFrozenLogTail: vi.fn(),
+    saveDiagnosticBundle: vi.fn(),
   };
 }
 

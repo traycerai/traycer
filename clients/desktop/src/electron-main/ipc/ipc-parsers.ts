@@ -44,6 +44,15 @@ export function assertString(
   }
 }
 
+export function assertNumber(
+  value: unknown,
+  context: string,
+): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} requires a finite number argument`);
+  }
+}
+
 /**
  * Parses the `{ token, refreshToken }` pair the renderer hands to
  * `tokenStore.signIn` over IPC. Fail-closed: a non-string field throws so a

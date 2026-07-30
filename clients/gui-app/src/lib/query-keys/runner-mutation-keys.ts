@@ -33,6 +33,8 @@ export const runnerMutationKeys = {
   uninstallTraycer: () => ["runner.host.uninstallTraycer"] as const,
   reinstallTraycer: () => ["runner.host.reinstallTraycer"] as const,
   supportSubmitReport: () => ["runner.support.submitReport"] as const,
+  supportSaveDiagnosticBundle: () =>
+    ["runner.support.saveDiagnosticBundle"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h

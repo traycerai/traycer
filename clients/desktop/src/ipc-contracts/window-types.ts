@@ -241,6 +241,11 @@ export interface SupportSnapshot {
   readonly logs: readonly SupportLogDescriptor[];
   readonly links: readonly SupportLinkDescriptor[];
   readonly supportEmail: string;
+  // DSN presence, known at startup. `submitReport` can still resolve to
+  // "unavailable" without this (e.g. Sentry client init failed), but this is
+  // the preflight signal the dialog uses to set expectations before the user
+  // invests effort writing a report.
+  readonly privateDeliveryAvailable: boolean;
 }
 
 export interface SupportRevealLogResult {
@@ -248,26 +253,94 @@ export interface SupportRevealLogResult {
   readonly path: string;
 }
 
+/**
+ * Structured private cause, allowlisted onto the wire field by field so an
+ * error boundary can never smuggle an arbitrary object past this contract.
+ * Populated by the renderer's `ReportIssueDraftContext` (ticket 05); until
+ * that lands, callers omit it.
+ */
+export interface SupportPrivateDiagnosticsCause {
+  readonly type: string;
+  readonly message: string;
+  readonly stack: string | null;
+  readonly componentStack: string | null;
+  readonly errorCode: string | null;
+  readonly sourceAction: string | null;
+  readonly timestamp: number;
+}
+
+/**
+ * Last-known session state (ticket 05's support-context registry). Every
+ * field is opaque (ids, not full URLs/paths) and independently nullable -
+ * provider data especially can be stale during a host failure and must say
+ * so, never fabricate a healthy-looking value.
+ */
+export interface SupportPrivateDiagnosticsSession {
+  readonly routeTemplate: string | null;
+  readonly hostId: string | null;
+  readonly epicId: string | null;
+  readonly tabId: string | null;
+  readonly artifactId: string | null;
+  readonly chatId: string | null;
+  readonly agentId: string | null;
+  readonly harness: string | null;
+  readonly model: string | null;
+  readonly profileId: string | null;
+  readonly profileMode: string | null;
+  readonly providerVersion: string | null;
+  readonly providerClass: "bundled" | "custom" | null;
+}
+
+export interface SupportPrivateDiagnostics {
+  readonly cause: SupportPrivateDiagnosticsCause | null;
+  readonly session: SupportPrivateDiagnosticsSession | null;
+}
+
 export interface SupportSubmitReportRequest {
+  // Keys the frozen evidence (both log tails + the report id minted at
+  // report-open) that `submitReport` and every retry must reuse.
+  readonly draftId: number;
   readonly title: string;
   readonly whatHappened: string;
   readonly stepsToReproduce: string;
   readonly expectedBehavior: string;
   readonly actualBehavior: string;
+  readonly privateDiagnostics?: SupportPrivateDiagnostics;
+  // fp:v1 fingerprint string and correlation id (ticket 05); Sentry tags, not
+  // part of the message body.
+  readonly fingerprint?: string;
+  readonly correlationId?: string;
 }
 
-export interface SupportSubmitReportResult {
-  // `null` when the diagnostics upload did not reach Sentry (no DSN baked in,
-  // or the flush timed out). There is then no report for triage to look up, so
-  // the GitHub issue must not advertise one. An id exists if and only if the
-  // upload was confirmed - the invariant is structural, not a parallel flag
-  // that can drift out of sync with the delivery outcome.
-  readonly reportId: string | null;
-}
+// Four states, not three: "no DSN" and "flush timed out" used to collapse
+// onto the same `reportId: null`, which told users a report failed when it
+// may have arrived, and let a retry mint a duplicate. `failed` is reserved
+// for definite non-delivery (capture threw, DSN rejected); a flush timeout
+// maps to `unconfirmed`, never `failed` - the transport may still deliver it.
+export type SupportSubmitReportResult =
+  | { readonly status: "delivered"; readonly reportId: string }
+  | { readonly status: "unconfirmed"; readonly reportId: string }
+  | { readonly status: "unavailable" }
+  | { readonly status: "failed"; readonly reason: "error" };
 
 export interface SupportLogTailResult {
   readonly target: SupportLogTarget;
   readonly path: string;
   readonly lines: readonly string[];
   readonly truncated: boolean;
+}
+
+export interface SupportFreezeEvidenceResult {
+  // Minted once per draft, at freeze time - not per submit call. Every retry
+  // (T2) and the GitHub fallback prefill reuse this same id.
+  readonly reportId: string;
+}
+
+export interface SupportReadFrozenLogTailInput {
+  readonly draftId: number;
+  readonly target: SupportLogTarget;
+}
+
+export interface SupportSaveDiagnosticBundleResult {
+  readonly path: string;
 }

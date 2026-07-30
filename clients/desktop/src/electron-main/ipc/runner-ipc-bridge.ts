@@ -23,9 +23,12 @@ import type {
   PerWindowStateCapabilities,
   PerWindowStatePatch,
   PerWindowStateUpdateAcknowledgement,
+  SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
+  SupportReadFrozenLogTailInput,
   SupportRevealLogResult,
+  SupportSaveDiagnosticBundleResult,
   SupportSnapshot,
   SupportSubmitReportRequest,
   SupportSubmitReportResult,
@@ -234,6 +237,14 @@ export interface IpcSupportService {
     readonly target: SupportLogTarget;
     readonly tailLines: number;
   }): Promise<SupportLogTailResult>;
+  freezeEvidence(draftId: number): Promise<SupportFreezeEvidenceResult>;
+  discardFrozenEvidence(draftId: number): void;
+  readFrozenLogTail(
+    input: SupportReadFrozenLogTailInput,
+  ): Promise<SupportLogTailResult>;
+  saveDiagnosticBundle(
+    form: SupportSubmitReportRequest,
+  ): Promise<SupportSaveDiagnosticBundleResult>;
 }
 
 type HostChangeListener = (snapshot: DesktopLocalHostSnapshot | null) => void;
@@ -1334,6 +1345,7 @@ class NullSupportService implements IpcSupportService {
       logs: [],
       links: [],
       supportEmail: "",
+      privateDeliveryAvailable: false,
     });
   }
 
@@ -1344,7 +1356,7 @@ class NullSupportService implements IpcSupportService {
   submitReport(
     _form: SupportSubmitReportRequest,
   ): Promise<SupportSubmitReportResult> {
-    return Promise.resolve({ reportId: null });
+    return Promise.resolve({ status: "unavailable" });
   }
 
   tailLog(input: {
@@ -1357,6 +1369,29 @@ class NullSupportService implements IpcSupportService {
       lines: [],
       truncated: false,
     });
+  }
+
+  freezeEvidence(_draftId: number): Promise<SupportFreezeEvidenceResult> {
+    return Promise.resolve({ reportId: "" });
+  }
+
+  discardFrozenEvidence(_draftId: number): void {}
+
+  readFrozenLogTail(
+    input: SupportReadFrozenLogTailInput,
+  ): Promise<SupportLogTailResult> {
+    return Promise.resolve({
+      target: input.target,
+      path: "",
+      lines: [],
+      truncated: false,
+    });
+  }
+
+  saveDiagnosticBundle(
+    _form: SupportSubmitReportRequest,
+  ): Promise<SupportSaveDiagnosticBundleResult> {
+    return Promise.resolve({ path: "" });
   }
 }
 

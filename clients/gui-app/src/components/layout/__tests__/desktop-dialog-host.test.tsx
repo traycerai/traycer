@@ -122,6 +122,7 @@ const snapshot: DesktopSupportSnapshot = {
     },
   ],
   supportEmail: "support@traycer.ai",
+  privateDeliveryAvailable: true,
 };
 
 const EPIC_A = { id: "e-a", name: "A", draft: false };
@@ -162,7 +163,8 @@ function createRunnerHost(
             snapshot.logs.find((entry) => entry.target === target)?.path ?? "",
         });
       },
-      submitReport: () => Promise.resolve({ reportId: "rpt_test" }),
+      submitReport: () =>
+        Promise.resolve({ status: "delivered", reportId: "rpt_test" }),
       tailLog: (input: {
         readonly target: DesktopSupportLogTarget;
         readonly tailLines: number;
@@ -175,6 +177,18 @@ function createRunnerHost(
           lines: logLines.slice(-input.tailLines),
           truncated: logLines.length > input.tailLines,
         }),
+      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+      discardFrozenEvidence: () => Promise.resolve(),
+      readFrozenLogTail: (input: {
+        readonly target: DesktopSupportLogTarget;
+      }) =>
+        Promise.resolve({
+          target: input.target,
+          path: "",
+          lines: [],
+          truncated: false,
+        }),
+      saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
     },
   });
 }
@@ -201,6 +215,18 @@ function createRunnerHostWithSubmit(
           lines: [],
           truncated: false,
         }),
+      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+      discardFrozenEvidence: () => Promise.resolve(),
+      readFrozenLogTail: (input: {
+        readonly target: DesktopSupportLogTarget;
+      }) =>
+        Promise.resolve({
+          target: input.target,
+          path: "",
+          lines: [],
+          truncated: false,
+        }),
+      saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
     },
   });
 }
@@ -750,7 +776,7 @@ describe("<DesktopDialogHost />", () => {
     fireEvent.change(draftBTitle, { target: { value: "Edited Draft B" } });
 
     await act(async () => {
-      deferred.resolve({ reportId: "rpt_a" });
+      deferred.resolve({ status: "delivered", reportId: "rpt_a" });
       await deferred.promise;
     });
     await waitFor(() => {

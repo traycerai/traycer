@@ -19,7 +19,10 @@ import { cn } from "@/lib/utils";
 import { buildGitHubIssueUrl } from "@traycer-clients/shared/support/issue-reporter";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
-import type { DesktopSupportSnapshot } from "@/lib/windows/types";
+import type {
+  DesktopSubmitReportResult,
+  DesktopSupportSnapshot,
+} from "@/lib/windows/types";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { DesktopSupportDialogProps } from "./types";
@@ -27,7 +30,7 @@ import {
   Analytics,
   AnalyticsEvent,
   analyticsBlockerFromError,
-  reportIssuePrivateSubmitPropertiesFromReportId,
+  reportIssuePrivateSubmitPropertiesFromResult,
 } from "@/lib/analytics";
 
 interface ReportIssueForm {
@@ -65,7 +68,25 @@ export function ReportIssueDialog(
     reportIssueFormFromContext(context),
   );
   const [snapshot, setSnapshot] = useState<DesktopSupportSnapshot | null>(null);
+  // Minted once at report-open (T2/T3) and reused by every retry as the
+  // Sentry idempotency key. Null until the freeze IPC resolves; submit stays
+  // disabled until then so it can never race ahead of the frozen evidence.
+  const [reportId, setReportId] = useState<string | null>(null);
   const submitErrorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (support === null) return;
+    void support.freezeEvidence(draftId).then(
+      (result) => setReportId(result.reportId),
+      () => null,
+    );
+    return () => {
+      void support.discardFrozenEvidence(draftId).catch(() => null);
+    };
+    // draftId is this component's identity for its whole mounted lifetime -
+    // the host remounts it under a fresh `key` per draft, so this effect
+    // only ever re-runs here if `support` itself changes identity.
+  }, [draftId, support]);
 
   useEffect(() => {
     if (!open || support === null) return;
@@ -74,26 +95,24 @@ export function ReportIssueDialog(
 
   const submitMutation = useMutation({
     mutationKey: runnerMutationKeys.supportSubmitReport(),
-    mutationFn: async (submission: ReportIssueSubmission) => {
+    mutationFn: async (
+      submission: ReportIssueSubmission,
+    ): Promise<DesktopSubmitReportResult> => {
       if (support === null) throw new Error("Support bridge unavailable");
-      const result = await support.submitReport(submission.form);
-      return result.reportId;
+      return support.submitReport({
+        draftId: submission.draftId,
+        ...submission.form,
+      });
     },
-    onSuccess: async (reportId, submission) => {
+    onSuccess: async (result, submission) => {
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePrivateSubmit,
-        reportIssuePrivateSubmitPropertiesFromReportId(reportId),
+        reportIssuePrivateSubmitPropertiesFromResult(result),
       );
-      // The hand-off to GitHub is the primary channel and must survive a
-      // Sentry outage, so a failed diagnostics upload does not block it. It
-      // does have to be visible: this dialog closes below, so the warning goes
-      // to a toast rather than an inline banner nobody would ever see.
-      if (reportId === null) {
-        toast.warning("Diagnostic logs could not be uploaded", {
-          description:
-            "Your report will still open on GitHub. Attach your logs manually from Settings → Diagnostics so the team can diagnose it.",
-        });
-      }
+      // unconfirmed/unavailable/failed keep the dialog open with an honest
+      // banner (see DeliveryOutcomeBanner) instead of the GitHub hand-off -
+      // only a confirmed delivery is terminal here.
+      if (result.status !== "delivered") return;
       const url = buildSupportIssueUrl(
         submission.snapshot,
         submission.form,
@@ -121,10 +140,35 @@ export function ReportIssueDialog(
     },
   });
 
+  const saveDiagnosticBundleMutation = useMutation({
+    mutationKey: runnerMutationKeys.supportSaveDiagnosticBundle(),
+    mutationFn: async (submission: ReportIssueSubmission) => {
+      if (support === null) throw new Error("Support bridge unavailable");
+      return support.saveDiagnosticBundle({
+        draftId: submission.draftId,
+        ...submission.form,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Diagnostic bundle saved", {
+        description:
+          "It's been revealed in your file browser. Review it before sharing publicly - it contains no logs yet.",
+      });
+    },
+    onError: () => {
+      toast.error("Could not save the diagnostic bundle");
+    },
+  });
+
+  const deliveryResult = submitMutation.isSuccess ? submitMutation.data : null;
+  const showsHonestBanner =
+    submitMutation.isError ||
+    (deliveryResult !== null && deliveryResult.status !== "delivered");
+
   useEffect(() => {
-    if (!submitMutation.isError) return;
+    if (!showsHonestBanner) return;
     submitErrorRef.current?.focus();
-  }, [submitMutation.isError]);
+  }, [showsHonestBanner]);
 
   const handleOpenChange = (open: boolean) => {
     if (!open && submitMutation.isPending) return;
@@ -139,6 +183,20 @@ export function ReportIssueDialog(
     (field: keyof ReportIssueForm) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const retry = () => submitMutation.mutate({ draftId, form, snapshot });
+  const openGithubFallback = async (): Promise<void> => {
+    const url = buildSupportIssueUrl(snapshot, form, reportId);
+    try {
+      await runnerHost.openExternalLink(url);
+    } catch {
+      // Attempt still happened and is tracked below.
+    }
+    Analytics.getInstance().track(
+      AnalyticsEvent.ReportIssuePublicOpenAttempted,
+      null,
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -157,6 +215,9 @@ export function ReportIssueDialog(
         <div className="flex-1 overflow-y-auto">
           <div className="grid gap-4 py-1 pr-1">
             {snapshot !== null && <EnvBadge snapshot={snapshot} />}
+            {snapshot !== null && !snapshot.privateDeliveryAvailable && (
+              <PrivateDeliveryUnavailableNote />
+            )}
 
             <Field htmlFor="report-issue-title" label="Title" required>
               <Input
@@ -226,18 +287,20 @@ export function ReportIssueDialog(
           </div>
         </div>
 
-        {submitMutation.isError ? (
+        {showsHonestBanner ? (
           <div
             ref={submitErrorRef}
             role="alert"
             tabIndex={-1}
             className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            Failed to submit report. Please try again.
+            {submitMutation.isError
+              ? "Failed to submit report. Please try again."
+              : deliveryOutcomeMessage(deliveryResult)}
           </div>
         ) : null}
 
-        <DialogFooter>
+        <DialogFooter className="flex-wrap gap-2">
           <Button
             variant="outline"
             onClick={() => handleOpenChange(false)}
@@ -245,25 +308,104 @@ export function ReportIssueDialog(
           >
             Cancel
           </Button>
-          <Button
-            onClick={() => submitMutation.mutate({ draftId, form, snapshot })}
-            disabled={
-              submitMutation.isPending || form.title.trim().length === 0
+          <ReportIssueFooterActions
+            deliveryResult={deliveryResult}
+            canSubmit={form.title.trim().length !== 0 && reportId !== null}
+            isSubmitPending={submitMutation.isPending}
+            isSaveBundlePending={saveDiagnosticBundleMutation.isPending}
+            onSubmitOrRetry={retry}
+            onOpenGithubFallback={() => void openGithubFallback()}
+            onSaveDiagnosticBundle={() =>
+              saveDiagnosticBundleMutation.mutate({ draftId, form, snapshot })
             }
-          >
-            {submitMutation.isPending ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-            Submit Report
-          </Button>
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+function ReportIssueFooterActions({
+  deliveryResult,
+  canSubmit,
+  isSubmitPending,
+  isSaveBundlePending,
+  onSubmitOrRetry,
+  onOpenGithubFallback,
+  onSaveDiagnosticBundle,
+}: {
+  readonly deliveryResult: DesktopSubmitReportResult | null;
+  readonly canSubmit: boolean;
+  readonly isSubmitPending: boolean;
+  readonly isSaveBundlePending: boolean;
+  readonly onSubmitOrRetry: () => void;
+  readonly onOpenGithubFallback: () => void;
+  readonly onSaveDiagnosticBundle: () => void;
+}): ReactNode {
+  if (deliveryResult?.status === "unavailable") {
+    return (
+      <>
+        <Button
+          variant="outline"
+          onClick={onSaveDiagnosticBundle}
+          disabled={isSaveBundlePending}
+        >
+          {isSaveBundlePending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Save diagnostic bundle
+        </Button>
+        <Button onClick={onOpenGithubFallback}>Open a GitHub issue</Button>
+      </>
+    );
+  }
+  if (deliveryResult !== null && deliveryResult.status !== "delivered") {
+    return (
+      <>
+        <Button variant="outline" onClick={onOpenGithubFallback}>
+          Report on GitHub instead
+        </Button>
+        <Button onClick={onSubmitOrRetry} disabled={isSubmitPending}>
+          {isSubmitPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Try again
+        </Button>
+      </>
+    );
+  }
+  return (
+    <Button onClick={onSubmitOrRetry} disabled={isSubmitPending || !canSubmit}>
+      {isSubmitPending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      Submit Report
+    </Button>
+  );
+}
+
+function deliveryOutcomeMessage(
+  result: DesktopSubmitReportResult | null,
+): string {
+  if (result?.status === "unconfirmed") {
+    return "We could not confirm your report was uploaded - it may have arrived. Trying again is safe; it reuses the same report ID.";
+  }
+  if (result?.status === "unavailable") {
+    return "Private reporting is not available in this build. You can save a diagnostic bundle and open a GitHub issue instead.";
+  }
+  return "Your report could not be sent. Nothing was lost - it is still here.";
 }
 
 function reportIssueFormFromContext(
@@ -376,6 +518,15 @@ function LogPathsInfo(): ReactNode {
         <span className="shrink-0 text-destructive">*</span>
         Log files are shared privately with your report.
       </p>
+    </div>
+  );
+}
+
+function PrivateDeliveryUnavailableNote(): ReactNode {
+  return (
+    <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-ui-xs text-muted-foreground">
+      Private reporting is not available in this build. Submitting will save a
+      diagnostic bundle and let you open a GitHub issue instead.
     </div>
   );
 }

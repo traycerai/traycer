@@ -38,6 +38,7 @@ import * as Sentry from "@sentry/electron/main";
 import { DesktopSupportService } from "../support";
 
 const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
+  draftId: 1,
   title: "Something broke",
   whatHappened: "",
   stepsToReproduce: "",
@@ -179,6 +180,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
+        await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
         await service.submitReport(EMPTY_REPORT_FORM);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
@@ -206,6 +208,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
   it("tags an absent layer0 record without fabricating a structured context", async () => {
     await withPidMetadataFile(undefined, async (hostLayout) => {
       const service = buildService(hostLayout);
+      await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
       await service.submitReport(EMPTY_REPORT_FORM);
 
       expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
@@ -245,6 +248,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
+        await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
         await service.submitReport(EMPTY_REPORT_FORM);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
@@ -294,6 +298,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
+        await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
         await service.submitReport(EMPTY_REPORT_FORM);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);

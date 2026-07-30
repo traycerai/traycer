@@ -84,6 +84,11 @@ describe("<RootErrorBoundary />", () => {
           revealLog: () => Promise.reject(new Error("log unavailable")),
           submitReport: () => Promise.reject(new Error("submit unavailable")),
           tailLog: () => Promise.reject(new Error("log unavailable")),
+          freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+          discardFrozenEvidence: () => Promise.resolve(),
+          readFrozenLogTail: () => Promise.reject(new Error("log unavailable")),
+          saveDiagnosticBundle: () =>
+            Promise.reject(new Error("bundle unavailable")),
         },
       },
     );
