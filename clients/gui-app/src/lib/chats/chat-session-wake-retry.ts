@@ -74,38 +74,146 @@ export function retryClosedChatSessions(
 
 /**
  * Wires `retryClosedChatSessions` over the live registry to the two OS-wake
- * triggers, with the per-wake episode dedupe. Returns a disposer. Mounted once
- * per window by `ChatSessionWakeRetryController`. The OS-resume wiring is
- * best-effort (mirroring the auth service's wake refresh): with no runner host
- * (host-less test harness) or a throwing resume subscription, the `online`
- * listener alone still nudges dead sessions when the network returns.
+ * triggers, with the per-wake episode dedupe. A non-open session is armed until
+ * its wake reconnect resolves: reaching `open` clears the active close arm but
+ * preserves the bounded wake episode, so a drop back to `reconnecting` inside
+ * that episode can re-arm it. Once armed, reaching terminal `closed` rebuilds
+ * it once even if the async recovery finishes after the episode window.
+ *
+ * Returns a disposer. Mounted once per window by
+ * `ChatSessionWakeRetryController`. The OS-resume wiring is best-effort
+ * (mirroring the auth service's wake refresh): with no runner host (host-less
+ * test harness) or a throwing resume subscription, the `online` listener alone
+ * still nudges dead sessions when the network returns.
  */
 export function subscribeChatSessionWakeRetry(
   runnerHost: IRunnerHost | null,
 ): () => void {
+  const registry = getChatSessionRegistry();
   const lastAttemptAt = new WeakMap<ChatSessionStoreHandle, number>();
-  const onWake = (reason: WakeSignalReason): void => {
-    const now = Date.now();
-    const due = getChatSessionRegistry()
-      .listHandles()
-      .filter((handle) => {
-        const last = lastAttemptAt.get(handle);
-        return last === undefined || now - last >= WAKE_RETRY_EPISODE_MS;
-      });
-    for (const handle of retryClosedChatSessions(due, reason)) {
-      lastAttemptAt.set(handle, now);
+  const wakeEpisodes = new Map<
+    ChatSessionStoreHandle,
+    { readonly reason: WakeSignalReason; readonly startedAt: number }
+  >();
+  const pendingLateCloseReason = new Map<
+    ChatSessionStoreHandle,
+    WakeSignalReason
+  >();
+  const handleDisposers = new Map<ChatSessionStoreHandle, () => void>();
+
+  const recordAttempts = (
+    handles: readonly ChatSessionStoreHandle[],
+    attemptedAt: number,
+  ): void => {
+    for (const handle of handles) {
+      pendingLateCloseReason.delete(handle);
+      wakeEpisodes.delete(handle);
+      lastAttemptAt.set(handle, attemptedAt);
     }
   };
+
+  const syncHandleSubscriptions = (): void => {
+    const liveHandles = new Set(registry.listHandles());
+    for (const [handle, dispose] of handleDisposers) {
+      if (liveHandles.has(handle)) continue;
+      dispose();
+      handleDisposers.delete(handle);
+      pendingLateCloseReason.delete(handle);
+      wakeEpisodes.delete(handle);
+    }
+    for (const handle of liveHandles) {
+      if (handleDisposers.has(handle)) continue;
+      const dispose = handle.store.subscribe((state, previousState) => {
+        if (state.connectionStatus === previousState.connectionStatus) return;
+        if (state.connectionStatus === "open") {
+          pendingLateCloseReason.delete(handle);
+          return;
+        }
+        if (state.connectionStatus === "reconnecting") {
+          const episode = wakeEpisodes.get(handle);
+          if (episode === undefined) return;
+          if (Date.now() - episode.startedAt >= WAKE_RETRY_EPISODE_MS) {
+            wakeEpisodes.delete(handle);
+            pendingLateCloseReason.delete(handle);
+            return;
+          }
+          pendingLateCloseReason.set(handle, episode.reason);
+          return;
+        }
+        if (state.connectionStatus !== "closed") return;
+        const reason = pendingLateCloseReason.get(handle);
+        if (reason === undefined) return;
+
+        // Disarm BEFORE retrying: `retry()` synchronously moves the store to
+        // connecting, and a permanently fatal replacement may close again. One
+        // late close gets one rebuild for this wake, never a retry loop.
+        pendingLateCloseReason.delete(handle);
+        recordAttempts(retryClosedChatSessions([handle], reason), Date.now());
+      });
+      handleDisposers.set(handle, dispose);
+    }
+  };
+
+  syncHandleSubscriptions();
+  const disposeRegistrySubscription = registry.subscribe(() => {
+    syncHandleSubscriptions();
+  });
+
+  const onWake = (reason: WakeSignalReason): void => {
+    const now = Date.now();
+    const due = registry.listHandles().filter((handle) => {
+      const last = lastAttemptAt.get(handle);
+      if (last !== undefined && now - last < WAKE_RETRY_EPISODE_MS) {
+        return false;
+      }
+      const episode = wakeEpisodes.get(handle);
+      if (
+        episode !== undefined &&
+        now - episode.startedAt < WAKE_RETRY_EPISODE_MS
+      ) {
+        return false;
+      }
+      wakeEpisodes.delete(handle);
+      pendingLateCloseReason.delete(handle);
+      return true;
+    });
+
+    const closed: ChatSessionStoreHandle[] = [];
+    for (const handle of due) {
+      if (handle.store.getState().connectionStatus === "closed") {
+        closed.push(handle);
+      } else {
+        wakeEpisodes.set(handle, { reason, startedAt: now });
+        if (handle.store.getState().connectionStatus !== "open") {
+          pendingLateCloseReason.set(handle, reason);
+        }
+      }
+    }
+    recordAttempts(retryClosedChatSessions(closed, reason), now);
+  };
+  let disposeWakeSubscription: () => void;
   if (runnerHost !== null) {
     try {
-      return subscribeWakeSignals(runnerHost, onWake);
+      disposeWakeSubscription = subscribeWakeSignals(runnerHost, onWake);
     } catch (cause) {
       appLogger.warn("[chat-session] OS-resume wake retry unavailable", {
         error: describeLogError(cause),
       });
+      disposeWakeSubscription = onWakeReconnect(() => {
+        onWake("wake-online");
+      });
     }
+  } else {
+    disposeWakeSubscription = onWakeReconnect(() => {
+      onWake("wake-online");
+    });
   }
-  return onWakeReconnect(() => {
-    onWake("wake-online");
-  });
+  return () => {
+    disposeWakeSubscription();
+    disposeRegistrySubscription();
+    for (const dispose of handleDisposers.values()) dispose();
+    handleDisposers.clear();
+    pendingLateCloseReason.clear();
+    wakeEpisodes.clear();
+  };
 }
