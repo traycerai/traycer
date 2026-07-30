@@ -3,6 +3,7 @@ import { buildGitHubIssueUrl, type IssueReportInfo } from "../issue-reporter";
 
 const TRUNCATION_MARKER = " (truncated, see support report)";
 const MAX_URL_LENGTH = 8 * 1024;
+const REPRO_PLACEHOLDER = "Filed from the in-app reporter.";
 
 const base: IssueReportInfo = {
   appVersion: "1.2.3",
@@ -22,6 +23,16 @@ const base: IssueReportInfo = {
   reportId: null,
 };
 
+// Same as `base` but with the fields the old dialog leaves blank most often,
+// so tests about the narrative/repro/placeholder shape don't have to fight
+// unrelated non-empty defaults.
+const minimal: IssueReportInfo = {
+  ...base,
+  stepsToReproduce: "",
+  expectedBehavior: "",
+  actualBehavior: "",
+};
+
 function paramsOf(url: string): URLSearchParams {
   return new URL(url).searchParams;
 }
@@ -38,29 +49,26 @@ describe("buildGitHubIssueUrl", () => {
     );
   });
 
-  it("prefills form fields from the mapped IssueReportInfo properties", () => {
+  it("prefills title/version/os from the mapped IssueReportInfo properties", () => {
     const params = paramsOf(buildGitHubIssueUrl(base));
     expect(params.get("title")).toBe("Something broke");
-    expect(params.get("what-happened")).toBe("The app crashed");
     expect(params.get("version")).toBe("1.2.3");
     expect(params.get("os")).toBe("darwin (arm64)");
   });
 
-  it("hardcodes component to Desktop app and repro to the in-app placeholder", () => {
-    const params = paramsOf(buildGitHubIssueUrl(base));
-    expect(params.get("component")).toBe("Desktop app");
-    expect(params.get("repro")).toBe("Filed from the in-app reporter.");
+  it("hardcodes component to Desktop app", () => {
+    expect(paramsOf(buildGitHubIssueUrl(base)).get("component")).toBe(
+      "Desktop app",
+    );
   });
 
-  it("does not set body or labels (template owns those)", () => {
+  it("does not set body or labels (the template owns those)", () => {
     const params = paramsOf(buildGitHubIssueUrl(base));
-    expect(params.get("body")).toBeNull();
-    expect(params.get("labels")).toBeNull();
     expect(params.has("body")).toBe(false);
     expect(params.has("labels")).toBe(false);
   });
 
-  it("ignores unused IssueReportInfo fields that no longer map to the form", () => {
+  it("ignores runtime/host detail and reportId, which no longer map to the form", () => {
     const withExtras: IssueReportInfo = {
       ...base,
       electronVersion: "28.0.0",
@@ -70,9 +78,6 @@ describe("buildGitHubIssueUrl", () => {
       hostStatus: "ready",
       hostPid: 1234,
       reportId: "rpt_abc123",
-      stepsToReproduce: "should-not-appear-in-url",
-      expectedBehavior: "should-not-appear-either",
-      actualBehavior: "nor-this",
     };
     const url = buildGitHubIssueUrl(withExtras);
     expect(url).not.toContain("28.0.0");
@@ -80,33 +85,82 @@ describe("buildGitHubIssueUrl", () => {
     expect(url).not.toContain("20.11.0");
     expect(url).not.toContain("0.5.1");
     expect(url).not.toContain("rpt_abc123");
-    expect(url).not.toContain("should-not-appear-in-url");
-    expect(url).not.toContain("should-not-appear-either");
-    expect(url).not.toContain("nor-this");
-    // Host status "ready" and pid "1234" are short enough to collide with
-    // unrelated URL text; assert they never become query values either.
     const params = paramsOf(url);
     for (const value of params.values()) {
       expect(value).not.toBe("ready");
       expect(value).not.toBe("1234");
-      expect(value).not.toBe("28.0.0");
     }
+  });
+
+  describe("what-happened composition", () => {
+    it("is just the narrative when expected/actual are empty", () => {
+      const params = paramsOf(buildGitHubIssueUrl(minimal));
+      expect(params.get("what-happened")).toBe("The app crashed");
+    });
+
+    it("folds non-empty expected/actual behavior in under labeled sections", () => {
+      const whatHappened = paramsOf(buildGitHubIssueUrl(base)).get(
+        "what-happened",
+      );
+      expect(whatHappened).toBe(
+        "The app crashed\n\nExpected: It should work\n\nActual: It crashed",
+      );
+    });
+
+    it("omits an empty expected or actual section individually", () => {
+      const whatHappened = paramsOf(
+        buildGitHubIssueUrl({ ...base, actualBehavior: "" }),
+      ).get("what-happened");
+      expect(whatHappened).toBe("The app crashed\n\nExpected: It should work");
+    });
+
+    it("treats whitespace-only expected/actual as empty", () => {
+      const whatHappened = paramsOf(
+        buildGitHubIssueUrl({
+          ...base,
+          expectedBehavior: "   ",
+          actualBehavior: "\n",
+        }),
+      ).get("what-happened");
+      expect(whatHappened).toBe("The app crashed");
+    });
+  });
+
+  describe("repro prefill", () => {
+    it("uses the standard placeholder when stepsToReproduce is empty", () => {
+      expect(paramsOf(buildGitHubIssueUrl(minimal)).get("repro")).toBe(
+        REPRO_PLACEHOLDER,
+      );
+    });
+
+    it("uses the standard placeholder when stepsToReproduce is whitespace-only", () => {
+      const url = buildGitHubIssueUrl({
+        ...base,
+        stepsToReproduce: "   \n  ",
+      });
+      expect(paramsOf(url).get("repro")).toBe(REPRO_PLACEHOLDER);
+    });
+
+    it("prefills repro with user-typed steps to reproduce when present", () => {
+      expect(paramsOf(buildGitHubIssueUrl(base)).get("repro")).toBe(
+        "1. Open app\n2. Click button",
+      );
+    });
   });
 
   it("keeps short reports under the 8 KiB budget without truncating", () => {
     const url = buildGitHubIssueUrl(base);
     expect(url.length).toBeLessThanOrEqual(MAX_URL_LENGTH);
-    expect(paramsOf(url).get("what-happened")).toBe("The app crashed");
-    expect(paramsOf(url).get("what-happened")).not.toContain(TRUNCATION_MARKER);
-    expect(paramsOf(url).get("title")).not.toContain(TRUNCATION_MARKER);
+    const params = paramsOf(url);
+    expect(params.get("what-happened")).not.toContain(TRUNCATION_MARKER);
+    expect(params.get("repro")).not.toContain(TRUNCATION_MARKER);
+    expect(params.get("title")).not.toContain(TRUNCATION_MARKER);
   });
 
   it("truncates a very long whatHappened so the URL stays within 8 KiB", () => {
-    // Encoded length grows beyond raw char length (`%` expansion). Use a
-    // payload large enough that the untruncated form clearly exceeds 8192.
     const longWhatHappened = "x".repeat(20_000);
     const url = buildGitHubIssueUrl({
-      ...base,
+      ...minimal,
       whatHappened: longWhatHappened,
     });
 
@@ -119,31 +173,43 @@ describe("buildGitHubIssueUrl", () => {
     }
     expect(whatHappened.endsWith(TRUNCATION_MARKER)).toBe(true);
     expect(whatHappened.length).toBeLessThan(longWhatHappened.length);
-    // Title should still be intact when what-happened alone absorbs the cut.
+    // Title and repro (empty -> placeholder) are short enough to stay intact.
     expect(paramsOf(url).get("title")).toBe("Something broke");
+    expect(paramsOf(url).get("repro")).toBe(REPRO_PLACEHOLDER);
   });
 
-  it("truncates title when whatHappened alone cannot fit the budget", () => {
-    // Force both fields to need room: a long title plus a long body so that
-    // even after what-happened is reduced to the marker, title still overflows.
-    const longTitle = "T".repeat(10_000);
-    const longWhatHappened = "W".repeat(10_000);
+  it("truncates repro when whatHappened alone cannot free enough room", () => {
     const url = buildGitHubIssueUrl({
-      ...base,
-      title: longTitle,
-      whatHappened: longWhatHappened,
+      ...minimal,
+      whatHappened: "The app crashed after opening settings.",
+      stepsToReproduce: "S".repeat(8_300),
+    });
+
+    expect(url.length).toBeLessThanOrEqual(MAX_URL_LENGTH);
+
+    const repro = paramsOf(url).get("repro");
+    expect(repro).not.toBeNull();
+    if (repro === null) {
+      throw new Error("expected repro param to be present");
+    }
+    expect(repro.endsWith(TRUNCATION_MARKER)).toBe(true);
+  });
+
+  it("truncates title when whatHappened and repro alone cannot fit the budget", () => {
+    const url = buildGitHubIssueUrl({
+      ...minimal,
+      title: "T".repeat(9_000),
+      whatHappened: "The app crashed.",
+      stepsToReproduce: "1. Open\n2. Click",
     });
 
     expect(url.length).toBeLessThanOrEqual(MAX_URL_LENGTH);
 
     const title = paramsOf(url).get("title");
-    const whatHappened = paramsOf(url).get("what-happened");
     expect(title).not.toBeNull();
-    expect(whatHappened).not.toBeNull();
-    if (title === null || whatHappened === null) {
-      throw new Error("expected title and what-happened params");
+    if (title === null) {
+      throw new Error("expected title param to be present");
     }
-    expect(whatHappened.endsWith(TRUNCATION_MARKER)).toBe(true);
     expect(title.endsWith(TRUNCATION_MARKER)).toBe(true);
   });
 });

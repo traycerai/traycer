@@ -9,9 +9,10 @@ const TRAYCER_OSS_REPO: string = import.meta.env.VITE_TRAYCER_OSS_REPO ?? "";
 // apply - an override would silently drop `triage`.
 const BUG_REPORT_TEMPLATE = "bug_report.yml";
 const COMPONENT_DESKTOP_APP = "Desktop app";
-// The form's `repro` field stays required for organic filers. App-routed
-// drafts don't collect step-by-step repro, so it's prefilled with a standard
-// sentence rather than left for the user to hit a required-field stop on.
+// The form's `repro` field stays required for organic filers. The old
+// dialog's `stepsToReproduce` field fills it when the user typed something;
+// only an empty draft falls back to this placeholder rather than leaving the
+// user to hit a required-field stop on GitHub.
 const REPRO_PLACEHOLDER = "Filed from the in-app reporter.";
 const MAX_URL_LENGTH = 8 * 1024;
 const TRUNCATION_MARKER = " (truncated, see support report)";
@@ -20,11 +21,11 @@ export interface IssueReportInfo {
   readonly appVersion: string;
   readonly platform: string;
   readonly arch: string;
-  // Runtime/host detail and the extra narrative fields below have no home in
-  // the form's per-field prefill (only title/what-happened/version/os map,
-  // per ticket 01). They stay on this shape only so existing callers keep
-  // compiling unchanged until ticket 09's buildPublicDraft replaces this
-  // interface as the sole producer of public text.
+  // Runtime/host detail has no home in the form's per-field prefill (only
+  // title/what-happened/version/os/repro map, per ticket 01). These stay on
+  // this shape only so existing callers keep compiling unchanged until
+  // ticket 09's buildPublicDraft replaces this interface as the sole
+  // producer of public text.
   readonly electronVersion: string | null;
   readonly nodeVersion: string | null;
   readonly chromeVersion: string | null;
@@ -39,31 +40,66 @@ export interface IssueReportInfo {
   readonly reportId: string | null;
 }
 
-interface UrlFields {
+interface ComposedFields {
   readonly title: string;
   readonly whatHappened: string;
+  readonly repro: string;
 }
 
 export function buildGitHubIssueUrl(info: IssueReportInfo): string {
-  const full = buildIssueFormUrl(info, info);
-  if (full.length <= MAX_URL_LENGTH) return full;
-
-  const whatHappened = truncateToFit(info.whatHappened, (candidate) =>
-    buildIssueFormUrl(info, { title: info.title, whatHappened: candidate }),
-  );
-  const afterWhatHappened = buildIssueFormUrl(info, {
+  let fields: ComposedFields = {
     title: info.title,
-    whatHappened,
-  });
-  if (afterWhatHappened.length <= MAX_URL_LENGTH) return afterWhatHappened;
+    whatHappened: composeWhatHappened(info),
+    repro: composeRepro(info),
+  };
+  let url = buildIssueFormUrl(info, fields);
 
-  const title = truncateToFit(info.title, (candidate) =>
-    buildIssueFormUrl(info, { title: candidate, whatHappened }),
-  );
-  return buildIssueFormUrl(info, { title, whatHappened });
+  // Largest/most-likely-oversized field first: the narrative, then repro
+  // (also user-typed and unbounded), then title (short in practice).
+  for (const field of ["whatHappened", "repro", "title"] as const) {
+    if (url.length <= MAX_URL_LENGTH) break;
+    fields = shrinkField(info, fields, field);
+    url = buildIssueFormUrl(info, fields);
+  }
+  return url;
 }
 
-function buildIssueFormUrl(info: IssueReportInfo, fields: UrlFields): string {
+// The user's own words for what happened, with non-empty expected/actual
+// behavior folded in under clear labels rather than silently dropped - the
+// old dialog still collects them even though the form has no field for them.
+function composeWhatHappened(info: IssueReportInfo): string {
+  return [
+    info.whatHappened,
+    info.expectedBehavior.trim() === ""
+      ? ""
+      : `Expected: ${info.expectedBehavior}`,
+    info.actualBehavior.trim() === "" ? "" : `Actual: ${info.actualBehavior}`,
+  ]
+    .filter((section) => section.trim() !== "")
+    .join("\n\n");
+}
+
+function composeRepro(info: IssueReportInfo): string {
+  return info.stepsToReproduce.trim() === ""
+    ? REPRO_PLACEHOLDER
+    : info.stepsToReproduce;
+}
+
+function shrinkField(
+  info: IssueReportInfo,
+  fields: ComposedFields,
+  field: "whatHappened" | "repro" | "title",
+): ComposedFields {
+  const truncated = truncateToFit(fields[field], (candidate) =>
+    buildIssueFormUrl(info, { ...fields, [field]: candidate }),
+  );
+  return { ...fields, [field]: truncated };
+}
+
+function buildIssueFormUrl(
+  info: IssueReportInfo,
+  fields: ComposedFields,
+): string {
   const params = new URLSearchParams({
     template: BUG_REPORT_TEMPLATE,
     title: fields.title,
@@ -71,7 +107,7 @@ function buildIssueFormUrl(info: IssueReportInfo, fields: UrlFields): string {
     version: info.appVersion,
     os: `${info.platform} (${info.arch})`,
     component: COMPONENT_DESKTOP_APP,
-    repro: REPRO_PLACEHOLDER,
+    repro: fields.repro,
   });
   return `${TRAYCER_OSS_REPO}/issues/new?${params.toString()}`;
 }
