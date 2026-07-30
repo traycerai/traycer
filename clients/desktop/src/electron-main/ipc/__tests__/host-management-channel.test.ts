@@ -18,6 +18,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 import type { IpcHostController } from "../runner-ipc-bridge";
 import type {
   ActivateInstalledOk,
@@ -78,8 +79,7 @@ let workHome: string;
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-mgmt-environment-"));
-  process.env.HOME = workHome;
-  process.env.USERPROFILE = workHome;
+  sandboxHome(workHome);
   vi.resetModules();
 });
 
