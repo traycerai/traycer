@@ -54,13 +54,16 @@ export class RemoteStreamClient<
   }
 
   /**
-   * No-op close subscription: a remote session self-heals via its own
-   * resume/backoff loop (Architecture §3) rather than closing underneath the
-   * provider, so there is no underneath-close to notify. The owner-side
-   * liveness guard's `isClosed()` re-check still covers a terminal close.
+   * Fires when the shared session reaches terminal close - a session-level
+   * fatal (e.g. `INCOMPATIBLE`, or a bounded/rejected `UNAUTHORIZED`
+   * recovery), or the last consumer's release closing it for real. This is
+   * what lets the owner-side liveness guard rebuild the transport instead of
+   * serving a permanently-dead client (`start()` no-ops once the session is
+   * closed). NOT retro-fired for an already-closed session - callers pair
+   * this with `isClosed()`, exactly as with `WsStreamClient.onClosed`.
    */
-  onClosed(_listener: () => void): () => void {
-    return () => {};
+  onClosed(listener: () => void): () => void {
+    return this.session.onClosed(listener);
   }
 
   close(_reason: string): void {
@@ -76,13 +79,18 @@ export class RemoteStreamClient<
   reconnectAll(_reason: string): void {}
 
   /**
-   * Never fires (see {@link IHostStreamClient.subscribeAvailabilityRecovered}):
-   * remote availability is owned by the registry's presence lease and the
-   * relay session's resume machinery, so there is no socket-level recovery
-   * evidence to surface from this client.
+   * Bridges the session's ready-boundary-after-a-drop transition (full
+   * re-attach + every live stream restored; see
+   * `RemoteSession.subscribeAvailabilityRecovered`) to availability-recovered
+   * listeners - the same "endpoint recovered" evidence `WsStreamClient`
+   * surfaces when a session re-opens after a drop. A clean first open never
+   * fires. This is what un-strands errored host-scoped queries for a tab
+   * bound to a NON-active remote host, whose only recovery evidence is its
+   * own transport (the presence lease + relay-resume path only covers the
+   * active host).
    */
-  subscribeAvailabilityRecovered(_listener: () => void): () => void {
-    return () => undefined;
+  subscribeAvailabilityRecovered(listener: () => void): () => void {
+    return this.session.subscribeAvailabilityRecovered(listener);
   }
 
   /**

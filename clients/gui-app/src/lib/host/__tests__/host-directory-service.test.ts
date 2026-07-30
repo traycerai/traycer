@@ -470,6 +470,128 @@ describe("HostDirectoryService", () => {
     );
   });
 
+  it("keeps the persisted remote selection armed across a FAILED first refresh - the next successful refresh restores it over the promoted local default", async () => {
+    rememberHostSelection(rememberedRemoteHostEntry.hostId);
+    const host = makeHost(localSnapshot);
+    const { fetcher } = queuedFetcher([
+      { kind: "failed" },
+      { kind: "hosts", entries: [rememberedRemoteHostEntry] },
+    ]);
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: fetcher,
+    });
+
+    await directory.start();
+    // A transient blip must not strand the app: the local default is
+    // promoted for usability while the restore intent stays armed.
+    expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+    await directory.refresh();
+
+    // The first refresh that genuinely resolves re-binds the user's
+    // remembered remote host - a network blip at launch never consumed it.
+    expect(directory.getSelected()?.hostId).toBe(
+      rememberedRemoteHostEntry.hostId,
+    );
+    expect(directory.getSelected()?.kind).toBe("remote");
+  });
+
+  it("retires the failed-first-refresh restore on the first GENUINE refresh that omits the host - the deregistered case falls to the default for good", async () => {
+    rememberHostSelection(rememberedRemoteHostEntry.hostId);
+    const host = makeHost(localSnapshot);
+    const { fetcher } = queuedFetcher([
+      { kind: "failed" },
+      { kind: "hosts", entries: [] },
+      { kind: "hosts", entries: [rememberedRemoteHostEntry] },
+    ]);
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: fetcher,
+    });
+
+    await directory.start();
+    expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+    // A genuine result WITHOUT the remembered host settles it exactly as a
+    // genuine first refresh would have: fall to the default, retire the
+    // intent.
+    await directory.refresh();
+    expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+    // A later re-appearance must NOT yank the user anymore (pins parity with
+    // the genuine-first-refresh late-arrival behavior above).
+    await directory.refresh();
+    expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+  });
+
+  it("collapses a REJECTED fetcher into the failed outcome - refresh() resolves, prior remote entries are retained, and the next refresh recovers", async () => {
+    const host = makeHost(localSnapshot);
+    const calls = { count: 0 };
+    const fetcher: RemoteHostFetcher = () => {
+      calls.count += 1;
+      if (calls.count === 1) {
+        return Promise.resolve({
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry],
+        });
+      }
+      if (calls.count === 2) {
+        return Promise.reject(new Error("ipc bridge rejected"));
+      }
+      return Promise.resolve({
+        kind: "hosts",
+        entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+      });
+    };
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    // The rejecting fetch takes the designed failed-outcome path: the promise
+    // resolves and the last-known remote entries survive.
+    const retained = await directory.refresh();
+    expect(retained.map((entry) => entry.hostId)).toContain(
+      rememberedRemoteHostEntry.hostId,
+    );
+
+    const recovered = await directory.refresh();
+    expect(recovered.map((entry) => entry.hostId)).toContain(
+      secondRemoteHostEntry.hostId,
+    );
+  });
+
+  it("a fetcher that rejects on the FIRST refresh still lets start() resolve instead of tearing the host runtime down", async () => {
+    const host = makeHost(localSnapshot);
+    const calls = { count: 0 };
+    const fetcher: RemoteHostFetcher = () => {
+      calls.count += 1;
+      if (calls.count === 1) {
+        return Promise.reject(new Error("ipc bridge rejected at startup"));
+      }
+      return Promise.resolve({
+        kind: "hosts",
+        entries: [rememberedRemoteHostEntry],
+      });
+    };
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: fetcher,
+    });
+
+    await expect(directory.start()).resolves.toBeUndefined();
+    expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+    // The service is fully operational afterwards: the next refresh merges
+    // the remote entries as usual.
+    const entries = await directory.refresh();
+    expect(entries.map((entry) => entry.hostId)).toContain(
+      rememberedRemoteHostEntry.hostId,
+    );
+  });
+
   it("clears stale selection when the selected host is no longer in the directory", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({

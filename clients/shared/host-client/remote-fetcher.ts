@@ -213,7 +213,17 @@ export function createRemoteHostFetcher(
     if (bearerToken === null) {
       return { kind: "signed-out" };
     }
-    const result = await deps.listHosts(bearerToken);
+    let result: HostListFetchResult;
+    try {
+      result = await deps.listHosts(bearerToken);
+    } catch {
+      // Unlike `fetchRegisteredHostsViaHttp`, the injected seam (desktop's
+      // Electron IPC bridge) is not contractually throw-free: a rejected
+      // bridge call must collapse into the transient `failed` outcome - the
+      // retain-last-known path - rather than rejecting the directory refresh
+      // it feeds (T20 / audit P4).
+      return { kind: "failed" };
+    }
     if (result.kind === "unauthorized") {
       return { kind: "signed-out" };
     }

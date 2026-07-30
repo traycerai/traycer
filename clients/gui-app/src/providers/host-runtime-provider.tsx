@@ -30,6 +30,7 @@ import { HostRequestCoordinator } from "@traycer-clients/shared/host-client/host
 import type { RpcSchedulingPolicy } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
+import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import {
   buildRuntimeHostMessenger,
@@ -203,6 +204,11 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           : (runtimeMessenger = buildRuntimeHostMessenger({
               registry,
               resolveTarget,
+              // UNAUTHORIZED session-fatal recovery for the shared remote
+              // session: revalidate + redial with the fresh bearer instead of
+              // terminally closing (the same recovery the stream transports
+              // wire via `useStreamAuthRevalidator`).
+              auth: createStreamAuthRevalidator(auth),
               authnBaseUrl: runnerHost.authnBaseUrl,
               requestId,
             })).messenger;

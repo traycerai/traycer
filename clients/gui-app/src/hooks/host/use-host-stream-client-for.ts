@@ -212,6 +212,10 @@ export function buildHostStreamClient(params: {
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      // Same UNAUTHORIZED recovery the local branch wires below: an expired
+      // bearer at a wake-time re-attach revalidates + redials instead of
+      // terminally closing the shared session (`RemoteSessionOptions.auth`).
+      auth: params.auth,
       rpcRegistry: hostRpcRegistry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,

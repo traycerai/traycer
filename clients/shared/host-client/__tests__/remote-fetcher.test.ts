@@ -206,4 +206,13 @@ describe("createRemoteHostFetcher", () => {
     });
     expect(await fetcher()).toEqual({ kind: "failed" });
   });
+
+  it("maps a REJECTED listHosts call to failed - the injected IPC seam is not throw-free, and a throw must not escape the fetcher contract", async () => {
+    const fetcher = createRemoteHostFetcher({
+      listHosts: () => Promise.reject(new Error("ipc bridge torn down")),
+      getBearerToken: () => "jwt",
+      relayBaseUrl: RELAY_BASE_URL,
+    });
+    expect(await fetcher()).toEqual({ kind: "failed" });
+  });
 });

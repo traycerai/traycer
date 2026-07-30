@@ -186,6 +186,8 @@ function fakeRemoteSession(): FakeRemoteSession {
       throw new Error("not exercised by this test");
     }),
     notifyBearerRotated: vi.fn(),
+    onClosed: () => () => undefined,
+    subscribeAvailabilityRecovered: () => () => undefined,
     close: () => {
       closeCalls += 1;
     },

@@ -14,6 +14,10 @@ import {
 } from "@traycer/protocol/framework/stream-compat";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type {
+  RevalidateOutcome,
+  StreamAuthRevalidator,
+} from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import type {
   IStreamSession,
@@ -117,6 +121,18 @@ export interface RemoteSessionOptions<
   readonly grantProvider: AttachGrantProvider;
   /** Reads the user bearer for the in-channel `open{bearer}` frame (A2). */
   readonly bearer: BearerSourceProvider;
+  /**
+   * Auth recovery hook invoked when the host FATALs the session with
+   * `UNAUTHORIZED` - the in-channel `open{bearer}` was rejected (the
+   * overnight-wake case: the bearer expired while the renderer slept). The
+   * session revalidates the credential (single-flight, shared with the local
+   * transports) and acts on the outcome - redial with the fresh bearer, stay
+   * in backoff on a transient failure, or go terminal on a rejected
+   * credential. `null` keeps an `UNAUTHORIZED` session fatal terminal,
+   * mirroring `WsStreamClientOptions.auth` for short-lived/dev clients that
+   * cannot recover an auth rejection by retrying the same bearer.
+   */
+  readonly auth: StreamAuthRevalidator | null;
   readonly rpcRegistry: RpcRegistry;
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -147,6 +163,24 @@ export interface IRemoteSession<
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
   notifyBearerRotated(): void;
+  /**
+   * Subscribes to the session's terminal close - a caller `close()` (on the
+   * shared session, once every consumer released) or a terminal session
+   * fatal. Fires once, synchronously, after the session state is fully torn
+   * down. NOT retro-fired for an already-closed session - late attachers must
+   * check `isClosed()` first, exactly as with `WsStreamClient.onClosed` (the
+   * provider-side liveness guard does both).
+   */
+  onClosed(listener: () => void): () => void;
+  /**
+   * Subscribes to positive evidence that the session just re-reached its
+   * ready boundary after a drop (reconnecting → full re-attach + every live
+   * stream restored). A clean FIRST open never fires - nothing recovered.
+   * The remote analog of the recovery evidence `WsStreamClient` surfaces via
+   * `subscribeAvailabilityRecovered`, consumed to un-strand errored
+   * host-scoped queries.
+   */
+  subscribeAvailabilityRecovered(listener: () => void): () => void;
   close(): void;
 }
 
@@ -205,8 +239,34 @@ export class RemoteSession<
   private readonly pendingUnary = new Map<number, PendingUnary>();
   private readonly outboundSeq = new Map<number, number>();
   private readonly restoredStreamIds = new Set<number>();
+  private readonly closedListeners = new Set<() => void>();
+  private readonly availabilityRecoveredListeners = new Set<() => void>();
   private nextStreamId = 1;
   private readyBoundaryGeneration: number | null = null;
+  /**
+   * The bearer presented in the current connection's `open` frame, captured
+   * at send time so the `UNAUTHORIZED` session-fatal recovery can tell
+   * whether the NEXT attach would present a different token (progress) or
+   * the very one the host just rejected (no progress).
+   */
+  private openFrameBearer: string | null = null;
+  /**
+   * Bounds the rare "valid-but-rejected" loop: authn keeps accepting the
+   * bearer (revalidation returns "rotated") yet the host keeps FATAL-ing the
+   * session `UNAUTHORIZED` because the token never actually changed (clock
+   * skew / config mismatch). Incremented ONLY when a "rotated" revalidation
+   * left the next-attach bearer identical to the just-rejected one; a real
+   * rotation, a transient "network-error", or reaching `ready` all reset it.
+   * At the cap the session goes terminal (mirrors the local stream
+   * transport's no-progress bound).
+   */
+  private noProgressUnauthorizedReconnects = 0;
+  /**
+   * Set on every connection drop; consumed at the next ready boundary to
+   * emit availability-recovered evidence. A boundary reached without a prior
+   * drop is the clean first open - NOT recovery - so it stays silent.
+   */
+  private droppedSinceReady = false;
 
   private phaseTimer: TimerHandle | null = null;
   private backoffTimer: TimerHandle | null = null;
@@ -405,6 +465,28 @@ export class RemoteSession<
     });
   }
 
+  /** See {@link IRemoteSession.onClosed}. */
+  onClosed(listener: () => void): () => void {
+    if (this.phase === "closed") {
+      return () => undefined;
+    }
+    this.closedListeners.add(listener);
+    return () => {
+      this.closedListeners.delete(listener);
+    };
+  }
+
+  /** See {@link IRemoteSession.subscribeAvailabilityRecovered}. */
+  subscribeAvailabilityRecovered(listener: () => void): () => void {
+    if (this.phase === "closed") {
+      return () => undefined;
+    }
+    this.availabilityRecoveredListeners.add(listener);
+    return () => {
+      this.availabilityRecoveredListeners.delete(listener);
+    };
+  }
+
   /** Tears the session down permanently: closes the socket, fails everything. */
   close(): void {
     if (this.phase === "closed") {
@@ -427,6 +509,7 @@ export class RemoteSession<
         fatalDetails: null,
       }),
     );
+    this.emitClosed();
   }
 
   // ---- LogicalStreamPort ------------------------------------------------- //
@@ -619,6 +702,7 @@ export class RemoteSession<
       return;
     }
     this.phase = "opening";
+    this.openFrameBearer = bearer;
     this.armPhaseTimer(
       generation,
       SESSION_OPEN_ACK_TIMEOUT_MS,
@@ -689,7 +773,7 @@ export class RemoteSession<
       case MuxFrameType.FATAL: {
         const parsed = fatalPayloadSchema.safeParse(message.json);
         if (parsed.success) {
-          this.goTerminalFatal(parsed.data.details);
+          this.handleSessionFatal(generation, parsed.data.details);
         } else {
           this.handleConnectionLost(generation, "malformed-session-fatal");
         }
@@ -770,6 +854,9 @@ export class RemoteSession<
     );
     this.clearPhaseTimer();
     this.phase = "ready";
+    // The host accepted the `open{bearer}`: any prior UNAUTHORIZED episode is
+    // over, so a later one starts its no-progress bound from a clean slate.
+    this.noProgressUnauthorizedReconnects = 0;
     this.restoredStreamIds.clear();
 
     for (const stream of this.subscriptions.values()) {
@@ -937,7 +1024,20 @@ export class RemoteSession<
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
+    this.dropConnection(cause);
+    this.scheduleReconnect();
+  }
+
+  /**
+   * Shared drop bookkeeping for a lost connection: tear the transport down,
+   * fail in-flight unary calls, flag streams reconnecting. The caller decides
+   * what happens next - `handleConnectionLost` schedules the backoff redial
+   * immediately; the `UNAUTHORIZED` session-fatal path first revalidates the
+   * credential and only then reconnects (or goes terminal).
+   */
+  private dropConnection(cause: string): void {
     this.phase = "reconnecting";
+    this.droppedSinceReady = true;
     this.restoredStreamIds.clear();
     this.teardownConnection(cause);
     // In-flight unary calls are post-send from the caller's view → not
@@ -952,7 +1052,141 @@ export class RemoteSession<
       }),
     );
     this.markStreamsReconnecting();
+  }
+
+  /**
+   * A session-level FATAL control frame from the host. Not every fatal is
+   * terminal (parity with the local stream transport's fatalError handling):
+   *  - `retryable === true` marks a transient host-side rejection (e.g. the
+   *    host's JWKS fetch timed out while verifying our bearer) - our
+   *    credential is fine, so it is treated exactly like a transport drop and
+   *    the reconnect backoff rides until the host recovers.
+   *  - `UNAUTHORIZED` is recoverable when an auth revalidator is wired: the
+   *    host rejected the in-channel `open{bearer}` (the overnight-wake case -
+   *    the bearer expired while the renderer slept, or at a wake re-attach),
+   *    and a single-flight revalidation may rotate a fresh one for the next
+   *    attach to present.
+   *  - every other fatal (e.g. `INCOMPATIBLE`), and the no-revalidator case,
+   *    stays terminal exactly as before.
+   */
+  private handleSessionFatal(
+    generation: number,
+    details: FatalErrorDetails,
+  ): void {
+    if (details.retryable === true) {
+      // A transient host blip must not count toward the credential give-up
+      // bound - clear any streak left by a prior genuine UNAUTHORIZED episode.
+      this.noProgressUnauthorizedReconnects = 0;
+      this.handleConnectionLost(generation, "session-fatal-retryable");
+      return;
+    }
+    if (details.code === "UNAUTHORIZED" && this.options.auth !== null) {
+      this.handleUnauthorizedSessionFatal(
+        generation,
+        details,
+        this.options.auth,
+      );
+      return;
+    }
+    this.goTerminalFatal(details);
+  }
+
+  private handleUnauthorizedSessionFatal(
+    generation: number,
+    details: FatalErrorDetails,
+    auth: StreamAuthRevalidator,
+  ): void {
+    if (!this.isCurrent(generation) || this.phase === "closed") {
+      return;
+    }
+    // Capture the bearer the host just rejected BEFORE teardown clears it, so
+    // after revalidation we can tell whether the next attach would present a
+    // DIFFERENT token (progress) or the same rejected one (no progress).
+    const rejectedBearer = this.openFrameBearer;
+    this.dropConnection("session-fatal-unauthorized");
+    void this.revalidateThenReconnect(auth, details, rejectedBearer);
+  }
+
+  /**
+   * Recovers an `UNAUTHORIZED` session fatal by revalidating the credential
+   * and acting on the normalized outcome (mirrors the local stream
+   * transport's `revalidateThenReconnect`):
+   *   - "rotated"       → redial from backoff; the next `open` frame carries
+   *                       the fresh bearer.
+   *   - "network-error" → stay in reconnect backoff (transient); the bearer
+   *                       is untouched, so this never counts toward the
+   *                       give-up bound.
+   *   - "rejected"      → terminal (the revalidator has already signed out).
+   * A no-progress streak (revalidation keeps returning a current credential
+   * the host keeps rejecting) is bounded and goes terminal to stop looping.
+   */
+  private async revalidateThenReconnect(
+    auth: StreamAuthRevalidator,
+    details: FatalErrorDetails,
+    rejectedBearer: string | null,
+  ): Promise<void> {
+    const outcome = await this.revalidateWithinBudget(auth);
+    if (this.phase !== "reconnecting" || this.connection !== null) {
+      // Closed - or a competing path already owns reconnection - while the
+      // revalidation was in flight.
+      return;
+    }
+    if (outcome === "rejected") {
+      this.goTerminalFatal(details);
+      return;
+    }
+    if (outcome === "network-error") {
+      this.noProgressUnauthorizedReconnects = 0;
+      this.scheduleReconnect();
+      return;
+    }
+    // outcome === "rotated": authn accepts the credential. If the bearer the
+    // next attach will present is still the one the host just rejected, no
+    // progress was made (authn validates it but the host keeps rejecting -
+    // clock skew / config mismatch). Bound that loop; otherwise reset and
+    // redial with the fresh token.
+    if (rejectedBearer !== null && this.readBearerOrNull() === rejectedBearer) {
+      this.noProgressUnauthorizedReconnects += 1;
+      if (
+        this.noProgressUnauthorizedReconnects >=
+        MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS
+      ) {
+        this.goTerminalFatal(details);
+        return;
+      }
+    } else {
+      this.noProgressUnauthorizedReconnects = 0;
+    }
     this.scheduleReconnect();
+  }
+
+  /**
+   * Awaits the auth revalidation but never longer than
+   * `UNAUTHORIZED_REVALIDATE_TIMEOUT_MS`, treating a timeout (or a thrown
+   * revalidation) as a transient "network-error" so the normal reconnect
+   * backoff retries - a hung authn refresh (a half-open socket after sleep)
+   * must never strand the session in "reconnecting" forever.
+   */
+  private async revalidateWithinBudget(
+    auth: StreamAuthRevalidator,
+  ): Promise<RevalidateOutcome> {
+    let timer: TimerHandle | null = null;
+    const budget = new Promise<RevalidateOutcome>((resolve) => {
+      timer = setTimeout(
+        () => resolve("network-error"),
+        UNAUTHORIZED_REVALIDATE_TIMEOUT_MS,
+      );
+    });
+    const revalidation = auth
+      .revalidateForReconnect()
+      .catch((): RevalidateOutcome => "network-error");
+    try {
+      return await Promise.race([revalidation, budget]);
+    } finally {
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   private goTerminalFatal(details: FatalErrorDetails): void {
@@ -976,6 +1210,7 @@ export class RemoteSession<
         fatalDetails: details,
       }),
     );
+    this.emitClosed();
   }
 
   private scheduleReconnect(): void {
@@ -1168,6 +1403,13 @@ export class RemoteSession<
     }
     this.readyBoundaryGeneration = this.connectGeneration;
     this.reconnectAttempt = 0;
+    if (this.droppedSinceReady) {
+      // The session just fully recovered from a drop (re-attach + streams
+      // restored) - the "endpoint recovered" evidence availability-recovered
+      // consumers refetch on. A clean first open never sets the flag.
+      this.droppedSinceReady = false;
+      this.emitAvailabilityRecovered();
+    }
   }
 
   private clientStreamCanonical(method: string): SchemaVersion {
@@ -1192,9 +1434,39 @@ export class RemoteSession<
     );
   }
 
+  private emitClosed(): void {
+    const listeners = Array.from(this.closedListeners);
+    this.closedListeners.clear();
+    this.availabilityRecoveredListeners.clear();
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[remote-session] closed listener threw", error);
+      }
+    }
+  }
+
+  private emitAvailabilityRecovered(): void {
+    // Guarded per listener: the emission happens inside inbound frame
+    // dispatch, so a throwing consumer must not break the session's message
+    // processing or the other listeners (parity with `WsStreamClient`).
+    for (const listener of Array.from(this.availabilityRecoveredListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.error(
+          "[remote-session] availability-recovered listener threw",
+          error,
+        );
+      }
+    }
+  }
+
   private teardownConnection(reason: string): void {
     const connection = this.connection;
     this.connection = null;
+    this.openFrameBearer = null;
     this.clearPhaseTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
@@ -1263,6 +1535,24 @@ export class RemoteSession<
 // -----------------------------------------------------------------------------
 // Module helpers
 // -----------------------------------------------------------------------------
+
+/**
+ * Cap on consecutive `UNAUTHORIZED` session-fatal recoveries where the
+ * revalidation keeps returning a current credential the host keeps rejecting
+ * (no token rotation making progress). After this many no-progress cycles the
+ * session goes terminal instead of looping forever - mirrors the local stream
+ * transport's identically-named bound.
+ */
+const MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS = 3;
+
+/**
+ * Upper bound on how long an `UNAUTHORIZED` revalidation may run before the
+ * session gives up waiting and treats it as a transient "network-error". Caps
+ * the "reconnecting" window so a hung authn refresh can never strand the
+ * session - the normal reconnect backoff then retries. Mirrors the local
+ * stream transport's `REVALIDATE_TIMEOUT_MS`.
+ */
+const UNAUTHORIZED_REVALIDATE_TIMEOUT_MS = 10_000;
 
 function buildRpcManifest(registry: VersionedRpcRegistry): ConnectionManifest {
   const manifest: Record<string, SchemaVersion> = {};

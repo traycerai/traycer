@@ -1,6 +1,7 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import { RemoteSession, type IRemoteSession } from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
@@ -39,6 +40,14 @@ export interface CreateRemoteTransportOptions<
   readonly hostPublicKey: string;
   /** Serves the in-channel bearer AND (derived) the grant-mint user bearer. */
   readonly bearer: BearerSourceProvider;
+  /**
+   * Auth recovery for an `UNAUTHORIZED` session fatal (an expired bearer at a
+   * wake-time re-attach; see `RemoteSessionOptions.auth`). `null` keeps such
+   * a fatal terminal. Only the FIRST acquirer for a `(hostId, userId)` cache
+   * key constructs the shared session, so production callers should all pass
+   * the app revalidator - a cache hit reuses whatever the creator wired.
+   */
+  readonly auth: StreamAuthRevalidator | null;
   readonly rpcRegistry: RpcRegistry;
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -93,6 +102,7 @@ export function createRemoteHostTransport<
         hostStaticPublicKey,
         grantProvider,
         bearer: options.bearer,
+        auth: options.auth,
         rpcRegistry: options.rpcRegistry,
         streamRegistry: options.streamRegistry,
         webSocketFactory: options.webSocketFactory,

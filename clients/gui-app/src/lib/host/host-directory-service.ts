@@ -3,6 +3,7 @@ import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/
 import {
   fetchRemoteHosts,
   isRemoteHostDirectoryEntry,
+  type RemoteHostFetchOutcome,
   type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
@@ -87,6 +88,27 @@ export class HostDirectoryService implements IHostDirectoryService {
    * actually delivers at least one remote entry.
    */
   private unboundFollowUpRestoreHostId: string | null = null;
+  /**
+   * True once any refresh has delivered a genuine fetcher outcome (`hosts`
+   * or `signed-out`). Until then the remote side of the directory is simply
+   * UNKNOWN - a `failed` fetch proves nothing about a remembered host's
+   * registration - which is what lets the startup restore distinguish "the
+   * registry omitted the host" (deregistered) from "the registry was never
+   * reached" (transient blip).
+   */
+  private hasGenuineRemoteOutcome = false;
+  /**
+   * One-shot startup-restore retry armed when the persisted host could not
+   * be resolved because the initial refresh FAILED (never delivered a
+   * genuine outcome). The default host is still promoted for usability, but
+   * the user's remembered selection is settled by the FIRST refresh that
+   * genuinely resolves: restored when present (overriding only the
+   * auto-promoted default - "we do not silently move them" cuts both ways),
+   * or retired when a genuine result omits it, exactly as a genuine first
+   * refresh would have fallen to the default. Retired by an explicit
+   * `selectById(...)` gesture.
+   */
+  private restoreAfterFailedRefreshHostId: string | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
   private readonly selectionListeners = new Set<
     (entry: HostDirectoryEntry | null) => void
@@ -201,6 +223,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     });
     this.startupRestoreHostId = null;
     this.unboundFollowUpRestoreHostId = null;
+    this.restoreAfterFailedRefreshHostId = null;
     this.explicitSelection = { hostId };
     if (hostId === null) {
       // An explicit clear erases the remembered host entirely rather than
@@ -395,7 +418,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * as a successful empty `hosts` result would.
    */
   private async performRefresh(): Promise<readonly HostDirectoryEntry[]> {
-    const outcome = await this.remoteFetcher();
+    const outcome = await this.fetchRemoteOutcome();
     if (outcome.kind === "failed") {
       appLogger.debug(
         "[host-directory] refresh failed, retaining last-known remote entries",
@@ -404,6 +427,8 @@ export class HostDirectoryService implements IHostDirectoryService {
       return this.snapshot();
     }
     this.remoteEntries = outcome.kind === "hosts" ? outcome.entries : [];
+    this.hasGenuineRemoteOutcome = true;
+    this.consumeRestoreAfterFailedRefresh();
     if (outcome.kind === "hosts") {
       this.consumeUnboundFollowUpRestore(outcome.entries);
     }
@@ -416,6 +441,25 @@ export class HostDirectoryService implements IHostDirectoryService {
       totalCount: this.snapshot().length,
     });
     return this.snapshot();
+  }
+
+  /**
+   * Runs the fetcher, collapsing a REJECTED fetcher promise into the same
+   * `failed` outcome a well-behaved fetcher returns. Without this a throwing
+   * fetcher (a rejected IPC bridge call) would reject `refresh()` - and,
+   * through `start()`'s await, tear down the whole host runtime with no
+   * retry - instead of taking the designed retain-last-known path
+   * (T20 / audit P4).
+   */
+  private async fetchRemoteOutcome(): Promise<RemoteHostFetchOutcome> {
+    try {
+      return await this.remoteFetcher();
+    } catch (error) {
+      appLogger.warn("[host-directory] remote fetcher threw", {
+        error: describeLogError(error),
+      });
+      return { kind: "failed" };
+    }
   }
 
   private snapshot(): readonly HostDirectoryEntry[] {
@@ -453,6 +497,8 @@ export class HostDirectoryService implements IHostDirectoryService {
   private preparePersistedSelectionRestore(): void {
     this.startupRestoreHostId = null;
     this.unboundFollowUpRestoreHostId = null;
+    this.restoreAfterFailedRefreshHostId = null;
+    this.hasGenuineRemoteOutcome = false;
     if (this.explicitSelection !== null) {
       return;
     }
@@ -468,6 +514,15 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (this.restorePersistedHostById(hostId)) {
       return;
     }
+    if (!this.hasGenuineRemoteOutcome) {
+      // The initial refresh FAILED, so the remembered host's absence proves
+      // nothing about deregistration - a transient network blip at launch
+      // must not consume the user's persisted selection ("we do not silently
+      // move them"). Promote the default below for usability, but keep a
+      // one-shot retry armed so the first refresh that genuinely resolves can
+      // still restore the remembered host.
+      this.restoreAfterFailedRefreshHostId = hostId;
+    }
     this.reconcileSelection();
     if (
       this.selected === null &&
@@ -477,6 +532,26 @@ export class HostDirectoryService implements IHostDirectoryService {
     ) {
       this.unboundFollowUpRestoreHostId = hostId;
     }
+  }
+
+  /**
+   * Settles the failed-initial-refresh restore retry on the FIRST genuine
+   * fetcher outcome: restore the remembered host if the registry still knows
+   * it (overriding only an auto-promoted default - an explicit pick made in
+   * the meantime wins and already retired this one-shot), or retire the
+   * intent when the genuine result omits it, exactly as a genuine FIRST
+   * refresh would have fallen to the default (the deregistered case).
+   */
+  private consumeRestoreAfterFailedRefresh(): void {
+    const hostId = this.restoreAfterFailedRefreshHostId;
+    if (hostId === null) {
+      return;
+    }
+    this.restoreAfterFailedRefreshHostId = null;
+    if (this.explicitSelection !== null) {
+      return;
+    }
+    this.restorePersistedHostById(hostId);
   }
 
   private consumeUnboundFollowUpRestore(

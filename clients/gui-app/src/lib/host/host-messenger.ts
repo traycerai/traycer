@@ -3,6 +3,7 @@ import type {
   BearerSourceProvider,
   OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
@@ -56,6 +57,13 @@ export interface BuildRawHostMessengerForTargetParams<
    * bearer reach the next `open` frame without rebuilding the session.
    */
   readonly bearer: BearerSourceProvider;
+  /**
+   * Auth recovery for an `UNAUTHORIZED` remote-session fatal (an expired
+   * bearer at a wake-time re-attach; see `RemoteSessionOptions.auth`).
+   * `null` keeps such a fatal terminal - acceptable only for short-lived
+   * callers; the runtime messenger always passes the app revalidator.
+   */
+  readonly auth: StreamAuthRevalidator | null;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
   /** The signed-in user this messenger is built for (Architecture §4 / S1 cache key). */
@@ -88,6 +96,7 @@ export function buildRawHostMessengerForTarget<
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      auth: params.auth,
       rpcRegistry: params.registry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
@@ -132,6 +141,13 @@ export interface BuildRuntimeHostMessengerParams<
    * looked up here rather than threaded through the transport contract.
    */
   readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  /**
+   * Auth recovery the remote transport uses when the host FATALs the shared
+   * session `UNAUTHORIZED` (see `BuildRawHostMessengerForTargetParams.auth`).
+   * The runtime provider passes the app revalidator so a wake-time expired
+   * bearer redials with a fresh one instead of bricking the session.
+   */
+  readonly auth: StreamAuthRevalidator | null;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
 }
@@ -154,6 +170,7 @@ class RuntimeHostMessenger<
 > implements IHostMessenger<Registry> {
   private readonly registry: Registry;
   private readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  private readonly auth: StreamAuthRevalidator | null;
   private readonly authnBaseUrl: string;
   private readonly requestId: RequestIdProvider;
   private readonly localMessenger: IHostMessenger<Registry>;
@@ -167,6 +184,7 @@ class RuntimeHostMessenger<
   constructor(params: BuildRuntimeHostMessengerParams<Registry>) {
     this.registry = params.registry;
     this.resolveTarget = params.resolveTarget;
+    this.auth = params.auth;
     this.authnBaseUrl = params.authnBaseUrl;
     this.requestId = params.requestId;
     this.localMessenger = new WsRpcClient<Registry>({
@@ -261,7 +279,15 @@ class RuntimeHostMessenger<
     // freshly-built session read the lease this call was authorized under.
     this.currentBearer = authority.bearer;
     if (this.remoteBinding !== null && this.remoteBinding.key === nextKey) {
-      return this.remoteBinding.transport.messenger;
+      if (!this.remoteBinding.transport.session.isClosed()) {
+        return this.remoteBinding.transport.messenger;
+      }
+      // The cached session terminally closed underneath (a session-level
+      // fatal). A closed session can never carry traffic again (`start()`
+      // no-ops once closed), so release the dead binding and rebuild below -
+      // the session cache evicts closed entries on acquire, so the rebuild
+      // mints a live successor rather than re-pinning the corpse.
+      this.closeRemoteTransport();
     }
     // The remote session cache is keyed `(hostId, userId)` (Architecture §4 /
     // S1); the authority's bearer is the authoritative identity for the
@@ -275,6 +301,7 @@ class RuntimeHostMessenger<
       userId,
       registry: this.registry,
       bearer: () => this.currentBearer,
+      auth: this.auth,
       authnBaseUrl: this.authnBaseUrl,
       requestId: this.requestId,
     });

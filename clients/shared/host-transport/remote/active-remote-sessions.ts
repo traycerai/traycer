@@ -93,6 +93,17 @@ export function acquireRemoteSession<
 ): IRemoteSession<RpcRegistry, StreamRegistry> {
   const key = remoteSessionCacheKey(identity);
   let entry = entriesByKey.get(key);
+  if (entry !== undefined && entry.session.isClosed()) {
+    // A terminally-closed session (a session-level fatal closes it in place,
+    // underneath every consumer) must never be handed to a NEW acquirer:
+    // `start()` no-ops once closed, so the view could never carry traffic
+    // again. Evict the dead entry so this acquire constructs a fresh session;
+    // its remaining views release against the entry captured at THEIR acquire
+    // time (the identity check in `release`), so a late release can never
+    // touch the successor's refCount.
+    entriesByKey.delete(key);
+    entry = undefined;
+  }
   if (entry === undefined) {
     entry = { session: createSession(), refCount: 0 };
     entriesByKey.set(key, entry);
@@ -132,6 +143,9 @@ export function acquireRemoteSession<
     sendUnary: (method, params) => session.sendUnary(method, params),
     subscribe: (method, params) => session.subscribe(method, params),
     notifyBearerRotated: () => session.notifyBearerRotated(),
+    onClosed: (listener) => session.onClosed(listener),
+    subscribeAvailabilityRecovered: (listener) =>
+      session.subscribeAvailabilityRecovered(listener),
     close: release,
   };
 }

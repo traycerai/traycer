@@ -26,6 +26,12 @@ interface FakeSession extends IRemoteSession<
 > {
   readonly closeCalls: number;
   ready: boolean;
+  /**
+   * Mirrors a session-level fatal: the real `RemoteSession` flips itself to
+   * closed IN PLACE (no consumer called the view's `close()`), which is
+   * exactly the state the cache must refuse to hand out on a later acquire.
+   */
+  closedUnderneath: boolean;
 }
 
 function fakeSession(): FakeSession {
@@ -37,14 +43,17 @@ function fakeSession(): FakeSession {
     // Mirrors the real `RemoteSession`: not ready until it has actually
     // connected, so a fresh fake never masquerades as evidence of liveness.
     ready: false,
+    closedUnderneath: false,
     start: vi.fn(),
-    isClosed: () => closeCalls > 0,
+    isClosed: () => closeCalls > 0 || session.closedUnderneath,
     isReady: () => session.ready,
     sendUnary: vi.fn(async () => ({}) as never),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
     notifyBearerRotated: vi.fn(),
+    onClosed: () => () => undefined,
+    subscribeAvailabilityRecovered: () => () => undefined,
     close: () => {
       closeCalls += 1;
     },
@@ -165,6 +174,39 @@ describe("acquireRemoteSession", () => {
 
     view2.close();
     expect(second.closeCalls).toBe(1);
+  });
+
+  it("evicts a session that terminally closed underneath (session-level fatal) and hands the next acquire a FRESH live session", () => {
+    const identity = freshIdentity();
+    const dead = fakeSession();
+    const fresh = fakeSession();
+    const createSession = vi
+      .fn()
+      .mockReturnValueOnce(dead)
+      .mockReturnValueOnce(fresh);
+
+    // A consumer still HOLDS a reference when the session goes terminal - the
+    // bricked-session incident shape: the messenger pins the entry in the
+    // cache while the provider's rebuild re-acquires the same key.
+    const pinningView = acquireRemoteSession(identity, createSession);
+    dead.closedUnderneath = true;
+    expect(pinningView.isClosed()).toBe(true);
+
+    // The re-acquire must NOT serve the dead entry: a closed session's
+    // `start()` no-ops, so it could never carry traffic again.
+    const rebuiltView = acquireRemoteSession(identity, createSession);
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(rebuiltView.isClosed()).toBe(false);
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+
+    // The pinning consumer's late release targets the EVICTED entry - it
+    // must never decrement (or tear down) the live successor.
+    pinningView.close();
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+    expect(fresh.closeCalls).toBe(0);
+
+    rebuiltView.close();
+    expect(fresh.closeCalls).toBe(1);
   });
 
   it("keys are scoped per-user - a different user on the same host gets an independent session", () => {
