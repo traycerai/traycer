@@ -276,8 +276,16 @@ export const ChatTimeline = memo(function ChatTimeline({
     return <ChatEmptyState />;
   }
 
-  const resolvedSizePreservationEnabled =
-    resolveChatTimelineSizePreservationEnabled(sizePreservationEnabled);
+  // Round-2 finding 3: built ONCE into a local object and passed BY
+  // REFERENCE to both `maintainVisibleContentPosition` below and the
+  // `data-size-preservation-enabled` echo - a mutation of `.size` directly
+  // (e.g. hardcoding it in an inline object literal) is then structurally
+  // impossible to diverge from the attribute, since they read the exact
+  // same object's field instead of two independently-computed values.
+  const maintainVisibleContentPosition = {
+    data: true,
+    size: resolveChatTimelineSizePreservationEnabled(sizePreservationEnabled),
+  };
 
   return (
     <ChatTimelineRowCtx value={sharedState}>
@@ -310,10 +318,7 @@ export const ChatTimeline = memo(function ChatTimeline({
                 },
               }
         }
-        maintainVisibleContentPosition={{
-          data: true,
-          size: resolvedSizePreservationEnabled,
-        }}
+        maintainVisibleContentPosition={maintainVisibleContentPosition}
         onScroll={handleScroll}
         {...(onListMetricsChange !== undefined
           ? { onMetricsChange: onListMetricsChange }
@@ -329,13 +334,21 @@ export const ChatTimeline = memo(function ChatTimeline({
             : CHAT_TIMELINE_LIST_HEADER
         }
         ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
-        // Review round (L3), test-observability only: echoes the RESOLVED
-        // `sizePreservationEnabled` value verbatim (not a value recomputed
-        // from a different source at the call site) - same "not read by any
-        // production code" contract as `data-scroll-mode`. Placed before
-        // `{...rest}` is spread so a caller can never accidentally shadow it.
-        data-size-preservation-enabled={String(resolvedSizePreservationEnabled)}
         {...rest}
+        // Round-2 finding 3, test-observability only: echoes the SAME
+        // `maintainVisibleContentPosition` object's own `.size` field passed
+        // to LegendList above (not a separately-computed value) - same "not
+        // read by any production code" contract as `data-scroll-mode`.
+        // Placed AFTER `{...rest}` is spread (not before) - a caller-
+        // supplied `rest` bag winning over an earlier explicit prop with the
+        // same key is how JSX prop precedence actually works (last write
+        // wins, regardless of what the type system would allow a real
+        // caller to pass through `rest`), so this ordering is what makes
+        // shadowing structurally impossible, not a claim about `rest`'s
+        // contents.
+        data-size-preservation-enabled={String(
+          maintainVisibleContentPosition.size,
+        )}
       />
     </ChatTimelineRowCtx>
   );

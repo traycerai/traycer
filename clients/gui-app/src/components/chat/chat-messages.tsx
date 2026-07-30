@@ -662,20 +662,37 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // first real gesture cancel or an explicit go-live, same as any other
   // suppression.
   const suppressFollowRestoreRef = useRef(initialScrollIndexAnchor !== null);
-  // Review round (tickets 10/11/12, H1): whether an ANIMATED imperative
-  // scroll (pill-click `scrollToEnd`, minimap/find navigation) is currently
-  // in flight, tracked INDEPENDENTLY of `suppressFollowRestoreRef` - the
-  // freeze below was gated solely on suppression, but `scrollToEnd`'s
-  // pill-click path is an explicit user action that legitimately clears
-  // suppression (`setTimelineMode("following-end")`) BEFORE its own animated
+  // Review round (tickets 10/11/12, H1/round-2 finding 2): whether an
+  // ANIMATED imperative scroll (pill-click `scrollToEnd`, minimap/find
+  // navigation, the anchor engine's own positioning scrollToIndex) is
+  // currently in flight, tracked INDEPENDENTLY of `suppressFollowRestoreRef`
+  // - the freeze below was gated solely on suppression, but these paths are
+  // explicit actions that legitimately clear suppression (`setTimelineMode
+  // ("following-end")`, `beginAnchoringNewTurn`) BEFORE their own animated
   // scroll settles. A bare pointerdown mid-animation then found nothing to
   // freeze: the native smooth-scroll kept running, and its terminal
-  // near-end report re-enabled following against the cancellation. Set on
-  // every ANIMATED scrollToEnd/scrollToIndex issue, cleared once that
-  // operation's own settle fires (via `settleChatTimelineNavigation`'s
-  // `onFirstSettle`) or the operation aborts (the cancel path below always
-  // clears it, mirroring `suppressFollowRestoreRef`).
-  const hasActiveAnimatedImperativeScrollRef = useRef(false);
+  // near-end report re-enabled following against the cancellation.
+  //
+  // An OPERATION ID (not a boolean) - round-2 finding: a bare boolean is not
+  // operation-safe. `onFirstSettle`/the anchor engine's own settle callback
+  // fire unconditionally regardless of `isAborted`, and each one used to
+  // write `false` unconditionally - op1's late 750ms fallback (its
+  // `awaitScrollSettle` cancellation is never invoked, only ever left to
+  // expire) could clear op2's freshly-armed ownership if op2 started before
+  // op1's fallback fired (e.g. a quick minimap-nav-then-pill-click). Each
+  // operation captures a freshly minted id at issue
+  // (`++animatedImperativeScrollOperationCounterRef.current`) and clears
+  // `activeAnimatedImperativeScrollOperationIdRef` ONLY if it still owns it
+  // (captured id === current) - a superseded operation's late settle is a
+  // no-op instead of clobbering the new owner. The freeze check below reads
+  // "owned by ANYONE" (`!== null`) since a pointerdown must freeze whichever
+  // operation is currently in flight; the cancel path clears unconditionally
+  // (after the freeze reads it - read-before-clear ordering preserved from
+  // round 1), same as `suppressFollowRestoreRef`.
+  const animatedImperativeScrollOperationCounterRef = useRef(0);
+  const activeAnimatedImperativeScrollOperationIdRef = useRef<number | null>(
+    null,
+  );
   // A real cancel while suppressed freezes the in-flight scroll (see
   // cancelTimelineLiveFollowForUserNavigation below) rather than just
   // clearing suppression: an ANIMATED scrollToIndex is the browser's native
@@ -866,14 +883,16 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       // above) and must not leak into THIS cancel's own gesture.
       justFrozeProgrammaticScrollRef.current = false;
       // H1 fix: freeze on suppression OR an in-flight animated imperative
-      // scroll - `scrollToEnd`'s pill-click path legitimately clears
-      // suppression before its own animation settles (see
-      // `hasActiveAnimatedImperativeScrollRef`'s own doc comment), so
-      // suppression alone under-covers exactly the case this ref exists for.
+      // scroll (owned by ANY operation - `!== null`, not which one) -
+      // `scrollToEnd`'s pill-click path and `beginAnchoringNewTurn` both
+      // legitimately clear suppression before their own animation settles
+      // (see `activeAnimatedImperativeScrollOperationIdRef`'s own doc
+      // comment), so suppression alone under-covers exactly the case this
+      // ref exists for.
       if (
         freezeInFlightScroll &&
         (suppressFollowRestoreRef.current ||
-          hasActiveAnimatedImperativeScrollRef.current)
+          activeAnimatedImperativeScrollOperationIdRef.current !== null)
       ) {
         const list = chatTimelineRef.current;
         const currentScroll = list?.getState().scroll;
@@ -883,7 +902,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         }
       }
       suppressFollowRestoreRef.current = false;
-      hasActiveAnimatedImperativeScrollRef.current = false;
+      activeAnimatedImperativeScrollOperationIdRef.current = null;
       if (anchorScrollRestoreFrameRef.current !== null) {
         cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
         anchorScrollRestoreFrameRef.current = null;
@@ -957,9 +976,15 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       // H1 fix: an animated pill click legitimately clears
       // `suppressFollowRestoreRef` (explicit go-live), so it's the freeze
       // condition's OTHER input that must cover a bare pointerdown arriving
-      // mid-animation - see the ref's own doc comment.
-      if (animated) {
-        hasActiveAnimatedImperativeScrollRef.current = true;
+      // mid-animation - see the ref's own doc comment. Round-2: an operation
+      // id, not a boolean - captured locally so the clear below can verify
+      // this operation still owns it before clobbering a newer one.
+      const animatedScrollOperationId = animated
+        ? ++animatedImperativeScrollOperationCounterRef.current
+        : null;
+      if (animatedScrollOperationId !== null) {
+        activeAnimatedImperativeScrollOperationIdRef.current =
+          animatedScrollOperationId;
       }
       void list?.scrollToEnd({ animated });
       if (!list) return;
@@ -984,7 +1009,13 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           setShowScrollToBottom(true);
         },
         onFirstSettle: () => {
-          hasActiveAnimatedImperativeScrollRef.current = false;
+          if (
+            animatedScrollOperationId !== null &&
+            activeAnimatedImperativeScrollOperationIdRef.current ===
+              animatedScrollOperationId
+          ) {
+            activeAnimatedImperativeScrollOperationIdRef.current = null;
+          }
         },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
@@ -1172,9 +1203,41 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           const currentAnchorIndex =
             activeTimelineAnchorIndexRef.current ?? anchorIndex;
           const scrollNode = list.getScrollableNode();
+          // Round-2 finding 1: every real send/steer/edit/queued-flush/A2A
+          // anchor is ANIMATED (decision #12) and `beginAnchoringNewTurn`
+          // clears `suppressFollowRestoreRef` unconditionally - the SAME gap
+          // H1 fixed for `scrollToEnd`/navigation, reachable via the most
+          // ordinary path: send -> reader pointerdowns to select text
+          // mid-animation -> mode goes free, but nothing had armed the
+          // freeze's OTHER input, so the still-running native animation's
+          // terminal report could re-pin follow against the cancel. Fresh-
+          // open stays safe automatically - `anchorAnimatedRef.current` is
+          // `false` there (decision #15), so `animatedAnchorOperationId` is
+          // `null` and both the arm below and the clear are no-ops.
+          const animatedAnchorOperationId = anchorAnimatedRef.current
+            ? ++animatedImperativeScrollOperationCounterRef.current
+            : null;
+          if (animatedAnchorOperationId !== null) {
+            activeAnimatedImperativeScrollOperationIdRef.current =
+              animatedAnchorOperationId;
+          }
           awaitScrollSettle(
             scrollNode,
             () => {
+              // Cleared FIRST, unconditionally relative to this operation's
+              // OWN bookkeeping below (mirrors `settleChatTimelineNavigation`'s
+              // `onFirstSettle` - "the animation genuinely stopped" holds
+              // regardless of whether this settle goes on to reposition) -
+              // but ownership-checked against the SHARED ref (round-2 finding
+              // 2): a superseded/late settle must not clobber a newer
+              // operation's own armed ownership.
+              if (
+                animatedAnchorOperationId !== null &&
+                activeAnimatedImperativeScrollOperationIdRef.current ===
+                  animatedAnchorOperationId
+              ) {
+                activeAnimatedImperativeScrollOperationIdRef.current = null;
+              }
               if (positionedTimelineAnchorRef.current !== messageId) return;
               if (anchorUserScrollGenerationRef.current !== generationAtReady)
                 return;
@@ -1832,9 +1895,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       // H1 fix: already covered by suppression's own freeze condition, but
       // set uniformly for every animated imperative scroll (same pattern as
-      // `scrollToEnd`) - see `hasActiveAnimatedImperativeScrollRef`'s doc.
-      if (location.animated) {
-        hasActiveAnimatedImperativeScrollRef.current = true;
+      // `scrollToEnd`) - see `activeAnimatedImperativeScrollOperationIdRef`'s
+      // doc. Round-2: operation id, not a boolean.
+      const animatedScrollOperationId = location.animated
+        ? ++animatedImperativeScrollOperationCounterRef.current
+        : null;
+      if (animatedScrollOperationId !== null) {
+        activeAnimatedImperativeScrollOperationIdRef.current =
+          animatedScrollOperationId;
       }
       scrollToTimelineLocation(location);
       const list = chatTimelineRef.current;
@@ -1871,7 +1939,13 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           // reconcile.
         },
         onFirstSettle: () => {
-          hasActiveAnimatedImperativeScrollRef.current = false;
+          if (
+            animatedScrollOperationId !== null &&
+            activeAnimatedImperativeScrollOperationIdRef.current ===
+              animatedScrollOperationId
+          ) {
+            activeAnimatedImperativeScrollOperationIdRef.current = null;
+          }
         },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
@@ -2166,9 +2240,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               onIsAtEndChange={onIsAtEndChange}
               followEnabled={isFollowingEnd}
               sizePreservationEnabled={isFreeScrolling}
-              navigationHighlightedMessageId={
-                navigationHighlightedMessageId
-              }
+              navigationHighlightedMessageId={navigationHighlightedMessageId}
               onListMetricsChange={onListMetricsChange}
               data-testid="chat-messages-scroll"
               data-scroll-mode={chatScrollModeDataAttribute(

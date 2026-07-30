@@ -1415,6 +1415,133 @@ describe("ChatMessages scroll policy", () => {
       });
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
     });
+
+    it("Round-2 finding 1: a bare pointerdown mid-animation during the STANDARD SEND-ANCHOR path still freezes (the anchor engine's own scrollToIndex must join the same ownership)", async () => {
+      // Root cause: EVERY real send/steer/edit/queued-flush/A2A anchor is
+      // ANIMATED (decision #12) and beginAnchoringNewTurn clears
+      // suppressFollowRestoreRef unconditionally - the same gap the pill-click
+      // pin above closes, but reachable via the single most ordinary path in
+      // the whole app: send a message, then pointerdown to select text while
+      // the anchor is still animating into position.
+      const sendId = "round2-f1-send";
+      const messages = makeCompletedTranscript(10);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "round2-f1-anchor-freeze",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // Let the anchor engine's OWN async chain (onAnchorReady -> two nested
+      // requestAnimationFrame calls inside positionAnchor) actually ISSUE its
+      // ANIMATED scrollToIndex - arming the ownership token - WITHOUT waiting
+      // for its full settle (CHAT_ANCHOR_SETTLE_FALLBACK_MS is 750ms; this is
+      // ~2 frames + 20ms, deliberately short of that).
+      await waitForRevealPassTick();
+
+      const scrollNode = getScrollNode();
+
+      // A bare pointerdown - NO accompanying scroll - mid-animation. Decision
+      // #6: cancels follow AND must freeze the anchor engine's still-in-flight
+      // positioning animation (round-2 finding 1 - this is the NEW coverage;
+      // pre-fix, nothing armed the ownership token for this call site).
+      act(() => {
+        fireEvent.pointerDown(scrollNode);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // Deliver what would be the animation's own terminal near-end report,
+      // as if it kept running unfrozen. Must NOT reverse the cancellation.
+      act(() => {
+        fireScrollToEnd();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+    });
+
+    it("Round-2 finding 2: op1's late stale settle does not clobber op2's freshly-armed ownership (operation-token, not a boolean)", async () => {
+      // Root cause: a bare boolean is not operation-safe. onFirstSettle (and
+      // the anchor engine's own settle callback) fire unconditionally
+      // regardless of isAborted, and each used to write `false`
+      // unconditionally - op1's late 750ms fallback (its awaitScrollSettle
+      // cancellation is never invoked, only ever left to expire) could clear
+      // op2's freshly-armed ownership if op2 started before op1's fallback
+      // fired. Fixed with a monotonic operation id: each operation clears
+      // the shared ref ONLY if it still owns it (captured id === current).
+      const messages = makeTranscript(24);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "round2-f2-operation-token",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+
+      // OP1: an animated minimap navigation - arms the shared ownership
+      // token and starts its OWN 750ms awaitScrollSettle fallback (jsdom
+      // never fires native scrollend). Its returned cancellation is
+      // discarded by design (settleChatTimelineNavigation never invokes
+      // it), so this fallback timer keeps running even once op1 is
+      // superseded by a later operation.
+      await selectLastChatTurnMinimapItem();
+
+      // Real gap so op1's and op2's independent 750ms fallbacks land at
+      // clearly distinguishable real-time moments - needed only so this
+      // test can isolate "op1's stale callback fires" from "op2 also
+      // genuinely settles", not required by the mechanism itself.
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 250);
+        });
+      });
+
+      // OP2: pill click (scrollToEnd, animated). Unlike minimap nav, this
+      // path clears suppressFollowRestoreRef unconditionally (explicit
+      // go-live) - so from this point on, ONLY the operation-token
+      // mechanism (not suppression) can protect a subsequent pointerdown,
+      // isolating exactly what this fix changed.
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+      // Wait until comfortably PAST op1's own fallback (750ms after op1 was
+      // issued = 900ms from op1, a 150ms margin matching this file's own
+      // waitForAnchorEngineSettle convention) but comfortably SHORT of op2's
+      // own fallback (750ms after op2 = 1000ms from op1, still 100ms away at
+      // T=900ms) - isolates "op1's stale settle fires and is a no-op" from
+      // "op2 also happens to have genuinely settled on its own", so the
+      // assertion below can only pass because the ownership check held.
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 650);
+        });
+      });
+
+      const scrollNode = getScrollNode();
+      // A bare pointerdown now must STILL freeze op2's still-in-flight
+      // animation - proving the shared ownership ref is still non-null
+      // (owned by op2), i.e. op1's late, superseded settle did NOT clear it
+      // out from under op2 (the bug this operation-token conversion fixes).
+      act(() => {
+        fireEvent.pointerDown(scrollNode);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      act(() => {
+        fireScrollToEnd();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+    });
   });
 
   describe("M3b minimap hit-strip is fully inert at zero gutter budget, not just visually collapsed", () => {
