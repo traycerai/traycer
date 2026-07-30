@@ -68,6 +68,9 @@ export interface AppLocalNotificationsState {
 
   activateIdentity: (userId: string) => void;
   deactivateIdentity: () => void;
+  /** Discards the current identity's rows while keeping that identity active
+   * for new local arrivals. Cloud-only mode must have no local shadow feed. */
+  reset: () => void;
   upsert: (entry: AppLocalNotificationInput) => void;
   upsertReplacing: (entry: AppLocalNotificationInput) => void;
   upsertReplacingPreservingReadState: (
@@ -234,6 +237,11 @@ export function createAppLocalNotificationsStore(initialName: string) {
 
         deactivateIdentity: () => {
           set(appLocalInitialState());
+        },
+
+        reset: () => {
+          const { activeUserId } = get();
+          set({ ...appLocalInitialState(), activeUserId });
         },
 
         upsert: (entry) => {
