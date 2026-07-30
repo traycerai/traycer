@@ -1473,18 +1473,21 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       liveFollowUserScrollGenerationRef.current ===
       anchorUserScrollGenerationRef.current;
     if (!generationOwned) {
-      // Ticket 11 fix #3: a suppressed programmatic nav that landed at/near
-      // the tail (decision #14/#21 - stays free-scrolling, never restores
-      // follow via position) fires no scroll event of its own when LATER
-      // streaming growth pushes content back off-screen - nothing moves the
-      // scroll, so no native `scroll` event exists to drive
-      // `onIsAtEndChange`. This per-`messages`-change effect is the only
-      // EXISTING hook that already reacts to content growth without a real
-      // scroll; piggyback on it purely for pill bookkeeping (no scroll
-      // mutation here - the no-follow contract is untouched).
-      if (!suppressFollowRestoreRef.current) return;
+      const suppressionAtSchedule = suppressFollowRestoreRef.current;
+      // A free-scrolling reader may be at the tail when follow is released,
+      // either through a suppressed programmatic navigation or a scroll-less
+      // gesture such as pointerdown. Later growth moves no scroll position,
+      // so no native event exists to drive onIsAtEndChange. Reconcile only
+      // the pill here while that suppression state remains stable; the
+      // no-follow contract and scroll position stay intact.
       return scheduleChatTimelineDoubleRaf(() => {
-        if (!suppressFollowRestoreRef.current) return;
+        if (
+          liveFollowUserScrollGenerationRef.current ===
+            anchorUserScrollGenerationRef.current ||
+          suppressFollowRestoreRef.current !== suppressionAtSchedule
+        ) {
+          return;
+        }
         const list = chatTimelineRef.current;
         if (!list) return;
         // Strict `isAtEnd`, not `resolveChatTimelineIsAtEnd`'s lenient

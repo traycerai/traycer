@@ -4083,6 +4083,37 @@ describe("ChatMessages scroll policy", () => {
       expect(isJumpPillVisible()).toBe(true);
     });
 
+    it("shows the pill when growth leaves an ordinary pointerdown-released reader behind", async () => {
+      const messages = makeCompletedTranscript(20);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t11-pointerdown-growth-pill",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+
+      fireEvent.pointerDown(scrollNode);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      expect(isJumpPillVisible()).toBe(false);
+      const parked = scrollNode.scrollTop;
+
+      let grown: ReadonlyArray<ChatMessageModel> = messages;
+      for (let i = 0; i < 20; i += 1) {
+        grown = appendOneStreamingChunk(grown, 2200 + i, 1_100_000 + i);
+      }
+      rerenderMessages(grown);
+      await settleLegendList();
+      await waitForRevealPassTick();
+      await waitForPillVisible();
+
+      expect(scrollNode.scrollTop).toBe(parked);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      expect(isJumpPillVisible()).toBe(true);
+    });
+
     it("(e) strict 1px epsilon gates mode reconciliation, not loose isNearEnd alone", async () => {
       await setupOverflowingAnchoredTurn({
         scrollStateKey: "t11-e-strict-epsilon",
