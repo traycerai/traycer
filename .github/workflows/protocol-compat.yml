@@ -6,14 +6,17 @@ name: Protocol Compatibility
 #  - `protocol-compat` resolves the protected set from the remote's release
 #    tags AT RUN TIME (never from a file in the tree, so a PR cannot shrink
 #    it - the only in-tree knob is `protocol/scripts/compat/support-floor.json`,
-#    guarded by the tripwire job below), dumps each baseline's protocol
-#    surface from its immutable tag in a git worktree, checks the PR tree
-#    against every one in a single combined report (two-sided handshake
-#    bridging + same-version wire-schema rules), and drives the real client
-#    transports against the baseline manifests. This is one job with a
-#    stable name that loops over baselines internally rather than fanning
-#    out a matrix job per baseline, so the required-status-check list in
-#    branch protection never has to change as new releases ship.
+#    guarded by the tripwire job below), obtains each baseline's protocol
+#    surface - preferring the protocol-surface.json asset the release itself
+#    published, which is truthful regardless of where the release tag sits,
+#    and reconstructing it from the tag in a git worktree when the asset is
+#    absent - checks the PR tree against every one in a single combined
+#    report (two-sided handshake bridging + same-version wire-schema rules),
+#    and drives the real client transports against the baseline manifests.
+#    This is one job with a stable name that loops over baselines internally
+#    rather than fanning out a matrix job per baseline, so the
+#    required-status-check list in branch protection never has to change as
+#    new releases ship.
 #  - `guarded-files-tripwire` fails any PR that edits (not adds) the compat
 #    governance files without the `protocol-compat-override` label, making
 #    baseline regeneration a deliberate, reviewable act. This closes the
@@ -66,32 +69,71 @@ jobs:
         run: |
           bun run protocol/scripts/compat/resolve-baselines.ts "$BASE_REPO_URL" \
             | jq -c '.baselines' > /tmp/baselines.json
+          if [ "$(jq 'length' /tmp/baselines.json)" = "0" ]; then
+            echo "::error::resolve-baselines.ts produced no protected baselines; refusing to run the gate with zero baselines." >&2
+            exit 1
+          fi
           echo "Protected baselines:"
           jq -r '.[] | "  " + .tags[0] + " (" + .sha + ")"' /tmp/baselines.json
       - name: Dump the working tree's protocol surface
         run: bun run protocol/scripts/compat/dump-protocol-surface.ts > /tmp/working-tree.json
-      - name: Dump every released baseline's protocol surface from its tag
+      - name: Obtain every released baseline's protocol surface (published asset, else reconstruct from tag)
+        env:
+          # Assets live on the BASE repo's releases, same as the tag set.
+          BASE_REPO_URL: ${{ github.event.pull_request.base.repo.clone_url || format('https://github.com/{0}.git', github.repository) }}
         run: |
           set -e
           mkdir -p /tmp/surfaces
           : > /tmp/baseline-args.txt
-          while IFS=$'\t' read -r sha label; do
-            echo "::group::dump ${label} (${sha})"
-            git fetch --no-tags origin "$sha"
-            git worktree add --detach "/tmp/baseline-${label}" "$sha"
-            # Baselines that predate the compat tooling get the (self-contained)
-            # dump script injected; newer tags run their own committed copy.
-            mkdir -p "/tmp/baseline-${label}/protocol/scripts/compat" \
-                     "/tmp/baseline-${label}/protocol/src/framework"
-            [ -f "/tmp/baseline-${label}/protocol/scripts/compat/dump-protocol-surface.ts" ] || \
-              cp protocol/scripts/compat/dump-protocol-surface.ts "/tmp/baseline-${label}/protocol/scripts/compat/"
-            [ -f "/tmp/baseline-${label}/protocol/src/framework/surface-build.ts" ] || \
-              cp protocol/src/framework/surface-build.ts "/tmp/baseline-${label}/protocol/src/framework/"
-            (cd "/tmp/baseline-${label}" && bun install >/dev/null && bun run protocol/scripts/compat/dump-protocol-surface.ts) \
-              > "/tmp/surfaces/${label}.json"
-            echo "${label}=/tmp/surfaces/${label}.json" >> /tmp/baseline-args.txt
+          release_repo_url="${BASE_REPO_URL%.git}"
+          while IFS=$'\t' read -r sha tags; do
+            label="${tags%% *}"
+            echo "::group::surface ${label} (${sha})"
+            out="/tmp/surfaces/${label}.json"
+            # Prefer the protocol-surface.json asset the release itself
+            # published: it was dumped from the build's pinned tree by that
+            # release's own gate, so it stays truthful even when the release
+            # tag was planted on the wrong commit (exactly what blocked the
+            # v1.1.9 desktop release with a phantom stream finding). Any tag
+            # in the sha-group may carry the asset; releases predating it
+            # fall back to reconstructing the surface from the tag commit.
+            fetched=""
+            read -r -a group_tags <<< "$tags"
+            for tag in "${group_tags[@]}"; do
+              if curl -sSfL --retry 3 --connect-timeout 10 --max-time 60 \
+                "${release_repo_url}/releases/download/${tag}/protocol-surface.json" -o "$out" \
+                && SURFACE_PATH="$out" bun -e '
+                  import { readFileSync } from "node:fs";
+                  import { protocolSurfaceSchema } from "./protocol/src/framework/surface-compat.ts";
+                  const path = process.env.SURFACE_PATH;
+                  if (path === undefined) throw new Error("SURFACE_PATH is required");
+                  protocolSurfaceSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+                ' >/dev/null 2>&1; then
+                fetched="$tag"
+                break
+              fi
+              rm -f "$out"
+            done
+            if [ -n "$fetched" ]; then
+              echo "using the protocol-surface.json asset published on ${fetched}"
+            else
+              echo "no usable release asset; reconstructing the surface from the tag commit"
+              git fetch --no-tags origin "$sha"
+              git worktree add --detach "/tmp/baseline-${label}" "$sha"
+              # Baselines that predate the compat tooling get the (self-contained)
+              # dump script injected; newer tags run their own committed copy.
+              mkdir -p "/tmp/baseline-${label}/protocol/scripts/compat" \
+                       "/tmp/baseline-${label}/protocol/src/framework"
+              [ -f "/tmp/baseline-${label}/protocol/scripts/compat/dump-protocol-surface.ts" ] || \
+                cp protocol/scripts/compat/dump-protocol-surface.ts "/tmp/baseline-${label}/protocol/scripts/compat/"
+              [ -f "/tmp/baseline-${label}/protocol/src/framework/surface-build.ts" ] || \
+                cp protocol/src/framework/surface-build.ts "/tmp/baseline-${label}/protocol/src/framework/"
+              (cd "/tmp/baseline-${label}" && bun install >/dev/null && bun run protocol/scripts/compat/dump-protocol-surface.ts) \
+                > "$out"
+            fi
+            echo "${label}=${out}" >> /tmp/baseline-args.txt
             echo "::endgroup::"
-          done < <(jq -r '.[] | [.sha, .tags[0]] | @tsv' /tmp/baselines.json)
+          done < <(jq -r '.[] | [.sha, (.tags | join(" "))] | @tsv' /tmp/baselines.json)
       - name: Check surface compatibility against every released baseline (two-sided handshake + wire schemas)
         run: |
           args=()

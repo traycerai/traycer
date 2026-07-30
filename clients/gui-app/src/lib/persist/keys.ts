@@ -189,6 +189,7 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   { camelName: "leftPanel", leaf: "left-panel", kind: "static" },
+  { camelName: "commGraphPanel", leaf: "comm-graph-panel", kind: "static" },
   { camelName: "fileTree", leaf: "file-tree", kind: "static" },
   { camelName: "historySearch", leaf: "history-search", kind: "static" },
   { camelName: "landingDraft", leaf: "draft", kind: "static" },

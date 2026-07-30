@@ -1,4 +1,7 @@
-import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatQueueState,
+  ChatRunStatus,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AcceptedChatAction,
@@ -173,6 +176,107 @@ export function reconcileSnapshotChange(
     },
     initial,
   );
+}
+
+/**
+ * Input for turn-settled reconciliation: the state slices needed to decide
+ * which optimistic pending user messages can no longer materialize.
+ */
+export type ReconcileTurnSettledInput = {
+  readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
+  readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  readonly messages: ReadonlyArray<Message>;
+  readonly queue: ChatQueueState;
+  readonly failedSendRestoration: FailedSendRestorationState | null;
+};
+
+export type ReconcileTurnSettledPatch = {
+  readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  readonly failedSendRestoration: FailedSendRestorationState | null;
+};
+
+/**
+ * Whether a `turnStateChanged` frame or `chat.subscribe` snapshot reports the
+ * turn settled: the host's own `turnInProgress` when present, with the
+ * `runStatus` idle read as the fallback for an older host that predates the
+ * field. A settled report is the trigger for {@link reconcileTurnSettled}.
+ */
+export function turnSettledFromStatus(
+  turnInProgress: boolean | undefined,
+  runStatus: ChatRunStatus,
+): boolean {
+  return turnInProgress === undefined ? runStatus === "idle" : !turnInProgress;
+}
+
+/**
+ * Drop stranded optimistic user messages when the turn settles.
+ *
+ * An accepted send ack deliberately keeps its `pendingUserMessages` entry
+ * alive - the durable `messageAccepted` frame is what normally clears it. A
+ * stop during turn activation can abort the send after the accepted ack but
+ * before the host appends the message, in which case neither
+ * `messageAccepted` nor a rejected ack ever arrives and the entry would
+ * survive indefinitely - keeping edit/delete gated off and rendering a user
+ * message the host never recorded. A settled report is the authoritative
+ * "this send will never materialize" signal. It arrives two ways, and this
+ * runs on both: a live `turnStateChanged` frame, and a re-subscribe snapshot
+ * (`reconcileSnapshotChange` only settles sends still in `pendingActions`,
+ * so an already-acked entry needs this pass on reconnect too).
+ *
+ * An entry survives while a path to materialization remains open: its ack is
+ * still in flight (`pendingActions`) or it was parked in the queue (a later
+ * `queueChanged`/`messageAccepted` settles it, and the mutation gate stays
+ * closed on the queue anyway). An entry whose message already reached the
+ * transcript is stale bookkeeping - dropped without restoration. Truly dead
+ * entries are dropped and the first one's content is restored to the
+ * composer via the `failedSendRestoration` slot (single-slot; an occupied
+ * slot is never overwritten).
+ *
+ * Pure function - all state is passed explicitly. `settled` is
+ * {@link turnSettledFromStatus}'s answer for the triggering frame/snapshot; a
+ * non-settled report returns the input slices unchanged.
+ */
+export function reconcileTurnSettled(
+  settled: boolean,
+  input: ReconcileTurnSettledInput,
+): ReconcileTurnSettledPatch {
+  if (!settled) {
+    return {
+      pendingUserMessages: input.pendingUserMessages,
+      failedSendRestoration: input.failedSendRestoration,
+    };
+  }
+  const confirmedMessageIds = confirmedMessageIdsForMessages(input.messages);
+  const stranded = input.pendingUserMessages.filter(
+    (message) =>
+      !Object.hasOwn(input.pendingActions, message.clientActionId) &&
+      !queueContainsPendingSend(input.queue, message.messageId, message),
+  );
+  if (stranded.length === 0) {
+    return {
+      pendingUserMessages: input.pendingUserMessages,
+      failedSendRestoration: input.failedSendRestoration,
+    };
+  }
+  const restorable = stranded.find(
+    (message) => !confirmedMessageIds.has(message.messageId),
+  );
+  const strandedActionIds = new Set(
+    stranded.map((message) => message.clientActionId),
+  );
+  return {
+    pendingUserMessages: input.pendingUserMessages.filter(
+      (message) => !strandedActionIds.has(message.clientActionId),
+    ),
+    failedSendRestoration:
+      input.failedSendRestoration !== null || restorable === undefined
+        ? input.failedSendRestoration
+        : {
+            clientActionId: restorable.clientActionId,
+            content: restorable.content,
+            reason: "The message was not recorded before the turn stopped.",
+          },
+  };
 }
 
 export interface StalePendingActionsSweep {

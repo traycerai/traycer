@@ -53,10 +53,12 @@ import type {
 } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
 } from "@/stores/epics/canvas/types";
+import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
@@ -923,6 +925,9 @@ function TabIcon(props: {
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isCommGraphTileRef(props.tab)) {
+    return <CommGraphTileIcon className="size-3.5" />;
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win

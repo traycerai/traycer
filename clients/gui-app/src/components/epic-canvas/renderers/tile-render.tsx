@@ -23,6 +23,7 @@ import { TicketTile } from "./ticket-tile";
 import { WorkspaceFileTile } from "./workspace-file-tile";
 import { GitDiffTile } from "./git-diff-tile";
 import { SnapshotDiffTile } from "./snapshot-diff-tile";
+import { CommGraphTile } from "./comm-graph-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
@@ -107,6 +108,12 @@ const TILE_RENDERERS: TileRendererRegistry = {
   ),
   "snapshot-diff": ({ node, viewTabId }) => (
     <SnapshotDiffTile node={node} viewTabId={viewTabId} />
+  ),
+  // Epic-scoped, not host-scoped: the tile fans a subscription out per host.
+  // The surrounding `TabHostProvider` carries the ref's inert placeholder host
+  // and this body never reads it.
+  "comm-graph": ({ node, viewTabId }) => (
+    <CommGraphTile node={node} viewTabId={viewTabId} />
   ),
   // A blank tab's body IS the inline opener; picking content replaces it in
   // place (via openTileInPane). `tileId` is the group id; `isActive` drives

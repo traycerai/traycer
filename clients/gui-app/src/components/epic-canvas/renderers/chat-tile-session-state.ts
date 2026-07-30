@@ -309,17 +309,30 @@ export function canModifyChatMessages(input: {
     | "runStatus"
     | "activeTurn"
     | "queue"
+    | "backgroundItems"
+    | "turnInProgress"
     | "pendingUserMessages"
     | "pendingActions"
   >;
 }): boolean {
   if (!input.canAct) return false;
-  // `runStatus` is the host-owned source of truth for an in-progress run and
-  // covers windows `activeTurn` misses - the pre-turn `turnActivating` phase
-  // (provider/worktree setup) and stop-during-activation both report a non-idle
-  // `runStatus` while `activeTurn` is still null. Gate on it so edit/delete stay
-  // disabled for the whole run, matching the composer's `runStatus`-driven UX.
-  if (input.state.runStatus !== "idle") return false;
+  // Narrowed via `resolvedTurnStatus`, not the raw `runStatus`: the raw value
+  // also reads "running" while visible background work outlives the settled
+  // turn (Bash `run_in_background` / a subagent / Monitor), which would keep
+  // edit/delete hidden indefinitely with no turn to wait for - the composer
+  // and restore gating already read the narrowed value for the same reason.
+  // The narrowed signal still covers the windows `activeTurn` misses: the
+  // pre-turn `turnActivating` phase (provider/worktree setup) and
+  // stop-during-activation both keep the host's `turnInProgress` true until
+  // the run truly unwinds. Queued sends are handled by the queue check below.
+  if (
+    resolvedTurnStatus(
+      input.state,
+      composerTurnStatus(input.state.runStatus),
+    ) !== null
+  ) {
+    return false;
+  }
   if (input.state.activeTurn !== null) return false;
   if (input.state.queue.items.length > 0) return false;
   if (input.state.pendingUserMessages.length > 0) return false;

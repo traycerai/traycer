@@ -60,6 +60,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
   readonly supplementalContent: ReactNode | null;
+  readonly side: "top" | "right" | "bottom" | "left";
 }): ReactNode {
   const [hoverState, setHoverState] =
     useState<OwnerMetadataHoverState>(CLOSED_HOVER_STATE);
@@ -171,7 +172,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
           />
         </div>
       }
-      side="right"
+      side={props.side}
       sideOffset={4}
       align="start"
       open={open}

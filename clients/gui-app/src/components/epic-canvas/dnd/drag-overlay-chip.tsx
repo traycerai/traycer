@@ -10,6 +10,7 @@ import * as m from "motion/react-m";
 import { FileDiff, FilePlus } from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
+import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
@@ -21,6 +22,7 @@ import {
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   type BlankTileRef,
@@ -133,6 +135,14 @@ function EpicCanvasNodeDragOverlay(props: {
   }
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
+  }
+  if (isCommGraphTileRef(props.node)) {
+    return (
+      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+        <CommGraphTileIcon className="size-3.5" />
+        <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      </m.div>
+    );
   }
   return <ArtifactNodeDragOverlay node={props.node} epicId={props.epicId} />;
 }
