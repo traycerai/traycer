@@ -208,20 +208,23 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         }}
       >
         {profiles.map((profile, index) => {
-          const statusSuffix = profileRowStatusSuffix(profile);
-          const commitId = profileCommitId(profile);
-          const label = profileDisplayLabel(profile);
-          const shortcutHint = shortcutHintForIndex(index);
-          const usageEntry = usagePresentation?.entries.get(commitId);
-          const selected = commitId === activeProfileId;
-          const admission = admissionByProfileId?.get(commitId) ?? null;
-          const rowDisabled = admission?.disabled === true;
-          const accessibleLabel = profileRowAccessibleLabel({
-            label,
-            profile,
-            selected,
+          const {
             statusSuffix,
+            commitId,
+            label,
+            shortcutHint,
             usageEntry,
+            selected,
+            admission,
+            rowDisabled,
+            accessibleLabel,
+          } = computeProfileRowState({
+            profile,
+            index,
+            activeProfileId,
+            shortcutHintForIndex,
+            usagePresentation,
+            admissionByProfileId,
           });
           const row = (
             <DropdownMenuItem
@@ -263,7 +266,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               {usageEntry !== undefined ? (
                 <ProfileUsageCompactMeter entry={usageEntry} />
               ) : null}
-              {shortcutHint !== null ? (
+              {shortcutHint !== null && !rowDisabled ? (
                 <DropdownMenuShortcut
                   data-testid={`model-profile-digit-${shortcutHint.digit}`}
                 >
@@ -317,6 +320,60 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   );
 }
 
+/** Every per-row derived value the `.map()` callback needs, computed in one
+ *  place - split out purely to keep that callback's branch count down. */
+function computeProfileRowState(input: {
+  readonly profile: ProviderProfile;
+  readonly index: number;
+  readonly activeProfileId: string | null;
+  readonly shortcutHintForIndex: (
+    index: number,
+  ) => ProfileDropdownShortcutHint | null;
+  readonly usagePresentation: ProfileDropdownUsagePresentation | null;
+  readonly admissionByProfileId: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
+}): {
+  readonly statusSuffix: string | null;
+  readonly commitId: string | null;
+  readonly label: string;
+  readonly shortcutHint: ProfileDropdownShortcutHint | null;
+  readonly usageEntry: ProfileDropdownUsageEntry | undefined;
+  readonly selected: boolean;
+  readonly admission: ProfileRowAdmission | null;
+  readonly rowDisabled: boolean;
+  readonly accessibleLabel: string;
+} {
+  const statusSuffix = profileRowStatusSuffix(input.profile);
+  const commitId = profileCommitId(input.profile);
+  const label = profileDisplayLabel(input.profile);
+  const shortcutHint = input.shortcutHintForIndex(input.index);
+  const usageEntry = input.usagePresentation?.entries.get(commitId);
+  const selected = commitId === input.activeProfileId;
+  const admission = input.admissionByProfileId?.get(commitId) ?? null;
+  const rowDisabled = admission?.disabled === true;
+  const accessibleLabel = profileRowAccessibleLabel({
+    label,
+    profile: input.profile,
+    selected,
+    statusSuffix,
+    usageEntry,
+    admissionReason: admission?.reason ?? null,
+  });
+  return {
+    statusSuffix,
+    commitId,
+    label,
+    shortcutHint,
+    usageEntry,
+    selected,
+    admission,
+    rowDisabled,
+    accessibleLabel,
+  };
+}
+
 /** Wraps a disabled-with-reason row in a tooltip; passes an admitted (or
  *  reasonless) row through unchanged. Split out of the row `.map()` purely to
  *  keep that callback's branch count down. */
@@ -365,8 +422,28 @@ function profileRowAccessibleLabel(input: {
   readonly selected: boolean;
   readonly statusSuffix: string | null;
   readonly usageEntry: ProfileDropdownUsageEntry | undefined;
+  /** The row's admission-disabled reason (`ProfileRowAdmission.reason`), when
+   *  set. Radix skips a disabled item during roving-focus arrow navigation,
+   *  so the tooltip that also renders this text is hover-only for keyboard/AT
+   *  users - folding it into the accessible name is what makes the reason
+   *  perceivable to them at all. */
+  readonly admissionReason: string | null;
 }): string {
   const label = `${input.label}${terminalBadgeSuffix(input.profile)}`;
+  const base = profileRowAccessibleLabelBase(input, label);
+  if (input.admissionReason === null) return base;
+  return `${base}, ${input.admissionReason}`;
+}
+
+function profileRowAccessibleLabelBase(
+  input: {
+    readonly profile: ProviderProfile;
+    readonly selected: boolean;
+    readonly statusSuffix: string | null;
+    readonly usageEntry: ProfileDropdownUsageEntry | undefined;
+  },
+  label: string,
+): string {
   if (input.usageEntry === undefined) {
     if (input.statusSuffix === null) return label;
     return `${label}, ${input.statusSuffix}`;

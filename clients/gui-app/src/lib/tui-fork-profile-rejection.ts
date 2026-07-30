@@ -39,9 +39,15 @@ const LATE_GUARD_SUBCODES: ReadonlyArray<TuiForkProfileAdmissionSubcode> = [
  *     (`tui-fork-scope-guard.ts`) - there is no separate wire field for it.
  *     A rejection from the guard's OTHER branch (a target profile-lifecycle
  *     error - unknown/tombstoned/setup-pending/unsupported-provider) carries
- *     no such prefix on this path (only the bulk preflight reshapes that
- *     family into a `TARGET_PROFILE_UNAVAILABLE` verdict), so it falls
- *     through unrecognized here and is left to the mutation's default toast.
+ *     no subcode prefix on this path at all - the host re-throws that error
+ *     class as-is (`discloseForkRejectionResidue` in
+ *     `agent-tui-prepare-launch-resolver.ts`), not wrapped in
+ *     `TuiForkScopeGuardError`. Those error classes live host-side only
+ *     (`profile-resolver.ts`) and cannot be imported into this bundle, and
+ *     the wire envelope carries only `{ code, message }`, so
+ *     `parseProfileLifecycleRejection` below recognizes them by their fixed
+ *     message templates instead - the only client-observable signal this
+ *     path has.
  */
 export function resolveTuiForkRejectionView(
   error: unknown,
@@ -69,7 +75,38 @@ function parseLateGuardRejection(error: unknown): {
       return { subcode, detail: error.message.slice(prefix.length) };
     }
   }
-  return null;
+  return parseProfileLifecycleRejection(error);
+}
+
+/**
+ * The four fixed message templates `profile-resolver.ts`'s lifecycle-error
+ * classes construct (`ProfileNotFoundError`/`ProfileTombstonedError`/
+ * `ProfileSetupPendingError`/`ProfileNotSupportedByProviderError`), matched
+ * loosely enough to survive the interpolated profile/provider id and the
+ * host's optional appended `FORK_REJECTION_RESIDUE_DISCLOSURE` sentence.
+ * Coupled to those constructors by construction - update both together.
+ */
+const PROFILE_LIFECYCLE_MESSAGE_PATTERNS: ReadonlyArray<RegExp> = [
+  /^No profile ".*" is registered for provider ".*"\./,
+  /^Profile ".*" for provider ".*" was removed and can no longer be used\./,
+  /^Profile ".*" for provider ".*" is still completing setup and cannot be used yet\./,
+  /^Provider ".*" does not support managed profiles\./,
+];
+
+function parseProfileLifecycleRejection(error: HostRpcError): {
+  readonly subcode: TuiForkProfileAdmissionSubcode;
+  readonly detail: string;
+} | null {
+  // The lifecycle family maps to `RPC_ERROR` on the wire (`handler.ts`'s
+  // batch-2 400 branch), never `E_INVALID_ARGUMENT` (reserved for
+  // `TuiForkScopeGuardError`'s `InvalidArgumentError` base) - checking it
+  // narrows the message-pattern match to the failure family it's meant for.
+  if (error.code !== "RPC_ERROR") return null;
+  const matches = PROFILE_LIFECYCLE_MESSAGE_PATTERNS.some((pattern) =>
+    pattern.test(error.message),
+  );
+  if (!matches) return null;
+  return { subcode: "TARGET_PROFILE_UNAVAILABLE", detail: error.message };
 }
 
 function buildRejectionView(

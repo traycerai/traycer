@@ -16,8 +16,16 @@ import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 let mockBinding: WorktreeBinding | null = null;
 let mockBindingResolved = true;
 
+/** The subset of `TerminalAgentForkDialogProps` this file's tests read off a
+ *  captured open call - not the real (unexported) prop type, since the mock
+ *  below stands in for the whole component and only these fields matter here. */
+interface CapturedForkDialogProps {
+  readonly open: boolean;
+  readonly target: { readonly intent: string } | null;
+}
+
 const tileMocks = vi.hoisted(() => ({
-  openProps: [] as unknown[],
+  openProps: [] as CapturedForkDialogProps[],
   forkProfileSupported: true,
 }));
 
@@ -167,9 +175,8 @@ vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
 
 // Capture fork-dialog open props; the dialog body is not under test here.
 vi.mock("../terminal-agent-fork-dialog", () => ({
-  TerminalAgentForkDialog: (props: unknown) => {
-    const dialogProps = props as { readonly open: boolean };
-    if (dialogProps.open) tileMocks.openProps.push(props);
+  TerminalAgentForkDialog: (props: CapturedForkDialogProps) => {
+    if (props.open) tileMocks.openProps.push(props);
     return null;
   },
 }));
@@ -212,9 +219,7 @@ function renderTile(): void {
 
 function lastForkTargetIntent(): string {
   expect(tileMocks.openProps.length).toBeGreaterThan(0);
-  const props = tileMocks.openProps[tileMocks.openProps.length - 1] as {
-    readonly target: { readonly intent: string } | null;
-  };
+  const props = tileMocks.openProps[tileMocks.openProps.length - 1];
   if (props.target === null) {
     throw new Error("expected fork dialog target");
   }
@@ -225,9 +230,13 @@ async function openContinueMenuItem(): Promise<HTMLElement> {
   const trigger = screen.getByRole("button", { name: "More fork options" });
   fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
   fireEvent.click(trigger);
+  // The accessible name gains an appended disabled reason on an old host
+  // (`tui-agent-tile.tsx`'s `aria-label`, amend-01 Fix 5) - match the stable
+  // prefix so this helper finds the item in both the enabled and disabled
+  // cell.
   return waitFor(() =>
     screen.getByRole("menuitem", {
-      name: "Continue under another profile…",
+      name: /^Continue under another profile…/,
     }),
   );
 }

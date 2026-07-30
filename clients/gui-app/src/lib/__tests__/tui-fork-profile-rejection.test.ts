@@ -125,7 +125,7 @@ describe("resolveTuiForkRejectionView", () => {
     expect(resolveTuiForkRejectionView(error, LABELS)).toBeNull();
   });
 
-  it("returns null for prepareLaunch errors without a recognized subcode prefix", () => {
+  it("returns null for prepareLaunch errors that match no recognized shape", () => {
     expect(
       resolveTuiForkRejectionView(
         prepareLaunchError("TARGET_PROFILE_UNAVAILABLE: not reshaped here"),
@@ -137,6 +137,58 @@ describe("resolveTuiForkRejectionView", () => {
         prepareLaunchError("plain host failure with no subcode prefix"),
         LABELS,
       ),
+    ).toBeNull();
+  });
+
+  it("maps a late lifecycle-error rejection (TOCTOU: tombstoned after preflight) to the TARGET_PROFILE_UNAVAILABLE inline copy + residue paragraph", () => {
+    const message =
+      'Profile "work-2" for provider "codex" was removed and can no longer be used. If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.';
+    const view = resolveTuiForkRejectionView(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message,
+        requestId: "req-test",
+        method: "agent.tui.prepareLaunch",
+        fatalDetails: null,
+      }),
+      LABELS,
+    );
+    expect(view).toEqual({
+      message:
+        "Can't continue this session under Work. That profile isn't available right now - it may be signed out, still finishing setup, or no longer supported. Choose a different profile, or start a new terminal agent.",
+      residueNote: message,
+    });
+  });
+
+  it("recognizes every profile-lifecycle message shape (not-found, setup-pending, unsupported provider)", () => {
+    const shapes = [
+      'No profile "work-2" is registered for provider "codex".',
+      'Profile "work-2" for provider "codex" is still completing setup and cannot be used yet.',
+      'Provider "cursor" does not support managed profiles.',
+    ];
+    for (const message of shapes) {
+      const view = resolveTuiForkRejectionView(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message,
+          requestId: "req-test",
+          method: "agent.tui.prepareLaunch",
+          fatalDetails: null,
+        }),
+        LABELS,
+      );
+      expect(view?.message).toBe(
+        "Can't continue this session under Work. That profile isn't available right now - it may be signed out, still finishing setup, or no longer supported. Choose a different profile, or start a new terminal agent.",
+      );
+      expect(view?.residueNote).toBe(message);
+    }
+  });
+
+  it("does not treat an E_INVALID_ARGUMENT-coded error as a lifecycle rejection even if the message text matches", () => {
+    const message =
+      'Profile "work-2" for provider "codex" was removed and can no longer be used.';
+    expect(
+      resolveTuiForkRejectionView(prepareLaunchError(message), LABELS),
     ).toBeNull();
   });
 });

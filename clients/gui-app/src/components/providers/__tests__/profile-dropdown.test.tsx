@@ -391,7 +391,11 @@ describe("<ProfileDropdown />", () => {
       }),
     );
 
-    const blocked = screen.getByRole("menuitem", { name: "Work" });
+    // The accessible label folds in the admission reason (amend-01 Fix 5) so
+    // a keyboard/AT user can perceive it without hovering the tooltip.
+    const blocked = screen.getByRole("menuitem", {
+      name: "Work, This profile can't continue this session.",
+    });
     if (!(blocked instanceof HTMLButtonElement)) {
       throw new Error("Expected Work row mock to render as a button.");
     }
@@ -431,8 +435,10 @@ describe("<ProfileDropdown />", () => {
       }),
     );
 
+    // The accessible label folds in the admission reason (amend-01 Fix 5) so
+    // a keyboard/AT user can perceive it without hovering the tooltip.
     const ambient = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal",
+      name: "Terminal account, Terminal, Ambient can't continue this session.",
     });
     if (!(ambient instanceof HTMLButtonElement)) {
       throw new Error("Expected ambient row mock to render as a button.");

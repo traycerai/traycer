@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useStore } from "zustand";
 import { toast } from "sonner";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -24,6 +31,7 @@ import { SurfaceActivityProvider } from "@/components/home/composer/surface-acti
 import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
+import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
@@ -66,6 +74,84 @@ const activeTerminalForkWorkspaceOwnerByKey = new Map<string, symbol>();
 const EMPTY_FORK_PROFILES: ReadonlyArray<ProviderProfile> = [];
 const EMPTY_FORK_ADMISSION: ReadonlyMap<string | null, ProfileRowAdmission> =
   new Map();
+
+const CAPABILITY_LOCK_REASON =
+  "Update Traycer host to continue this session under another profile.";
+const ADMISSION_PENDING_REASON =
+  "Checking whether this profile can continue this session…";
+const ADMISSION_FAILED_REASON =
+  "Couldn't confirm this profile can continue this session. Choose the current profile, or try again.";
+
+type AdmissionOutcome =
+  | {
+      readonly kind: "resolved";
+      readonly map: ReadonlyMap<string | null, ProfileRowAdmission>;
+    }
+  | { readonly kind: "failed" };
+
+interface AdmissionResultState {
+  readonly requestKey: string;
+  readonly outcome: AdmissionOutcome;
+}
+
+/** Disables every profile except `sourceProfileId` with the same `reason` -
+ *  the shared shape both the old-host capability lock and the bulk-admission
+ *  pending/failed states use (amend-01 Fixes 1 and 3): same profile stays
+ *  fully functional, every OTHER profile is unreachable through the picker. */
+function lockNonSourceProfiles(
+  profiles: ReadonlyArray<ProviderProfile>,
+  sourceProfileId: string | null,
+  reason: string,
+): ReadonlyMap<string | null, ProfileRowAdmission> {
+  return new Map(
+    profiles
+      .filter((profile) => profileCommitId(profile) !== sourceProfileId)
+      .map((profile) => [profileCommitId(profile), { disabled: true, reason }]),
+  );
+}
+
+/**
+ * The dialog's single source of truth for `profileAdmission`, composing three
+ * independent gates in priority order:
+ *   1. Old-host capability lock (Fix 1) - wins regardless of intent.
+ *   2. Bulk admission unsettled/failed (Fix 3) - locks non-source profiles
+ *      rather than failing open while pending or after an RPC failure.
+ *   3. Bulk admission resolved - the server's per-profile verdicts.
+ * Plain-fork intent on a capable host falls through to `EMPTY_FORK_ADMISSION`
+ * (picker stays fully open) - sound per the T5 review: submit-time preflight
+ * plus the authoritative `prepareLaunch` guard both still apply there.
+ */
+function resolveDialogAdmission(input: {
+  readonly capabilityLockActive: boolean;
+  readonly admissionActive: boolean;
+  readonly admissionSettled: AdmissionOutcome | null;
+  readonly sourceHarnessProfiles: ReadonlyArray<ProviderProfile>;
+  readonly sourceProfileId: string | null;
+}): ReadonlyMap<string | null, ProfileRowAdmission> {
+  if (input.capabilityLockActive) {
+    return lockNonSourceProfiles(
+      input.sourceHarnessProfiles,
+      input.sourceProfileId,
+      CAPABILITY_LOCK_REASON,
+    );
+  }
+  if (!input.admissionActive) return EMPTY_FORK_ADMISSION;
+  if (input.admissionSettled === null) {
+    return lockNonSourceProfiles(
+      input.sourceHarnessProfiles,
+      input.sourceProfileId,
+      ADMISSION_PENDING_REASON,
+    );
+  }
+  if (input.admissionSettled.kind === "failed") {
+    return lockNonSourceProfiles(
+      input.sourceHarnessProfiles,
+      input.sourceProfileId,
+      ADMISSION_FAILED_REASON,
+    );
+  }
+  return input.admissionSettled.map;
+}
 
 /**
  * `"fork"` is today's plain sibling-session fork. `"continue"` is the T5
@@ -113,6 +199,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   const intent: TerminalAgentForkIntent = target?.intent ?? "fork";
   const titleInputId = useId();
   const argsInputId = useId();
+  const profileSectionHeadingId = useId();
+  const profileSectionRef = useRef<HTMLElement | null>(null);
   const [titleState, setTitleState] = useState(() => ({
     open,
     touched: false,
@@ -180,6 +268,30 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   }, [providersQuery.data, target]);
 
   const sourceTuiAgentId = target?.sourceAgent.id ?? null;
+  // The EFFECTIVE source profile for cross-profile comparison/locking below -
+  // resolved the SAME way `useComposerToolbarStore`'s seed validation
+  // resolves `currentProfileId` (a tombstoned/never-supported raw source
+  // profile corrects to ambient there too). Comparing against the RAW
+  // `target.sourceAgent.profileId` instead would misread that correction as
+  // a user-initiated cross-profile pick and wrongly lock/block a plain
+  // forking-without-touching-the-picker submit.
+  const providersSettled = providersQuery.data !== undefined;
+  const sourceProfileId =
+    target === null
+      ? null
+      : resolveSeededProfileId(
+          target.sourceAgent.profileId,
+          sourceHarnessProfiles,
+          providersSettled,
+        );
+  // Old-host bypass fix (amend-01 Fix 1, blocker): negotiated capability
+  // absence is no evidence the host has the new authoritative `prepareLaunch`
+  // guard - it just means the host predates this package. The picker must be
+  // pinned to the source's own profile in THIS case regardless of intent,
+  // since the same dialog is reachable through the always-enabled primary
+  // Fork button, not just the (already capability-gated) Continue menu item.
+  const capabilityLockActive =
+    dialogActive && !forkProfileSupported && sourceHarnessProfiles.length > 0;
   // Only continue mode proactively disables unshared rows (tech plan UX
   // package scopes bulk-admission picker behavior to continue mode); a
   // manual cross-profile pick in plain fork mode still gets caught by
@@ -191,15 +303,18 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     forkProfileSupported &&
     sourceTuiAgentId !== null &&
     sourceHarnessProfiles.length > 0;
-  // The fetched map is masked to empty at render time (below) whenever
-  // `admissionActive` is false, so the effect never needs to synchronously
-  // reset it itself - only the in-flight request's own resolution writes here.
-  const [fetchedAdmission, setFetchedAdmission] =
-    useState<ReadonlyMap<string | null, ProfileRowAdmission>>(
-      EMPTY_FORK_ADMISSION,
-    );
+  // Keyed by the exact inputs a bulk request answers for, so a stale result
+  // from a PRIOR target/profile-set is never read as settled for the current
+  // one (amend-01 Fix 3: the map must not fail open while unsettled).
+  const admissionRequestKey =
+    sourceTuiAgentId === null
+      ? null
+      : `${sourceTuiAgentId}:${sourceHarnessProfiles.map(profileCommitId).join(",")}`;
+  const [admissionResult, setAdmissionResult] =
+    useState<AdmissionResultState | null>(null);
   useEffect(() => {
     if (!admissionActive) return;
+    if (admissionRequestKey === null) return;
     let cancelled = false;
     void validateForkProfileMutateAsync({
       epicId,
@@ -208,38 +323,59 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     })
       .then((result) => {
         if (cancelled) return;
-        setFetchedAdmission(
-          new Map(
-            result.verdicts.map((verdict) => [
-              verdict.targetProfileId,
-              {
-                disabled: !verdict.admitted,
-                reason:
-                  verdict.message ??
-                  (verdict.admitted
-                    ? null
-                    : "This profile can't continue this session."),
-              },
-            ]),
-          ),
-        );
+        setAdmissionResult({
+          requestKey: admissionRequestKey,
+          outcome: {
+            kind: "resolved",
+            map: new Map(
+              result.verdicts.map((verdict) => [
+                verdict.targetProfileId,
+                {
+                  disabled: !verdict.admitted,
+                  reason:
+                    verdict.message ??
+                    (verdict.admitted
+                      ? null
+                      : "This profile can't continue this session."),
+                },
+              ]),
+            ),
+          },
+        });
       })
       .catch(() => {
-        if (!cancelled) setFetchedAdmission(EMPTY_FORK_ADMISSION);
+        if (cancelled) return;
+        setAdmissionResult({
+          requestKey: admissionRequestKey,
+          outcome: { kind: "failed" },
+        });
       });
     return () => {
       cancelled = true;
     };
   }, [
     admissionActive,
+    admissionRequestKey,
     epicId,
     sourceHarnessProfiles,
     sourceTuiAgentId,
     validateForkProfileMutateAsync,
   ]);
-  const admissionByProfileId = admissionActive
-    ? fetchedAdmission
-    : EMPTY_FORK_ADMISSION;
+  // `null` = no settled result for the CURRENT request key yet (either still
+  // pending, or a stale result from a superseded target/profile-set).
+  const admissionSettled: AdmissionOutcome | null =
+    admissionRequestKey !== null &&
+    admissionResult !== null &&
+    admissionResult.requestKey === admissionRequestKey
+      ? admissionResult.outcome
+      : null;
+  const admissionByProfileId = resolveDialogAdmission({
+    capabilityLockActive,
+    admissionActive,
+    admissionSettled,
+    sourceHarnessProfiles,
+    sourceProfileId,
+  });
 
   // Live default title (tech plan UX package: "profile-changed default
   // title"): reactive to the CURRENT picker selection, not frozen at
@@ -301,12 +437,22 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   const argsTouched =
     argsState.sourceAgentId === sourceAgentId ? argsState.touched : false;
   const busy = createAgent.isPending || status !== "idle";
+  // Defense-in-depth alongside the picker's own row-disabling (amend-01
+  // Fixes 1 and 3): the CTA itself refuses to submit a currently-selected
+  // profile the composed admission map has locked, whether that's the
+  // old-host capability lock, an unsettled/failed bulk check, or a rejected
+  // server verdict. Same-profile selection is never gated by this check.
+  const crossProfileSelected = currentProfileId !== sourceProfileId;
+  const selectedProfileLocked =
+    crossProfileSelected &&
+    admissionByProfileId.get(currentProfileId)?.disabled === true;
   const canSubmit =
     target !== null &&
     sourceSessionId !== null &&
     trimmedTitle.length > 0 &&
     modelResolved &&
-    !busy;
+    !busy &&
+    !selectedProfileLocked;
 
   // The seeded workspace (staged intent + live snapshot) is scratch state for
   // THIS fork attempt. Abandoning the dialog must drop it, or the next fork in
@@ -458,11 +604,25 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     intent === "continue" &&
     target !== null &&
     target.sourceAgent.harnessId === "claude" &&
-    currentProfileId !== target.sourceAgent.profileId;
+    crossProfileSelected;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]">
+      <DialogContent
+        className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]"
+        onOpenAutoFocus={(event) => {
+          // Continue mode's promised focus destination is the profile
+          // choice, not the title field the Radix default (first tabbable)
+          // would land on - a visual ring alone (below) isn't perceivable to
+          // keyboard/AT users (amend-01 Fix 5). Handing off to the section
+          // itself (rather than reaching into the picker's own internal
+          // trigger) is the documented "at minimum" fallback.
+          if (intent !== "continue") return;
+          if (profileSectionRef.current === null) return;
+          event.preventDefault();
+          profileSectionRef.current.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>
             {intent === "continue"
@@ -497,8 +657,16 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
               aria-label="Fork terminal agent title"
             />
           </label>
-          <section className="flex min-w-0 flex-col gap-2">
-            <div className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
+          <section
+            ref={profileSectionRef}
+            tabIndex={-1}
+            aria-labelledby={profileSectionHeadingId}
+            className="flex min-w-0 flex-col gap-2 rounded-md focus:outline-none focus:ring-2 focus:ring-ring/50"
+          >
+            <div
+              id={profileSectionHeadingId}
+              className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70"
+            >
               {intent === "continue" ? "Continue under" : "Harness"}
             </div>
             {intent === "continue" ? (

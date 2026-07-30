@@ -32,6 +32,11 @@ const dialogMocks = vi.hoisted(() => ({
   providersByClient: new Map<unknown, unknown>(),
   forkProfileSupported: true,
   toast: vi.fn<(message: string) => void>(),
+  // Stable identity across re-renders: a fresh `vi.fn()` per hook call would
+  // re-trigger the dialog's admission effect forever (mutateAsync is in the
+  // effect dep array), hanging any continue-mode test that waits for
+  // cross-profile settlement.
+  validateMutateAsync: vi.fn().mockResolvedValue({ verdicts: [] }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", async (importOriginal) => {
@@ -51,7 +56,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", async (importOriginal) => {
 // (which only implements `useHostQuery`, not the mutation-lifecycle helper).
 vi.mock("@/hooks/agent/use-validate-tui-fork-profile-mutation", () => ({
   useValidateTuiForkProfile: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ verdicts: [] }),
+    mutateAsync: dialogMocks.validateMutateAsync,
     isPending: false,
   }),
 }));
@@ -206,6 +211,8 @@ describe("<TerminalAgentForkDialog />", () => {
     dialogMocks.providersByClient.clear();
     dialogMocks.forkProfileSupported = true;
     dialogMocks.toast.mockReset();
+    dialogMocks.validateMutateAsync.mockReset();
+    dialogMocks.validateMutateAsync.mockResolvedValue({ verdicts: [] });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
@@ -804,6 +811,12 @@ describe("<TerminalAgentForkDialog />", () => {
       />,
     );
 
+    // The bulk fork-admission preflight is gated to settlement (amend-01 Fix
+    // 3), so a cross-profile pick must wait for the mocked mutation's
+    // microtask to resolve before the CTA will accept it.
+    await act(async () => {
+      await Promise.resolve();
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Select Work profile" }),
     );
@@ -822,6 +835,126 @@ describe("<TerminalAgentForkDialog />", () => {
     await waitFor(() => {
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
+  });
+
+  it("locks cross-profile selection through the primary Fork button when the old-host capability is absent (mixed-version regression)", async () => {
+    dialogMocks.forkProfileSupported = false;
+    seedClaudeProviders([
+      ambientProfile("Terminal account"),
+      managedProfile("work-profile", "Work"),
+    ]);
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    // This file's stub picker has no admission awareness of its own (real
+    // row-disabling is covered by `profile-dropdown.test.tsx`) - clicking it
+    // stands in for "some UI path reached a cross-profile pick", proving the
+    // dialog's OWN capability lock refuses the submit regardless.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select Work profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    expect(dialogMocks.create).not.toHaveBeenCalled();
+
+    // Same-profile Fork stays fully functional under capability absence.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select ambient profile" }),
+    );
+    dialogMocks.create.mockResolvedValue("forked-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: null }),
+      );
+    });
+  });
+
+  it("shows the pick-time Claude cross-profile lossiness hint only after a different profile is selected in continue mode", async () => {
+    const claudeHint =
+      "Heads up: TodoWrite history and rewind state from this session won't carry over to the new profile.";
+    seedClaudeProviders([
+      ambientProfile("Terminal account"),
+      managedProfile("work-profile", "Work"),
+    ]);
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "continue",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    // Same-profile selection (open defaults to the source ambient profile):
+    // the pick-time hint must stay hidden until a different profile is chosen.
+    expect(screen.queryByText(claudeHint)).toBeNull();
+
+    // Bulk admission settles before a cross-profile pick is actionable; flush
+    // the mocked mutation microtask first (same pattern as the post-fork toast).
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select Work profile" }),
+    );
+
+    expect(screen.getByText(claudeHint)).toBeDefined();
+  });
+
+  it("does not show the pick-time Claude lossiness hint for a non-Claude harness", async () => {
+    const claudeHint =
+      "Heads up: TodoWrite history and rewind state from this session won't carry over to the new profile.";
+    seedClaudeProviders([
+      ambientProfile("Terminal account"),
+      managedProfile("work-profile", "Work"),
+    ]);
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: { ...sourceAgent(), harnessId: "codex" },
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "continue",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByText(claudeHint)).toBeNull();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select Work profile" }),
+    );
+
+    // Cross-profile selected, but harness is not Claude - no pick-time hint.
+    expect(screen.queryByText(claudeHint)).toBeNull();
   });
 });
 

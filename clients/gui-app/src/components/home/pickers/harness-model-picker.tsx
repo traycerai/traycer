@@ -787,6 +787,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningActionable,
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
+    activeProviderProfileAdmission: profileAdmission,
     onProfileChange: handleProfileChange,
   });
 

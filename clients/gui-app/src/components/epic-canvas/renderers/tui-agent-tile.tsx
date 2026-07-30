@@ -941,6 +941,11 @@ function TerminalAgentPreLaunchToolbar(
               <span className="flex w-full">
                 <DropdownMenuItem
                   disabled={forkDisabled || !continueUnderProfileSupported}
+                  aria-label={
+                    continueUnderProfileDisabledReason === undefined
+                      ? undefined
+                      : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
+                  }
                   onSelect={() => openForkDialog("continue")}
                 >
                   Continue under another profile…
