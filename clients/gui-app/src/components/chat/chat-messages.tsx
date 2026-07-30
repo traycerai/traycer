@@ -14,6 +14,8 @@ import {
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
   classifyChatEdgeMutation,
+  isChatAnchorCandidateMessage,
+  resolveChatAnchorTargetWithSetupCard,
   selectActiveUserMessageId,
   viewportActiveUserMessageId,
   type ChatTimelineNavigationLocation,
@@ -570,10 +572,16 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // Fresh open (decision #15): no saved state -> anchor the LAST user
   // message near the top via the same anchor path as a send, non-animated,
   // instead of `initialScrollAtEnd`. `null` when a saved state exists (that
-  // restore keeps precedence) or the transcript has no user row yet.
+  // restore keeps precedence) or the transcript has no anchor candidate yet.
+  // Decision #27 widens the candidate to a `forked-chat-link` marker (a
+  // freshly opened fork lands on its own start marker, not the last copied
+  // query above it); decision #28 then substitutes a setup card woven
+  // directly above the resolved candidate (mid-chat weave or genesis pin).
   const [freshOpenAnchorMessageId] = useState<string | null>(() => {
     if (hadSavedScrollState) return null;
-    return messages.findLast((message) => message.role === "user")?.id ?? null;
+    const candidate = messages.findLast(isChatAnchorCandidateMessage);
+    if (candidate === undefined) return null;
+    return resolveChatAnchorTargetWithSetupCard(messages, candidate.id);
   });
   // Ticket 5: a restored `free-scrolling` position with a still-valid anchor
   // row (`restoreChatTabState` already dropped it if stale) becomes LegendList's
@@ -754,6 +762,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const [timelineAnchorMessageId, setTimelineAnchorMessageId] = useState<
     string | null
   >(freshOpenAnchorMessageId);
+  // Ticket 13 (decision #28): mirrors `timelineAnchorMessageId` so the
+  // mid-anchoring card-retarget check (below) can read the CURRENT target
+  // synchronously from inside the edge-mutation effect without adding that
+  // state to the effect's own dependency array - doing so would re-run the
+  // effect a second time per retarget (the state update lands a render
+  // after the ref does), re-classifying the SAME `messages` transition for
+  // no purpose beyond confirming there's nothing left to retarget.
+  const timelineAnchorMessageIdRef = useRef(freshOpenAnchorMessageId);
   // Mirrors `timelineScrollModeRef.current === "following-end"` into render -
   // the minimap's active-dot selection needs to read it during render, which
   // a ref cannot do.
@@ -1109,10 +1125,56 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       // never turns visible).
       setIsReaderAtLiveEdge(false);
       setHasUnseenTurnCompletion(false);
+      timelineAnchorMessageIdRef.current = messageId;
       setTimelineAnchorMessageId(messageId);
     },
     [cancelPillShow],
   );
+
+  // Ticket 13 (decision #28, the "hard half"): a setup card can weave in
+  // directly above the turn's anchor row AFTER anchoring already began - the
+  // `setup.creating` event lands async, later than the send that created the
+  // pending row, so `classifyChatEdgeMutation` sees a plain non-tail system-row
+  // insertion (`NONE_OUTCOME`) rather than a fresh anchor-triggering event.
+  // Left alone, LegendList's `maintainVisibleContentPosition` would keep the
+  // ALREADY-anchored row pinned at its current pixel position, scrolling the
+  // new card entirely off-screen above it instead of revealing setup progress.
+  // This re-points the SAME anchoring session at the card's row id - same
+  // semantic turn, new target row, called from the edge-mutation effect below
+  // whenever the resolved target changes while still anchoring.
+  //
+  // Deliberately REUSES `anchorUserScrollGenerationRef` rather than bumping
+  // it: a bump is this component's signal for a genuine CANCEL (a real
+  // gesture invalidating in-flight `onAnchorReady`/settle callbacks for
+  // every previously-issued messageId at once, `cancelTimelineLiveFollowFor-
+  // UserNavigation`); a retarget is not a cancel, so nothing else about the
+  // turn (mode, live-follow generation, `animated`, overflow tracking)
+  // should reset. Staleness for the OLD target is instead handled the same
+  // way any other superseded anchor request already is:
+  // `shouldAcceptChatAnchorReadyEvent` only accepts an `onAnchorReady` whose
+  // messageId matches `pendingTimelineAnchorRef`/`positionedTimelineAnchorRef`
+  // - both of which this reassigns to the new id up front, so a late
+  // `onAnchorReady` for the old row falls through as stale on its own. Also
+  // resets `expectedAnchorScrollTopRef` (the anchor mover's departure-guard
+  // baseline, `anchorMoverShouldYieldToReader`) since it was computed against
+  // the OLD target's geometry - stale to the new target, and safely `null`
+  // until the fresh positioning cycle below recomputes it (both mover checks
+  // that consult it treat `null` as "nothing to compare against yet").
+  const retargetAnchoringNewTurn = useCallback((messageId: string): void => {
+    if (timelineAnchorMessageIdRef.current === messageId) return;
+    expectedAnchorScrollTopRef.current = null;
+    pendingTimelineAnchorRef.current = messageId;
+    positionedTimelineAnchorRef.current = null;
+    settledTimelineAnchorRef.current = null;
+    activeTimelineAnchorIndexRef.current = null;
+    pendingAnchorScrollRestoreRef.current = null;
+    if (anchorScrollRestoreFrameRef.current !== null) {
+      cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
+      anchorScrollRestoreFrameRef.current = null;
+    }
+    timelineAnchorMessageIdRef.current = messageId;
+    setTimelineAnchorMessageId(messageId);
+  }, []);
 
   // Intent listeners (decision #5): passive wheel/touchmove on the scroll
   // node cancel live-follow. Pointerdown is handled by the stable transcript
@@ -2121,8 +2183,16 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         });
         break;
       case "anchor-new-turn":
+        // Decision #28: substitute a setup card ALREADY woven above the
+        // trigger row at the id level only - `consumeLocalProvenance` below
+        // still needs the trigger's own id (the card is never a
+        // local-provenance entry itself; substituting it there would leave
+        // the real send's provenance never consumed).
         beginAnchoringNewTurn(
-          outcome.action.messageId,
+          resolveChatAnchorTargetWithSetupCard(
+            messages,
+            outcome.action.messageId,
+          ),
           outcome.action.animated,
         );
         // A no-op if `messageId` was never a local-provenance match (a
@@ -2132,6 +2202,18 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         consumeLocalProvenance(outcome.action.messageId);
         break;
       case "none":
+        // Ticket 13 (decision #28): a setup card weaving in directly above
+        // the row this session is anchoring reads as a harmless non-tail
+        // insertion here (the card is a system row, never a fresh
+        // anchor-triggering event of its own) - retarget in place instead.
+        if (timelineScrollModeRef.current === "anchoring-new-turn") {
+          const currentTarget = timelineAnchorMessageIdRef.current;
+          if (currentTarget !== null) {
+            retargetAnchoringNewTurn(
+              resolveChatAnchorTargetWithSetupCard(messages, currentTarget),
+            );
+          }
+        }
         break;
     }
     scheduleActiveViewportUpdate(
@@ -2142,6 +2224,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     messages,
     setTimelineMode,
     beginAnchoringNewTurn,
+    retargetAnchoringNewTurn,
     hadSavedScrollState,
     localProvenanceMessageIds,
     consumeLocalProvenance,

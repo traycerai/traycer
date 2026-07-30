@@ -369,6 +369,18 @@ function resolveChatTimelineSizePreservationEnabled(
   return sizePreservationEnabled ?? false;
 }
 
+/** Ticket 13 (bonus): the assistant estimate (14rem) is tuned for
+ *  multi-paragraph turns; a synthesized `role: "system"` row (the fork
+ *  marker, the collapsed setup card) is a single hairline-ruled line, so
+ *  reusing that estimate overshoots badly for the pre-measurement paint. */
+function chatTimelineRowSizeHintClassName(
+  role: ChatMessageModel["role"],
+): string {
+  if (role === "user") return "[contain-intrinsic-size:auto_8rem]";
+  if (role === "system") return "[contain-intrinsic-size:auto_4rem]";
+  return "[contain-intrinsic-size:auto_14rem]";
+}
+
 /** Returns a structurally-shared copy of `rows`: for each row whose content
  *  hasn't changed since last call, the previous object reference is reused.
  *  Guarded adjust-state-during-render (same idiom as
@@ -415,9 +427,7 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
         "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
         ctx.navigationHighlightedMessageId === message.id &&
           "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
-        message.role === "user"
-          ? "[contain-intrinsic-size:auto_8rem]"
-          : "[contain-intrinsic-size:auto_14rem]",
+        chatTimelineRowSizeHintClassName(message.role),
       )}
     >
       <ChatMessage

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 import {
   buildMessageIdToIndex,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
   chatViewportAnchorRowIndex,
   classifyChatEdgeMutation,
+  isChatAnchorCandidateMessage,
+  resolveChatAnchorTargetWithSetupCard,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   selectActiveUserMessageId,
@@ -69,6 +72,118 @@ function idsOf(
   messages: ReadonlyArray<ChatMessageModel>,
 ): ReadonlyArray<string> {
   return messages.map((message) => message.id);
+}
+
+/** Ticket 13 (decision #27): the fork-marker system row a fresh-open fork
+ *  should be able to anchor on. */
+function forkMarker(id: string, createdAt: number): ChatMessageModel {
+  return {
+    ...makeMessageAt(0, "system", createdAt),
+    id,
+    segments: [
+      {
+        id: `${id}:link`,
+        kind: "forked-chat-link",
+        viewTabId: "tab-1",
+        sourceChatId: "source-chat-1",
+        sourceChatTitle: "Original chat",
+        sourceHostId: "source-host-1",
+      },
+    ],
+  };
+}
+
+const SETUP_MODEL: SetupCardViewModel = {
+  aggregate: {
+    epicId: "epic-1",
+    ownerId: "owner-1",
+    ownerKind: "chat",
+    state: "setting-up",
+  },
+  workspaces: [
+    {
+      workspacePath: "/repo",
+      label: "repo",
+      state: "setting-up",
+      setupExitCode: null,
+      terminalSessionId: "term-1",
+      worktreePath: "/worktrees/repo/feature",
+      branch: "feature",
+      errorMessage: null,
+      retryFolderIntent: null,
+    },
+  ],
+  createdAt: 1500,
+  isActive: true,
+};
+
+/** Ticket 13 (decision #28): a setup-card system row genuinely owned by
+ *  `anchorMessageId` (`SetupCardRow.triggeringMessageId` match) - the
+ *  interleaved-and-matching shape the resolver must substitute onto. */
+function anchoredSetupCard(
+  id: string,
+  createdAt: number,
+  anchorMessageId: string,
+): ChatMessageModel {
+  return {
+    ...makeMessageAt(0, "system", createdAt),
+    id,
+    segments: [
+      {
+        id: `${id}:card`,
+        kind: "setup-card",
+        model: SETUP_MODEL,
+        viewTabId: "tab-1",
+        anchorMessageId,
+        isGenesisPin: false,
+      },
+    ],
+  };
+}
+
+/** Ticket 13 (decision #28): the pinned genesis card - no real trigger to
+ *  match, substitutes unconditionally for whatever the array's first row is. */
+function genesisSetupCard(id: string, createdAt: number): ChatMessageModel {
+  return {
+    ...makeMessageAt(0, "system", createdAt),
+    id,
+    segments: [
+      {
+        id: `${id}:card`,
+        kind: "setup-card",
+        model: SETUP_MODEL,
+        viewTabId: "tab-1",
+        anchorMessageId: null,
+        isGenesisPin: true,
+      },
+    ],
+  };
+}
+
+/** Ticket 13 (decision #28): a FLOATING setup-card row - its triggering
+ *  message never became an anchor target (queued/steered/branched/deleted),
+ *  so `rendered-messages.ts` sorts it by `createdAt` with no guaranteed
+ *  relation to its neighbor. `anchorMessageId` points at some OTHER message
+ *  (or is `null`) - never the row it happens to land next to. */
+function floatingSetupCard(
+  id: string,
+  createdAt: number,
+  anchorMessageId: string | null,
+): ChatMessageModel {
+  return {
+    ...makeMessageAt(0, "system", createdAt),
+    id,
+    segments: [
+      {
+        id: `${id}:card`,
+        kind: "setup-card",
+        model: SETUP_MODEL,
+        viewTabId: "tab-1",
+        anchorMessageId,
+        isGenesisPin: false,
+      },
+    ],
+  };
 }
 
 describe("buildMessageIdToIndex", () => {
@@ -418,6 +533,82 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: assistantOnly,
           isFollowingEnd: false,
           hadSavedScrollState: false,
+          localProvenanceMessageIds: NO_PROVENANCE,
+        }),
+      ).toEqual({ action: { kind: "none" }, nextMode: null });
+    });
+
+    // Ticket 13 (decision #27): widens the mount-time fresh-open seed
+    // (`previousMessages === null` - `ChatMessages` mounts only after the
+    // authoritative snapshot, per the base's own "anchor passive turns after
+    // saved empty snapshots" fix, so a fork's copied history + marker are
+    // already present at THIS classify call) from user-only to accept a
+    // `forked-chat-link` marker, self-superseding via the shared `findLast`
+    // once a real user turn exists.
+    it("(pin a) anchors the fork marker when it is the only candidate (a freshly opened fork with no new turn yet)", () => {
+      const messages = [forkMarker("forked-chat-link:fork-1", 1)];
+      expect(
+        classify({
+          previousMessages: null,
+          nextMessages: messages,
+          isFollowingEnd: false,
+          hadSavedScrollState: false,
+          localProvenanceMessageIds: NO_PROVENANCE,
+        }),
+      ).toEqual({
+        action: {
+          kind: "anchor-new-turn",
+          messageId: "forked-chat-link:fork-1",
+          animated: false,
+        },
+        nextMode: null,
+      });
+    });
+
+    it("(pin b) anchors a newer user turn over the fork marker (self-superseding)", () => {
+      const messages = [
+        forkMarker("forked-chat-link:fork-1", 1),
+        user("u-new", 2),
+      ];
+      expect(
+        classify({
+          previousMessages: null,
+          nextMessages: messages,
+          isFollowingEnd: false,
+          hadSavedScrollState: false,
+          localProvenanceMessageIds: NO_PROVENANCE,
+        }),
+      ).toEqual({
+        action: { kind: "anchor-new-turn", messageId: "u-new", animated: false },
+        nextMode: null,
+      });
+    });
+
+    it("widens the gated live-arrival branch too, defensively (a genuinely empty chat's first live turn is never actually a fork, but the predicate stays consistent)", () => {
+      const messages = [forkMarker("forked-chat-link:fork-1", 1)];
+      expect(
+        classify({
+          previousMessages: [],
+          nextMessages: messages,
+          isFollowingEnd: true,
+          hadSavedScrollState: true,
+          localProvenanceMessageIds: NO_PROVENANCE,
+        }),
+      ).toEqual({
+        action: {
+          kind: "anchor-new-turn",
+          messageId: "forked-chat-link:fork-1",
+          animated: true,
+        },
+        nextMode: null,
+      });
+
+      expect(
+        classify({
+          previousMessages: [],
+          nextMessages: messages,
+          isFollowingEnd: false,
+          hadSavedScrollState: true,
           localProvenanceMessageIds: NO_PROVENANCE,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
@@ -948,6 +1139,126 @@ describe("classifyChatEdgeMutation", () => {
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
+  });
+});
+
+describe("isChatAnchorCandidateMessage (ticket 13 / decision #27)", () => {
+  it("accepts user rows and forked-chat-link markers", () => {
+    expect(isChatAnchorCandidateMessage(user("u0", 1))).toBe(true);
+    expect(
+      isChatAnchorCandidateMessage(forkMarker("forked-chat-link:fork-1", 1)),
+    ).toBe(true);
+  });
+
+  it("rejects assistant rows and setup-card markers (non-goal: the card is never a findLast candidate itself)", () => {
+    expect(isChatAnchorCandidateMessage(assistant("a0", 1))).toBe(false);
+    expect(
+      isChatAnchorCandidateMessage(
+        anchoredSetupCard("setup-card:owner-1:0:1", 1, "u0"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("resolveChatAnchorTargetWithSetupCard (ticket 13 / decision #28)", () => {
+  it("(pin c) substitutes a card genuinely owned by the target (mid-chat weave, anchorMessageId match)", () => {
+    const messages = [
+      anchoredSetupCard("setup-card:owner-1:0:1", 1, "u0"),
+      user("u0", 2),
+      assistant("a0", 3),
+    ];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe(
+      "setup-card:owner-1:0:1",
+    );
+  });
+
+  it("substitutes the pinned genesis card unconditionally (no trigger to match)", () => {
+    const messages = [
+      genesisSetupCard("setup-card:owner-1:0:0", 0),
+      user("u0", 2),
+      assistant("a0", 3),
+    ];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe(
+      "setup-card:owner-1:0:0",
+    );
+  });
+
+  // Reviewer-caught bug (ticket 13 review round): array adjacency alone is
+  // NOT proof of ownership. A card whose triggering message never became an
+  // anchor target (queued/steered/branched/deleted) floats by `createdAt`
+  // (`rendered-messages.ts`'s `floatingCards`) and can land directly above a
+  // completely unrelated row by coincidence - substituting onto it would
+  // anchor the reader on an unrelated card's worktree-setup progress.
+  it("does NOT substitute a FLOATING card merely adjacent to an unrelated message (anchorMessageId points elsewhere)", () => {
+    const messages = [
+      floatingSetupCard("setup-card:owner-1:0:1", 1, "some-other-message"),
+      user("u0", 2),
+      assistant("a0", 3),
+    ];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe("u0");
+  });
+
+  it("does NOT substitute a FLOATING card with a null anchorMessageId (defensive creating-event-without-id shape)", () => {
+    const messages = [
+      floatingSetupCard("setup-card:owner-1:0:1", 1, null),
+      user("u0", 2),
+    ];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe("u0");
+  });
+
+  it("walks past more than one consecutive OWNED card to the topmost (defensive: same-anchor card stack)", () => {
+    // Today's model consolidates one send's consecutive `setup.creating`
+    // events into a single window/card (`buildSetupCardRows.ts`), so two
+    // windows sharing one triggeringMessageId isn't a case production
+    // currently produces - this is defensive robustness for that array
+    // shape, not a chain (card1 does not anchor to card0; both would anchor
+    // to "u0" directly if it ever occurred).
+    const messages = [
+      anchoredSetupCard("setup-card:owner-1:0:1", 1, "u0"),
+      anchoredSetupCard("setup-card:owner-1:1:1", 1, "u0"),
+      user("u0", 2),
+    ];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe(
+      "setup-card:owner-1:0:1",
+    );
+  });
+
+  it("stops the walk at the first card that does NOT own the target, even mid-stack", () => {
+    // card0 floats (owns nothing here); card1 genuinely owns "u0". The walk
+    // must stop at card1, not credit card0 just because it's consecutively
+    // stacked above an owned card.
+    const messages = [
+      floatingSetupCard("setup-card:owner-1:0:1", 1, "unrelated"),
+      anchoredSetupCard("setup-card:owner-1:1:1", 1, "u0"),
+      user("u0", 2),
+    ];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe(
+      "setup-card:owner-1:1:1",
+    );
+  });
+
+  it("returns messageId unchanged when no card sits above it", () => {
+    const messages = [assistant("a0", 1), user("u0", 2)];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe("u0");
+  });
+
+  it("returns messageId unchanged when messageId is not found or is the first row", () => {
+    const messages = [user("u0", 1), assistant("a0", 2)];
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "missing")).toBe(
+      "missing",
+    );
+    expect(resolveChatAnchorTargetWithSetupCard(messages, "u0")).toBe("u0");
+  });
+
+  it("(pin d groundwork) is idempotent once retargeted to the card - re-deriving from the card itself finds nothing further above", () => {
+    const messages = [
+      anchoredSetupCard("setup-card:owner-1:0:1", 1, "u0"),
+      user("u0", 2),
+    ];
+    const retargeted = resolveChatAnchorTargetWithSetupCard(messages, "u0");
+    expect(resolveChatAnchorTargetWithSetupCard(messages, retargeted)).toBe(
+      retargeted,
+    );
   });
 });
 

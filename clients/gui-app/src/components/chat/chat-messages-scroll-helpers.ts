@@ -124,6 +124,92 @@ function isHumanUserMessage(message: ChatMessageModel): boolean {
   return message.role === "user" && message.agentSenderInfo === null;
 }
 
+/** A synthesized `role: "system"` row whose single segment is `kind`
+ *  (`chat-special-segment.ts`'s shape, re-checked here rather than imported
+ *  since that helper returns the segment itself, not a predicate). */
+function isSingleSpecialSegmentMessage(
+  message: ChatMessageModel,
+  kind: "setup-card" | "forked-chat-link",
+): boolean {
+  return (
+    message.role === "system" &&
+    message.segments.length === 1 &&
+    message.segments[0].kind === kind
+  );
+}
+
+/**
+ * Decision #27: the fresh-open (and late-history-arrival equivalent) anchor
+ * predicate widens from "user rows only" to "user rows OR `forked-chat-link`
+ * system markers" - a freshly opened fork lands on its own "Forked from
+ * conversation" marker instead of the last COPIED user query above it.
+ * Self-superseding via the callers' shared `findLast`: any user turn sent in
+ * the fork is newer and wins naturally. The setup card is deliberately NOT a
+ * candidate here (non-goal) - it only ever substitutes for the message it
+ * belongs to, via `resolveChatAnchorTargetWithSetupCard` below.
+ */
+export function isChatAnchorCandidateMessage(
+  message: ChatMessageModel,
+): boolean {
+  return (
+    isUserMessage(message) ||
+    isSingleSpecialSegmentMessage(message, "forked-chat-link")
+  );
+}
+
+/**
+ * Decision #28: a setup-card row is only a valid substitute for `targetId`
+ * when it is GENUINELY its card - `anchorMessageId` (`SetupCardRow.
+ * triggeringMessageId`) matches, or it's the pinned genesis card (no real
+ * trigger to match - decision #28 says it substitutes unconditionally).
+ * Array adjacency alone is NOT proof of ownership: a card whose triggering
+ * message never became an anchor target (queued/steered/branched/deleted)
+ * FLOATS by `createdAt` instead (`rendered-messages.ts`'s `floatingCards`)
+ * and can land directly above a completely unrelated row by coincidence.
+ */
+function setupCardMatchesTarget(
+  candidate: ChatMessageModel,
+  targetId: string,
+): boolean {
+  if (candidate.role !== "system" || candidate.segments.length !== 1) {
+    return false;
+  }
+  const segment = candidate.segments[0];
+  if (segment.kind !== "setup-card") return false;
+  return segment.isGenesisPin || segment.anchorMessageId === targetId;
+}
+
+/**
+ * Decision #28: when the row(s) directly above `messageId` in `messages` are
+ * setup-card rows GENUINELY OWNED by it (`setupCardMatchesTarget`), the
+ * anchor should target the TOPMOST one instead - "anchor the top of the turn
+ * group" so worktree-setup progress is visible before streaming starts.
+ * Walks past more than one consecutive owned card rather than stopping at
+ * the row immediately above - defensive robustness for a message anchoring
+ * more than one lifecycle window, even though today's model (`setup-card-
+ * rows.ts`) consolidates one send's setup into a single window/card. Covers
+ * both the mid-chat weave (a card sorts immediately above the message whose
+ * send created it) and the pinned genesis card (unshifted at array index 0,
+ * so it always sits directly above whatever row is first). Returns
+ * `messageId` unchanged when there's no owned card above it, or `messageId`
+ * isn't found at all.
+ */
+export function resolveChatAnchorTargetWithSetupCard(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+): string {
+  const index = messages.findIndex((message) => message.id === messageId);
+  if (index <= 0) return messageId;
+  let topIndex = index;
+  while (
+    topIndex > 0 &&
+    setupCardMatchesTarget(messages[topIndex - 1], messageId)
+  ) {
+    topIndex -= 1;
+  }
+  return topIndex === index ? messageId : messages[topIndex].id;
+}
+
 export function selectActiveUserMessageId(
   messages: ReadonlyArray<ChatMessageModel>,
   viewportRowMessageId: string | null,
@@ -461,15 +547,22 @@ function classifyFirstNonEmptyChatEdge(
     // authoritative chat snapshot. `null` therefore means this is that
     // initial render: saved-state restore owns it, while a genuinely fresh
     // open anchors the last user row without animation (decision #15).
+    // Decision #27 widens the candidate to a `forked-chat-link` marker - a
+    // fork's copied history + marker are already present in this very first
+    // snapshot (a fork is always fresh-open, never a saved-state restore),
+    // so this mount-time branch is precisely where a freshly opened fork
+    // lands on its own marker.
     if (hadSavedScrollState) {
       return { action: { kind: "none" }, nextMode: null };
     }
-    const lastUserMessage = nextMessages.findLast(isUserMessage);
-    if (lastUserMessage !== undefined) {
+    const lastAnchorCandidate = nextMessages.findLast(
+      isChatAnchorCandidateMessage,
+    );
+    if (lastAnchorCandidate !== undefined) {
       return {
         action: {
           kind: "anchor-new-turn",
-          messageId: lastUserMessage.id,
+          messageId: lastAnchorCandidate.id,
           animated: false,
         },
         nextMode: null,
@@ -482,8 +575,11 @@ function classifyFirstNonEmptyChatEdge(
   // empty chat has now received its first live turn. Treat a passive row
   // exactly like any later queued/A2A arrival (decision #9) - anchor the
   // tail-most user only while following; a reader who relinquished follow
-  // stays parked.
-  const gatedTarget = nextMessages.findLast(isUserMessage);
+  // stays parked. Widened to `isChatAnchorCandidateMessage` for consistency
+  // with decision #27, though a fork marker realistically never reaches this
+  // branch (a fork's history is already present at mount, never arriving as
+  // a live batch into a genuinely empty chat).
+  const gatedTarget = nextMessages.findLast(isChatAnchorCandidateMessage);
   if (isFollowingEnd && gatedTarget !== undefined) {
     return {
       action: {

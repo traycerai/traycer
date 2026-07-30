@@ -41,6 +41,7 @@ import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-key";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   makeAssistantMessage,
@@ -238,6 +239,80 @@ function appendPersistentUserRow(
     },
   ];
 }
+
+const TICKET_13_SETUP_MODEL: SetupCardViewModel = {
+  aggregate: {
+    epicId: "epic-1",
+    ownerId: "owner-1",
+    ownerKind: "chat",
+    state: "setting-up",
+  },
+  workspaces: [
+    {
+      workspacePath: "/repo",
+      label: "repo",
+      state: "setting-up",
+      setupExitCode: null,
+      terminalSessionId: "term-1",
+      worktreePath: "/worktrees/repo/feature",
+      branch: "feature",
+      errorMessage: null,
+      retryFolderIntent: null,
+    },
+  ],
+  createdAt: 0,
+  isActive: true,
+};
+
+/** Ticket 13 (decision #28): a synthesized setup-card system row, matching
+ *  `rendered-messages.ts`'s `buildSetupCardMessage` shape (single-segment
+ *  `role: "system"` row, `kind: "setup-card"`). `anchorMessageId` is the id
+ *  this card GENUINELY owns (`SetupCardRow.triggeringMessageId` match) -
+ *  the resolver now verifies this identity, not just array adjacency
+ *  (reviewer-caught bug: a floating card can otherwise land directly above
+ *  an unrelated row by `createdAt` coincidence). */
+function setupCardRow(
+  id: string,
+  createdAt: number,
+  anchorMessageId: string | null,
+): ChatMessageModel {
+  return {
+    ...makeMessageAt(0, "system", createdAt),
+    id,
+    segments: [
+      {
+        id: `${id}:card`,
+        kind: "setup-card",
+        model: TICKET_13_SETUP_MODEL,
+        viewTabId: "tab-1",
+        anchorMessageId,
+        isGenesisPin: false,
+      },
+    ],
+  };
+}
+
+/** Ticket 13 (decision #27): a synthesized fork-marker system row, matching
+ *  `rendered-messages.ts`'s `buildForkedChatLinkMessage` shape. */
+function forkMarkerRow(id: string, createdAt: number): ChatMessageModel {
+  return {
+    ...makeMessageAt(0, "system", createdAt),
+    id,
+    segments: [
+      {
+        id: `${id}:link`,
+        kind: "forked-chat-link",
+        viewTabId: "tab-1",
+        sourceChatId: "source-chat-1",
+        sourceChatTitle: "Original chat",
+        sourceHostId: "source-host-1",
+      },
+    ],
+  };
+}
+
+/** Uniform row height under `legend-list-test-environment` (ITEM_HEIGHT_PX). */
+const TICKET_13_ROW_HEIGHT_PX = 90;
 
 /** Many trailing assistant rows so the anchored turn overflows the usable viewport. */
 function appendStreamingAssistantChunks(
@@ -543,6 +618,11 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     ...result,
     scrollStateKey,
     instanceId,
+    /** Ticket 13: read the harness-local provenance set so pins can assert
+     *  `consumeLocalProvenance` was invoked with the raw send id (not a
+     *  setup-card substitute). */
+    getLocalProvenanceMessageIds: (): ReadonlySet<string> =>
+      state.localProvenanceMessageIds,
     rerenderMessages: (messages: ReadonlyArray<ChatMessageModel>) => {
       state.messages = messages;
       result.rerender(jsx());
@@ -4990,6 +5070,408 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       second.unmount();
+    });
+  });
+
+  describe("ticket 13: fork-marker candidacy (decision #27)", () => {
+    /**
+     * jsdom note: mount-time fresh-open seeds `timelineAnchorMessageId` and
+     * mode correctly, but the LegendList anchor engine does not actually move
+     * `scrollTop` on that first paint (scrollTop stays 0). The late-history
+     * path (`empty → snapshot` through `beginAnchoringNewTurn`) DOES land a
+     * real scrollTop - same candidate predicate, effect-driven. Pins (a)/(b)
+     * therefore use late-history for the geometric assertion; a separate
+     * mount-time pin below covers mode seed + row presence.
+     */
+    async function lateHistoryAnchor(
+      history: ReadonlyArray<ChatMessageModel>,
+      keyPrefix: string,
+    ): Promise<{ scrollTop: number; unmount: () => void }> {
+      const { rerenderMessages, unmount } = renderChatMessages({
+        messages: [],
+        scrollStateKey: `${keyPrefix}-${Math.random().toString(36).slice(2)}`,
+        freshOpen: true,
+      });
+      await settleLegendList();
+      expect(screen.getByText("Start the conversation")).toBeTruthy();
+      rerenderMessages(history);
+      await settleLegendList();
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      return { scrollTop: getScrollNode().scrollTop, unmount };
+    }
+
+    it("(pin a) fresh fork open anchors the fork marker, not the last copied user query", async () => {
+      // Copied history ends with a user/assistant pair; the fork marker sits
+      // after every copied row. Decision #27 lands on the marker; pre-#27
+      // lands on the last user two indices earlier. Uniform 90px rows.
+      const prefix = makeCompletedTranscript(20);
+      // last user = message-18 at index 18; marker at index 20 → delta 2.
+      const lastUserId = "message-18";
+      const markerId = "forked-chat-link:fork-open-a";
+      const withMarker: ReadonlyArray<ChatMessageModel> = [
+        ...prefix,
+        forkMarkerRow(markerId, 10_000),
+      ];
+
+      const control = await lateHistoryAnchor(prefix, "t13-pin-a-control");
+      expect(control.scrollTop).toBeGreaterThan(0);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${lastUserId}`)).toBeTruthy();
+      });
+      control.unmount();
+
+      const subject = await lateHistoryAnchor(withMarker, "t13-pin-a-subject");
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${markerId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(subject.scrollTop - control.scrollTop).toBe(
+        2 * TICKET_13_ROW_HEIGHT_PX,
+      );
+      subject.unmount();
+    });
+
+    it("(pin b) fork with a newer user turn anchors that turn (self-superseding)", async () => {
+      // Same long prefix + marker as pin (a), plus a real user send after the
+      // marker. findLast must pick the newer user, not stick on the marker.
+      const prefix = makeCompletedTranscript(20);
+      const markerId = "forked-chat-link:fork-open-b";
+      const newUserId = "user-fork-turn-b";
+      const withMarker: ReadonlyArray<ChatMessageModel> = [
+        ...prefix,
+        forkMarkerRow(markerId, 10_000),
+      ];
+      const withNewTurn: ReadonlyArray<ChatMessageModel> = [
+        ...withMarker,
+        {
+          ...makeMessageAt(0, "user", 20_000),
+          id: newUserId,
+          content: "first turn in the fork",
+          completedAt: null,
+        },
+      ];
+
+      const control = await lateHistoryAnchor(withMarker, "t13-pin-b-control");
+      expect(control.scrollTop).toBeGreaterThan(0);
+      control.unmount();
+
+      const subject = await lateHistoryAnchor(withNewTurn, "t13-pin-b-subject");
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${newUserId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(subject.scrollTop - control.scrollTop).toBe(
+        TICKET_13_ROW_HEIGHT_PX,
+      );
+      subject.unmount();
+    });
+
+    it("mount-time freshOpen seed enters anchoring-new-turn on a fork-marker-only transcript", async () => {
+      // Complements the late-history geometric pins: the mount-time
+      // `freshOpenAnchorMessageId` initializer must also accept the marker
+      // (mode seed is sync; jsdom does not land scrollTop on this path).
+      // Marker-ONLY so a user-only candidate regression cannot hide behind a
+      // copied user row still seeding anchoring-new-turn.
+      const markerId = "forked-chat-link:mount-seed";
+      const messages: ReadonlyArray<ChatMessageModel> = [
+        forkMarkerRow(markerId, 10_000),
+      ];
+      renderChatMessages({
+        messages,
+        scrollStateKey: `t13-mount-seed-${Math.random().toString(36).slice(2)}`,
+        freshOpen: true,
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await settleLegendList();
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${markerId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+    });
+
+    it("late-history empty→fork-marker-only snapshot anchors the marker (effect path, not just mount seed)", async () => {
+      // Mount-time `freshOpenAnchorMessageId` sees an empty transcript and
+      // seeds null. The late-history branch of `classifyChatEdgeMutation`
+      // (`!hadSavedScrollState`) must still widen to the fork marker when the
+      // snapshot arrives - same decision #27 predicate as the mount seed.
+      const markerId = "forked-chat-link:late-history";
+      const history: ReadonlyArray<ChatMessageModel> = [
+        forkMarkerRow(markerId, 1),
+      ];
+      const { rerenderMessages } = renderChatMessages({
+        messages: [],
+        scrollStateKey: `t13-late-fork-${Math.random().toString(36).slice(2)}`,
+        freshOpen: true,
+      });
+      await settleLegendList();
+      expect(screen.getByText("Start the conversation")).toBeTruthy();
+
+      rerenderMessages(history);
+      await settleLegendList();
+      await waitForAnchorEngineSettle();
+
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${markerId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+    });
+  });
+
+  describe("ticket 13: setup-card turn-group anchoring (decision #28)", () => {
+    it("(pin c) beginAnchoringNewTurn with a setup card already above the send lands on the card", async () => {
+      // Decision #28 at begin time (card already woven when the send is
+      // classified - genesis pin and mid-chat card that raced ahead of the
+      // optimistic row both look like this). Control: send with no card →
+      // anchors the send at history.length. Subject: card + send arrive
+      // together → resolveChatAnchorTargetWithSetupCard rewrites the target
+      // to the card, which occupies the SAME index the control's send used
+      // (content above is identical) → bit-for-bit same scrollTop. Without
+      // the resolve, subject lands on the send one slot later (+90px).
+      // (Mount-time fresh-open leaves scrollTop at 0 in jsdom, so the
+      // geometric pin uses the live beginAnchoringNewTurn path; pure-function
+      // pin c covers the genesis-shaped array walk.)
+      const history = makeCompletedTranscript(16);
+      const sendId = "user-pin-c-send";
+      const cardId = "setup-card:owner-1:0:pin-c";
+
+      const control = renderChatMessages({
+        messages: history,
+        scrollStateKey: `t13-pin-c-control-${Math.random().toString(36).slice(2)}`,
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const controlAfterSend = appendOptimisticUserSend(
+        history,
+        sendId,
+        500_000,
+      );
+      control.rerenderMessages(controlAfterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const controlScrollTop = getScrollNode().scrollTop;
+      expect(controlScrollTop).toBeGreaterThan(0);
+      control.unmount();
+
+      const subject = renderChatMessages({
+        messages: history,
+        scrollStateKey: `t13-pin-c-subject-${Math.random().toString(36).slice(2)}`,
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      // Card already above the send when the anchor-new-turn fires (no mid-
+      // weave retarget - pure begin-time substitution).
+      const subjectAfter: ReadonlyArray<ChatMessageModel> = [
+        ...history,
+        setupCardRow(cardId, 499_999, sendId),
+        {
+          ...makeMessageAt(0, "user", 500_000),
+          id: sendId,
+          content: "hello from send",
+          persistentMessageId: null,
+        },
+      ];
+      subject.rerenderMessages(subjectAfter);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${cardId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop).toBe(controlScrollTop);
+      // Provenance consumed with the RAW send id, not the card substitute.
+      expect(subject.getLocalProvenanceMessageIds().has(sendId)).toBe(false);
+      subject.unmount();
+    });
+
+    it("(pin d) mid-anchoring setup-card weave retargets the anchor to the card, without exiting anchoring-new-turn", async () => {
+      // Row height is uniform (90px, ITEM_HEIGHT_PX) under the jsdom shim: the
+      // card takes over the EXACT array slot the send row occupied before the
+      // weave, so a correct retarget lands at the bit-for-bit SAME scrollTop -
+      // not shifted by one row height, which is what leaving
+      // `maintainVisibleContentPosition` to keep the send row pixel-stable
+      // (the pre-ticket-13 behavior) would do, scrolling the new card
+      // off-screen above the still-anchored send row instead of revealing it.
+      // Also pins that `consumeLocalProvenance` still receives the RAW send
+      // id (the card is never a provenance entry; substituting it would leave
+      // the real send never consumed).
+      const initial = makeCompletedTranscript(6);
+      const sendId = "user-worktree-send";
+      const { rerenderMessages, getLocalProvenanceMessageIds } =
+        renderChatMessages({
+          messages: initial,
+          scrollStateKey: "t13-retarget-key",
+          localProvenanceMessageIds: new Set([sendId]),
+        });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(initial, sendId, 500_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      // Provenance for the send is consumed on the anchor-new-turn outcome,
+      // before any card weave - still the raw send id.
+      expect(getLocalProvenanceMessageIds().has(sendId)).toBe(false);
+      const scrollBeforeCard = getScrollNode().scrollTop;
+
+      // The `setup.creating` event lands async - the card weaves in directly
+      // above the send row (by `triggeringMessageId`), at the exact index
+      // the send row used to occupy.
+      const sendIndex = afterSend.findIndex(
+        (message) => message.id === sendId,
+      );
+      const card = setupCardRow(
+        `setup-card:owner-1:0:${sendId}`,
+        499_999,
+        sendId,
+      );
+      const afterCard: ReadonlyArray<ChatMessageModel> = [
+        ...afterSend.slice(0, sendIndex),
+        card,
+        ...afterSend.slice(sendIndex),
+      ];
+      rerenderMessages(afterCard);
+      await waitForAnchorEngineSettle();
+
+      // Still the SAME anchoring session - a retarget, not a cancel/exit.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(screen.getByTestId(`mock-message-${card.id}`)).toBeTruthy();
+
+      const scrollAfterCard = getScrollNode().scrollTop;
+      expect(scrollAfterCard).toBe(scrollBeforeCard);
+      // Card weave is a `none` outcome - provenance set stays empty (the
+      // send was already consumed; we never re-added the card id).
+      expect(getLocalProvenanceMessageIds().has(sendId)).toBe(false);
+      expect(getLocalProvenanceMessageIds().has(card.id)).toBe(false);
+    });
+
+    it("(pin e) mid-chat setup card woven above a NON-anchored message leaves the active anchor untouched", async () => {
+      // Anchoring turn N (the latest send). A setup card for an EARLIER turn
+      // weaves in elsewhere in the transcript - classify as `none`, and
+      // `resolveChatAnchorTargetWithSetupCard` from the CURRENT target finds
+      // no card above it, so retarget is a no-op. scrollTop and mode hold.
+      const initial = makeCompletedTranscript(6);
+      const sendId = "user-turn-n-send";
+      const earlierUserId = "message-2"; // index 2 in the prefix
+      const { rerenderMessages } = renderChatMessages({
+        messages: initial,
+        scrollStateKey: "t13-pin-e-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(initial, sendId, 500_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const scrollBeforeWeave = getScrollNode().scrollTop;
+
+      // Weave a card above an EARLIER user row (not the anchored send).
+      const earlierIndex = afterSend.findIndex(
+        (message) => message.id === earlierUserId,
+      );
+      expect(earlierIndex).toBeGreaterThanOrEqual(0);
+      const foreignCard = setupCardRow(
+        `setup-card:owner-1:0:${earlierUserId}`,
+        100,
+        earlierUserId,
+      );
+      const afterForeignCard: ReadonlyArray<ChatMessageModel> = [
+        ...afterSend.slice(0, earlierIndex),
+        foreignCard,
+        ...afterSend.slice(earlierIndex),
+      ];
+      // Inserting above an earlier row shifts every later row (including the
+      // anchored send) down by one slot. MVCP should keep the anchored send's
+      // pixel position stable for a `none` non-retarget outcome - scrollTop
+      // rises by exactly one row height so the SAME row stays on-screen at
+      // the same visual place. Retargeting to the foreign card would jump
+      // scrollTop back toward the earlier index (a multi-row shift).
+      rerenderMessages(afterForeignCard);
+      await waitForAnchorEngineSettle();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      // Still showing the send, not retargeted onto the foreign card.
+      expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      // MVCP holds the anchored row's visual place: +1 row of content above.
+      expect(getScrollNode().scrollTop).toBe(
+        scrollBeforeWeave + TICKET_13_ROW_HEIGHT_PX,
+      );
+    });
+
+    it("newer user send after a setup-card retarget re-derives on the new send (decision #28 never sticks)", async () => {
+      // After pin (d)'s retarget has pointed the session at a setup card, a
+      // REAL subsequent user send must begin a new anchoring session on that
+      // send - not stick to the stale card from the previous turn. Delta from
+      // card → second send is exactly 2 rows (card, firstSend, secondSend).
+      const history = makeCompletedTranscript(16);
+      const firstSendId = "user-sticky-first-send";
+      const secondSendId = "user-sticky-second-send";
+      const cardId = "setup-card:owner-1:0:sticky";
+      const { rerenderMessages, getLocalProvenanceMessageIds } =
+        renderChatMessages({
+          messages: history,
+          scrollStateKey: `t13-sticky-${Math.random().toString(36).slice(2)}`,
+          localProvenanceMessageIds: new Set([firstSendId, secondSendId]),
+        });
+      await settleLegendList();
+
+      // First send + card weave → retarget onto the card (decision #28 live).
+      const afterFirstSend = appendOptimisticUserSend(
+        history,
+        firstSendId,
+        500_000,
+      );
+      rerenderMessages(afterFirstSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${firstSendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      const firstSendIndex = afterFirstSend.findIndex(
+        (message) => message.id === firstSendId,
+      );
+      const card = setupCardRow(cardId, 499_999, firstSendId);
+      const afterCard: ReadonlyArray<ChatMessageModel> = [
+        ...afterFirstSend.slice(0, firstSendIndex),
+        card,
+        ...afterFirstSend.slice(firstSendIndex),
+      ];
+      rerenderMessages(afterCard);
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const scrollOnCard = getScrollNode().scrollTop;
+      expect(scrollOnCard).toBeGreaterThan(0);
+
+      // Second send: no setup card for this turn. Must re-derive onto the
+      // new send. Array: [...history, card, firstSend, secondSend] → delta 2.
+      const afterSecondSend = appendOptimisticUserSend(
+        afterCard,
+        secondSendId,
+        600_000,
+      );
+      rerenderMessages(afterSecondSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${secondSendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollOnCard).toBe(
+        2 * TICKET_13_ROW_HEIGHT_PX,
+      );
+      // Second send's provenance was consumed on the anchor-new-turn outcome
+      // (raw send id, not the previous turn's card).
+      expect(getLocalProvenanceMessageIds().has(secondSendId)).toBe(false);
     });
   });
 });
