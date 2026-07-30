@@ -19,7 +19,7 @@ describe("chat-tile transcript flex container (H1)", () => {
 
     // Assert the required tokens independently of their source ordering.
     expect(source).toMatch(
-      /className="(?=[^"]*\brelative\b)(?=[^"]*\bflex\b)(?=[^"]*\bmin-h-0\b)(?=[^"]*\bflex-1\b)(?=[^"]*\bflex-col\b)[^"]*"/,
+      /className="(?=[^"]*\brelative\b)(?=[^"]*\bflex(?![-\w]))(?=[^"]*\bmin-h-0\b)(?=[^"]*\bflex-1\b)(?=[^"]*\bflex-col\b)[^"]*"/,
     );
     // Pre-fix regression: was only a flex item, never a flex container.
     // Guard against silently reverting that exact broken string.

@@ -313,16 +313,21 @@ async function waitForAnchorEngineSettle(): Promise<void> {
   });
 }
 
+function getScrollToEndPill(): HTMLButtonElement {
+  const pill = document.querySelector('button[aria-label="Scroll to end"]');
+  if (!(pill instanceof HTMLButtonElement)) {
+    throw new Error("Scroll-to-end pill button was not rendered");
+  }
+  return pill;
+}
+
 function pillVisibleLabel(): string {
-  const pill = screen.getByRole("button", {
-    name: "Scroll to end",
-    hidden: true,
-  });
+  const pill = getScrollToEndPill();
   return pill.textContent;
 }
 
 function isJumpPillVisible(): boolean {
-  const pill = screen.getByRole("button", { name: "Scroll to end" });
+  const pill = getScrollToEndPill();
   return (
     pill.classList.contains("opacity-100") &&
     !pill.classList.contains("opacity-0")
@@ -1885,6 +1890,80 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("following-end catch-up (coverage restore)", () => {
+    it("releases follow after a scroll-only upward departure and keeps later growth parked", async () => {
+      const messages = makeTranscript(20);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "follow-scroll-only-departure",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      const liveEdgeScrollTop = scrollNode.scrollTop;
+      expect(liveEdgeScrollTop).toBeGreaterThan(200);
+
+      const streaming = appendAssistant(
+        messages,
+        "growth-before-scroll-only-departure",
+        100_000,
+      );
+      rerenderMessages(streaming);
+      await settleLegendList();
+      await waitForRevealPassTick();
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      expect(scrollNode.scrollTop).toBeGreaterThanOrEqual(liveEdgeScrollTop);
+
+      // jsdom does not emit the terminal event from LegendList's
+      // programmatic catch-up, so report the settled owned position before
+      // simulating the browser's scroll-only scrollbar-drag event.
+      const settledOwnedScrollTop = scrollNode.scrollTop;
+      await fireScrollTopAndFlush(settledOwnedScrollTop);
+      await fireScrollTopAndFlush(settledOwnedScrollTop - 200);
+
+      await waitFor(() => {
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      });
+      await waitForPillVisible();
+
+      const parked = scrollNode.scrollTop;
+      rerenderMessages(
+        appendAssistant(
+          streaming,
+          "growth-after-scroll-only-departure",
+          100_001,
+        ),
+      );
+      await settleLegendList();
+      await waitForRevealPassTick();
+
+      expect(scrollNode.scrollTop).toBe(parked);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+    });
+
+    it("keeps follow through pure streaming growth bursts whose scrollTop never decreases", async () => {
+      const messages = makeTranscript(20);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "follow-growth-bursts",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      let previousScrollTop = scrollNode.scrollTop;
+      let next: ReadonlyArray<ChatMessageModel> = messages;
+      for (let burst = 0; burst < 4; burst += 1) {
+        next = appendAssistant(next, `growth-burst-${burst}`, 110_000 + burst);
+        rerenderMessages(next);
+        await settleLegendList();
+        await waitForRevealPassTick();
+
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+        expect(scrollNode.scrollTop).toBeGreaterThanOrEqual(previousScrollTop);
+        previousScrollTop = scrollNode.scrollTop;
+      }
+      expect(isJumpPillVisible()).toBe(false);
+    });
+
     it("scrolls to reveal appended assistant growth while following", async () => {
       const messages = makeTranscript(20);
       const { rerenderMessages } = renderChatMessages({
@@ -4249,7 +4328,7 @@ describe("ChatMessages scroll policy", () => {
         // A second clean pill click must not move further - exact end.
         Reflect.deleteProperty(scrollNode, "scrollTop");
         scrollNode.scrollTop = recovered;
-        fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+        fireEvent.click(getScrollToEndPill());
         await waitForAnchorEngineSettle();
         expect(
           Math.abs(getScrollNode().scrollTop - recovered),

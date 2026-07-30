@@ -41,6 +41,7 @@ export function ScrollToEndPill({
   return (
     <button
       type="button"
+      aria-hidden={visible ? undefined : true}
       aria-label="Scroll to end"
       onClick={visible ? onClick : undefined}
       tabIndex={visible ? 0 : -1}

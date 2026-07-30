@@ -25,10 +25,10 @@ describe("ScrollToEndPill", () => {
     ];
 
     for (const state of states) {
-      const { unmount } = renderPill(state);
+      const { container, unmount } = renderPill(state);
       expect(
-        screen.getByRole("button", { name: "Scroll to end", hidden: true }),
-      ).toBeTruthy();
+        container.querySelector("button")?.getAttribute("aria-label"),
+      ).toBe("Scroll to end");
       unmount();
     }
   });
@@ -50,10 +50,12 @@ describe("ScrollToEndPill", () => {
   it("hides interaction when hidden (tabIndex -1, opacity-0, pointer-events-none)", () => {
     const { onClick } = renderPill({ kind: "hidden" });
 
-    const pill = screen.getByRole("button", {
-      name: "Scroll to end",
-      hidden: true,
-    });
+    const pill = screen.getByText("Scroll to end").closest("button");
+    if (!(pill instanceof HTMLButtonElement)) {
+      throw new Error("Expected hidden scroll-to-end button");
+    }
+    expect(pill.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Scroll to end" })).toBeNull();
     expect(pill.tabIndex).toBe(-1);
     expect(pill.classList.contains("opacity-0")).toBe(true);
     expect(pill.classList.contains("pointer-events-none")).toBe(true);

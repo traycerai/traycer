@@ -131,6 +131,9 @@ export const CHAT_ANCHOR_SETTLE_FALLBACK_MS = 750;
  *  (`metrics.scrollDeltaToRevealEnd <= 1`) so a fitting anchor's still-
  *  closing reserve near-end is never misread as "arrived". */
 const CHAT_TIMELINE_LIVE_EDGE_EPSILON_PX = 1;
+/** A smaller scrollTop is user movement away from an owned live-edge
+ * position; equal or larger values are compatible with streaming growth. */
+const CHAT_TIMELINE_SCROLL_DEPARTURE_EPSILON_PX = 1;
 /** Ticket 10: pixel tolerance for the settle/re-issue validation below - a
  *  navigation whose landing is off by more than this is treated as a real
  *  undershoot, not float/rounding noise. */
@@ -150,6 +153,41 @@ function chatScrollModeDataAttribute(
   if (isAnchoringNewTurn) return "anchoring-new-turn";
   if (isFollowingEnd) return "following-end";
   return "free-scrolling";
+}
+
+function resolveOwnedAtEndReport(input: {
+  readonly isAtEnd: boolean;
+  readonly mode: ChatTimelineScrollMode;
+  readonly generationOwned: boolean;
+  readonly currentScrollTop: number | undefined;
+  readonly previousOwnedScrollTop: number | null;
+}): {
+  readonly shouldSwallow: boolean;
+  readonly nextOwnedScrollTop: number | null;
+} {
+  const {
+    isAtEnd,
+    mode,
+    generationOwned,
+    currentScrollTop,
+    previousOwnedScrollTop,
+  } = input;
+  const isScrollOnlyFollowDeparture =
+    !isAtEnd &&
+    mode === "following-end" &&
+    typeof currentScrollTop === "number" &&
+    previousOwnedScrollTop !== null &&
+    currentScrollTop <
+      previousOwnedScrollTop - CHAT_TIMELINE_SCROLL_DEPARTURE_EPSILON_PX;
+  return {
+    shouldSwallow: !isAtEnd && generationOwned && !isScrollOnlyFollowDeparture,
+    nextOwnedScrollTop:
+      generationOwned &&
+      !isScrollOnlyFollowDeparture &&
+      typeof currentScrollTop === "number"
+        ? currentScrollTop
+        : previousOwnedScrollTop,
+  };
 }
 
 type ChatKeyboardScrollAction =
@@ -628,6 +666,11 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const liveFollowUserScrollGenerationRef = useRef<number | null>(
     initialModeSeed.liveFollowGeneration,
   );
+  // Last physical position reported while follow ownership was intact.
+  // LegendList's false reports alone cannot distinguish an OS-scrollbar drag
+  // upward from content growth reopening the distance to end; their scrollTop
+  // direction can.
+  const lastOwnedScrollTopRef = useRef<number | null>(null);
   const pendingAnchorScrollRestoreRef = useRef<{
     readonly offset: number;
     readonly userScrollGeneration: number;
@@ -776,6 +819,8 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         isAtEndRef.current = true;
         liveFollowUserScrollGenerationRef.current =
           anchorUserScrollGenerationRef.current;
+        lastOwnedScrollTopRef.current =
+          chatTimelineRef.current?.getScrollableNode().scrollTop ?? null;
         cancelPillShow();
         setShowScrollToBottom(false);
         suppressFollowRestoreRef.current = false;
@@ -784,6 +829,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         setHasUnseenTurnCompletion(false);
       } else {
         liveFollowUserScrollGenerationRef.current = null;
+        lastOwnedScrollTopRef.current = null;
       }
       setIsFollowingEnd(next === "following-end");
     },
@@ -843,6 +889,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         setShowScrollToBottom(true);
       }
       liveFollowUserScrollGenerationRef.current = null;
+      lastOwnedScrollTopRef.current = null;
       pendingTimelineAnchorRef.current = null;
       positionedTimelineAnchorRef.current = null;
       settledTimelineAnchorRef.current = null;
@@ -1305,13 +1352,27 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         chatTimelineRef.current?.getState().isAtEnd ?? isAtEnd;
       setIsReaderAtLiveEdge(strictAtLiveEdge);
 
-      if (
-        !isAtEnd &&
+      const currentScrollTop =
+        chatTimelineRef.current?.getScrollableNode().scrollTop;
+      const previousOwnedScrollTop = lastOwnedScrollTopRef.current;
+      const generationOwned =
         liveFollowUserScrollGenerationRef.current ===
-          anchorUserScrollGenerationRef.current
-      ) {
+        anchorUserScrollGenerationRef.current;
+      const { shouldSwallow, nextOwnedScrollTop } = resolveOwnedAtEndReport({
+        isAtEnd,
+        mode: timelineScrollModeRef.current,
+        generationOwned,
+        currentScrollTop,
+        previousOwnedScrollTop,
+      });
+      lastOwnedScrollTopRef.current = nextOwnedScrollTop;
+
+      if (shouldSwallow) {
         // Transient isAtEnd=false while WE own the scroll (mid-flight
-        // animated scrollToIndex, initialScrollAtEnd settling): not a gesture.
+        // animated scrollToIndex, initialScrollAtEnd settling, or streaming
+        // growth with a non-decreasing scrollTop): not a gesture. A decrease
+        // while following is an OS-scrollbar-style user departure and falls
+        // through to the ordinary free-scrolling transition below.
         cancelPillShow();
         setShowScrollToBottom(false);
         return;
@@ -1391,6 +1452,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       } else {
         timelineScrollModeRef.current = "free-scrolling";
         liveFollowUserScrollGenerationRef.current = null;
+        lastOwnedScrollTopRef.current = null;
         setIsFollowingEnd(false);
         setIsAnchoringNewTurn(false);
         maybeShowPillDebounced();
