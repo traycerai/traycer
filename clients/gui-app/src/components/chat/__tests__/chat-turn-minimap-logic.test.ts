@@ -6,6 +6,7 @@ import {
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_ITEM_SPACING,
   CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS,
+  CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS,
   CHAT_TURN_MINIMAP_PERSISTENT_GUTTER,
   resolveChatTurnMinimapHasPersistentGutter,
   resolveChatTurnMinimapHeightStyle,
@@ -36,15 +37,15 @@ function viewportForGutter(gutterPx: number): number {
 }
 
 describe("resolveChatTurnMinimapHeightStyle", () => {
-  it("uses (itemCount-1)*spacing as the natural height, capped by the max-height CSS", () => {
+  it("uses (itemCount-1)*spacing as the natural height, capped by the viewport and pane", () => {
     expect(resolveChatTurnMinimapHeightStyle(1)).toBe(
-      `min(1px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS})`,
+      `min(1px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
     );
     expect(resolveChatTurnMinimapHeightStyle(2)).toBe(
-      `min(${CHAT_TURN_MINIMAP_ITEM_SPACING}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS})`,
+      `min(${CHAT_TURN_MINIMAP_ITEM_SPACING}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
     );
     expect(resolveChatTurnMinimapHeightStyle(5)).toBe(
-      `min(${4 * CHAT_TURN_MINIMAP_ITEM_SPACING}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS})`,
+      `min(${4 * CHAT_TURN_MINIMAP_ITEM_SPACING}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
     );
   });
 });

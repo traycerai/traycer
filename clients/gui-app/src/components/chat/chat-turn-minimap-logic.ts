@@ -18,6 +18,8 @@ export const CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR = `[${CHAT_TURN_MINIMAP_K
 export const CHAT_TURN_MINIMAP_ITEM_SPACING = 8;
 export const CHAT_TURN_MINIMAP_MIN_ITEMS = 2;
 export const CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
+export const CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS =
+  "max(1px, calc(100% - 1rem))";
 /** Matches `chat-timeline.tsx`'s row `max-w-3xl` (48rem = 768px). */
 export const CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH = 768;
 export const CHAT_TURN_MINIMAP_PERSISTENT_GUTTER = 48;
@@ -27,7 +29,7 @@ export function resolveChatTurnMinimapHeightStyle(itemCount: number): string {
     1,
     (itemCount - 1) * CHAT_TURN_MINIMAP_ITEM_SPACING,
   );
-  return `min(${naturalHeight}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS})`;
+  return `min(${naturalHeight}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`;
 }
 
 export function resolveChatTurnMinimapTopPercent(
