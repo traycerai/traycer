@@ -316,6 +316,10 @@ describe("ChatTurnMinimap preview content", () => {
       "[data-chat-turn-minimap-preview]",
     );
     expect(previewPanel).not.toBeNull();
+    expect(previewPanel?.classList).toContain(
+      "w-[min(20rem,calc(100vw-3rem))]",
+    );
+    expect(previewPanel?.classList).not.toContain("w-80");
     expect(
       (previewPanel as HTMLElement).querySelectorAll(".text-muted-foreground"),
     ).toHaveLength(0);

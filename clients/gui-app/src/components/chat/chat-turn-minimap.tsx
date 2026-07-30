@@ -177,7 +177,7 @@ function ChatTurnMinimapPreview(props: {
 }) {
   return (
     <span
-      className="pointer-events-auto absolute left-8 w-80 cursor-text select-text"
+      className="pointer-events-auto absolute left-8 w-[min(20rem,calc(100vw-3rem))] cursor-text select-text"
       data-chat-turn-minimap-preview=""
       onMouseMove={(event) => event.stopPropagation()}
       style={{
