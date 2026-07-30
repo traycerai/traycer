@@ -67,7 +67,12 @@ describe("resolveHostStartTarget", () => {
     // Passes the resolved slot dir so a host baked for a different slot still
     // publishes pid.json where this environment expects it.
     expect(target.args).toEqual(["--host-data-dir", hostHomeDir("production")]);
-    expect(target.cwd).toBe(work);
+    // The host home dir, never the executable's own directory: a CWD inside
+    // `install/` is an open handle children inherit, and on Windows any such
+    // child that outlives the pre-update kill fails the install swap rename
+    // with EBUSY.
+    expect(target.cwd).toBe(hostHomeDir("production"));
+    expect(target.cwd).not.toBe(work);
     expect(target.record.version).toBe("1.0.0");
   });
 

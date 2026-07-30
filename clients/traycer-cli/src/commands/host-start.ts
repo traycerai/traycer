@@ -5,7 +5,6 @@ import {
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
-import { dirname } from "node:path";
 import type { Readable } from "node:stream";
 import {
   openBootstrapLogFd,
@@ -180,10 +179,18 @@ export async function resolveHostStartTarget(
   // publishes pid.json where this environment's desktop watches, instead of
   // self-resolving to its own baked slot. PATH-ONLY: this never selects the
   // host's cloud/auth target, which stays baked into the host binary.
+  // The host home dir, NOT the executable's own directory: on Windows a
+  // process's CWD is an open handle on that directory, and children the
+  // host spawns without an explicit cwd inherit it. With the CWD inside
+  // `install/`, any such child that outlives the pre-update kill blocks
+  // the install-dir swap rename with EBUSY - and the slot scan cannot see
+  // a process whose only tie to the install is its CWD. The host itself
+  // resolves nothing cwd-relative (SEA module loads anchor at
+  // `import.meta.url`; data paths come from `--host-data-dir`).
   return {
     executable: record.executablePath,
     args: ["--host-data-dir", hostHomeDir(opts.environment)],
-    cwd: opts.cwd ?? dirname(record.executablePath),
+    cwd: opts.cwd ?? hostHomeDir(opts.environment),
     record,
   };
 }
