@@ -192,7 +192,7 @@ interface TraycerAuthenticatedRuntimeProps {
 function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
   return (
     <CommandPaletteProvider router={props.router}>
-      <SupportContextRegistryBridge />
+      <SupportContextRegistryBridge router={props.router} />
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
         <HostCredentialProvisionProvider>

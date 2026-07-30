@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { useRouterState } from "@tanstack/react-router";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { AppRouter } from "@/router";
 import {
   PROVIDER_DISPLAY_NAMES,
   TUI_HARNESS_ID_TO_PROVIDER_ID,
@@ -46,6 +46,30 @@ function resolveProviderId(harnessId: string): ProviderId | null {
     return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
   if (isProviderId(harnessId)) return harnessId;
   return null;
+}
+
+/**
+ * Reads the current route template directly off the router INSTANCE
+ * (`router.state`/`router.subscribe`) rather than via `useRouterState`, which
+ * requires a `<RouterProvider>` ancestor context. This bridge is mounted
+ * above `RouterProvider` in the tree (`TraycerAuthenticatedRuntime`, a sibling
+ * of the deeply-nested `TraycerAppRuntimeSurface` that renders
+ * `<RouterProvider>`), so no such context exists there - `useRouterState`
+ * throws `Cannot read properties of null (reading 'isServer')` in that
+ * position. Taking the live router as a prop and reading it imperatively
+ * (the same pattern `HistoryPruneProvider` already uses) works regardless of
+ * where in the tree this is mounted.
+ */
+function useRouteTemplate(router: AppRouter): string | null {
+  const subscribe = useCallback(
+    (callback: () => void) => router.subscribe("onResolved", () => callback()),
+    [router],
+  );
+  const getSnapshot = useCallback(() => {
+    const lastMatch = router.state.matches.at(-1);
+    return lastMatch === undefined ? null : lastMatch.routeId;
+  }, [router]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }
 
 interface ActiveHarnessContext {
@@ -118,17 +142,19 @@ function resolveActiveHarnessContext(
  * that is exactly what the module-scoped registry store guarantees and a
  * React context would not.
  */
-export function SupportContextRegistryBridge(): null {
+export interface SupportContextRegistryBridgeProps {
+  /** The live app router - read imperatively, never via `useRouterState`. */
+  readonly router: AppRouter;
+}
+
+export function SupportContextRegistryBridge(
+  props: SupportContextRegistryBridgeProps,
+): null {
   const hostId = useReactiveActiveHostId();
   const epicId = useActiveEpicId();
   const tabId = useActiveTabId();
   const artifactRef = useActiveEpicArtifactRef(tabId ?? undefined);
-  const routeTemplate = useRouterState({
-    select: (state) => {
-      const lastMatch = state.matches.at(-1);
-      return lastMatch === undefined ? null : lastMatch.routeId;
-    },
-  });
+  const routeTemplate = useRouteTemplate(props.router);
   const providersListQuery = useProvidersList({
     enabled: true,
     subscribed: false,
