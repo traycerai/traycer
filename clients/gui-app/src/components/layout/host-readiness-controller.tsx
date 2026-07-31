@@ -210,20 +210,24 @@ function presentationFromLifecycle(args: {
 function compatibilityPresentation(
   compatibility: HostCompatibility,
 ): DefaultHostReadinessPresentation["compatibility"] {
-  if ("error" in compatibility && compatibility.status === "failed") {
+  if (compatibility.status === "failed") {
     return {
       status: "failed",
       errorMessage: compatibility.error.message,
       retrying: compatibility.retrying,
       retry: compatibility.retry,
+      degraded: false,
+      unreachable: compatibility.unreachable,
     };
   }
-  if ("error" in compatibility) {
+  if (compatibility.status === "incompatible") {
     return {
       status: "incompatible",
       errorMessage: describeHostCompatibilityError(compatibility.error),
       retrying: false,
       retry: compatibility.retry,
+      degraded: false,
+      unreachable: false,
     };
   }
   if (compatibility.status === "checking") {
@@ -232,6 +236,8 @@ function compatibilityPresentation(
       errorMessage: null,
       retrying: false,
       retry: compatibility.retry,
+      degraded: false,
+      unreachable: false,
     };
   }
   return {
@@ -239,6 +245,8 @@ function compatibilityPresentation(
     errorMessage: null,
     retrying: false,
     retry: compatibility.retry,
+    degraded: compatibility.degraded,
+    unreachable: false,
   };
 }
 
@@ -337,10 +345,12 @@ function SlowHostFallback(props: {
         ),
         // The pre-consolidation `LocalHostUnavailable` card carried this; a
         // startup failure is exactly where a user needs to report.
-        footer: hostStartupReportIssueAction(
-          "Traycer Host is unavailable",
-          "Traycer Host was unavailable.",
-        ),
+        footer: hostFailureReportIssueAction({
+          title: "Traycer Host is unavailable",
+          message: "Traycer Host did not become available.",
+          code: "HOST_UNAVAILABLE",
+          presentation: props.presentation,
+        }),
         actions: [],
       }}
       testId={props.testId}
@@ -566,51 +576,86 @@ function fallbackContent(
         ],
       };
     case "compatibility-error":
-      return {
-        message: compatibilityErrorMessage(presentation),
-        detail: null,
-        body: null,
-        footer: hostStartupReportIssueAction(
-          "Could not start Traycer Host",
-          "Traycer Host could not start.",
-        ),
-        actions: [
-          {
-            label: "Retry",
-            testId: "local-host-compatibility-retry",
-            variant: "outline",
-            disabled: presentation.compatibility.retrying,
-            pending: presentation.compatibility.retrying,
-            onClick: presentation.compatibility.retry,
-          },
-        ],
-      };
+      return compatibilityErrorFallback(presentation);
     case "incompatible-host":
       return incompatibleFallback(presentation);
   }
 }
 
 /**
- * Standard "Report issue" affordance shown alongside the recovery actions
- * on the startup-failure fallbacks (provisioning-error, compatibility-error,
- * incompatible-host), matching the pre-consolidation gate cards.
+ * Standard "Report issue" affordance shown alongside the recovery actions on
+ * the host-failure fallbacks (provisioning-error, compatibility-error,
+ * incompatible-host, slow/unavailable host).
+ *
+ * Every one of those used to file the SAME "Could not start Traycer Host"
+ * report. On 2026-07-31 that single template produced three field reports with
+ * identical titles and three completely unrelated causes - an offline host that
+ * could not verify the session (traycer#858), a first install whose 60s
+ * readiness budget expired mid-provisioning (traycer#862), and a host that had
+ * been running and serving agent turns for hours (traycer#860). Each one cost a
+ * full desktop+host log pull just to learn WHICH failure it was.
+ *
+ * So the pre-filled report now names its own failure family (`title`/`code`)
+ * and carries a one-line health snapshot. The snapshot is categorical state
+ * only - never paths, error text or anything the user has to redact.
  */
-function hostStartupReportIssueAction(
-  title: string,
-  message: string,
-): ReactNode {
+function hostFailureReportIssueAction(args: {
+  readonly title: string;
+  readonly message: string;
+  readonly code: string;
+  readonly presentation: DefaultHostReadinessPresentation;
+}): ReactNode {
   return (
     <ReportIssueAction
       context={createReportIssueContext({
-        title,
-        message,
-        code: null,
+        title: args.title,
+        message: `${args.message} ${describeHostHealth(args.presentation)}`,
+        code: args.code,
         source: "Host startup",
       })}
       presentation="text"
       className={undefined}
     />
   );
+}
+
+/**
+ * One line of triage state for the pre-filled report: what the desktop shell
+ * believed about the host at the moment the user filed. Everything here is a
+ * fixed vocabulary the renderer already holds - no new plumbing, and nothing
+ * that can carry a filesystem path or a user's own data.
+ */
+function describeHostHealth(
+  presentation: DefaultHostReadinessPresentation,
+): string {
+  const parts: string[] = [
+    `host ${presentation.localTarget ? presentation.localHostState : "remote"}`,
+    `compat ${describeCompatHealth(presentation)}`,
+  ];
+  if (presentation.provisioning) parts.push("provisioning");
+  if (presentation.removed) parts.push("removed");
+  if (presentation.hostBusy) parts.push("busy");
+  if (presentation.stage === "slow") parts.push("slow start");
+  const progress = presentation.progress;
+  if (progress !== null) {
+    const percent =
+      progress.percent === null ? "" : ` ${Math.round(progress.percent)}%`;
+    parts.push(`last progress ${progress.stage ?? "unknown"}${percent}`);
+  }
+  return `Host health: ${parts.join(", ")}.`;
+}
+
+function describeCompatHealth(
+  presentation: DefaultHostReadinessPresentation,
+): string {
+  const compatibility = presentation.compatibility;
+  if (compatibility.status === "failed") {
+    return compatibility.unreachable ? "unreachable" : "rejected";
+  }
+  if (compatibility.status === "compatible" && compatibility.degraded) {
+    return "compatible (degraded)";
+  }
+  return compatibility.status;
 }
 
 function loadingFallback(
@@ -663,10 +708,12 @@ function provisioningErrorFallback(
       "Could not start Traycer Host.",
     detail: null,
     body: null,
-    footer: hostStartupReportIssueAction(
-      "Could not start Traycer Host",
-      "Traycer Host could not start.",
-    ),
+    footer: hostFailureReportIssueAction({
+      title: "Could not start Traycer Host",
+      message: "Traycer Host could not start.",
+      code: "HOST_PROVISIONING_FAILED",
+      presentation,
+    }),
     actions: [
       {
         label: "Retry",
@@ -681,24 +728,62 @@ function provisioningErrorFallback(
 }
 
 /**
- * Trailing space guard: the compat error message is optional, and
- * `"… compatibility. " + ""` shipped a sentence with a dangling space.
+ * The compat probe failed. WHY it failed decides what this card may claim.
+ *
+ * A probe that never reached the host says nothing about protocol
+ * compatibility - the host may be mid-restart, stalled under load, or up but
+ * unable to verify the session because it cannot reach the sign-in service.
+ * Calling all of that "could not verify host compatibility" is what put
+ * `fetch failed` behind a version-mismatch sentence on an offline machine
+ * (traycer#858) and what framed a busy, working host as a compat problem
+ * (traycer#860). Only a host that ANSWERED and rejected the handshake gets the
+ * compatibility wording.
  */
-function compatibilityErrorMessage(
+function compatibilityErrorFallback(
   presentation: DefaultHostReadinessPresentation,
-): string {
-  const reason = presentation.compatibility.errorMessage;
-  const base = "Could not verify host compatibility.";
-  return reason === null ? base : `${base} ${reason}`;
+): ReadinessFallback {
+  const unreachable = presentation.compatibility.unreachable;
+  return {
+    message: unreachable
+      ? "Traycer Host is not responding."
+      : "Could not verify host compatibility.",
+    // The reason rides in its own line rather than concatenated onto the
+    // sentence: it is a raw transport/host string, and gluing it on produced
+    // "Could not verify host compatibility. fetch failed."
+    detail: presentation.compatibility.errorMessage,
+    body: null,
+    footer: hostFailureReportIssueAction({
+      title: unreachable
+        ? "Traycer Host is not responding"
+        : "Could not verify Traycer Host compatibility",
+      message: unreachable
+        ? "The app could not reach Traycer Host."
+        : "Traycer Host rejected the compatibility handshake.",
+      code: unreachable ? "HOST_UNREACHABLE" : "HOST_COMPAT_PROBE_REJECTED",
+      presentation,
+    }),
+    actions: [
+      {
+        label: "Retry",
+        testId: "local-host-compatibility-retry",
+        variant: "outline",
+        disabled: presentation.compatibility.retrying,
+        pending: presentation.compatibility.retrying,
+        onClick: presentation.compatibility.retry,
+      },
+    ],
+  };
 }
 
 function incompatibleFallback(
   presentation: DefaultHostReadinessPresentation,
 ): ReadinessFallback {
-  const footer = hostStartupReportIssueAction(
-    "Host update required",
-    "Traycer Host requires an update.",
-  );
+  const footer = hostFailureReportIssueAction({
+    title: "Host update required",
+    message: "Traycer Host requires an update.",
+    code: "HOST_INCOMPATIBLE",
+    presentation,
+  });
   const shared = {
     message: "Host update required",
     // The explanation, the labelled reason box and the restart error were all
