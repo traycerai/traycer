@@ -205,11 +205,11 @@ function makeClient(options: {
   readonly dialTimeoutMs: number;
   readonly frameTimeoutMs: number;
   /**
-   * Omitted means `0` - no post-send attestation grace, so a response-wait
+   * `undefined` means `0` - no post-send attestation grace, so a response-wait
    * timeout fails the call the moment the caller's deadline expires. Tests that
    * exercise the grace pass a window explicitly.
    */
-  readonly hostAttestationWindowMs?: number;
+  readonly hostAttestationWindowMs: number | undefined;
 }): BoundWsRpcClient<typeof testRegistry> {
   const inner = new WsRpcClient<typeof testRegistry>({
     registry: testRegistry,
@@ -365,6 +365,7 @@ describe("WsRpcClient", () => {
       requestId: "req-1",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "hi" });
@@ -457,6 +458,7 @@ describe("WsRpcClient", () => {
       requestId: "req-no-auth",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     await expect(
@@ -507,6 +509,7 @@ describe("WsRpcClient", () => {
       requestId: "req-incompat",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -558,6 +561,7 @@ describe("WsRpcClient", () => {
       requestId: "req-unauth",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.status", {});
@@ -594,6 +598,7 @@ describe("WsRpcClient", () => {
       requestId: "req-mirror",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -631,6 +636,7 @@ describe("WsRpcClient", () => {
       requestId: "req-correlated",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -668,6 +674,7 @@ describe("WsRpcClient", () => {
       requestId: "req-dial-fail",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -694,6 +701,7 @@ describe("WsRpcClient", () => {
       requestId: "req-dial-timeout",
       dialTimeoutMs: 25,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -717,6 +725,7 @@ describe("WsRpcClient", () => {
       requestId: "req-frame-timeout",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 25,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -741,6 +750,7 @@ describe("WsRpcClient", () => {
       requestId: "req-malformed",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -782,6 +792,7 @@ describe("WsRpcClient", () => {
       requestId: "req-dial-retryable",
       dialTimeoutMs: 25,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -799,6 +810,7 @@ describe("WsRpcClient", () => {
       requestId: "req-close-retryable",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -821,6 +833,7 @@ describe("WsRpcClient", () => {
       requestId: "req-handshake-retryable",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 25,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -1811,6 +1824,7 @@ describe("WsRpcClient", () => {
       requestId: "req-postsend",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 25,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -1840,6 +1854,7 @@ describe("WsRpcClient", () => {
       requestId: "req-postsend-fatal",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -1879,6 +1894,7 @@ describe("WsRpcClient", () => {
       requestId: "req-longpoll",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 25,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.requestWithResponseTimeout(
@@ -1919,6 +1935,7 @@ describe("WsRpcClient", () => {
       requestId: "req-longpoll-handshake",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 25,
+      hostAttestationWindowMs: undefined,
     });
 
     // The extended budget covers ONLY the response wait - a host that never
@@ -1947,6 +1964,7 @@ describe("WsRpcClient", () => {
       requestId: "req-longpoll-elapsed",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 25,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.requestWithResponseTimeout(
@@ -1978,6 +1996,7 @@ describe("WsRpcClient", () => {
       requestId: "req-malformed-nonretry",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
@@ -2002,6 +2021,7 @@ describe("WsRpcClient", () => {
       requestId: "req-error-env",
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
     });
 
     const pending = client.request("host.echo", { message: "x" });
