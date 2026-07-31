@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode } from "react";
+import { useMemo, type ComponentType, type ReactNode } from "react";
 import { TraycerMarkdown } from "@/markdown";
 import { AgentReferenceChip } from "@/components/chat/agent-reference-chip";
 import { CodeBlock } from "@/markdown/components/code-block";
@@ -36,18 +36,40 @@ export function AgentReferenceMarkdown({
   markdown,
   proseSize,
   quotable,
+  components,
 }: {
   readonly isStreaming: boolean;
   readonly markdown: string;
   readonly proseSize: "compact" | "normal";
   readonly quotable: boolean;
+  /**
+   * Per-surface overrides merged OVER the shared agent-reference set, for a
+   * surface whose link semantics differ from chat's. `null` for surfaces that
+   * want the shared behaviour unchanged - which is every chat surface.
+   */
+  readonly components: Record<
+    string,
+    ComponentType<Record<string, unknown>>
+  > | null;
 }): ReactNode {
+  // MEMOIZED, and above the early return so the hook order is unconditional.
+  // `TraycerMarkdown` keys its parse `useMemo` - and `MarkdownBlock` its memo
+  // comparator - on this object's IDENTITY, so minting a fresh merge per render
+  // would reparse every block of every body on any unrelated rerender of the
+  // surface. Callers pass a module-level constant, so this key never churns.
+  const mergedComponents = useMemo(
+    () =>
+      components === null
+        ? AGENT_REFERENCE_MARKDOWN_COMPONENTS
+        : { ...AGENT_REFERENCE_MARKDOWN_COMPONENTS, ...components },
+    [components],
+  );
   if (markdown.length === 0) return null;
   return (
     <TraycerMarkdown
       className={null}
       proseSize={proseSize}
-      components={AGENT_REFERENCE_MARKDOWN_COMPONENTS}
+      components={mergedComponents}
       remarkPlugins={null}
       rehypePlugins={AGENT_REFERENCE_REHYPE_PLUGINS}
       quotable={quotable}

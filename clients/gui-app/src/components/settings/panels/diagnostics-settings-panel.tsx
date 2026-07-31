@@ -24,6 +24,7 @@ import {
 import {
   runnerMutationKeys,
   runnerQueryKeys,
+  supportBridgeQueryScopeId,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import type {
@@ -281,7 +282,9 @@ function DiagnosticsLogs(props: {
   const { support } = props;
   const listQuery = useQuery(
     queryOptions<DesktopSupportSnapshot>({
-      queryKey: runnerQueryKeys.supportLogList(support),
+      queryKey: runnerQueryKeys.supportLogList(
+        supportBridgeQueryScopeId(support),
+      ),
       queryFn: () => support.getSnapshot(),
       staleTime: 60_000,
     }),
@@ -344,7 +347,10 @@ function DiagnosticsLogEntry(props: {
 
   const tailQuery = useQuery(
     queryOptions<DesktopSupportLogTailResult>({
-      queryKey: runnerQueryKeys.supportLogTail(support, entry.target),
+      queryKey: runnerQueryKeys.supportLogTail(
+        supportBridgeQueryScopeId(support),
+        entry.target,
+      ),
       queryFn: () =>
         support.tailLog({ target: entry.target, tailLines: LOG_TAIL_LINES }),
       enabled: open,

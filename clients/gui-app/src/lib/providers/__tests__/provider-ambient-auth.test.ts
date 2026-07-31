@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { describe, expect, it } from "vitest";
 import type {
   ProviderAuth,
@@ -39,6 +40,7 @@ function providerState(
     providerId: "claude-code",
     enabled: true,
     disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     selected: { kind: "bundled" },
     candidates: [],
     auth: auth(providerAuthStatus),

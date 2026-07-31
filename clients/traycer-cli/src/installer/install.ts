@@ -32,7 +32,7 @@ import {
   listAsideDirsNewestFirst,
   sweepDeadAsideDirs,
 } from "./aside-dirs";
-import { renameWithRetry } from "./rename-retry";
+import { isRetryableRenameCode, renameWithRetryPlan } from "./rename-retry";
 import { reconcileHostStage } from "./stage-reconcile";
 
 // Host installer - verify-before-replace per the Tech Plan.
@@ -81,9 +81,37 @@ export type InstallSourceArg =
 //     non-readiness). The hook should therefore swallow start errors
 //     internally if it wants the install to report success; throwing
 //     propagates the error to `installHost`'s caller.
+//
+//   - `swapLockRecovery` is the Windows-only escalation seam for the swap
+//     renames themselves. `beforeSwap`'s service stop kills every host
+//     process the slot scan can SEE (exe path / command line under the
+//     install dir), but a process merely holding a handle inside it - an
+//     orphaned child with its CWD there, an AV scanner - is invisible to
+//     that scan and fails the rename with EBUSY. `killLingeringProcesses`
+//     re-runs the kill between rename attempts; `describeLockHolders` runs
+//     after the retries are exhausted so the error can name the processes
+//     still matching the slot instead of a bare EBUSY. `null` on platforms
+//     whose renames don't contend with open handles (POSIX) and for
+//     callers that manage the OS service themselves.
 export interface InstallHostLifecycle {
   readonly beforeSwap: () => Promise<void>;
   readonly afterSwap: () => Promise<void>;
+  readonly swapLockRecovery: SwapLockRecovery | null;
+}
+
+// A process the platform's slot scan still associates with the install
+// after the swap rename kept failing - the diagnostic payload for the
+// EBUSY error. `name`/`executablePath` are null when the scan could not
+// read them (access-denied on another user's process, for instance).
+export interface SwapLockHolderProcess {
+  readonly pid: number;
+  readonly name: string | null;
+  readonly executablePath: string | null;
+}
+
+export interface SwapLockRecovery {
+  readonly killLingeringProcesses: () => Promise<void>;
+  readonly describeLockHolders: () => Promise<readonly SwapLockHolderProcess[]>;
 }
 
 export interface InstallHostOptions {
@@ -552,6 +580,8 @@ export async function commitInstallFromSource(
   await atomicSwap({
     environment: opts.environment,
     stagingDir: opts.sourceDir,
+    swapLockRecovery:
+      opts.lifecycle === null ? null : opts.lifecycle.swapLockRecovery,
   });
   opts.onCommitted();
   logger.info("Host install atomic swap completed", {
@@ -781,9 +811,137 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
   };
 }
 
+// Both recovery calls are best-effort by construction: a broken scan or
+// kill must never mask the rename failure it was trying to explain or fix.
+function swapLockRetryHook(
+  recovery: SwapLockRecovery | null,
+  logger: ILogger,
+): (() => Promise<void>) | null {
+  if (recovery === null) return null;
+  return async () => {
+    try {
+      await recovery.killLingeringProcesses();
+    } catch (err) {
+      logger.warn("Host install swap-lock re-kill failed", {
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
+      });
+    }
+  };
+}
+
+async function collectSwapLockHolders(
+  recovery: SwapLockRecovery | null,
+  logger: ILogger,
+): Promise<readonly SwapLockHolderProcess[]> {
+  if (recovery === null) return [];
+  try {
+    return await recovery.describeLockHolders();
+  } catch (err) {
+    logger.warn("Host install swap-lock holder scan failed", {
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+    return [];
+  }
+}
+
+// The logger's `LogValue` requires an index signature interfaces don't
+// carry - re-shape each holder as an anonymous literal for the log fields.
+function logLockHolder(holder: SwapLockHolderProcess): {
+  readonly pid: number;
+  readonly name: string | null;
+  readonly executablePath: string | null;
+} {
+  return {
+    pid: holder.pid,
+    name: holder.name,
+    executablePath: holder.executablePath,
+  };
+}
+
+// The diagnostic tail appended to the swap failure's message. Named
+// holders when the slot scan matched something; otherwise, for a
+// lock-class failure on a platform that HAS the scan (Windows), an
+// actionable fallback - a CWD-only orphan, an AV/indexer scan, or an open
+// Explorer/terminal window holds the directory without its exe or command
+// line ever mentioning it, so the scan legitimately comes back empty and
+// "retry" alone cannot clear it. A non-lock code (say a genuine EIO) gets
+// no suffix: claiming "another program is holding it" there would send
+// the user chasing a locker that does not exist.
+function swapLockFailureSuffix(
+  cause: unknown,
+  holders: readonly SwapLockHolderProcess[],
+  recovery: SwapLockRecovery | null,
+): string {
+  if (holders.length > 0) {
+    const rendered = holders
+      .map((holder) => {
+        const name = holder.name === null ? "" : ` (${holder.name})`;
+        const exe =
+          holder.executablePath === null ? "" : ` at ${holder.executablePath}`;
+        return `pid ${holder.pid}${name}${exe}`;
+      })
+      .join(", ");
+    return `; processes still holding the install directory: ${rendered}`;
+  }
+  if (recovery === null) return "";
+  const code =
+    cause && typeof cause === "object" && "code" in cause
+      ? String((cause as { code?: unknown }).code)
+      : "";
+  if (!isRetryableRenameCode(code)) return "";
+  return (
+    "; no Traycer process matches the install directory - another program" +
+    " is holding it open (an antivirus or indexer scan, a terminal or" +
+    " Explorer window inside it, or an orphaned child process whose" +
+    " working directory is inside it). Close it or restart Windows, then" +
+    " retry the update"
+  );
+}
+
 interface AtomicSwapOptions {
   readonly environment: Environment;
   readonly stagingDir: string;
+  readonly swapLockRecovery: SwapLockRecovery | null;
+}
+
+// The swap renames get a far longer runway than `renameWithRetry`'s
+// default ~2.5s: the field failure this heals is a Windows EBUSY from a
+// handle the pre-swap kill couldn't see (an orphaned child with its CWD in
+// the install dir, an AV scan of the just-killed executable), and those
+// outlast a 2.5s window while resolving well inside ~25s once the
+// between-attempt re-kill lands. POSIX renames never raise the retryable
+// codes, so the schedule costs nothing there. Exported for the schedule
+// contract pin in install.test.ts - production reads it only through
+// `swapRenameDelays()` below.
+export const SWAP_RENAME_DELAYS_MS: readonly number[] = [
+  250, 500, 1000, 2000, 4000, 8000, 8000,
+];
+
+// Wall-clock ceiling for one swap rename INCLUDING its re-kill hooks. The
+// schedule above sums to ~24s of sleeps, but each Windows re-kill pass can
+// legitimately spend a 10s WMI scan plus a 30s taskkill on a degraded
+// machine - seven such passes would keep the service down and the
+// environment cli-lock held for ~5 minutes. Healthy re-kills run in a
+// couple of seconds, so this ceiling never truncates the schedule where
+// the retries can actually work; it only stops the pathological machines
+// from wedging every other host mutation while they fail.
+export const SWAP_RENAME_MAX_TOTAL_MS = 120_000;
+
+// The exhausted-retries paths are untestable at production timing (a full
+// EBUSY exhaustion sleeps the whole ~24s schedule), so tests inject a
+// short schedule here. Mirrors `setWindowsTaskInstallDepsForTests`'s
+// shape. Never set in production.
+let swapRenameDelaysOverride: readonly number[] | null = null;
+export function setSwapRenameDelaysForTests(
+  delays: readonly number[] | null,
+): void {
+  swapRenameDelaysOverride = delays;
+}
+
+function swapRenameDelays(): readonly number[] {
+  return swapRenameDelaysOverride ?? SWAP_RENAME_DELAYS_MS;
 }
 
 async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
@@ -798,6 +956,12 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   // continue.
   await sweepOldTrash(target, "install.json", logger);
 
+  const swapRenamePlan = {
+    delaysMs: swapRenameDelays(),
+    onRetry: swapLockRetryHook(opts.swapLockRecovery, logger),
+    maxTotalMs: SWAP_RENAME_MAX_TOTAL_MS,
+  };
+
   const targetExists = await access(target).then(
     () => true,
     () => false,
@@ -811,37 +975,85 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     // so the rename target is empty. We delete the trash copy after
     // the new install is in place - there is no rollback cache by
     // design.
-    await renameWithRetry(target, trash);
+    try {
+      await renameWithRetryPlan(target, trash, swapRenamePlan);
+    } catch (cause) {
+      // Nothing has moved: the previous install is intact, only the update
+      // is blocked. Wrap the raw fs error (historically surfaced verbatim
+      // as "EBUSY: resource busy or locked, rename ...") and name the
+      // processes still holding the install dir so the report identifies
+      // the culprit instead of a bare errno.
+      const holders = await collectSwapLockHolders(
+        opts.swapLockRecovery,
+        logger,
+      );
+      logger.error(
+        "Host install failed to move the previous install aside",
+        {
+          environment: opts.environment,
+          target,
+          trash,
+          holders: holders.map(logLockHolder),
+        },
+        errorFromUnknown(cause),
+      );
+      throw cliError({
+        code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+        message: `host install: failed to move the previous install aside: ${cause instanceof Error ? cause.message : String(cause)}${swapLockFailureSuffix(cause, holders, opts.swapLockRecovery)}`,
+        details: { target, trash, lockHolders: holders },
+        exitCode: 1,
+      });
+    }
   }
   try {
-    await renameWithRetry(opts.stagingDir, target);
+    await renameWithRetryPlan(opts.stagingDir, target, swapRenamePlan);
   } catch (cause) {
+    const holders = await collectSwapLockHolders(opts.swapLockRecovery, logger);
     logger.error(
       "Host install atomic swap failed",
       {
         environment: opts.environment,
         targetExists,
+        holders: holders.map(logLockHolder),
       },
       errorFromUnknown(cause),
     );
     // Restore the previous install if the rename of the new one fails. The
     // same transient Windows lock that failed the swap can also fail the
-    // restore, so it gets the same retry; if it still fails we log rather
-    // than mask the swap error about to be thrown - but a silent failure
-    // here would leave no install at all with nothing pointing at why.
+    // restore, so it gets the SAME recovery-aware plan as the forward
+    // renames (schedule + re-kill) rather than the bare ~2.5s default -
+    // this is the worst failure in the file (no `install/` at all, the
+    // previous install stranded as `install.old-*`), so it needs every bit
+    // of the retry budget the forward renames get. If it still fails we log
+    // rather than mask the swap error about to be thrown - but a silent
+    // failure here would leave no install at all with nothing pointing at
+    // why.
     if (targetExists) {
-      await renameWithRetry(trash, target).catch((restoreCause) => {
-        logger.error(
-          "Host install rollback failed - previous install left aside",
-          { target, trash },
-          errorFromUnknown(restoreCause),
-        );
-      });
+      await renameWithRetryPlan(trash, target, swapRenamePlan).catch(
+        async (restoreCause) => {
+          // The `holders` in the enclosing scope were collected right after
+          // the SWAP-IN failure, before this restore ever ran its own
+          // retries/re-kills - they don't necessarily describe who (if
+          // anyone) still holds `target` now that the restore has also
+          // exhausted. Re-scan so this, the worst failure in the file (no
+          // `install/` at all), gets a diagnosis of its own rather than a
+          // stale one.
+          const restoreHolders = await collectSwapLockHolders(
+            opts.swapLockRecovery,
+            logger,
+          );
+          logger.error(
+            "Host install rollback failed - previous install left aside",
+            { target, trash, holders: restoreHolders.map(logLockHolder) },
+            errorFromUnknown(restoreCause),
+          );
+        },
+      );
     }
     throw cliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
-      message: `host install: failed to swap staging dir into place: ${cause instanceof Error ? cause.message : String(cause)}`,
-      details: { target, stagingDir: opts.stagingDir },
+      message: `host install: failed to swap staging dir into place: ${cause instanceof Error ? cause.message : String(cause)}${swapLockFailureSuffix(cause, holders, opts.swapLockRecovery)}`,
+      details: { target, stagingDir: opts.stagingDir, lockHolders: holders },
       exitCode: 1,
     });
   }

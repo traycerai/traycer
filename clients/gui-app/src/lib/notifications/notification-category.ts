@@ -9,6 +9,7 @@ const CATEGORY_BY_SOURCE: Readonly<
   Record<MergedNotificationSource, NotificationCategory>
 > = {
   host: "task",
+  cloud: "task",
   "app-local": "system",
   global: "collaboration",
 };

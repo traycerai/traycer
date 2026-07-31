@@ -30,6 +30,20 @@ export const RunnerHostInvoke = {
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // Devices & Sessions account-security surface. These authn-v3 calls run in
+  // main for the same renderer-origin CORS reason as token validation.
+  listUserSessions: "runnerHost:auth:sessions:list",
+  revokeUserSession: "runnerHost:auth:sessions:revoke",
+  revokeAllSessions: "runnerHost:auth:sessions:revokeAll",
+  // Delegated host-credential mint. Same main-process placement as the revoke
+  // calls, with the added reason that the retained step-up bearer must never
+  // reach the renderer.
+  mintHostCredential: "runnerHost:auth:hosts:mintCredential",
+  // Cross-window arbitration for the mint above. Each BrowserWindow is its own
+  // module realm, so the renderer's "one prompt per host" memo does not span
+  // them; main holds the single registry every window claims against.
+  requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
+  verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -73,6 +87,18 @@ export const RunnerHostInvoke = {
   supportRevealLog: "runnerHost:support:log:reveal",
   supportSubmitReport: "runnerHost:support:report:submit",
   supportTailLog: "runnerHost:support:log:tail",
+  supportFreezeEvidence: "runnerHost:support:evidence:freeze",
+  supportDiscardFrozenEvidence: "runnerHost:support:evidence:discard",
+  supportReadFrozenLogTail: "runnerHost:support:evidence:log:tail",
+  supportSaveDiagnosticBundle: "runnerHost:support:diagnosticBundle:save",
+  // Per-install report ledger (T3.5). Read-only surface for the dialog's
+  // "Nth time on this install" strip; sightings write via freezeEvidence,
+  // filed reports write on delivered submit - neither is renderer-writable.
+  supportGetFingerprintOccurrence:
+    "runnerHost:support:ledger:fingerprintOccurrence:get",
+  // Ticket 09 / T6: the sole main-process producer of public (GitHub-bound)
+  // text, always behind the deep scrubber.
+  supportBuildPublicDraft: "runnerHost:support:publicDraft:build",
   serviceInstall: "runnerHost:service:install",
   serviceUninstall: "runnerHost:service:uninstall",
   serviceStart: "runnerHost:service:start",

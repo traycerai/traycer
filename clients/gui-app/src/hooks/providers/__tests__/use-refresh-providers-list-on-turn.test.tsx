@@ -49,12 +49,19 @@ describe("useRefreshProvidersListOnTurn", () => {
     cleanup();
   });
 
-  it("invalidates the tab-scoped providers.list query when a matching turn completes", () => {
+  it("invalidates the tab-scoped classic providers.list query when a matching turn completes", () => {
     const { invalidateSpy } = setup("claude", "host-a");
     fireTurn("claude");
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    // The exact CLASSIC key, not the `providers.list` method scope: the same
+    // method also carries the native (MCP/plugins/skills) queries, and a turn
+    // completion says nothing about those. A scope-wide (3-element prefix)
+    // invalidation would refetch every native list on every turn.
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["host", "host-a", "providers.list", {}],
+      queryKey: ["host", "host-a", "providers.list", { native: null }],
+    });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: ["host", "host-a", "providers.list"],
     });
   });
 

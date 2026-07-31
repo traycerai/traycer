@@ -41,6 +41,7 @@ import type {
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isDiffTileRef,
   isManagedCommandOutputTileRef,
 } from "@/stores/epics/canvas/types";
@@ -449,17 +450,19 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   const isPendingCreate = useEpicCanvasStore((s) =>
     s.pendingCreateArtifactIds.has(activeTab.id),
   );
-  // Terminals, git-diff tiles, workspace files, output windows, and blank tabs
-  // are renderer-only - no cloud-backed projection, so a lookup miss isn't
-  // deletion. (A blank tab's content id is a throwaway uuid; without this
-  // guard the artifact lookup would miss and wrongly mark it deleted. An output
-  // window's content id is a managed-command id, which the epic doc never
-  // carries at all - its own stream reports the command's death instead.)
+  // Terminals, git-diff tiles, workspace files, output windows, the comm graph,
+  // and blank tabs are renderer-only - no cloud-backed projection, so a lookup
+  // miss isn't deletion. (A blank tab's content id is a throwaway uuid; the comm
+  // graph's is derived from the epic id; an output window's is a managed-command
+  // id, which the epic doc never carries at all - its own stream reports the
+  // command's death instead. Without this guard the artifact lookup would miss
+  // and wrongly mark them deleted.)
   const isRemoteDeleted =
     activeTab.type === "terminal" ||
     isDiffTileRef(activeTab) ||
     isBlankTileRef(activeTab) ||
     isManagedCommandOutputTileRef(activeTab) ||
+    isCommGraphTileRef(activeTab) ||
     activeTab.type === WORKSPACE_FILE_TAB_KIND
       ? false
       : computeIsRemoteDeleted({

@@ -30,6 +30,17 @@ interface MutationContext {
   readonly hostId: string | null;
 }
 
+/**
+ * Result of a user-initiated folder pick+prepare. `hostId` is the host that
+ * was bound at dispatch (and re-validated after every await) — callers MUST
+ * stamp folder rows with this value, never re-read the mutable client.
+ */
+export type PrepareFoldersWithHostResult = {
+  readonly folders: readonly PreparedWorkspaceFolder[];
+  readonly repoIdentifiers: PrepareWorkspaceFoldersResponse["repoIdentifiers"];
+  readonly hostId: string;
+};
+
 export interface WorkspaceFolderActions {
   readonly isPreparing: boolean;
   readonly isRemoving: boolean;
@@ -45,7 +56,7 @@ export interface WorkspaceFolderActions {
     RemoveEpicRepoRequest,
     MutationContext
   >;
-  readonly pickAndPrepareFolders: () => Promise<PrepareWorkspaceFoldersResponse | null>;
+  readonly pickAndPrepareFolders: () => Promise<PrepareFoldersWithHostResult | null>;
 }
 
 export function useWorkspaceFolderActions(): WorkspaceFolderActions {
@@ -138,8 +149,10 @@ export function useWorkspaceFolderActionsForClient(
   const { mutateAsync: prepareFoldersAsync } = prepareFoldersMutation;
 
   const pickAndPrepareFolders = useCallback(async () => {
-    const activeHost = client?.getActiveHost() ?? null;
-    if (!canAssociateLocalWorkspaces(activeHost)) {
+    // Capture host identity at dispatch. Every post-await re-read must match
+    // this id; otherwise refuse so we never stamp A-prepared paths as B.
+    const dispatchHost = client?.getActiveHost() ?? null;
+    if (!canAssociateLocalWorkspaces(dispatchHost)) {
       reportableErrorToast("Select the local host to add folders.", undefined, {
         title: "Could not add workspace folders",
         message: "The local host was not selected.",
@@ -148,15 +161,51 @@ export function useWorkspaceFolderActionsForClient(
       });
       return null;
     }
+    const dispatchHostId = dispatchHost.hostId;
 
     const folderPaths = await runnerHost.workspaceFolders.pickFolders();
     if (folderPaths.length === 0) {
       return null;
     }
+    if (!hostStillBound(client, dispatchHostId)) {
+      reportableErrorToast(
+        "Host changed while choosing folders. Try again.",
+        undefined,
+        {
+          title: "Could not add workspace folders",
+          message: "The active host changed while choosing folders.",
+          code: null,
+          source: "Workspace folders",
+        },
+      );
+      return null;
+    }
 
-    return prepareFoldersAsync({ folderPaths: [...folderPaths] }).catch(
-      () => null,
-    );
+    const response = await prepareFoldersAsync({
+      folderPaths: [...folderPaths],
+    }).catch(() => null);
+    if (response === null) {
+      return null;
+    }
+    if (!hostStillBound(client, dispatchHostId)) {
+      reportableErrorToast(
+        "Host changed while adding folders. Try again.",
+        undefined,
+        {
+          title: "Could not add workspace folders",
+          message: "The active host changed while adding folders.",
+          code: null,
+          source: "Workspace folders",
+        },
+      );
+      return null;
+    }
+
+    return {
+      folders: response.folders,
+      repoIdentifiers: response.repoIdentifiers,
+      hostId: dispatchHostId,
+    };
   }, [client, runnerHost, prepareFoldersAsync]);
 
   return {
@@ -170,13 +219,24 @@ export function useWorkspaceFolderActionsForClient(
 
 export function preparedWorkspaceFolderToWorkspaceFolderInfo(
   folder: PreparedWorkspaceFolder,
+  hostId: string | null,
 ): WorkspaceFolderInfo {
   return {
     path: folder.workspacePath,
     name: folder.workspaceName,
     repoIdentifier: folder.repoIdentifier,
+    hostId,
   };
 }
+
+function hostStillBound(
+  client: HostClient<HostRpcRegistry> | null,
+  dispatchHostId: string,
+): boolean {
+  if (client === null) return false;
+  return client.getActiveHostId() === dispatchHostId;
+}
+
 function canAssociateLocalWorkspaces(
   activeHost: HostDirectoryEntry | null,
 ): activeHost is HostDirectoryEntry & {
@@ -190,4 +250,17 @@ function canAssociateLocalWorkspaces(
 
 function readWorkspaceActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
+}
+
+/**
+ * Pure helper for tests: stamp prepared folders with a dispatch-time host id.
+ * Mirrors the production post-prepare mapping without re-reading a client.
+ */
+export function stampPreparedFoldersWithDispatchHost(
+  folders: readonly PreparedWorkspaceFolder[],
+  dispatchHostId: string,
+): readonly WorkspaceFolderInfo[] {
+  return folders.map((folder) =>
+    preparedWorkspaceFolderToWorkspaceFolderInfo(folder, dispatchHostId),
+  );
 }

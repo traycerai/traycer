@@ -86,6 +86,18 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(link?.getAttribute("href")).toBe("/settings/host");
   });
 
+  it("Sessions entry links to the compatibility /settings/devices route", async () => {
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    const link = await screen.findByRole("link", { name: "Sessions" });
+    expect(link.getAttribute("href")).toBe("/settings/devices");
+  });
+
   it("SETTINGS_SECTIONS does not contain the legacy Service id", () => {
     const ids = SETTINGS_SECTIONS.map((section) => section.id);
     expect(ids).toContain("host");

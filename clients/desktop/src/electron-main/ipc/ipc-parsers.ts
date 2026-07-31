@@ -25,6 +25,7 @@ import type {
   StoredAuthTokens,
   StoredCredentialsIdentity,
 } from "../../ipc-contracts/auth-types";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 
 export {
   parseJsonRecord,
@@ -40,6 +41,24 @@ export function assertString(
 ): asserts value is string {
   if (typeof value !== "string") {
     throw new Error(`${context} requires a string argument`);
+  }
+}
+
+export function assertNumber(
+  value: unknown,
+  context: string,
+): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} requires a finite number argument`);
+  }
+}
+
+export function assertInteger(
+  value: unknown,
+  context: string,
+): asserts value is number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${context} requires an integer argument`);
   }
 }
 
@@ -65,6 +84,28 @@ export function parseStoredAuthTokens(value: unknown): StoredAuthTokens {
  * `tokenStore.signIn`. The main store stamps `authnBaseUrl` + `savedAt`, so only
  * the user identity crosses here. Fail-closed on any non-string field.
  */
+/**
+ * Parses the delegated host-credential mint request. `hostId` is required (the
+ * mint is meaningless without it and the server rejects a bad one anyway);
+ * `hostLabel` and `platform` are display metadata, so anything that is not a
+ * string collapses to `null` rather than throwing - a missing label must not
+ * cost the user a credential.
+ */
+export function parseMintHostCredentialRequest(
+  value: unknown,
+): MintHostCredentialRequest {
+  if (value === null || typeof value !== "object") {
+    throw new Error("mintHostCredential requires a request object");
+  }
+  const record = value as Record<string, unknown>;
+  assertString(record.hostId, "mintHostCredential.hostId");
+  return {
+    hostId: record.hostId,
+    hostLabel: typeof record.hostLabel === "string" ? record.hostLabel : null,
+    platform: typeof record.platform === "string" ? record.platform : null,
+  };
+}
+
 export function parseStoredCredentialsIdentity(
   value: unknown,
 ): StoredCredentialsIdentity {
@@ -369,7 +410,8 @@ export function parseDesktopAuthSession(
 }
 
 export function parseSupportLogTarget(value: unknown): SupportLogTarget {
-  return value === "host" ? "host" : "desktop";
+  if (value === "host" || value === "desktop") return value;
+  throw new Error('supportLogTarget must be "desktop" or "host"');
 }
 
 export function readSenderWebContentsId(

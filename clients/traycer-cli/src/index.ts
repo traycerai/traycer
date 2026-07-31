@@ -10,6 +10,7 @@ import {
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
+import { resolveCliVersion } from "./cli-version";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
@@ -169,14 +170,11 @@ export function isTraycerCliEntrypoint(argv1: string | undefined): boolean {
   return /(?:^|[\\/])(?:index\.ts|traycer(?:\.exe)?)$/i.test(argv1);
 }
 
-// Local/dev fallback when the build pipeline did not inject a version
-// (i.e. running under tsx / vitest or an unreleased local SEA build).
-// CI release workflows set `TRAYCER_CLI_VERSION` from the `cli-v<version>`
-// tag, and `build-cli-sea.cjs` bakes that value into the bundle via an
-// esbuild define - when that path runs, `process.env.TRAYCER_CLI_VERSION`
-// is a literal string in the emitted JS so this fallback is unreachable
-// from a published binary.
-export const LOCAL_CLI_VERSION = "0.0.0-local";
+// Both live in the leaf `cli-version.ts` so `registry/` can read the running
+// CLI's version without importing this module (which builds the whole program
+// and would close a cycle). Re-exported here because this is where every
+// existing caller and test looks for them.
+export { LOCAL_CLI_VERSION, resolveCliVersion } from "./cli-version";
 
 export type AgentCliSurface = "full" | "readonly";
 
@@ -184,22 +182,6 @@ export function resolveAgentCliSurface(
   env: Readonly<Record<string, string | undefined>>,
 ): AgentCliSurface {
   return env.TRAYCER_AGENT_CLI_SURFACE === "readonly" ? "readonly" : "full";
-}
-
-/**
- * Resolve the version Commander should advertise. SEA builds get the
- * release-injected value through an esbuild `define` on
- * `process.env.TRAYCER_CLI_VERSION`; everything else (tsx dev, vitest,
- * an unreleased local SEA built without the env var) falls back to
- * `0.0.0-local`. Exported so tests can pin the resolution matrix
- * without subprocess-spawning the binary.
- */
-export function resolveCliVersion(
-  env: Readonly<Record<string, string | undefined>>,
-): string {
-  const injected = env.TRAYCER_CLI_VERSION;
-  if (typeof injected === "string" && injected.length > 0) return injected;
-  return LOCAL_CLI_VERSION;
 }
 
 // Construct the full commander program. Exported as a builder so tests

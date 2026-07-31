@@ -39,6 +39,7 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 }));
 
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
 const RAW_EMAIL = "worker@example.com";
 // Matches `redactEmail`'s format: first local-part char + fixed mask + the
@@ -76,6 +77,7 @@ function opencodeState(): ProviderCliState {
     providerId: "opencode",
     enabled: true,
     disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     selected: { kind: "bundled" },
     candidates: [],
     auth: {
@@ -112,6 +114,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}

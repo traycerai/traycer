@@ -252,14 +252,18 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
-  preparedWorkspaceFolderToWorkspaceFolderInfo: (folder: {
-    readonly workspacePath: string;
-    readonly workspaceName: string;
-    readonly repoIdentifier: unknown;
-  }) => ({
+  preparedWorkspaceFolderToWorkspaceFolderInfo: (
+    folder: {
+      readonly workspacePath: string;
+      readonly workspaceName: string;
+      readonly repoIdentifier: unknown;
+    },
+    hostId: string | null,
+  ) => ({
     path: folder.workspacePath,
     name: folder.workspaceName,
     repoIdentifier: folder.repoIdentifier,
+    hostId,
   }),
   useWorkspaceFolderActions: () => ({
     pickAndPrepareFolders: mocks.pickAndPrepareFolders,
@@ -591,6 +595,7 @@ describe("landing workspace summary empty state", () => {
           path: GIT_SUMMARY.workspacePath,
           name: "app",
           repoIdentifier: GIT_SUMMARY.repoIdentifier,
+          hostId: null,
         },
       },
       primaryPath: GIT_SUMMARY.workspacePath,
@@ -743,6 +748,7 @@ describe("landing workspace summary empty state", () => {
           path: folderAPath,
           name: "app",
           repoIdentifier: GIT_REPO_IDENTIFIER,
+          hostId: null,
         },
       },
       primaryPath: folderAPath,
@@ -811,11 +817,13 @@ describe("landing workspace summary empty state", () => {
             path: folderAPath,
             name: "app",
             repoIdentifier: GIT_REPO_IDENTIFIER,
+            hostId: null,
           },
           [folderBPath]: {
             path: folderBPath,
             name: "lib",
             repoIdentifier: folderBRepo,
+            hostId: null,
           },
         },
         primaryPath: folderAPath,

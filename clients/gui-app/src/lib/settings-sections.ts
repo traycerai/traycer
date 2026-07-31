@@ -8,6 +8,7 @@ import {
   Keyboard,
   Palette,
   Server,
+  ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
 } from "lucide-react";
@@ -22,6 +23,7 @@ export type SettingsSectionId =
   | "shell"
   | "worktrees"
   | "host"
+  | "devices"
   | "diagnostics";
 
 export interface SettingsSection {
@@ -45,5 +47,6 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   { id: "shell", label: "Shell", icon: TerminalSquare },
   { id: "worktrees", label: "Worktrees", icon: GitBranch },
   { id: "host", label: "Host", icon: Server },
+  { id: "devices", label: "Sessions", icon: ShieldCheck },
   { id: "diagnostics", label: "Diagnostics", icon: Activity },
 ];

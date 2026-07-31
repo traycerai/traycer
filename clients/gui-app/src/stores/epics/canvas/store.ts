@@ -54,6 +54,8 @@ import {
   openTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
+  findPaneTabByContentId,
+  openSingletonTileInPane as openSingletonTileInPaneCanvas,
   promotePreview,
   renameArtifact,
   renameTerminalTiles,
@@ -65,6 +67,7 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
+  updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
 } from "@/stores/epics/canvas/actions";
@@ -80,6 +83,7 @@ import {
   type EdgeDropPosition,
   type EpicCanvasTileRef,
   type EpicCanvasState,
+  type CommGraphTileViewState,
   type EpicViewTab,
   type GitDiffTileViewState,
   type SplitDirection,
@@ -424,6 +428,16 @@ export interface EpicCanvasStore {
     source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
+   * Opener path for a SINGLETON tile (one instance per content id, e.g. the
+   * per-epic comm graph): focus the existing tab if there is one, otherwise
+   * open into `paneId`. See {@link openSingletonTileInPaneCanvas}.
+   */
+  prepareOpenSingletonTileInPaneFocusTarget: (
+    tabId: string,
+    paneId: string,
+    ref: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
+  /**
    * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank:
    * a no-op-ish focus when the pane's active tab is already blank.
    * See {@link openBlankTabInPaneCanvas}.
@@ -442,6 +456,11 @@ export interface EpicCanvasStore {
     tabId: string,
     tileId: string,
     view: GitDiffTileViewState,
+  ) => void;
+  updateCommGraphTileViewInTab: (
+    tabId: string,
+    tileId: string,
+    view: CommGraphTileViewState,
   ) => void;
   toggleGitDiffBundleFileCollapsedInTab: (
     tabId: string,
@@ -1687,6 +1706,26 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         return target;
       },
 
+      prepareOpenSingletonTileInPaneFocusTarget: (tabId, paneId, ref) => {
+        const before = canvasForExistingTab(get(), tabId);
+        const targetPane =
+          before === null ? null : findPaneById(before.root, paneId);
+        const existingSingleton =
+          before === null ? null : findPaneTabByContentId(before, ref.id);
+        set((state) =>
+          updateTabCanvas(state, tabId, (canvas) =>
+            openSingletonTileInPaneCanvas(canvas, paneId, ref),
+          ),
+        );
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        // A focus of an ALREADY-OPEN singleton is still a real focus target
+        // even when the requested pane is stale - the canvas focused the
+        // existing instance in ITS pane regardless. Null only when nothing
+        // could have happened: no pane to insert into AND no existing
+        // instance to focus.
+        return targetPane === null && existingSingleton === null ? null : after;
+      },
+
       prepareOpenTileInPaneFocusTargetFromSource: (
         tabId,
         paneId,
@@ -1734,6 +1773,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             updateSnapshotDiffTileView(canvas, tileId, view),
+          ),
+        );
+      },
+
+      updateCommGraphTileViewInTab: (tabId, tileId, view) => {
+        set((state) =>
+          updateTabCanvas(state, tabId, (canvas) =>
+            updateCommGraphTileView(canvas, tileId, view),
           ),
         );
       },
@@ -2509,6 +2556,7 @@ export {
   getCanvasRootForTab,
   isTileRefRecordLive,
   makeSelectActiveEpicArtifactId,
+  makeSelectActiveEpicArtifactRef,
   makeSelectEpicArtifactRecords,
   makeSelectEpicCanvas,
   makeSelectEpicTab,
@@ -2516,6 +2564,7 @@ export {
   makeSelectIsActivePane,
   makeSelectTabActivation,
   useActiveEpicArtifactId,
+  useActiveEpicArtifactRef,
   useActiveEpicId,
   useActiveTabId,
   useEpicArtifactRecords,

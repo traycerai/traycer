@@ -15,11 +15,17 @@ const STAGING_KEY = {
   ownerId: "__pending_fork_chat__",
 };
 
-const GIT_FOLDER = { path: "/repo/git", name: "git", repoIdentifier: null };
+const GIT_FOLDER = {
+  path: "/repo/git",
+  name: "git",
+  repoIdentifier: null,
+  hostId: null,
+};
 const NON_GIT_FOLDER = {
   path: "/repo/non-git",
   name: "non-git",
   repoIdentifier: null,
+  hostId: null,
 };
 
 function stagedWorktreeEntry(workspacePath: string, isPrimary: boolean) {

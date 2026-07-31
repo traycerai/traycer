@@ -12,6 +12,15 @@ import type {
   TokenRotateResult,
   TokenStoreChange,
 } from "../ipc-contracts/auth-types";
+import type {
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  MintHostCredentialRequest,
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+} from "../ipc-contracts/host-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -60,6 +69,24 @@ export interface AuthBridgeSurface {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult>;
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
@@ -71,6 +98,46 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.validateAuthTokenIdentity,
         token,
       ) as Promise<AuthIdentityValidationResult>,
+
+    listUserSessions: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listUserSessions,
+        bearerToken,
+      ) as Promise<ListUserSessionsFetchResult>,
+
+    revokeUserSession: (bearerToken, familyId, useStepUpCredential) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.revokeUserSession,
+        bearerToken,
+        familyId,
+        useStepUpCredential,
+      ) as Promise<RevokeUserSessionFetchResult>,
+
+    revokeAllSessions: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.revokeAllSessions,
+        bearerToken,
+      ) as Promise<RevokeAllSessionsFetchResult>,
+
+    mintHostCredential: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintHostCredential,
+        bearerToken,
+        request,
+      ) as Promise<MintHostCredentialFetchResult>,
+
+    requestStepUpChallenge: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.requestStepUpChallenge,
+        bearerToken,
+      ) as Promise<StepUpChallengeFetchResult>,
+
+    verifyStepUpChallenge: (bearerToken, code) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.verifyStepUpChallenge,
+        bearerToken,
+        code,
+      ) as Promise<RetainedStepUpVerifyFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to

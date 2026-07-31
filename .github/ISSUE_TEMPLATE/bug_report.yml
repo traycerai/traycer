@@ -1,3 +1,10 @@
+# Field ids (component, version, os, what-happened, repro) and their
+# `required` flags are a de facto wire contract with every shipped app
+# version: clients/shared/support/issue-reporter.ts prefills them by id via
+# GitHub's issue-form query params. Renaming, removing, or flipping
+# `required` on any of them breaks that prefill with no release gate to
+# catch it - see the contract test in
+# clients/shared/support/__tests__/issue-template-contract.test.ts.
 name: Bug report
 description: Report a problem with the CLI, desktop/mobile app, or protocol
 labels: ["bug", "triage"]

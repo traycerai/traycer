@@ -126,6 +126,21 @@ if (typeof globalThis.IntersectionObserver === "undefined") {
   });
 }
 
+// jsdom implements no image decoder, so `createImageBitmap` (ADV-I4's
+// attach-time decodability check in use-report-issue-attachments.ts) is
+// absent. Default to a successful decode - tests exercising a genuine
+// decode failure stub their own rejecting/throwing implementation over
+// this default (see use-report-issue-attachments.test.ts); interaction
+// tests elsewhere just need attaching a well-formed fixture to work.
+if (typeof globalThis.createImageBitmap === "undefined") {
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: (): Promise<{ close: () => void }> =>
+      Promise.resolve({ close: () => undefined }),
+  });
+}
+
 // Radix-ui's DropdownMenu / Popover triggers route through Pointer Events
 // that jsdom does not implement. Stub the pointer-capture methods and
 // `scrollIntoView` so opening a menu in tests does not throw.

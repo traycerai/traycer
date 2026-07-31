@@ -262,6 +262,15 @@ function claudeState(
     envOverrides: [],
     loginCapability,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -293,6 +302,15 @@ function cursorState(): ProviderCliState {
     // API-key-only provider: no OAuth session to reconnect → no banner capability.
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -317,6 +335,15 @@ function droidState(): ProviderCliState {
     envOverrides: [],
     loginCapability: DROID_CAP,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }

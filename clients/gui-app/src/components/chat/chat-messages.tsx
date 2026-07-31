@@ -10,6 +10,7 @@ import {
 import {
   buildMessageIdToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
+  chatMessageAlignmentDelta,
   chatScrollLocationForMessage,
   chatComputeItemKey,
   chatItemIdentity,
@@ -67,6 +68,7 @@ import {
 } from "@virtuoso.dev/message-list";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -99,9 +101,24 @@ interface ChatMessagesProps {
   scrollRequest: ChatMessageScrollRequest | null;
 }
 
+/**
+ * How many frames a programmatic navigation keeps correcting its target as rows
+ * measure. Bounded for the same reason the restore retry is: a target that never
+ * settles must not spin forever.
+ */
+const MIN_SCROLL_CORRECTION_FRAMES = 30;
+const MAX_SCROLL_CORRECTION_FRAMES = 90;
+const STABLE_SCROLL_CORRECTION_FRAMES = 12;
+const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
+
 export interface ChatMessageScrollRequest {
   readonly messageId: string;
-  readonly blockId: string;
+  /**
+   * The card inside the message to expand on arrival, or `null` when the
+   * anchor IS the message (a delivered A2A message jumped to from the
+   * communication timeline has no owning card).
+   */
+  readonly blockId: string | null;
   readonly requestId: number;
 }
 
@@ -113,6 +130,7 @@ interface ChatListContext {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
+  readonly navigationHighlightedMessageId: string | null;
 }
 
 // Keep the overscan conservative: every mounted row is ResizeObserver-measured
@@ -356,8 +374,19 @@ const ChatItemContent: ChatVirtuosoProps["ItemContent"] = ({
   return (
     <div
       data-message-id={message.id}
+      data-navigation-highlighted={
+        context.navigationHighlightedMessageId === message.id
+          ? "true"
+          : undefined
+      }
       className={cn(
-        "mx-auto w-full max-w-3xl px-6 pb-6 [contain:layout_paint_style]",
+        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
+        // Live-verified subtlety floor: at /10 background + /35 ring the pulse
+        // read as an ordinary hover wash and users reported never seeing it.
+        // The ring carries the signal (full-strength primary), the wash stays
+        // light so text contrast is untouched.
+        context.navigationHighlightedMessageId === message.id &&
+          "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
         message.role === "user"
           ? "[contain-intrinsic-size:auto_8rem]"
           : "[contain-intrinsic-size:auto_14rem]",
@@ -456,6 +485,27 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   );
   const [scrolledActiveUserMessageId, setScrolledActiveUserMessageId] =
     useState<string | null>(restoredScrollState.activeUserMessageId);
+  const [navigationHighlightedMessageId, setNavigationHighlightedMessageId] =
+    useState<string | null>(null);
+  const navigationHighlightTimeoutRef = useRef<number | null>(null);
+  const clearNavigationHighlight = useCallback((): void => {
+    if (navigationHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(navigationHighlightTimeoutRef.current);
+      navigationHighlightTimeoutRef.current = null;
+    }
+    setNavigationHighlightedMessageId(null);
+  }, []);
+  const showNavigationHighlight = useCallback((messageId: string): void => {
+    if (navigationHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(navigationHighlightTimeoutRef.current);
+    }
+    setNavigationHighlightedMessageId(messageId);
+    navigationHighlightTimeoutRef.current = window.setTimeout(() => {
+      navigationHighlightTimeoutRef.current = null;
+      setNavigationHighlightedMessageId(null);
+    }, NAVIGATION_HIGHLIGHT_DURATION_MS);
+  }, []);
+  useEffect(() => clearNavigationHighlight, [clearNavigationHighlight]);
 
   const hasContent = messages.length > 0;
   const backgroundToolBlockIds = useMemo<ReadonlySet<string>>(() => {
@@ -613,12 +663,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
+      navigationHighlightedMessageId,
     }),
     [
       backgroundToolBlockIds,
       getMessageActions,
       hasContent,
       nextStepActions,
+      navigationHighlightedMessageId,
       taskTitle,
     ],
   );
@@ -687,12 +739,22 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // Unpin gestures also cancel any in-flight programmatic smooth scroll:
   // Virtuoso's animation re-writes scrollTop every frame for up to ~50 frames,
   // so without the cancel the list physically fights the user's input.
+  // Declared above the correction loop, so the cancel is reached through a ref
+  // rather than reordering half this component.
+  const cancelScrollCorrectionRef = useRef<() => void>(() => undefined);
+
   const unpinFromUserGesture = useCallback((): void => {
+    clearNavigationHighlight();
     cancelScrollRestorationRetry();
+    cancelScrollCorrectionRef.current();
     lastScrollGestureRef.current = "up";
     virtuosoRef.current?.cancelSmoothScroll();
     setBottomFollowingIfChanged(false);
-  }, [cancelScrollRestorationRetry, setBottomFollowingIfChanged]);
+  }, [
+    cancelScrollRestorationRetry,
+    clearNavigationHighlight,
+    setBottomFollowingIfChanged,
+  ]);
 
   // A downward user gesture (wheel/keys/touch toward the tail) also takes over
   // from an in-flight restore: cancel the defend loop so it can't re-assert the
@@ -702,10 +764,12 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // rewrites `scrollTop` for ~50 frames, and a downward key pressed during that
   // window would otherwise be painted over and read as a dead key.
   const markDownwardUserGesture = useCallback((): void => {
+    clearNavigationHighlight();
     cancelScrollRestorationRetry();
+    cancelScrollCorrectionRef.current();
     lastScrollGestureRef.current = "down";
     virtuosoRef.current?.cancelSmoothScroll();
-  }, [cancelScrollRestorationRetry]);
+  }, [cancelScrollRestorationRetry, clearNavigationHighlight]);
 
   const handleScroll = useCallback(
     (location: ListScrollLocation): void => {
@@ -804,12 +868,16 @@ function ChatMessagesInner(props: ChatMessagesProps) {
 
   const handlePointerDownCapture = useCallback<
     PointerEventHandler<HTMLDivElement>
-  >((event) => {
-    const distanceFromRightEdge =
-      event.currentTarget.clientWidth - event.clientX;
-    scrollbarPointerDragRef.current =
-      distanceFromRightEdge <= SCROLLBAR_POINTER_HIT_SLOP_PX;
-  }, []);
+  >(
+    (event) => {
+      clearNavigationHighlight();
+      const distanceFromRightEdge =
+        event.currentTarget.clientWidth - event.clientX;
+      scrollbarPointerDragRef.current =
+        distanceFromRightEdge <= SCROLLBAR_POINTER_HIT_SLOP_PX;
+    },
+    [clearNavigationHighlight],
+  );
 
   const handlePointerUpCapture = useCallback<
     PointerEventHandler<HTMLDivElement>
@@ -913,25 +981,123 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     requestMeasuredItemChangeRef.current = requestMeasuredItemChange;
   }, [requestMeasuredItemChange]);
 
+  // A virtualized list computes the offset for an index from the sizes it KNOWS.
+  // On a freshly mounted tile almost nothing is measured, so a deep target's
+  // computed offset is far too small and the scroll lands near the top - which
+  // is what a cross-tile jump hits, and what the restore defend loop used to
+  // mask by dragging the view to the bottom instead.
+  //
+  // First ask Virtuoso to materialize the index, then measure the target's real
+  // DOM position and correct scrollTop as variable-height rows settle. Re-issue
+  // only while the target is not mounted. The loop is bounded because a target
+  // that never settles must not spin.
+  const scrollCorrectionRef = useRef<{
+    rafId: number;
+    frame: number;
+    stableFrames: number;
+  }>({
+    rafId: 0,
+    frame: 0,
+    stableFrames: 0,
+  });
+
+  const cancelScrollCorrection = useCallback((): void => {
+    if (scrollCorrectionRef.current.rafId !== 0) {
+      cancelAnimationFrame(scrollCorrectionRef.current.rafId);
+      scrollCorrectionRef.current.rafId = 0;
+    }
+    scrollCorrectionRef.current.frame = 0;
+    scrollCorrectionRef.current.stableFrames = 0;
+  }, []);
+
+  useEffect(() => {
+    cancelScrollCorrectionRef.current = cancelScrollCorrection;
+  }, [cancelScrollCorrection]);
+  useEffect(() => cancelScrollCorrection, [cancelScrollCorrection]);
+
   const navigateToMessage = useCallback(
-    (messageId: string): void => {
+    (messageId: string, highlight: boolean): void => {
+      // CANCEL THE RESTORE DEFEND LOOP FIRST, for the same reason a wheel-up
+      // does. `useScrollRestoration` keeps re-applying its anchor for up to
+      // MAX_RESTORE_FRAMES whenever the restore reports `retry`/`defend`, and a
+      // freshly opened tile's anchor is "pinned at bottom". A navigation that
+      // did not cancel it would issue a ~50-frame smooth scroll INTO that loop
+      // and lose: the view would settle back at the bottom every time. That is
+      // invisible for a minimap click (the loop is long finished by the time a
+      // human clicks) and systematic for a cross-tile jump, which arrives while
+      // the tile is still mounting.
+      cancelScrollRestorationRetry();
       // This navigation is programmatic. If it parks inside the bottom
       // tolerance band, emitted scroll events must not read as user intent to
       // tail the latest message.
       lastScrollGestureRef.current = null;
       setBottomFollowingIfChanged(false);
       setScrolledActiveUserMessageIdIfChanged(messageId);
+      // The pulse marks a landing the reader could not otherwise identify -
+      // arriving cold from ANOTHER tile. An in-tile minimap click already
+      // shows its target parked at the top of the viewport, so pulsing it
+      // there is redundant noise.
+      if (highlight) showNavigationHighlight(messageId);
       // The full row history is mounted in Virtuoso, so every persisted
       // minimap target resolves; pending/live rows may briefly miss.
-      const location = chatScrollLocationForMessage(
-        messageId,
-        messageIndexByIdRef.current,
-        "smooth",
-      );
-      if (location === null) return;
-      virtuosoRef.current?.scrollToItem(location);
+      // INSTANT, not smooth. A smooth scroll animates from wherever the list
+      // currently is over ~50 frames, and re-issuing a corrected target mid
+      // animation restarts that animation - the two fight and the view crawls.
+      // Landing immediately and correcting is both faster and stable.
+      const issue = (): boolean => {
+        const location = chatScrollLocationForMessage(
+          messageId,
+          messageIndexByIdRef.current,
+          "auto",
+        );
+        if (location === null) return false;
+        virtuosoRef.current?.scrollToItem(location);
+        return true;
+      };
+      cancelScrollCorrection();
+      if (!issue()) return;
+      const step = (): void => {
+        scrollCorrectionRef.current.rafId = requestAnimationFrame(() => {
+          scrollCorrectionRef.current.rafId = 0;
+          scrollCorrectionRef.current.frame += 1;
+          const scroller = virtuosoRef.current?.scrollerElement() ?? null;
+          const delta = chatMessageAlignmentDelta(scroller, messageId);
+          if (delta === null) {
+            scrollCorrectionRef.current.stableFrames = 0;
+            if (!issue()) {
+              scrollCorrectionRef.current.frame = 0;
+              return;
+            }
+          } else if (Math.abs(delta) > 1) {
+            if (scroller !== null) scroller.scrollTop += delta;
+            scrollCorrectionRef.current.stableFrames = 0;
+          } else {
+            scrollCorrectionRef.current.stableFrames += 1;
+          }
+          const reachedStableMinimum =
+            scrollCorrectionRef.current.frame >= MIN_SCROLL_CORRECTION_FRAMES &&
+            scrollCorrectionRef.current.stableFrames >=
+              STABLE_SCROLL_CORRECTION_FRAMES;
+          if (
+            !reachedStableMinimum &&
+            scrollCorrectionRef.current.frame < MAX_SCROLL_CORRECTION_FRAMES
+          ) {
+            step();
+            return;
+          }
+          scrollCorrectionRef.current.frame = 0;
+          scrollCorrectionRef.current.stableFrames = 0;
+        });
+      };
+      step();
     },
-    [setBottomFollowingIfChanged, setScrolledActiveUserMessageIdIfChanged],
+    [
+      cancelScrollCorrection,
+      cancelScrollRestorationRetry,
+      setBottomFollowingIfChanged,
+      setScrolledActiveUserMessageIdIfChanged,
+      showNavigationHighlight,
+    ],
   );
 
   const handleRenderedDataChangeWithFind = useCallback((): void => {
@@ -940,7 +1106,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   }, [handleRenderedDataChange, onChatFindRenderedDataChange]);
 
   const onMinimapItemClick = useCallback(
-    (messageId: string): void => navigateToMessage(messageId),
+    (messageId: string): void => navigateToMessage(messageId, false),
     [navigateToMessage],
   );
 
@@ -949,16 +1115,19 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
-    const activityGroupId = activityGroupIdForBlock(
-      messagesRef.current,
-      request.messageId,
-      request.blockId,
-      backgroundToolBlockIdsRef.current,
-    );
+    const activityGroupId =
+      request.blockId === null
+        ? null
+        : activityGroupIdForBlock(
+            messagesRef.current,
+            request.messageId,
+            request.blockId,
+            backgroundToolBlockIdsRef.current,
+          );
     if (activityGroupId !== null) {
       activityGroupOpenStore.getState().setOpen(activityGroupId, true);
     }
-    navigateToMessage(request.messageId);
+    navigateToMessage(request.messageId, true);
     scrollRequestRef.current = null;
   }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
 

@@ -20,6 +20,7 @@ export { authMutationKeys } from "@/lib/query-keys/auth-mutation-keys";
 export {
   runnerMutationKeys,
   runnerQueryKeys,
+  supportBridgeQueryScopeId,
 } from "@/lib/query-keys/runner-mutation-keys";
 export { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 export { migrationMutationKeys } from "@/lib/query-keys/migration-mutation-keys";
@@ -34,6 +35,17 @@ export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
+export {
+  CLASSIC_PROVIDERS_LIST_PARAMS,
+  isNativeMcpListQueryKey,
+  isNativePluginsListQueryKey,
+  isNativeSkillsListQueryKey,
+  nativeMcpDiscoverParams,
+  nativeMcpListParams,
+  nativePluginsListParams,
+  nativeSkillsListParams,
+  providersNativeQueryKeys,
+} from "@/lib/query-keys/providers-native-query-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
