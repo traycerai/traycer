@@ -3,7 +3,10 @@ import {
   memo,
   use,
   useCallback,
+  useLayoutEffect,
   useMemo,
+  useState,
+  useSyncExternalStore,
   type RefObject,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -28,6 +31,86 @@ import {
 } from "./chat-stable-rows";
 
 /**
+ * Ticket 24 (painted-chat lifecycle audit, finding 5): a row-local
+ * subscription for the navigation highlight, kept OUT of
+ * `ChatTimelineRowSharedState`. That context's value is a single object
+ * shared by every mounted row - React forces every context consumer to
+ * re-render whenever the value changes, bypassing each row's own `memo`
+ * bailout entirely (a probe confirmed 8/8 mounted rows re-rendering on one
+ * highlight move). `useSyncExternalStore` lets each row subscribe with its
+ * own selector (`id === message.id`); React re-renders a given subscriber
+ * only when ITS boolean actually flips, so a highlight move re-renders
+ * exactly the old and new highlighted rows.
+ */
+interface NavigationHighlightStore {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly getSnapshot: () => string | null;
+  readonly setHighlightedId: (id: string | null) => void;
+}
+
+function createNavigationHighlightStore(
+  initialHighlightedId: string | null,
+): NavigationHighlightStore {
+  let highlightedId = initialHighlightedId;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot() {
+      return highlightedId;
+    },
+    setHighlightedId(next) {
+      if (next === highlightedId) return;
+      highlightedId = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+function useIsNavigationHighlighted(
+  store: NavigationHighlightStore,
+  messageId: string,
+): boolean {
+  return useSyncExternalStore(store.subscribe, () =>
+    store.getSnapshot() === messageId,
+  );
+}
+
+/** Owns the store's lifetime and keeps it synced with the latest prop -
+ *  pulled out of `ChatTimeline`'s own body (alongside
+ *  `resolveChatTimelineSizePreservationEnabled` below) to keep that
+ *  component's cyclomatic complexity under the lint limit. */
+function useNavigationHighlightStore(
+  navigationHighlightedMessageId: string | null | undefined,
+): NavigationHighlightStore {
+  const [store] = useState<NavigationHighlightStore>(() =>
+    createNavigationHighlightStore(navigationHighlightedMessageId ?? null),
+  );
+
+  // Review round 1, finding 1: a PASSIVE effect here runs after paint unless
+  // the update happens to originate inside a parent `useLayoutEffect` (the
+  // external-jump activation path) - the 3s highlight-timeout clear
+  // (`setTimeout`) and the real-gesture clear (a plain callback, not a
+  // layout effect) have no such guarantee, so a paint could commit the new
+  // prop while the store - and therefore every row's boolean - still holds
+  // the old id, and a row mounting in that window would read the stale
+  // snapshot. `useLayoutEffect` publishes synchronously before the browser
+  // paints on EVERY producer path uniformly, not just the ones that happen
+  // to chain off another layout effect. The mutation itself is still
+  // outside render (it runs in the commit/layout phase, not the render
+  // phase), so `useSyncExternalStore`'s purity contract is unaffected.
+  useLayoutEffect(() => {
+    store.setHighlightedId(navigationHighlightedMessageId ?? null);
+  }, [store, navigationHighlightedMessageId]);
+
+  return store;
+}
+
+/**
  * Shared, closure-free row context. Row components read business-logic
  * callbacks from context instead of a per-item closure, so `renderItem`
  * stays referentially stable and LegendList's own memo boundary is never
@@ -40,7 +123,7 @@ interface ChatTimelineRowSharedState {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
-  readonly navigationHighlightedMessageId: string | null | undefined;
+  readonly navigationHighlightStore: NavigationHighlightStore;
 }
 
 const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
@@ -208,20 +291,24 @@ export const ChatTimeline = memo(function ChatTimeline({
 }: ChatTimelineProps) {
   const rows = useStableChatTimelineRows(listRef, messages);
 
+  const navigationHighlightStore = useNavigationHighlightStore(
+    navigationHighlightedMessageId,
+  );
+
   const sharedState = useMemo<ChatTimelineRowSharedState>(
     () => ({
       taskTitle,
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
-      navigationHighlightedMessageId,
+      navigationHighlightStore,
     }),
     [
       taskTitle,
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
-      navigationHighlightedMessageId,
+      navigationHighlightStore,
     ],
   );
 
@@ -473,16 +560,18 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   if (ctx === null) {
     throw new Error("ChatTimelineRow must render inside ChatTimeline");
   }
+  const isNavigationHighlighted = useIsNavigationHighlighted(
+    ctx.navigationHighlightStore,
+    message.id,
+  );
 
   return (
     <div
       data-message-id={message.id}
-      data-navigation-highlighted={
-        ctx.navigationHighlightedMessageId === message.id ? "true" : undefined
-      }
+      data-navigation-highlighted={isNavigationHighlighted ? "true" : undefined}
       className={cn(
         "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
-        ctx.navigationHighlightedMessageId === message.id &&
+        isNavigationHighlighted &&
           "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
         chatTimelineRowSizeHintClassName(message.role),
       )}
