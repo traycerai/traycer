@@ -367,6 +367,11 @@ import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
 const CAPABILITY_LOCK_REASON =
   "Update Traycer host to continue this session under another profile.";
 const WORK_REJECTION_REASON = "some reason";
+// Host bulk preflight message shape for fork-before-first-turn (SOURCE_NOT_READY).
+// The dialog surfaces `verdict.message` on the row verbatim - not the client
+// submit-time copy in tui-fork-profile-rejection.ts.
+const SOURCE_NOT_READY_REASON =
+  "SOURCE_NOT_READY: terminal agent session 'source-session' has no conversation yet - send it a message before forking.";
 
 describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
   afterEach(() => {
@@ -438,6 +443,73 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
     // Admitted ambient stays clickable (same-profile reselect is a no-op).
     fireEvent.click(admitted);
     expect(titleInputValue()).toBe("Fork - Source terminal");
+  });
+
+  it("disables every real ProfileDropdown row (including the source's own) when bulk verdicts are all SOURCE_NOT_READY", async () => {
+    // Fork-before-first-turn: the host rejects every candidate - including a
+    // same-profile plain continue under the source itself - because Claude has
+    // not yet written the source session transcript. Prove the continue-mode
+    // picker surfaces that on every row (not just non-source targets).
+    seedClaudeProviders([
+      ambientProfile("Terminal account"),
+      managedProfile("work-profile", "Work"),
+    ]);
+    dialogMocks.mutateAsync.mockResolvedValue({
+      verdicts: [
+        {
+          targetProfileId: null,
+          admitted: false,
+          subcode: "SOURCE_NOT_READY",
+          message: SOURCE_NOT_READY_REASON,
+        },
+        {
+          targetProfileId: "work-profile",
+          admitted: false,
+          subcode: "SOURCE_NOT_READY",
+          message: SOURCE_NOT_READY_REASON,
+        },
+      ],
+    });
+
+    renderDialog({ intent: "continue", sourceAgent: sourceAgent() });
+
+    await openPicker();
+    await waitFor(() => {
+      expect(dialogMocks.mutateAsync).toHaveBeenCalled();
+    });
+
+    const sourceRow = await waitFor(() => {
+      const row = screen.getByRole("menuitem", {
+        name: new RegExp(
+          `Terminal account.*${escapeRegExp(SOURCE_NOT_READY_REASON)}`,
+        ),
+      });
+      if (!(row instanceof HTMLButtonElement)) {
+        throw new Error("expected ambient menuitem button");
+      }
+      return row;
+    });
+    expect(sourceRow.disabled).toBe(true);
+    expect(sourceRow.getAttribute("aria-label")).toContain(
+      SOURCE_NOT_READY_REASON,
+    );
+
+    const workRow = screen.getByRole("menuitem", {
+      name: new RegExp(`Work.*${escapeRegExp(SOURCE_NOT_READY_REASON)}`),
+    });
+    if (!(workRow instanceof HTMLButtonElement)) {
+      throw new Error("expected Work menuitem button");
+    }
+    expect(workRow.disabled).toBe(true);
+    expect(workRow.getAttribute("aria-label")).toContain(
+      SOURCE_NOT_READY_REASON,
+    );
+
+    // Disabled rows are non-interactive - click must not change the title.
+    const titleBefore = titleInputValue();
+    fireEvent.click(sourceRow);
+    fireEvent.click(workRow);
+    expect(titleInputValue()).toBe(titleBefore);
   });
 
   it("locks non-source real ProfileDropdown rows under capability-false plain fork intent", async () => {

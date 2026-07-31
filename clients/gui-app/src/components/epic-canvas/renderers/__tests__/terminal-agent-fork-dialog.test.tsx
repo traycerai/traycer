@@ -652,6 +652,11 @@ describe("<TerminalAgentForkDialog />", () => {
       expected:
         "Can't continue this session - the source terminal agent couldn't be identified. Close and reopen this tab, then try again.",
     },
+    {
+      subcode: "SOURCE_NOT_READY" as const,
+      expected:
+        "This session has no conversation yet - send a message before forking.",
+    },
   ])(
     "shows an inline rejection alert for preflight subcode $subcode without closing",
     async ({
