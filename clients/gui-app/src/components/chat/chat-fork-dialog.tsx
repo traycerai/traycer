@@ -346,6 +346,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 registerActivation={false}
                 createProfileHostId={tabHostId}
                 runTargetHostId={tabHostId}
+                profileAdmission={null}
               />
               <div className="shrink-0">
                 <AgentModeToggle

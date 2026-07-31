@@ -18,6 +18,7 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
@@ -104,6 +105,12 @@ interface HarnessModelPickerPanelProps {
   readonly runTargetHostId: string | null;
   readonly createProfileDisabled: boolean;
   readonly createProfileDisabledReason: string | undefined;
+  /** Per-row admission override for the active provider's profile strip -
+   *  see `HarnessModelPicker`'s prop of the same name. */
+  readonly profileAdmission: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
 }
 
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
@@ -154,6 +161,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     runTargetHostId,
     createProfileDisabled,
     createProfileDisabledReason,
+    profileAdmission,
   } = props;
   const openAddProfile = useProviderProfileAddFlowStore(
     (state) => state.openForHarness,
@@ -258,6 +266,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
                 contentContainer={profileDropdownContainer}
                 inputRef={inputRef}
                 runTargetHostId={runTargetHostId}
+                admissionByProfileId={profileAdmission}
               />
             </div>
           ) : (

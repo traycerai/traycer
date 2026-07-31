@@ -693,6 +693,8 @@ export function useLandingComposerActions(): LandingComposerActions {
               reasoningEffort,
               agentMode,
               forkSourceHarnessSessionId: null,
+              sourceTuiAgentId: null,
+              sourceProfileId: null,
               onStatusChange: null,
               worktreeIntent: workspaceContext.worktreeIntent,
               workspaceMode: workspaceContext.workspaceMode,
