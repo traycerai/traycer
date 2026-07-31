@@ -39,3 +39,21 @@ export const QUOTED_SENSITIVE_INLINE_VALUE_PATTERN =
  * credential intact right after it.
  */
 export const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9+/=]+/gi;
+
+/**
+ * Scrubber-only, redacts the TOKEN ITSELF wherever it appears in free text -
+ * no key/assignment context required (code review, finding N2, P1): a naked
+ * high-entropy API key pasted directly into user-typed intent text matches
+ * none of the key=value/quoted-key/bearer patterns above, since there is no
+ * key at all around it. Every alternative anchors on a real provider's
+ * fixed, published token prefix (Anthropic, OpenAI-style, GitHub, Slack,
+ * AWS, Google, Stripe, JWT, npm) - never a bare long hex/base64 run, which
+ * the same review round explicitly ruled out as too false-positive-prone.
+ * `\b` on both ends keeps this from firing inside an ordinary word that
+ * happens to contain one of these short prefixes (e.g. "task-runner",
+ * "risk-adjusted" never match - the letter immediately before the prefix is
+ * a word character too, so there is no boundary there); the `{n,}` minimum
+ * length on every open-ended alternative rules out short coincidental hits.
+ */
+export const TOKEN_SHAPE_PATTERN =
+  /\b(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|gh[oprsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|(?:sk|rk)_live_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|npm_[A-Za-z0-9]{20,})\b/gi;

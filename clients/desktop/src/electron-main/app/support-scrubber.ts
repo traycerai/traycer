@@ -4,6 +4,7 @@ import {
   QUOTED_SENSITIVE_INLINE_VALUE_PATTERN,
   SENSITIVE_KEY_PATTERN,
   SENSITIVE_QUERY_PARAM_PATTERN,
+  TOKEN_SHAPE_PATTERN,
 } from "./sensitive-text-patterns";
 
 /**
@@ -156,7 +157,12 @@ function scrubLine(line: string, pathPseudonyms: Map<string, string>): string {
     // everything the plain `SENSITIVE_INLINE_VALUE_PATTERN` logger.ts still
     // uses unchanged, plus JSON/YAML-style `"password": "value"` forms whose
     // closing key-quote sits between the word and the separator.
-    .replace(QUOTED_SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
+    .replace(QUOTED_SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>")
+    // Token-shape redaction (code review, finding N2): a bare high-entropy
+    // key pasted into free text (user intent, a log line, an error message)
+    // has no key/assignment context at all for the patterns above to key
+    // off of - this matches the token's own published prefix shape instead.
+    .replace(TOKEN_SHAPE_PATTERN, "<redacted>");
   return pseudonymizeAbsolutePaths(redacted, pathPseudonyms);
 }
 

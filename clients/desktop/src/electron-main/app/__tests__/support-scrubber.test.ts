@@ -196,6 +196,86 @@ describe("scrubSupportText", () => {
       expect(result).not.toContain("dXNlcjpwYXNz");
     });
   });
+
+  // Live E2E verification (finding N2, P1): a naked, high-entropy API key
+  // pasted directly into free text - no surrounding key=value/quoted-key
+  // context at all - matched none of the patterns above. This is the exact
+  // planted fixture from that run, plus one fixture per token family, each
+  // checked in both an "intent text" position (a plain user sentence) and a
+  // "log line" position (the shape a host.log/desktop.log line takes).
+  describe("token-shape redaction (finding N2)", () => {
+    const ANTHROPIC_KEY =
+      "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH";
+
+    it("redacts the exact planted Anthropic key from the live E2E run, in intent-text position", () => {
+      const result = scrubSupportText(
+        `I was using my key ${ANTHROPIC_KEY} to test the feature`,
+      );
+      expect(result).not.toContain(ANTHROPIC_KEY);
+      expect(result).toBe("I was using my key <redacted> to test the feature");
+    });
+
+    it("redacts the same Anthropic key in log-line position", () => {
+      const result = scrubSupportText(
+        `2026-07-31T00:00:00Z [info] provider auth using ${ANTHROPIC_KEY}`,
+      );
+      expect(result).not.toContain(ANTHROPIC_KEY);
+    });
+
+    it.each([
+      [
+        "generic sk- (OpenAI-style sk-proj-...)",
+        "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890",
+      ],
+      ["GitHub ghp_", "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz12345678"],
+      [
+        "GitHub github_pat_",
+        "github_pat_11ABCDEFG0AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJKLMNOP",
+      ],
+      [
+        "Slack xoxb-",
+        ["xox", "b-1234567890-1234567890123-AbCdEfGhIjKlMnOpQrSt"].join(""),
+      ],
+      ["AWS AKIA (access key id)", "AKIAIOSFODNN7EXAMPLE"],
+      ["Google AIza", "AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz1234567"],
+      [
+        "Stripe sk_live_",
+        ["sk_", "live_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"].join(""),
+      ],
+      [
+        "Stripe rk_live_",
+        ["rk_", "live_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"].join(""),
+      ],
+      [
+        "JWT shape",
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+      ],
+      ["npm_ token", "npm_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"],
+    ])(
+      "redacts a %s token in both intent-text and log-line position",
+      (_label, token) => {
+        const intentResult = scrubSupportText(
+          `Here is what happened: I pasted ${token} into the field by mistake`,
+        );
+        expect(intentResult).not.toContain(token);
+
+        const logLineResult = scrubSupportText(
+          `2026-07-31T00:00:00Z [debug] request header token=${token}`,
+        );
+        expect(logLineResult).not.toContain(token);
+      },
+    );
+
+    it("does not touch ordinary words that merely contain a token-prefix-shaped substring", () => {
+      const input = "risk-adjusted task-runner desk-check-something";
+      expect(scrubSupportText(input)).toBe(input);
+    });
+
+    it("does not touch a short benign string that starts with a token prefix but is too short to be one", () => {
+      const input = "sk-ai is a cool product name";
+      expect(scrubSupportText(input)).toBe(input);
+    });
+  });
 });
 
 describe("deepScrubSupportValue", () => {

@@ -496,4 +496,48 @@ describe("buildPublicDraftFields", () => {
       expect(other.title).not.toContain("screenshot");
     });
   });
+
+  // Live E2E verification (finding N2, P1): a bare API key planted in the
+  // user-typed intent question survived into the private Sentry envelope AND
+  // the public draft TITLE - the derived title has no key/assignment context
+  // to key redaction off of, so it needed the scrubber's token-shape pass
+  // (support-scrubber.ts), not a change here. This exercises that fix
+  // end-to-end through the real (unmodified) title-derivation code path.
+  describe("token-shape redaction reaches the public title (finding N2)", () => {
+    const ANTHROPIC_KEY =
+      "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH";
+
+    it("scrubs a bare API key out of a derived title (no privateDiagnostics.cause)", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        intent: `My key is ${ANTHROPIC_KEY} and it stopped working`,
+      });
+      expect(result.title).not.toContain(ANTHROPIC_KEY);
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).not.toContain(ANTHROPIC_KEY);
+    });
+
+    it("scrubs a bare API key out of an edited overrideTitle", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        overrideTitle: `Failing with ${ANTHROPIC_KEY} in the header`,
+      });
+      expect(result.title).not.toContain(ANTHROPIC_KEY);
+    });
+
+    it("scrubs a bare API key out of the message-derived title symptom", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        privateDiagnostics: makeDiagnostics({
+          cause: makeCause({
+            sourceAction: null,
+            errorCode: null,
+            message: `auth failed for ${ANTHROPIC_KEY}\nmore`,
+          }),
+        }),
+      });
+      expect(result.title).not.toContain(ANTHROPIC_KEY);
+    });
+  });
 });
