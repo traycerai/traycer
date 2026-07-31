@@ -42,6 +42,7 @@ import type {
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
 import { evictChatTabState } from "@/stores/chats/chat-tab-state-cache";
+import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
 import { evictActivityGroupOpenStores } from "@/stores/chats/activity-group-open-store-core";
 import { evictA2AOpenStores } from "@/stores/chats/a2a-open-store-context";
 import {
@@ -93,7 +94,10 @@ import {
   collectLiveTileInstanceIds,
   createEmptyCanvas,
 } from "@/stores/epics/canvas/canvas-state";
-import { findPaneById } from "@/stores/epics/canvas/tile-tree";
+import {
+  findPaneById,
+  paneRemovalDissolveHandoffTargets,
+} from "@/stores/epics/canvas/tile-tree";
 import {
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
@@ -1451,6 +1455,23 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             ? (sourceCanvas.tilesByInstanceId[args.sourceTileTabId] ?? null)
             : null;
         if (pane === null || node === null) return null;
+        // Ticket 20: the torn-off tile always remounts - it moves from the
+        // source header tab's canvas root into a brand-new header tab's
+        // canvas root, a completely different React parent chain (MOVE
+        // semantics, same instanceId - see the corrected comment at
+        // `commitHeaderStripDrop`'s call site). When it was its source
+        // pane's only tab, `closeTileTab` below falls through to
+        // `closePane`, which can also dissolve that pane's parent group and
+        // remount a sibling. Flush both before `set()` commits the move.
+        flushChatTabViewportHandoff([
+          args.sourceTileTabId,
+          ...(pane.tabInstanceIds.length === 1
+            ? paneRemovalDissolveHandoffTargets(
+                sourceCanvas.root,
+                args.sourcePaneId,
+              )
+            : []),
+        ]);
         const newId = uuidv4();
         const siblingNames = epicTabNames(state.tabsById, sourceTab.epicId);
         const newTab: EpicViewTab = {
@@ -1899,6 +1920,27 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       insertNodeOnTabStrip: (tabId, targetPaneId, targetIndex, node) => {
+        // Ticket 20: mirrors `dropOnTabStrip`'s own node-kind resolution -
+        // dropping a node already open in a DIFFERENT pane routes through
+        // `moveTabAcrossPanes` there, remounting that pane's painted tile
+        // exactly like an explicit cross-pane drag (and, if it empties its
+        // source pane, can also dissolve a sibling's parent group). Flush
+        // both before `set()` commits the move.
+        const before = canvasForExistingTab(get(), tabId);
+        if (before !== null) {
+          const existing = findPaneTabByContentId(before, node.id);
+          if (existing !== null && existing.pane.id !== targetPaneId) {
+            flushChatTabViewportHandoff([
+              existing.instanceId,
+              ...(existing.pane.tabInstanceIds.length === 1
+                ? paneRemovalDissolveHandoffTargets(
+                    before.root,
+                    existing.pane.id,
+                  )
+                : []),
+            ]);
+          }
+        }
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             dropOnTabStrip(
@@ -1929,6 +1971,24 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       moveTabOnTabStrip: (tabId, args) => {
         const before = canvasForExistingTab(get(), tabId);
         const node = before?.tilesByInstanceId[args.tabId];
+        // Ticket 20: a cross-pane move remounts the dragged tab's painted
+        // chat (the keyed layer moves from the source `TabGroupView` to the
+        // target one - `moveTabAcrossPanes`). When the dragged tab was its
+        // source pane's only tab, that pane also closes and can dissolve its
+        // parent group, remounting a SIBLING pane too. Flush both before
+        // `set()` commits. A same-pane reorder never remounts anything.
+        if (before !== null && args.sourcePaneId !== args.targetPaneId) {
+          const sourcePane = findPaneById(before.root, args.sourcePaneId);
+          flushChatTabViewportHandoff([
+            args.tabId,
+            ...(sourcePane !== null && sourcePane.tabInstanceIds.length === 1
+              ? paneRemovalDissolveHandoffTargets(
+                  before.root,
+                  args.sourcePaneId,
+                )
+              : []),
+          ]);
+        }
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => {
             const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
@@ -1977,6 +2037,42 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
       splitPaneWithNode: (tabId, targetPaneId, position, node) => {
         const before = canvasForExistingTab(get(), tabId);
+        // Ticket 20 (review round 1, finding 1): when the target pane's
+        // parent group runs perpendicular to `position` (or the target is
+        // the bare root pane), inserting beside it WRAPS the target instead
+        // of a flat insertion (`insertPaneAtEdge`) - the target's own
+        // painted chat remounts even though this call never touches its
+        // content. Flushing its active tab's viewport unconditionally is
+        // cheap and correct either way (a flat, non-wrapping insertion
+        // leaves it mounted, and the flush is simply harmless there).
+        //
+        // Separately: `splitPaneAtEdge` (actions.ts) resolves a `node`
+        // source whose content is ALREADY OPEN somewhere into a `tab`-kind
+        // move BEFORE doing anything else - the same "already open"
+        // resolution `insertNodeOnTabStrip`/`dropOnTabStrip` perform, but
+        // this call creates a BRAND NEW pane for the moved tab unconditionally
+        // (`createPaneWithTab`), regardless of whether the existing tab's
+        // source pane is the same as `targetPaneId` - so the moved instance
+        // always remounts, not just on a genuine cross-pane move. When its
+        // source pane empties (and isn't the target itself - the
+        // `splitsIntoItself` case deliberately keeps that pane alive as the
+        // split's other half instead of dissolving it), flush the promoted
+        // dissolve survivors too.
+        if (before !== null) {
+          const targetPane = findPaneById(before.root, targetPaneId);
+          const existing = findPaneTabByContentId(before, node.id);
+          flushChatTabViewportHandoff([
+            ...(targetPane !== null && targetPane.activeTabId !== null
+              ? [targetPane.activeTabId]
+              : []),
+            ...(existing !== null ? [existing.instanceId] : []),
+            ...(existing !== null &&
+            existing.pane.tabInstanceIds.length === 1 &&
+            existing.pane.id !== targetPaneId
+              ? paneRemovalDissolveHandoffTargets(before.root, existing.pane.id)
+              : []),
+          ]);
+        }
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             splitPaneAtEdge(canvas, targetPaneId, position, {
@@ -2010,6 +2106,31 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       splitPaneWithTab: (tabId, args) => {
         const before = canvasForExistingTab(get(), tabId);
         const node = before?.tilesByInstanceId[args.tabId];
+        // Ticket 20: the dragged tab always lands in a brand-new pane
+        // (`createPaneWithTab` inside `splitPaneAtEdge`) - it remounts
+        // unconditionally, unlike a same-pane/same-axis flat split of a
+        // DIFFERENT tab. The target pane can also wrap (see
+        // `splitPaneWithNode`'s comment) and, when the drag emptied its
+        // source pane, that pane's own close can dissolve a THIRD pane's
+        // parent. Flush all three defensively before `set()`.
+        if (before !== null) {
+          const targetPane = findPaneById(before.root, args.targetPaneId);
+          const sourcePane = findPaneById(before.root, args.sourcePaneId);
+          flushChatTabViewportHandoff([
+            args.tabId,
+            ...(targetPane !== null && targetPane.activeTabId !== null
+              ? [targetPane.activeTabId]
+              : []),
+            ...(sourcePane !== null &&
+            sourcePane.tabInstanceIds.length === 1 &&
+            args.sourcePaneId !== args.targetPaneId
+              ? paneRemovalDissolveHandoffTargets(
+                  before.root,
+                  args.sourcePaneId,
+                )
+              : []),
+          ]);
+        }
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => {
             const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
@@ -2045,6 +2166,16 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
       splitPaneEmptyInTab: (tabId, targetPaneId, direction) => {
         let newPaneId: string | null = null;
+        // Ticket 20: an empty placeholder pane can still WRAP the target
+        // (same `insertPaneAtEdge` mechanism as `splitPaneWithNode`), even
+        // though this action opens no content of its own.
+        const before = canvasForExistingTab(get(), tabId);
+        if (before !== null) {
+          const targetPane = findPaneById(before.root, targetPaneId);
+          if (targetPane !== null && targetPane.activeTabId !== null) {
+            flushChatTabViewportHandoff([targetPane.activeTabId]);
+          }
+        }
         set((state) => {
           const tab = state.tabsById[tabId];
           if (tab === undefined) return state;
@@ -2078,6 +2209,18 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
       closeCanvasTab: (tabId, paneId, tileTabId) => {
         const beforeCanvas = get().canvasByTabId[tabId];
+        // Ticket 20: closing a pane's LAST tab removes the pane itself
+        // (`closeTab` falls through to `closePane`), which can dissolve its
+        // parent group and remount a sibling's painted chat. Predict this
+        // BEFORE `set()`, from the state as it stands right now.
+        if (beforeCanvas !== undefined) {
+          const pane = findPaneById(beforeCanvas.root, paneId);
+          if (pane !== null && pane.tabInstanceIds.length === 1) {
+            flushChatTabViewportHandoff(
+              paneRemovalDissolveHandoffTargets(beforeCanvas.root, paneId),
+            );
+          }
+        }
         // `tileTabId` is a tab instanceId; pendingCreate tracking is keyed by
         // content id, so resolve the closed tab's content id before clearing.
         set((state) => {
@@ -2147,6 +2290,16 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
       closeAllCanvasTabs: (tabId, paneId) => {
         const beforeCanvas = get().canvasByTabId[tabId];
+        // Ticket 20: `closeAllTabs` always falls through to `closePane` for
+        // a non-empty pane - same dissolve risk as `closeCanvasTab`.
+        if (beforeCanvas !== undefined) {
+          const pane = findPaneById(beforeCanvas.root, paneId);
+          if (pane !== null && pane.tabInstanceIds.length > 0) {
+            flushChatTabViewportHandoff(
+              paneRemovalDissolveHandoffTargets(beforeCanvas.root, paneId),
+            );
+          }
+        }
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             closeAllTabs(canvas, paneId),
@@ -2165,6 +2318,13 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
       closeCanvasPane: (tabId, paneId) => {
         const beforeCanvas = get().canvasByTabId[tabId];
+        // Ticket 20: same dissolve risk as `closeCanvasTab`/`closeAllCanvasTabs`
+        // - `closePane` always removes the whole pane.
+        if (beforeCanvas !== undefined) {
+          flushChatTabViewportHandoff(
+            paneRemovalDissolveHandoffTargets(beforeCanvas.root, paneId),
+          );
+        }
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => closePane(canvas, paneId)),
         );

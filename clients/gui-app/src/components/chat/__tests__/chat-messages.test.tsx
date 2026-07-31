@@ -49,6 +49,7 @@ import {
   saveChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
 import { evictChatTabPersistenceForEpic } from "@/stores/chats/chat-tab-persistence-eviction";
 import { getOrCreateActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import type { ActivityGroupOpenState } from "@/stores/chats/activity-group-open-store-context";
@@ -7430,6 +7431,344 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
 
       expect(hasSavedChatTabState(identity)).toBe(false);
+    });
+  });
+
+  describe("ticket 20: pre-structural-mutation viewport handoff", () => {
+    /**
+     * Review round 1, finding 3: the same-commit pin below must actually
+     * force React to unmount the old fiber and mount the replacement in ONE
+     * commit - `unmount()` followed by a separate `render()` call is two
+     * commits, and cannot catch a cleanup-clobber. Swapping the wrapping
+     * host element's TYPE (div -> section) between rerenders makes React
+     * tear down and rebuild the whole subtree - old fiber deletion, new
+     * fiber placement, both commit-phase - inside a single `rerender` call,
+     * the same one-store-update shape a real drag/split/dissolve/tear-off
+     * produces (retained `instanceId`, replaced fiber).
+     */
+    function KeyedParentChatMessages({
+      parentTag,
+      instanceId,
+      messages,
+    }: {
+      parentTag: "div" | "section";
+      instanceId: string;
+      messages: ReadonlyArray<ChatMessageModel>;
+    }): ReactElement {
+      const Parent = parentTag;
+      return (
+        <Parent
+          data-chat-keyboard-scroll-scope
+          data-active="true"
+          style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
+        >
+          <ChatMessages
+            taskTitle="Test chat"
+            taskId="task-1"
+            epicId="epic-1"
+            messages={messages}
+            localProvenanceMessageIds={new Set()}
+            consumeLocalProvenance={() => undefined}
+            backgroundItems={undefined}
+            getMessageActions={() => null}
+            nextStepActions={null}
+            instanceId={instanceId}
+            visible
+            systemOverlayActive={false}
+            isChatStreaming={false}
+            scrollRequest={null}
+            composerOverlayHeight={80}
+          />
+        </Parent>
+      );
+    }
+
+    it(
+      "same-commit remount reads the pre-move position only when the action " +
+        "creator flushes before the replacement mounts (red without the flush)",
+      async () => {
+        const messages = makeCompletedTranscript(20);
+        const instanceId = `t20-same-commit-${Math.random().toString(36).slice(2)}`;
+        const identity = makeDefaultTestIdentity(instanceId);
+
+        tileLiveness.live = true;
+        const { rerender } = render(
+          <KeyedParentChatMessages
+            parentTag="div"
+            instanceId={instanceId}
+            messages={messages}
+          />,
+        );
+        await settleLegendList();
+
+        act(() => {
+          enterFreeScrollingAwayFromEnd();
+        });
+        await fireScrollTopAndFlush(360);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        const preMoveScrollTop = getScrollNode().scrollTop;
+        expect(preMoveScrollTop).toBe(360);
+
+        // RED-ON-BASELINE: `restoreChatTabState` is exactly what a
+        // same-commit replacement's render-time state initializer calls
+        // (`ChatMessagesInner`'s `restoredTabState` useState initializer) -
+        // React runs it during render, which happens BEFORE ANY commit-phase
+        // effect, including the currently-mounted fiber's own unmount
+        // cleanup. Nothing has unmounted yet here, so whatever
+        // `restoreChatTabState` returns right now is exactly what the
+        // type-swap rerender below will read. Without a pre-mutation flush,
+        // that is still the harness/cache-miss default following-end seed,
+        // not the live 360px position currently on screen - the audit's own
+        // `initialize:stale` probe finding, reproduced directly.
+        const staleRestore = restoreChatTabState(identity, messages);
+        expect(staleRestore.mode).toBe("following-end");
+
+        // The fix: a structural-mutation action creator (drag/split-wrap/
+        // dissolve/tear-off) calls this exact primitive, synchronously,
+        // BEFORE its own `set()` - simulated here immediately before the
+        // type-swap rerender that stands in for that `set()`.
+        flushChatTabViewportHandoff([instanceId]);
+        const freshRestore = restoreChatTabState(identity, messages);
+        expect(freshRestore.mode).toBe("free-scrolling");
+        expect(freshRestore.anchorMessageId).not.toBeNull();
+
+        // A REAL same-commit remount: the div -> section type change and the
+        // replacement's render-time restore both happen inside this one
+        // `rerender` call - React never lets the old fiber's commit-phase
+        // cleanup run before this call's render phase (including the new
+        // fiber's state initializer) has already completed.
+        rerender(
+          <KeyedParentChatMessages
+            parentTag="section"
+            instanceId={instanceId}
+            messages={messages}
+          />,
+        );
+        await settleLegendList();
+        await settleLegendList();
+
+        // Confirm it actually paints directly at the pre-move position - no
+        // stale/default jump.
+        expect(getScrollNode().scrollTop).toBe(preMoveScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      },
+    );
+
+    it(
+      "the pre-mutation flush captures a coherent live-DOM snapshot, not a " +
+        "stale rAF-throttled mirror (review round 1, finding 2: rebuilt - " +
+        "the prior version raced a scrollRequest, but navigateToMessage " +
+        "synchronously freshens the mirror before it scrolls, so that " +
+        "construction could never actually desync it)",
+      async () => {
+        const rowCount = 100;
+        const targetRow = 50;
+        const targetScrollTop =
+          targetRow * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX;
+        const messages = makeCompletedTranscript(rowCount);
+        const instanceId = `t20-coherent-flush-${Math.random().toString(36).slice(2)}`;
+        const identity = makeDefaultTestIdentity(instanceId);
+
+        tileLiveness.live = true;
+        const first = renderChatMessages({ messages, instanceId });
+        await settleLegendList();
+        act(() => {
+          enterFreeScrollingAwayFromEnd();
+        });
+        // Ticket 15 review (live pass S5 round 3)'s exact race, reused here
+        // for the still-mounted flush path instead of that pin's non-live
+        // unmount path: sets scrollTop and fires the scroll event WITHOUT
+        // yielding a frame afterward, so `scheduleActiveViewportUpdate`'s
+        // rAF-throttled reading-line mirror (`scrolledActiveUserMessageIdRef`)
+        // never catches up to this position. Critically, nothing in this
+        // window is a navigation (`navigateToMessage` is not called - no
+        // scrollRequest, no minimap/find jump) - only `navigateToMessage`
+        // synchronously writes that ref before scrolling, so a
+        // navigation-driven jump can never desync the mirror from the DOM in
+        // the first place. That is exactly why the prior version of this
+        // pin (a scrollRequest-driven jump) was vacuous.
+        fireScrollTopWithoutFlush(targetScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+        // Flush with `first` STILL MOUNTED, exactly as a real structural
+        // mutation's pre-`set()` flush runs. Reading `restoreChatTabState`
+        // BEFORE `first.unmount()` (same ordering proof as the same-commit
+        // pin above) is load-bearing: unmounting first would trigger
+        // `first`'s OWN unmount-cleanup save too, masking a disabled/broken
+        // flush behind the pre-existing unmount path and silently degrading
+        // this into an ordinary unmount-capture check that stays green
+        // either way.
+        flushChatTabViewportHandoff([instanceId]);
+        const saved = restoreChatTabState(identity, messages);
+        expect(saved.mode).toBe("free-scrolling");
+        expect(saved.anchorMessageId).not.toBeNull();
+        // The stale mirror (unserviced since before this scroll) points at
+        // a different row entirely - a poisoned capture would land well
+        // outside this window, not just off by a row or two.
+        expect(saved.anchorIndex).toBeGreaterThan(targetRow - 2);
+        expect(saved.anchorIndex).toBeLessThan(targetRow + 2);
+
+        first.unmount();
+
+        const replacement = renderChatMessages({ messages, instanceId });
+        await settleLegendList();
+        await settleLegendList();
+        expect(getScrollNode().scrollTop).toBe(targetScrollTop);
+
+        replacement.unmount();
+      },
+    );
+
+    it("flushing an instanceId with no live/mounted tile is a harmless no-op", () => {
+      const instanceId = `t20-no-live-mount-${Math.random().toString(36).slice(2)}`;
+      expect(() => flushChatTabViewportHandoff([instanceId])).not.toThrow();
+      expect(hasSavedChatTabState(makeDefaultTestIdentity(instanceId))).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("ticket 20: restore-driven navigation never visibly traverses", () => {
+    /**
+     * Records every `scrollTo({behavior, top, left})` LegendList issues
+     * against `scrollNode`. Does NOT re-spy `HTMLElement.prototype.scrollTo`
+     * by wrapping its CURRENT value as a "call through to prior" fallback -
+     * `installLegendListViewportMetrics` already replaced it with a mock
+     * once per test, and `vi.spyOn` on an already-spied method returns that
+     * SAME mock instance rather than a fresh wrapper, so a captured
+     * "prior" reference is actually the mock being reconfigured -
+     * `mockImplementation` on it recurses into itself (stack overflow).
+     * Reimplements the shim's own minimal numeric/options handling directly
+     * against the real `scrollTop`/`scrollLeft` property setters instead.
+     */
+    function recordScrollToCallsOnNode(scrollNode: HTMLElement): ReadonlyArray<{
+      readonly behavior?: ScrollBehavior;
+      readonly top?: number;
+      readonly left?: number;
+    }> {
+      const calls: Array<{
+        behavior?: ScrollBehavior;
+        top?: number;
+        left?: number;
+      }> = [];
+      const scrollTopSetter = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        "scrollTop",
+      )?.set;
+      const scrollLeftSetter = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        "scrollLeft",
+      )?.set;
+      if (scrollTopSetter === undefined || scrollLeftSetter === undefined) {
+        throw new Error("expected scrollTop/scrollLeft setters");
+      }
+      vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(
+        function (
+          this: HTMLElement,
+          ...args: Array<number | ScrollToOptions | undefined>
+        ): void {
+          const first = args[0];
+          if (typeof first === "number") {
+            const second = args[1];
+            scrollLeftSetter.call(this, first);
+            scrollTopSetter.call(this, typeof second === "number" ? second : 0);
+            return;
+          }
+          if (typeof first !== "object" || first === null) return;
+          if (this === scrollNode) {
+            calls.push({
+              behavior: first.behavior,
+              top: first.top,
+              left: first.left,
+            });
+          }
+          if (typeof first.left === "number") {
+            scrollLeftSetter.call(this, first.left);
+          }
+          if (typeof first.top === "number") {
+            scrollTopSetter.call(this, first.top);
+          }
+        },
+      );
+      return calls;
+    }
+
+    it(
+      "late-hydration catch-up requests a non-animated (behavior: auto) jump, " +
+        "never the animated (behavior: smooth) path minimap/deep-link use " +
+        "(find is unrelated - it independently stays non-animated)",
+      async () => {
+        const fullMessages = makeCompletedTranscript(200);
+        const anchorIndex = 20;
+        const anchorId = fullMessages[anchorIndex]?.id ?? null;
+        expect(anchorId).toBeTruthy();
+        const expectedScrollTop =
+          anchorIndex * TICKET_13_ROW_HEIGHT_PX +
+          LEGEND_LIST_HEADER_PX -
+          CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+
+        const catchupKey = `t20-hydration-single-frame-${Math.random().toString(36).slice(2)}`;
+        saveChatTabState({
+          identity: makeDefaultTestIdentity(catchupKey),
+          mode: "free-scrolling",
+          anchorMessageId: anchorId,
+          anchorIndex,
+          offset: 24,
+        });
+        const partialMessages = fullMessages.slice(180);
+        const { rerenderMessages } = renderChatMessages({
+          messages: partialMessages,
+          scrollStateKey: catchupKey,
+        });
+        await settleLegendList();
+        expect(getScrollNode().scrollTop).not.toBe(expectedScrollTop);
+
+        const scrollNode = getScrollNode();
+        const callsOnScrollNode = recordScrollToCallsOnNode(scrollNode);
+
+        // The rest of the transcript arrives (a later onSnapshot/backfill
+        // commit) - triggers the hydration-retry effect's `navigateToMessage`
+        // call.
+        rerenderMessages(fullMessages);
+        await settleLegendList();
+
+        expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+        // RED-ON-BASELINE: before threading an explicit `animated` param
+        // through `navigateToMessage`, this call hardcoded `animated: true`,
+        // which LegendList translates to `behavior: "smooth"` - a reader
+        // would see the transcript visibly scroll to the resolved anchor
+        // instead of painting there directly. A restore is not a user
+        // navigation; every call this retry produced must request
+        // `behavior: "auto"` (LegendList's instant/non-animated path).
+        expect(callsOnScrollNode.length).toBeGreaterThan(0);
+        expect(
+          callsOnScrollNode.every((call) => call.behavior === "auto"),
+        ).toBe(true);
+      },
+    );
+
+    it("minimap navigation (a real, user-triggered jump) still requests the animated path, unchanged", async () => {
+      const messages = makeTranscript(24);
+      renderChatMessages({
+        messages,
+        scrollStateKey: `t20-minimap-still-animated-${Math.random().toString(36).slice(2)}`,
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+
+      const scrollNode = getScrollNode();
+      const callsOnScrollNode = recordScrollToCallsOnNode(scrollNode);
+
+      await selectLastChatTurnMinimapItem();
+
+      expect(callsOnScrollNode.length).toBeGreaterThan(0);
+      expect(
+        callsOnScrollNode.every((call) => call.behavior === "smooth"),
+      ).toBe(true);
     });
   });
 });

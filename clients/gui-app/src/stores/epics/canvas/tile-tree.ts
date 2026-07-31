@@ -364,6 +364,36 @@ export function removePaneFromTree(
   };
 }
 
+/**
+ * Ticket 20: read-only mirror of {@link removePaneFromTree}'s single-survivor
+ * dissolve branch - if removing `paneId` would leave its parent group with
+ * exactly one remaining child, that child is promoted into the parent's slot
+ * and every pane in ITS subtree gets a new React ancestor (a dissolve whose
+ * promoted subtree holds more than one pane remounts every one of them, not
+ * just the direct sibling). Returns the active-tab instanceId of every pane
+ * in the promoted subtree - the tiles a caller must flush a pre-mutation
+ * viewport handoff for - or `[]` when no dissolve would occur (the parent
+ * has other children, or `paneId` is the root).
+ */
+export function paneRemovalDissolveHandoffTargets(
+  root: TileLayoutNode | null,
+  paneId: string,
+): ReadonlyArray<string> {
+  if (root === null) return [];
+  const path = findPanePath(root, paneId);
+  if (path === null || path.length === 0) return [];
+  const parentPath = path.slice(0, -1);
+  const parentNode = getNodeAtPath(root, parentPath);
+  if (parentNode.kind !== "group" || parentNode.children.length !== 2) {
+    return [];
+  }
+  const removeIndex = path[path.length - 1];
+  const survivor = parentNode.children[removeIndex === 0 ? 1 : 0];
+  return collectPanes(survivor)
+    .map((pane) => pane.activeTabId)
+    .filter((activeTabId): activeTabId is string => activeTabId !== null);
+}
+
 export interface InsertPaneAtEdgeArgs {
   readonly state: TileTreeState;
   readonly targetPaneId: string;

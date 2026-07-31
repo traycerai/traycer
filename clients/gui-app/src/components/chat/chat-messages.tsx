@@ -43,7 +43,9 @@ import {
   saveChatTabState,
   type ChatTabScrollMode,
   type SavedChatTabScrollState,
+  type SaveChatTabStateInput,
 } from "@/stores/chats/chat-tab-state-cache";
+import { registerChatTabViewportCapture } from "@/stores/chats/chat-tab-viewport-handoff";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
 import { CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR } from "@/components/chat/chat-turn-minimap-logic";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -2208,6 +2210,135 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     endInsetRef.current = endInset;
   }, [endInset]);
 
+  // Ticket 20: the coherent-snapshot capture used by BOTH this component's
+  // own unmount-cleanup save below AND the pre-structural-mutation viewport
+  // handoff (`chat-tab-viewport-handoff.ts`) a canvas-store action creator
+  // flushes just before a drag/split-wrap/dissolve/tear-off commits a move
+  // that retains this SAME instanceId under a NEW React parent. Without the
+  // proactive flush, React would mount the replacement fiber's
+  // `restoreChatTabState` render-time state initializer BEFORE this
+  // component's own unmount cleanup ever runs - render happens before ANY
+  // commit-phase effect, including a removed fiber's layout-effect cleanup
+  // (painted-chat lifecycle audit finding 1: a disposable probe recorded
+  // `initialize:stale` then `cleanup:fresh`). One function backs both call
+  // sites so the coherent-snapshot invariant below can never drift into two
+  // independently maintained copies.
+  const captureLiveChatTabScrollSnapshot = useCallback((): Omit<
+    SaveChatTabStateInput,
+    "identity"
+  > => {
+    // `anchoring-new-turn` never persists as its own mode (see
+    // `chat-tab-state-cache.ts`): a remount mid-anchor has no live
+    // anchor/settle sequence left to resume, so it collapses to
+    // `free-scrolling` at wherever it had settled - same as any other
+    // unpinned reading position.
+    const wasAnchoring =
+      timelineScrollModeRef.current === "anchoring-new-turn";
+    const mode: ChatTabScrollMode =
+      timelineScrollModeRef.current === "following-end"
+        ? "following-end"
+        : "free-scrolling";
+    const list = chatTimelineRef.current;
+    // Ticket 15 review (live pass S5 round 3, confirmed regression):
+    // `scrolledActiveUserMessageIdRef` is an rAF-throttled mirror
+    // (`scheduleActiveViewportUpdate`) of "which row is at the reading
+    // line" - it can lag a scroll that happened in the same tick as this
+    // capture (rAF never runs for a backgrounded/closing tab, but the race
+    // exists in a visible renderer too: scroll then close/move before the
+    // pending frame). The offset captured below reads the CURRENT live
+    // `scroll` unconditionally - pairing that with a STALE anchor row
+    // produces an internally-inconsistent {anchorMessageId, anchorIndex,
+    // offset} triple (a huge/negative offset relative to the wrong row),
+    // which restore then clamps to nonsense. Recompute the anchor row
+    // SYNCHRONOUSLY from the SAME live list snapshot the offset capture
+    // below reads, so both halves of the pair are drawn from one
+    // coherent, never-mixed-time snapshot - restoring the invariant the
+    // pre-LegendList `chat-scroll-state-cache.ts` `saveChatScrollState`
+    // documented ("captures any reading position the last animation-frame
+    // update had not yet committed"). The rAF mirror is only a fallback
+    // for when the list itself is unmeasurable (never mounted a real
+    // LegendList instance, or genuinely reports nothing yet).
+    //
+    // `list.getState().scroll` is ITSELF a candidate for the same class
+    // of lag (its own doc comment two blocks below: "LegendList's tracked
+    // scroll can lag the DOM while an animated navigation is still
+    // settling") - overridden here with `getScrollableNode().scrollTop`
+    // (the RAW, always-current DOM value, same source the offset capture
+    // below uses) so the anchor computation cannot reintroduce a mismatch
+    // through LegendList's own internal state lagging instead of React's.
+    const liveActiveUserMessageId =
+      list === null
+        ? null
+        : viewportActiveUserMessageId(
+            {
+              ...list.getState(),
+              scroll: list.getScrollableNode().scrollTop,
+              topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            },
+            messagesRef.current,
+          );
+    const anchorMessageId =
+      mode === "free-scrolling"
+        ? (liveActiveUserMessageId ?? scrolledActiveUserMessageIdRef.current)
+        : null;
+    const anchorIndex =
+      anchorMessageId === null
+        ? undefined
+        : messageIndexByIdRef.current.get(anchorMessageId);
+    // F3: while still anchoring, `anchoredEndSpace` reserves trailing blank
+    // space below the anchor for a still-streaming reply - the live
+    // `scroll` may only be reachable because of that reserve. Clamp the
+    // captured offset to LegendList's true no-reserve max scroll (header +
+    // footer + last-row bottom + endInset - viewport) so the saved position
+    // stays valid once restored without the reserve. Do NOT use
+    // `targetScrollToRevealEnd` here - that is the reveal-pass target and
+    // under-clamps by header+footer-anchorOffset.
+    let naturalMaxScroll: number | null = null;
+    if (wasAnchoring && list !== null) {
+      const listState = list.getState();
+      const lastBottom = getChatRowBottom(
+        listState,
+        listState.data.length - 1,
+      );
+      if (lastBottom !== null) {
+        naturalMaxScroll = getChatNaturalMaxScrollWithoutAnchorReserve({
+          headerSize: listTopOffsetAdjustmentRef.current,
+          footerSize: listFooterSizeRef.current,
+          lastBottom,
+          endInset: endInsetRef.current,
+          viewportLength: listState.scrollLength,
+        });
+      }
+    }
+    // Narrow measurement source so capture can fold in the live header pad
+    // (list.getState() does not expose headerSize; metrics keep it current).
+    const measurementSource =
+      list === null
+        ? null
+        : {
+            getState: () => ({
+              positionAtIndex: (index: number) =>
+                list.getState().positionAtIndex(index),
+              // LegendList's tracked scroll can lag the DOM while an
+              // animated navigation is still settling. Persist the pixels
+              // the reader can actually see right now; row positions still
+              // come from the library's measured state.
+              scroll: list.getScrollableNode().scrollTop,
+              topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            }),
+          };
+    return {
+      mode,
+      anchorMessageId,
+      anchorIndex: anchorIndex ?? null,
+      offset: captureChatFreeScrollingOffset(
+        measurementSource,
+        anchorIndex,
+        naturalMaxScroll,
+      ),
+    };
+  }, []);
+
   // Persist the reading position on unmount (chat tiles fully remount per tab
   // switch - decision #17 - so this is the sole persistence path; the
   // display:none keep-alive `useScrollRestoration` machinery other tile kinds
@@ -2232,120 +2363,30 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(
     () => () => {
       const isLive = isEpicCanvasTileInstanceLive(instanceId);
-      // `anchoring-new-turn` never persists as its own mode (see
-      // `chat-tab-state-cache.ts`): a remount mid-anchor has no live
-      // anchor/settle sequence left to resume, so it collapses to
-      // `free-scrolling` at wherever it had settled - same as any other
-      // unpinned reading position.
-      const wasAnchoring =
-        timelineScrollModeRef.current === "anchoring-new-turn";
-      const mode: ChatTabScrollMode =
-        timelineScrollModeRef.current === "following-end"
-          ? "following-end"
-          : "free-scrolling";
-      const list = chatTimelineRef.current;
-      // Ticket 15 review (live pass S5 round 3, confirmed regression):
-      // `scrolledActiveUserMessageIdRef` is an rAF-throttled mirror
-      // (`scheduleActiveViewportUpdate`) of "which row is at the reading
-      // line" - it can lag a scroll that happened in the same tick as this
-      // unmount (rAF never runs for a backgrounded/closing tab, but the
-      // race exists in a visible renderer too: scroll then close before the
-      // pending frame). The offset captured below reads the CURRENT live
-      // `scroll` unconditionally - pairing that with a STALE anchor row
-      // produces an internally-inconsistent {anchorMessageId, anchorIndex,
-      // offset} triple (a huge/negative offset relative to the wrong row),
-      // which restore then clamps to nonsense. Recompute the anchor row
-      // SYNCHRONOUSLY from the SAME live list snapshot the offset capture
-      // below reads, so both halves of the pair are drawn from one
-      // coherent, never-mixed-time snapshot - restoring the invariant the
-      // pre-LegendList `chat-scroll-state-cache.ts` `saveChatScrollState`
-      // documented ("captures any reading position the last animation-frame
-      // update had not yet committed"). The rAF mirror is only a fallback
-      // for when the list itself is unmeasurable (never mounted a real
-      // LegendList instance, or genuinely reports nothing yet).
-      //
-      // `list.getState().scroll` is ITSELF a candidate for the same class
-      // of lag (its own doc comment two blocks below: "LegendList's tracked
-      // scroll can lag the DOM while an animated navigation is still
-      // settling") - overridden here with `getScrollableNode().scrollTop`
-      // (the RAW, always-current DOM value, same source the offset capture
-      // below uses) so the anchor computation cannot reintroduce a mismatch
-      // through LegendList's own internal state lagging instead of React's.
-      const liveActiveUserMessageId =
-        list === null
-          ? null
-          : viewportActiveUserMessageId(
-              {
-                ...list.getState(),
-                scroll: list.getScrollableNode().scrollTop,
-                topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
-              },
-              messagesRef.current,
-            );
-      const anchorMessageId =
-        mode === "free-scrolling"
-          ? (liveActiveUserMessageId ?? scrolledActiveUserMessageIdRef.current)
-          : null;
-      const anchorIndex =
-        anchorMessageId === null
-          ? undefined
-          : messageIndexByIdRef.current.get(anchorMessageId);
-      // F3: while still anchoring, `anchoredEndSpace` reserves trailing blank
-      // space below the anchor for a still-streaming reply - the live
-      // `scroll` may only be reachable because of that reserve. Clamp the
-      // captured offset to LegendList's true no-reserve max scroll (header +
-      // footer + last-row bottom + endInset - viewport) so the saved position
-      // stays valid once restored without the reserve. Do NOT use
-      // `targetScrollToRevealEnd` here - that is the reveal-pass target and
-      // under-clamps by header+footer-anchorOffset.
-      let naturalMaxScroll: number | null = null;
-      if (wasAnchoring && list !== null) {
-        const listState = list.getState();
-        const lastBottom = getChatRowBottom(
-          listState,
-          listState.data.length - 1,
-        );
-        if (lastBottom !== null) {
-          naturalMaxScroll = getChatNaturalMaxScrollWithoutAnchorReserve({
-            headerSize: listTopOffsetAdjustmentRef.current,
-            footerSize: listFooterSizeRef.current,
-            lastBottom,
-            endInset: endInsetRef.current,
-            viewportLength: listState.scrollLength,
-          });
-        }
-      }
-      // Narrow measurement source so capture can fold in the live header pad
-      // (list.getState() does not expose headerSize; metrics keep it current).
-      const measurementSource =
-        list === null
-          ? null
-          : {
-              getState: () => ({
-                positionAtIndex: (index: number) =>
-                  list.getState().positionAtIndex(index),
-                // LegendList's tracked scroll can lag the DOM while an
-                // animated navigation is still settling. Persist the pixels
-                // the reader can actually see at unmount; row positions still
-                // come from the library's measured state.
-                scroll: list.getScrollableNode().scrollTop,
-                topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
-              }),
-            };
       const commit = isLive ? saveChatTabState : commitChatTabStateToDurable;
-      commit({
-        identity,
-        mode,
-        anchorMessageId,
-        anchorIndex: anchorIndex ?? null,
-        offset: captureChatFreeScrollingOffset(
-          measurementSource,
-          anchorIndex,
-          naturalMaxScroll,
-        ),
-      });
+      commit({ identity, ...captureLiveChatTabScrollSnapshot() });
     },
-    [identity, instanceId],
+    [identity, instanceId, captureLiveChatTabScrollSnapshot],
+  );
+
+  // Ticket 20: register the SAME capture for the canvas store's pre-
+  // structural-mutation viewport handoff (`chat-tab-viewport-handoff.ts`) - a
+  // drag/split-wrap/dissolve/tear-off action creator flushes this
+  // synchronously just BEFORE it commits a move that retains `instanceId`
+  // under a new React parent, so the replacement mount's `restoreChatTabState`
+  // initializer reads the fresh position instead of whatever was already
+  // cached. Registered live-only (only a currently-mounted tile has any DOM
+  // viewport worth capturing) - a background/never-mounted-yet tab is simply
+  // absent from the registry, same shape as the close-sweep promotion
+  // (`promoteChatTabPersistenceToDurable`) this pattern reuses. Always
+  // `saveChatTabState` (never the durable-only commit): this component is by
+  // construction live for the whole window it stays registered.
+  useLayoutEffect(
+    () =>
+      registerChatTabViewportCapture(instanceId, () => {
+        saveChatTabState({ identity, ...captureLiveChatTabScrollSnapshot() });
+      }),
+    [identity, instanceId, captureLiveChatTabScrollSnapshot],
   );
 
   const onListMetricsChange = useCallback(
@@ -2605,8 +2646,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [scrollToTimelineLocation],
   );
 
+  // Ticket 20 (no-visible-traversal requirement): `animated` is an explicit
+  // caller intent, not a hardcoded constant - minimap/deep-link navigation
+  // (this function's other two callers below) are real (if programmatic)
+  // user-triggered jumps, animated by design (decision #21's "manual-
+  // navigation cancellation" framing already treats them as navigations the
+  // reader should perceive happening). Find does NOT go through this
+  // function at all - `use-chat-find-controller.ts`'s own
+  // `scrollToMessageForFind` independently builds its location with
+  // `animated: false` already, unchanged by this ticket. The late-hydration
+  // catch-up effect below is different from either: it is a RESTORE landing
+  // where the transcript simply grew to finally contain a position already
+  // decided at mount, not a fresh navigation the reader initiated - it must
+  // reposition in a single frame like any other mount-time restore, never
+  // visibly scroll/animate to get there.
   const navigateToMessage = useCallback(
-    (messageId: string, highlight: boolean): void => {
+    (messageId: string, highlight: boolean, animated: boolean): void => {
       // Decision #21: minimap/find/deep-link navigation all perform
       // manual-navigation cancellation first. Not a real gesture - a plain
       // release, no freeze: the navigation's own scroll (right below, via
@@ -2617,7 +2672,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const location = chatTimelineLocationForMessage(
         messageId,
         messageIndexByIdRef.current,
-        true,
+        animated,
       );
       if (location === null) return;
       if (highlight) {
@@ -2674,12 +2729,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // through (minimap/find/deep-link), rather than hand-driving
     // `scrollToIndex`'s own `viewOffset` outside its one established
     // caller (`chatTimelineLocationForMessage`'s fixed navigation
-    // padding).
-    navigateToMessage(anchorId, false);
+    // padding). Non-animated (ticket 20): this is a restore finally
+    // resolving, not a fresh navigation - the reader must never see it
+    // visibly scroll to land.
+    navigateToMessage(anchorId, false, false);
   }, [messages, navigateToMessage]);
 
   const onMinimapItemSelect = useCallback(
-    (messageId: string): void => navigateToMessage(messageId, false),
+    (messageId: string): void => navigateToMessage(messageId, false, true),
     [navigateToMessage],
   );
 
@@ -2924,7 +2981,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // Cross-tile jumps use the same programmatic-navigation choke point as
     // every in-tile navigation: suppression, settle validation, and bounded
     // re-issue are all armed before the scroll. The highlight is visual only.
-    navigateToMessage(request.messageId, true);
+    // Animated (ticket 20 does not change minimap/deep-link semantics - find
+    // is unrelated to this call site, see navigateToMessage's own comment):
+    // a cross-tile jump is a real navigation the reader triggered elsewhere.
+    navigateToMessage(request.messageId, true, true);
     scrollRequestRef.current = null;
   }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
 
