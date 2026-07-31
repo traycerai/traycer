@@ -664,10 +664,16 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.perWindowStateClear,
         RunnerHostInvoke.authSessionGet,
         RunnerHostInvoke.authSessionSet,
-        RunnerHostInvoke.supportSnapshotGet,
+        RunnerHostInvoke.supportSaveDiagnosticBundle,
+        RunnerHostInvoke.supportDiscardFrozenEvidence,
+        RunnerHostInvoke.supportFreezeEvidence,
+        RunnerHostInvoke.supportReadFrozenLogTail,
+        RunnerHostInvoke.supportGetFingerprintOccurrence,
         RunnerHostInvoke.supportRevealLog,
-        RunnerHostInvoke.supportSubmitReport,
         RunnerHostInvoke.supportTailLog,
+        RunnerHostInvoke.supportBuildPublicDraft,
+        RunnerHostInvoke.supportSubmitReport,
+        RunnerHostInvoke.supportSnapshotGet,
         RunnerHostInvoke.powerSetSleepBlocked,
         // Legacy `runnerHost:service:*` install/uninstall/start/stop/restart/
         // upgrade/enableLinger/status/getLogTail channels have been removed
