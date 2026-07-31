@@ -50,9 +50,8 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
-// M4 (T3 parity, ticket 16): sizes match T3's `MessagesTimeline.tsx` exactly
-// (`TIMELINE_LIST_HEADER`/`_FADE_HEADER`/`_FOOTER`) - the 40px header/footer
-// and 64/80px fade header were unsanctioned drift (decision log #30).
+// M4 (ticket 16 spacer alignment): the 40px header/footer and 64/80px fade
+// header were unsanctioned drift (decision log #30).
 // Consumers read the live measured size via `onListMetricsChange`, so they
 // adapt automatically; nothing here is a hardcoded assumption elsewhere.
 const CHAT_TIMELINE_LIST_HEADER = (
@@ -335,7 +334,7 @@ export const ChatTimeline = memo(function ChatTimeline({
           ? { onMetricsChange: onListMetricsChange }
           : {})}
         className={cn(
-          // M1 (T3 parity): `scrollbar-gutter-both` (T3's `MessagesTimeline.tsx`)
+          // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both`
           // reserves the scrollbar's track width on BOTH edges permanently, so
           // the centered `max-w-3xl` column never shifts when the bar
           // appears/disappears - the previous one-sided `mr-1` margin hack

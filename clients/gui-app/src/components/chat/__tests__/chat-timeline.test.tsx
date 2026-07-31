@@ -382,7 +382,7 @@ describe("ChatTimeline", () => {
     expect(onItemSizeChanged).toHaveBeenCalled();
   });
 
-  // M1 (T3 parity, ticket 16): `scrollbar-gutter-both` reserves the
+  // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both` reserves the
   // scrollbar's track width on both edges so the centered column never
   // shifts when the bar appears/disappears - replaces the old one-sided
   // `mr-1` margin hack (see index.css's `.chat-timeline-scroll-fade` for the
@@ -399,9 +399,9 @@ describe("ChatTimeline", () => {
     expect(listElement.className).not.toContain("mr-1");
   });
 
-  // M4 (T3 parity, ticket 16): header/footer 40px -> 12/16px, fade header
-  // 64/80px -> 40/48px (T3's own MessagesTimeline.tsx sizes).
-  it("sizes the header/footer/fade-header spacers to T3's values, not the old 40/64/80px drift", () => {
+  // M4 (ticket 16 spacer alignment): header/footer 40px -> 12/16px, fade
+  // header 64/80px -> 40/48px.
+  it("uses the approved compact spacer sizes instead of the old 40/64/80px drift", () => {
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
 
     function spacerClasses(container: HTMLElement): ReadonlyArray<string> {

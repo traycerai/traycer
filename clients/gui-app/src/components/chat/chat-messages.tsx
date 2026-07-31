@@ -1029,7 +1029,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // after the ref does), re-classifying the SAME `messages` transition for
   // no purpose beyond confirming there's nothing left to retarget.
   const timelineAnchorMessageIdRef = useRef(freshOpenAnchorMessageId);
-  // O1 (T3 parity, ticket 16): mirrors `timelineScrollModeRef.current` into
+  // O1 (ticket 16 mode consolidation): mirrors `timelineScrollModeRef.current` into
   // render as the ONE rendered representation - `followEnabled`,
   // `sizePreservationEnabled`, the pill formula, and `data-scroll-mode` all
   // derive from this single value (replaces the old `isFollowingEnd` /
@@ -2493,7 +2493,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   const handleScroll = useCallback((): void => {
-    // O2 (T3 parity, ticket 16): drives the minimap's in-view highlighting
+    // O2 (ticket 16 listener consolidation): drives the minimap's in-view highlighting
     // off THIS existing LegendList scroll callback instead of a second
     // scroll-listener lifecycle the minimap used to attach itself
     // (rAF-polling attach + native listener + detach). Called unconditionally,

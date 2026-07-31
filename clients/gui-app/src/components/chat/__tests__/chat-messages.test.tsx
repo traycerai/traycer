@@ -12,7 +12,15 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { StoreApi } from "zustand/vanilla";
 import {
   CHAT_ANCHOR_SETTLE_FALLBACK_MS,
@@ -68,6 +76,7 @@ const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
 const PILL_SHOW_DEBOUNCE_MS = 150;
 const LEGEND_LIST_HEADER_PX = 40;
+const DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX = 80;
 
 const platformMock = vi.hoisted(() => ({ isMac: true }));
 // Default false matches an empty canvas store (existing tests never seed live
@@ -781,7 +790,8 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     backgroundItems: options.backgroundItems,
     visible: options.visible ?? true,
     tileActive: options.tileActive ?? true,
-    composerOverlayHeight: options.composerOverlayHeight ?? 80,
+    composerOverlayHeight:
+      options.composerOverlayHeight ?? DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX,
     localProvenanceMessageIds: options.localProvenanceMessageIds ?? new Set(),
     isChatStreaming: options.isChatStreaming ?? false,
   };
@@ -1565,11 +1575,13 @@ describe("ChatMessages scroll policy", () => {
 
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       // True end shifts 1:1 with the grown composer inset relative to the
-      // default 80px other ticket-17 pins render with (observed, not
+      // default inset other ticket-17 pins render with (observed, not
       // derived from a formula - same methodology as T17_TRUE_END_SCROLL_TOP
       // itself).
       expect(getScrollNode().scrollTop).toBe(
-        T17_TRUE_END_SCROLL_TOP + (T17_GROWN_COMPOSER_OVERLAY_HEIGHT_PX - 80),
+        T17_TRUE_END_SCROLL_TOP +
+          (T17_GROWN_COMPOSER_OVERLAY_HEIGHT_PX -
+            DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX),
       );
     });
 
@@ -2680,7 +2692,7 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  // O2 (T3 parity, ticket 16 batch review, F8): proves the FULL production
+  // O2 (ticket 16 listener consolidation, F8): proves the FULL production
   // chain end to end - a real LegendList scroll -> ChatTimeline's own
   // `onScroll` -> ChatMessages's `handleScroll` ->
   // `minimapInViewRefreshRef.current()` -> the minimap's `updateInView` ->
@@ -5268,7 +5280,11 @@ describe("ChatMessages scroll policy", () => {
           break;
         }
       }
-      expect(contentEndScroll).not.toBeNull();
+      if (contentEndScroll === null) {
+        throw new Error(
+          "Never reached the content end within the probe range - test setup is wrong, not the assertion.",
+        );
+      }
 
       // Re-enter anchoring so we can probe the SHORT-OF-END case under the
       // same overflow geometry. A fresh local-provenance send does that.
@@ -5284,7 +5300,7 @@ describe("ChatMessages scroll policy", () => {
         scrollStateKey: "t11-e-strict-epsilon-2",
         sendId: "t11-e-send-2",
       });
-      const end = contentEndScroll as number;
+      const end = contentEndScroll;
 
       // ~200px short of the true content end: scrollDeltaToRevealEnd >> 1,
       // so even if isNearEnd is true the strict gate must keep anchoring.
@@ -5633,6 +5649,10 @@ describe("ChatMessages scroll policy", () => {
         scrollNode,
         "removeEventListener",
       );
+      onTestFinished(() => {
+        removeEventListenerSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      });
 
       rerenderWith({
         scrollRequest: {

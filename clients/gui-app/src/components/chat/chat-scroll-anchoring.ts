@@ -141,7 +141,10 @@ export function getChatAnchoredTurnMetrics({
     state.scrollLength - endInset - anchorOffset,
   );
   const turnHeight = Math.max(0, lastBottom - anchorTop);
-  const contentRelativeScroll = state.scroll - topOffsetAdjustment;
+  const normalizedTopOffsetAdjustment = Number.isFinite(topOffsetAdjustment)
+    ? topOffsetAdjustment
+    : 0;
+  const contentRelativeScroll = state.scroll - normalizedTopOffsetAdjustment;
   const visibleUsableBottom = contentRelativeScroll + usableViewportHeight;
   const targetScrollToRevealEnd = Math.max(
     0,

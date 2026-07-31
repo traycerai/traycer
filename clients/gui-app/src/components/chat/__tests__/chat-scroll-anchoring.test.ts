@@ -196,6 +196,32 @@ describe("getChatAnchoredTurnMetrics", () => {
     });
   });
 
+  it.each([Number.NaN, Number.POSITIVE_INFINITY])(
+    "treats a non-finite top-offset adjustment (%s) as zero",
+    (topOffsetAdjustment) => {
+      const state = makeState({
+        dataLength: 3,
+        scroll: 100,
+        scrollLength: 700,
+        positions: [0, 200, 700],
+        sizes: [200, 500, 200],
+      });
+      const metrics = getChatAnchoredTurnMetrics({
+        state,
+        anchorIndex: 1,
+        endInset: 80,
+        anchorOffset: 16,
+        topOffsetAdjustment,
+      });
+
+      expect(metrics).toMatchObject({
+        visibleUsableBottom: 704,
+        targetScrollToRevealEnd: 296,
+        scrollDeltaToRevealEnd: 196,
+      });
+    },
+  );
+
   it("clamps a negative usable viewport to 0", () => {
     const state = makeState({
       dataLength: 1,
@@ -238,9 +264,9 @@ describe("getChatAnchoredTurnMetrics", () => {
 });
 
 describe("getChatNaturalMaxScrollWithoutAnchorReserve", () => {
-  // M4 (T3 parity, ticket 16): fade header h-10=40 / sm:h-12=48, footer
-  // h-3=12 / sm:h-4=16 (T3's own `MessagesTimeline.tsx` sizes - the previous
-  // h-16/h-20/h-10 values were unsanctioned drift, decision log #30).
+  // M4 (ticket 16 spacer alignment): fade header h-10=40 / sm:h-12=48,
+  // footer h-3=12 / sm:h-4=16. The previous h-16/h-20/h-10 values were
+  // unsanctioned drift (decision log #30).
   // CHAT_LIST_ANCHOR_OFFSET=16. Old bound (targetScrollToRevealEnd) under-
   // clamps the true no-reserve max by header+footer-anchorOffset = 36 / 48.
   const ANCHOR_OFFSET = CHAT_LIST_ANCHOR_OFFSET;

@@ -125,9 +125,8 @@ function chatTurnMinimapEventTargetsPreview(target: EventTarget): boolean {
 }
 
 /** The preview anchors to the active strip's own top edge, except at the
- *  rail's very ends where that would push it off-screen. O3 (T3 parity,
- *  ticket 16): T3 itself inlines this as a nested ternary - this repo's
- *  lint forbids `no-nested-ternary`, so this one stays an extracted
+ *  rail's very ends where that would push it off-screen. O3 (ticket 16):
+ *  this repo's lint forbids `no-nested-ternary`, so this stays an extracted
  *  if-chain rather than the true one-liners (aria-label, wrapper opacity,
  *  active-state resolution) that ARE inlined below. */
 function resolveChatTurnMinimapTooltipTranslate(
@@ -158,8 +157,8 @@ interface ChatTurnMinimapActiveState {
   readonly activeTopPercent: number;
 }
 
-/** Kept extracted (not inlined like T3) for the same complexity-ceiling
- *  reason as the two functions above. */
+/** Kept extracted for the same complexity-ceiling reason as the two
+ *  functions above. */
 function resolveChatTurnMinimapActiveState(
   items: ReadonlyArray<ChatTurnMinimapItem>,
   activeIndex: number | null,
@@ -241,7 +240,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   // DOM rect probing (jsdom/perf lesson; the old reading-line probe died on
   // exactly this). Written directly to each strip's dataset, bypassing React
   // state, so a scroll tick never triggers a re-render of the whole rail. O2
-  // (T3 parity, ticket 16): this used to run off a second scroll listener
+  // (ticket 16 listener consolidation): this used to run off a second scroll listener
   // this component attached to the scrollable node itself (rAF-polling
   // attach + native listener + detach, duplicating a lifecycle ChatTimeline
   // already runs) - it now runs only via `inViewRefreshRef`, invoked from
@@ -293,9 +292,8 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     return () => cancelAnimationFrame(frame);
   }, [updateInView]);
 
-  // O3 (T3 parity, ticket 16): `ChatTurnMinimap` sits at this repo's
-  // complexity-16 lint ceiling (T3 has no such limit) - inlining this
-  // 3-branch resolution here (as T3 does) pushed it over, so it stays
+  // O3 (ticket 16): `ChatTurnMinimap` sits at this repo's complexity-16 lint
+  // ceiling. Inlining this 3-branch resolution pushed it over, so it stays
   // extracted; the true one-liners (aria-label, wrapper opacity) below ARE
   // inlined.
   const { resolvedActiveIndex, activeItem, activeTopPercent } =

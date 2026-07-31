@@ -678,7 +678,7 @@ describe("ChatTurnMinimap in-view highlighting", () => {
     });
   });
 
-  // O2 (T3 parity, ticket 16): the minimap no longer attaches its own scroll
+  // O2 (ticket 16 listener consolidation): the minimap no longer attaches its own scroll
   // listener to the list's scrollable node - production now drives this via
   // `inViewRefreshRef`, invoked from ChatTimeline's own `onScroll` callback
   // (chat-messages.tsx's `handleScroll`). This pin exercises the same

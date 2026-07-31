@@ -20,6 +20,11 @@ export function setLegendListScrollContainerScrollHeightOverride(
   heightPx: number | null,
 ): void {
   scrollContainerScrollHeightOverridePx = heightPx;
+  if (heightPx !== null) {
+    onTestFinished(() => {
+      scrollContainerScrollHeightOverridePx = null;
+    });
+  }
 }
 
 function rectOf(x: number, y: number, width: number, height: number): DOMRect {
@@ -77,34 +82,35 @@ export function installLegendListViewportMetrics(): void {
   const scrollTopByElement = new WeakMap<HTMLElement, number>();
   const scrollLeftByElement = new WeakMap<HTMLElement, number>();
 
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: HTMLElement) {
+  const getBoundingClientRectSpy = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
       return rectOf(0, 0, VIEWPORT_WIDTH_PX, heightFor(this));
-    },
-  );
+    });
 
-  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
-    function (this: HTMLElement) {
+  const clientHeightSpy = vi
+    .spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
       return heightFor(this);
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
-    function () {
+    });
+  const clientWidthSpy = vi
+    .spyOn(HTMLElement.prototype, "clientWidth", "get")
+    .mockImplementation(function () {
       return VIEWPORT_WIDTH_PX;
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
-    function (this: HTMLElement) {
+    });
+  const offsetHeightSpy = vi
+    .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
       return heightFor(this);
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
-    function () {
+    });
+  const offsetWidthSpy = vi
+    .spyOn(HTMLElement.prototype, "offsetWidth", "get")
+    .mockImplementation(function () {
       return VIEWPORT_WIDTH_PX;
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
-    function (this: HTMLElement) {
+    });
+  const scrollHeightSpy = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
       if (isListItemShell(this) || isSpacerShell(this)) {
         return heightFor(this);
       }
@@ -113,41 +119,41 @@ export function installLegendListViewportMetrics(): void {
       }
       // Large enough that virtualization has work to do.
       return LARGE_CONTENT_ROW_COUNT * ITEM_HEIGHT_PX;
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(
-    function () {
+    });
+  const scrollWidthSpy = vi
+    .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+    .mockImplementation(function () {
       return VIEWPORT_WIDTH_PX;
-    },
-  );
+    });
 
   // jsdom's scrollTop setter is a no-op; LegendList's initialScrollAtEnd
   // bootstrap only converges when native scroll offsets stick.
-  vi.spyOn(HTMLElement.prototype, "scrollTop", "get").mockImplementation(
-    function (this: HTMLElement) {
+  const scrollTopGetSpy = vi
+    .spyOn(HTMLElement.prototype, "scrollTop", "get")
+    .mockImplementation(function (this: HTMLElement) {
       return scrollTopByElement.get(this) ?? 0;
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "scrollTop", "set").mockImplementation(
-    function (this: HTMLElement, value: number) {
+    });
+  const scrollTopSetSpy = vi
+    .spyOn(HTMLElement.prototype, "scrollTop", "set")
+    .mockImplementation(function (this: HTMLElement, value: number) {
       scrollTopByElement.set(this, value);
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "scrollLeft", "get").mockImplementation(
-    function (this: HTMLElement) {
+    });
+  const scrollLeftGetSpy = vi
+    .spyOn(HTMLElement.prototype, "scrollLeft", "get")
+    .mockImplementation(function (this: HTMLElement) {
       return scrollLeftByElement.get(this) ?? 0;
-    },
-  );
-  vi.spyOn(HTMLElement.prototype, "scrollLeft", "set").mockImplementation(
-    function (this: HTMLElement, value: number) {
+    });
+  const scrollLeftSetSpy = vi
+    .spyOn(HTMLElement.prototype, "scrollLeft", "set")
+    .mockImplementation(function (this: HTMLElement, value: number) {
       scrollLeftByElement.set(this, value);
-    },
-  );
+    });
 
   // jsdom does not define HTMLElement.scrollTo. Seed a configurable no-op so
   // Vitest can spy on it, then remove that seed after restoreAllMocks puts it
   // back; the prototype leaves each test exactly as it entered.
-  if (!Object.hasOwn(HTMLElement.prototype, "scrollTo")) {
+  const seededScrollTo = !Object.hasOwn(HTMLElement.prototype, "scrollTo");
+  if (seededScrollTo) {
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
       configurable: true,
       writable: true,
@@ -157,8 +163,9 @@ export function installLegendListViewportMetrics(): void {
       Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
     });
   }
-  vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(
-    function scrollToShim(
+  const scrollToSpy = vi
+    .spyOn(HTMLElement.prototype, "scrollTo")
+    .mockImplementation(function scrollToShim(
       this: HTMLElement,
       ...args: Array<number | ScrollToOptions | undefined>
     ): void {
@@ -177,8 +184,25 @@ export function installLegendListViewportMetrics(): void {
           this.scrollTop = first.top;
         }
       }
-    },
-  );
+    });
+
+  onTestFinished(() => {
+    scrollToSpy.mockRestore();
+    scrollLeftSetSpy.mockRestore();
+    scrollLeftGetSpy.mockRestore();
+    scrollTopSetSpy.mockRestore();
+    scrollTopGetSpy.mockRestore();
+    scrollWidthSpy.mockRestore();
+    scrollHeightSpy.mockRestore();
+    offsetWidthSpy.mockRestore();
+    offsetHeightSpy.mockRestore();
+    clientWidthSpy.mockRestore();
+    clientHeightSpy.mockRestore();
+    getBoundingClientRectSpy.mockRestore();
+    if (seededScrollTo) {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    }
+  });
 }
 
 /**

@@ -24,13 +24,9 @@ function MeasuredHeightProbe(props: { readonly mounted: boolean }): ReactNode {
 }
 
 function stubHeight(heightPx: number): () => void {
-  const original = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "getBoundingClientRect",
-  );
-  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
-    configurable: true,
-    value(this: HTMLElement) {
+  const spy = vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: Element) {
       const targeted = this.getAttribute("data-testid") === "probe-target";
       return {
         x: 0,
@@ -43,17 +39,8 @@ function stubHeight(heightPx: number): () => void {
         bottom: targeted ? heightPx : 0,
         toJSON: () => ({}),
       };
-    },
-  });
-  return () => {
-    if (original) {
-      Object.defineProperty(
-        HTMLElement.prototype,
-        "getBoundingClientRect",
-        original,
-      );
-    }
-  };
+    });
+  return () => spy.mockRestore();
 }
 
 describe("useMeasuredElementHeight", () => {
