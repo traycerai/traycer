@@ -53,7 +53,7 @@ describe("<NewConversationModalAction />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("new-agent"));
+    fireEvent.click(screen.getByRole("button", { name: "New agent" }));
 
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
