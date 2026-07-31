@@ -977,6 +977,20 @@ function isLandingTerminalPanelElement(
   );
 }
 
+function resolveLandingTerminalResizeContainer(
+  handle: HTMLElement,
+): HTMLElement | null {
+  const parent = handle.parentElement;
+  if (parent === null) return null;
+
+  // Split landing panes portal the handle and panel into a `display: contents`
+  // anchor. That anchor preserves flex layout but has no box of its own, so its
+  // bounding rect is always zero-sized. Measure the pane's flex row instead.
+  return window.getComputedStyle(parent).display === "contents"
+    ? parent.parentElement
+    : parent;
+}
+
 interface LandingTerminalPanelResizeArgs {
   readonly panelWidthFraction: number;
   readonly setPanelWidthFraction: (fraction: number) => void;
@@ -996,7 +1010,9 @@ function useLandingTerminalPanelResize(
     axis: "horizontal",
     onDragStart: (event) => {
       const panel = event.currentTarget.nextElementSibling;
-      const container = event.currentTarget.parentElement;
+      const container = resolveLandingTerminalResizeContainer(
+        event.currentTarget,
+      );
       if (!isLandingTerminalPanelElement(panel) || container === null) {
         return false;
       }
