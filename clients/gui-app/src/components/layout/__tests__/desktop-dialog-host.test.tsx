@@ -944,6 +944,7 @@ describe("<DesktopDialogHost />", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open a GitHub issue" }),
     );
+    await flushDialogEffects();
     expect(openedLinks).toEqual([]);
     expect(
       screen.queryByRole("heading", { name: "Preview the public issue" }),
