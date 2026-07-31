@@ -29,7 +29,11 @@ import type {
 } from "@/lib/windows/types";
 import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
 import { captureReportIssueError } from "@/lib/report-issue-error-capture";
-import { __resetSupportContextRegistryForTests } from "@/lib/support-context-registry";
+import {
+  knownField,
+  setSupportContextSnapshot,
+  __resetSupportContextRegistryForTests,
+} from "@/lib/support-context-registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 
@@ -518,6 +522,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(harness.submittedForms).toEqual([]);
       expect(track).toHaveBeenCalledWith(AnalyticsEvent.ReportIssueBlocked, {
         report_type: "bug",
+        blocked_action: "send",
       });
     });
 
@@ -655,6 +660,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       ).not.toBeNull();
       expect(track).toHaveBeenCalledWith(AnalyticsEvent.ReportIssueBlocked, {
         report_type: "idea",
+        blocked_action: "send",
       });
 
       fireEvent.change(ideaIntentField(), {
@@ -1031,6 +1037,27 @@ describe("Report issue capture dialog (deep interactions)", () => {
     });
   });
 
+  describe("route template labeling (KB3)", () => {
+    it("shows a human label for the route template in the expanded evidence review, never the raw path", async () => {
+      setSupportContextSnapshot({ routeTemplate: knownField("/") });
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openErrorTriggeredReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("button", { name: "Review" }));
+      expect(screen.getByText("Where")).not.toBeNull();
+      expect(screen.getByText("Start page")).not.toBeNull();
+    });
+  });
+
   describe("delivery states", () => {
     it("renders the delivered confirmation with a copyable report id", async () => {
       const harness = createSupportBridgeHarness({
@@ -1279,6 +1306,227 @@ describe("Report issue capture dialog (deep interactions)", () => {
         screen.getByRole("button", { name: "Open a GitHub issue" }),
       ).not.toBeNull();
       expect(harness.submittedForms).toHaveLength(1);
+    });
+
+    it("blocks 'Open a GitHub issue' and 'Save diagnostic bundle' with no evidence, same as Send (N1)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: { ...baseSnapshot, privateDeliveryAvailable: false },
+        submitReport: undefined,
+        buildPublicDraft: () => {
+          throw new Error(
+            "buildPublicDraft must not be called while the gate is unsatisfied",
+          );
+        },
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open a GitHub issue" }),
+      );
+      expect(
+        await screen.findByText(
+          "Add a sentence, a screenshot, or pick where it happened - we need at least one to act on the report.",
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("heading", { name: "Report an issue" }),
+      ).not.toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save diagnostic bundle" }),
+      );
+      expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("heading", { name: "Report an issue" }),
+      ).not.toBeNull();
+    });
+
+    it("blocks 'Report on GitHub instead' if the user clears their text after a failed submit (N1)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({ status: "failed", reason: "error" }),
+        buildPublicDraft: () => {
+          throw new Error(
+            "buildPublicDraft must not be called while the gate is unsatisfied",
+          );
+        },
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Failed delivery, about to clear this" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+      await screen.findByRole("alert");
+
+      fireEvent.change(bugIntentField(), { target: { value: "" } });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Report on GitHub instead" }),
+      );
+
+      expect(
+        await screen.findByText(
+          "Add a sentence, a screenshot, or pick where it happened - we need at least one to act on the report.",
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.queryByRole("heading", { name: "Preview the public issue" }),
+      ).toBeNull();
+    });
+
+    it("returns Back from the no-DSN preview to capture, not confirmed (KB1)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: { ...baseSnapshot, privateDeliveryAvailable: false },
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "No private channel in this build" },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open a GitHub issue" }),
+      );
+      expect(
+        await screen.findByRole("heading", {
+          name: "Preview the public issue",
+        }),
+      ).not.toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      expect(
+        await screen.findByRole("heading", { name: "Report an issue" }),
+      ).not.toBeNull();
+      expect(screen.queryByRole("heading", { name: "Report sent" })).toBeNull();
+      expect(
+        screen.getByDisplayValue("No private channel in this build"),
+      ).not.toBeNull();
+    });
+
+    it("opens the honest 'GitHub draft opened' state on a no-DSN publish, never the private-send confirmation (KB1)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: { ...baseSnapshot, privateDeliveryAvailable: false },
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "No private channel, opening GitHub instead" },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open a GitHub issue" }),
+      );
+      await screen.findByRole("heading", { name: "Preview the public issue" });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open GitHub draft" }),
+      );
+
+      expect(
+        await screen.findByRole("heading", { name: "GitHub draft opened" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByText("Nothing was sent from this app."),
+      ).not.toBeNull();
+      expect(screen.queryByRole("heading", { name: "Report sent" })).toBeNull();
+      expect(
+        screen.queryByText("Sent privately to the Traycer team."),
+      ).toBeNull();
+      expect(harness.openedLinks).toHaveLength(1);
+    });
+
+    it("opens the honest 'GitHub draft opened' state after a definite failed submit's GitHub fallback, never confirms (KB1)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({ status: "failed", reason: "error" }),
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Failed delivery, falling back to GitHub" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+      await screen.findByRole("alert");
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Report on GitHub instead" }),
+      );
+      await screen.findByRole("heading", { name: "Preview the public issue" });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open GitHub draft" }),
+      );
+
+      expect(
+        await screen.findByRole("heading", { name: "GitHub draft opened" }),
+      ).not.toBeNull();
+      expect(screen.queryByRole("heading", { name: "Report sent" })).toBeNull();
+    });
+
+    it("still reaches the confirmed screen after an unconfirmed submit's GitHub fallback - a reportId exists, only the upload is unconfirmed (KB1)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({
+            status: "unconfirmed",
+            reportId: "rpt_unconf_open",
+          }),
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Unconfirmed delivery, also opening GitHub" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+      await screen.findByRole("alert");
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Report on GitHub instead" }),
+      );
+      await screen.findByRole("heading", { name: "Preview the public issue" });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open GitHub draft" }),
+      );
+
+      expect(
+        await screen.findByRole("heading", { name: "Report sent" }),
+      ).not.toBeNull();
+      expect(screen.getByText(/rpt_unconf_open/)).not.toBeNull();
     });
   });
 

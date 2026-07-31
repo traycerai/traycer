@@ -735,8 +735,12 @@ export interface AnalyticsEventProperties {
   // Which report type's gate blocked the attempt (ticket 07's evidence gate,
   // Flow 2 manual opens only) - downstream funnels join this against a later
   // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
+  // `blocked_action` (review round N1) - the gate guards every report-
+  // producing action, not just Send, so this says which one the user hit.
   readonly [AnalyticsEvent.ReportIssueBlocked]: {
     readonly report_type: "bug" | "idea" | "other";
+    readonly blocked_action:
+      "send" | "open_github_issue" | "report_on_github" | "save_bundle";
   };
   readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
     | {
@@ -1276,7 +1280,10 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.SettingChanged],
     ["source", "section", "setting"],
   ),
-  ...eventKeyEntries([AnalyticsEvent.ReportIssueBlocked], ["report_type"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.ReportIssueBlocked],
+    ["report_type", "blocked_action"],
+  ),
   ...eventKeyEntries(
     [AnalyticsEvent.ReportIssuePrivateSubmit],
     ["outcome", "blocker", "attachment_count"],
@@ -1538,6 +1545,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     [AnalyticsEvent.ReportIssueBlocked],
     "report_type",
     new Set(["bug", "idea", "other"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssueBlocked],
+    "blocked_action",
+    new Set(["send", "open_github_issue", "report_on_github", "save_bundle"]),
   ),
 ]);
 

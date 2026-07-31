@@ -65,6 +65,7 @@ import type {
 } from "@/lib/windows/types";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import type { FileRouteTypes } from "@/routeTree.gen";
 import type { DesktopSupportDialogProps } from "./types";
 import {
   Analytics,
@@ -73,7 +74,57 @@ import {
   reportIssuePrivateSubmitPropertiesFromResult,
 } from "@/lib/analytics";
 
-type ReportIssueScreen = "capture" | "confirmed" | "preview";
+// "opened" is the honest terminal state for a public-draft open when nothing
+// was ever privately delivered (no-DSN Case B, or a definite failure) - never
+// "confirmed", which claims a private send that did not happen.
+type ReportIssueScreen = "capture" | "confirmed" | "preview" | "opened";
+
+// Keyed by the generated route tree's `fullPaths` union (not a plain
+// `string`) so adding a route fails compile here until it gets a human
+// label - compiler-guaranteed completeness, zero manual drift. The registry
+// can still hold a `routeTemplate` captured by an older session/build that
+// no longer exists in the current tree, so `humanRouteLabel`'s `?? "This
+// screen"` fallback below is load-bearing at runtime even though every key
+// here is exhaustive at compile time.
+const ROUTE_TEMPLATE_LABELS: Readonly<
+  Record<FileRouteTypes["fullPaths"], string>
+> = {
+  "/": "Start page",
+  "/epics": "Epics list",
+  "/epics/": "Epics list",
+  "/epics/$epicId/$tabId": "Epic tab",
+  "/draft/new": "New chat draft",
+  "/draft/$draftId": "Chat draft",
+  "/onboarding": "Onboarding",
+  "/settings": "Settings",
+  "/settings/": "Settings",
+  "/settings/agents": "Settings - Agents",
+  "/settings/appearance": "Settings - Appearance",
+  "/settings/devices": "Settings - Devices",
+  "/settings/diagnostics": "Settings - Diagnostics",
+  "/settings/general": "Settings - General",
+  "/settings/host": "Settings - Host",
+  "/settings/keybindings": "Settings - Keybindings",
+  "/settings/notifications": "Settings - Notifications",
+  "/settings/providers": "Settings - Providers",
+  "/settings/service": "Settings - Service",
+  "/settings/shell": "Settings - Shell",
+  "/settings/worktrees": "Settings - Worktrees",
+};
+
+// Widened for runtime lookup: `ROUTE_TEMPLATE_LABELS` above is exhaustive
+// over the CURRENT route tree, but a registry value from an older
+// session/build can be a template that no longer exists in it - indexing
+// with an arbitrary `string` must stay honestly `string | undefined`, not
+// inherit the literal's exhaustiveness, or the fallback below reads as
+// unreachable when it is exactly what stale input needs.
+const ROUTE_TEMPLATE_LABEL_LOOKUP: Readonly<
+  Record<string, string | undefined>
+> = ROUTE_TEMPLATE_LABELS;
+
+function humanRouteLabel(template: string): string {
+  return ROUTE_TEMPLATE_LABEL_LOOKUP[template] ?? "This screen";
+}
 
 const CURRENT_LOCATION_VALUE = "__current__";
 const LOCATION_OPTIONS = [
@@ -156,6 +207,27 @@ function privateOutcomeFor(
   if (deliveryResult.status === "delivered") return "delivered";
   if (deliveryResult.status === "unconfirmed") return "unconfirmed";
   return "none";
+}
+
+// Both `delivered` and `unconfirmed` carry a reportId - a private report was
+// actually minted and (at least attempted to be) filed, unlike `failed`/
+// `unavailable`/never-attempted. `ConfirmationScreen` requires this be
+// non-null so the false "sent privately" state is unrepresentable: it is
+// simply never rendered when this returns null (KB1).
+function confirmedReportId(
+  deliveryResult: DesktopSubmitReportResult | null,
+): string | null {
+  if (deliveryResult?.status === "delivered") return deliveryResult.reportId;
+  if (deliveryResult?.status === "unconfirmed") return deliveryResult.reportId;
+  return null;
+}
+
+// The preview is only ever entered from "capture" or "confirmed" - never
+// from "preview"/"opened" themselves (neither renders a button that opens
+// the preview) - but `screen` is typed as the full union at the call site,
+// so this narrows it explicitly rather than asserting.
+function previewOriginFor(screen: ReportIssueScreen): "capture" | "confirmed" {
+  return screen === "confirmed" ? "confirmed" : "capture";
 }
 
 interface ReportIssueDerivedFlags {
@@ -321,15 +393,18 @@ export function ReportIssueDialog(
   // Non-migrated error surfaces still call `openReportIssueWithContext` with
   // only a public `ReportIssueContext` (no structured private cause) - that
   // context would otherwise be silently dropped by a redesign built around
-  // the structured capture. Prefilling the intent question from it (mirrors
-  // the old five-field form's `whatHappened` composition) keeps that context
-  // visible until those surfaces migrate to a full draft context (ticket 05's
-  // "the rest follow incrementally"). Error-triggered opens (a structured
-  // cause) never prefill here - the evidence strip already shows that.
-  const [form, setForm] = useState<ReportIssueFormState>(() => ({
-    ...INITIAL_FORM_STATE,
-    intent: intentFromUnmigratedContext(draftContext),
-  }));
+  // the structured capture. It used to be prefilled straight into the intent
+  // textarea (mirroring the old five-field form's `whatHappened`
+  // composition), but machine text ("Area: ... Error code: ...") answering
+  // the human question both buried the actual prompt and trivially satisfied
+  // the evidence gate with zero human signal. It's rendered as its own
+  // captured-context row instead (`legacyContext`, below the type chips) and
+  // still folded into the submitted intent (`composeIntentForSubmission`) -
+  // just never into the user-editable textarea the gate reads from.
+  // Error-triggered opens (a structured cause) never have this - the
+  // evidence strip already shows that.
+  const legacyContext = intentFromUnmigratedContext(draftContext);
+  const [form, setForm] = useState<ReportIssueFormState>(INITIAL_FORM_STATE);
   const [reviewExpanded, setReviewExpanded] = useState(false);
   const [gateErrorVisible, setGateErrorVisible] = useState(false);
   const [logsTouchedByUser, setLogsTouchedByUser] = useState(false);
@@ -341,6 +416,13 @@ export function ReportIssueDialog(
   const [previewDraft, setPreviewDraft] =
     useState<DesktopSupportBuildPublicDraftResult | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
+  // KB1: the preview is entered from either "capture" (the two fallback
+  // routes) or "confirmed" (opt-in publish) - Back must return there, never
+  // unconditionally to "confirmed" (which would claim a private send that
+  // never happened on the fallback routes).
+  const [previewOrigin, setPreviewOrigin] = useState<"capture" | "confirmed">(
+    "capture",
+  );
 
   useEffect(() => {
     if (support === null) return;
@@ -381,7 +463,10 @@ export function ReportIssueDialog(
     return {
       draftId,
       type: form.type,
-      intent: form.intent,
+      // The legacy machine-text context rides along here (unchanged from
+      // before KB2) - just appended to the user's own words instead of
+      // masquerading as them in the textarea/gate.
+      intent: composeIntentForSubmission(form.intent, legacyContext),
       frequency: form.frequency,
       location:
         form.type === "bug" && form.locationChanged ? form.locationValue : null,
@@ -397,9 +482,7 @@ export function ReportIssueDialog(
       // `overrideTitle`/`privateOutcome` are `buildPublicDraft`-only (ignored
       // by submit/bundle) - shared here per the one-contract rule.
       overrideTitle,
-      privateOutcome: privateOutcomeFor(
-        submitMutation.isSuccess ? submitMutation.data : null,
-      ),
+      privateOutcome,
       ...(draftContext === null
         ? {}
         : {
@@ -453,6 +536,15 @@ export function ReportIssueDialog(
       toast.error("Could not save the diagnostic bundle");
     },
   });
+
+  // Single source of truth for what the private channel actually did with
+  // this draft - shared by `buildRequest`'s wire field, the confirmation
+  // screen's reportId, and the post-open screen branch below (KB1).
+  const lastSubmitResult = submitMutation.isSuccess
+    ? submitMutation.data
+    : null;
+  const privateOutcome = privateOutcomeFor(lastSubmitResult);
+  const confirmedReportIdValue = confirmedReportId(lastSubmitResult);
 
   const {
     effectiveDeliveryResult,
@@ -544,7 +636,11 @@ export function ReportIssueDialog(
     },
     onSuccess: () => {
       toast.success("Opened in your browser");
-      setScreen("confirmed");
+      // KB1: "confirmed" claims a private send happened - only true when
+      // delivered/unconfirmed actually minted a report. A no-DSN or definite-
+      // failure open (privateOutcome "none") lands on the honest "opened"
+      // terminal state instead, never the green confirmation.
+      setScreen(privateOutcome === "none" ? "opened" : "confirmed");
     },
     onError: () => {
       toast.error("Could not open the GitHub draft", {
@@ -581,16 +677,60 @@ export function ReportIssueDialog(
     });
   }
 
-  function handleSend(): void {
+  // N1: every capture-screen action that produces a report artifact - Send,
+  // the two GitHub-fallback buttons, and Save diagnostic bundle - must pass
+  // the same evidence gate Send always did; only Send used to check it, so
+  // e.g. the no-DSN "Open a GitHub issue" primary action could open a public
+  // preview off zero evidence. Same focus + inline-copy behavior for all
+  // four, same telemetry (now tagged with which action was blocked).
+  function runIfGateSatisfied(
+    blockedAction:
+      "send" | "open_github_issue" | "report_on_github" | "save_bundle",
+    run: () => void,
+  ): void {
     if (!gateSatisfied) {
       Analytics.getInstance().track(AnalyticsEvent.ReportIssueBlocked, {
         report_type: form.type,
+        blocked_action: blockedAction,
       });
       setGateErrorVisible(true);
       intentRef.current?.focus();
       return;
     }
-    submitMutation.mutate();
+    run();
+  }
+
+  function handleSend(): void {
+    runIfGateSatisfied("send", () => submitMutation.mutate());
+  }
+
+  // Shared by all three routes into the preview - the no-DSN "Open a GitHub
+  // issue", the unconfirmed/failed "Report on GitHub instead", and the
+  // confirmed screen's opt-in "Also post publicly on GitHub". Captures which
+  // screen we're leaving so the preview's Back can return there (KB1)
+  // instead of always landing on "confirmed".
+  function enterPreview(): void {
+    setPreviewOrigin(previewOriginFor(screen));
+    buildDraftMutation.mutate();
+  }
+
+  // Case B's primary action (no-DSN) - N1: previously ungated, so an empty
+  // report with only the un-actioned default location could still open a
+  // public preview.
+  function handleOpenGithubIssue(): void {
+    runIfGateSatisfied("open_github_issue", enterPreview);
+  }
+
+  // The unconfirmed/failed banner's fallback - same gate as Send, since it
+  // produces the same kind of report artifact.
+  function handleReportOnGithub(): void {
+    runIfGateSatisfied("report_on_github", enterPreview);
+  }
+
+  function handleSaveDiagnosticBundle(): void {
+    runIfGateSatisfied("save_bundle", () =>
+      saveDiagnosticBundleMutation.mutate(),
+    );
   }
 
   return (
@@ -628,18 +768,15 @@ export function ReportIssueDialog(
             onLogsTouched={() => setLogsTouchedByUser(true)}
             onSelectType={selectType}
             attachments={attachments}
+            legacyContext={legacyContext}
           />
         ) : null}
 
-        {screen === "confirmed" ? (
-          <ConfirmationScreen
-            reportId={
-              submitMutation.data?.status === "delivered"
-                ? submitMutation.data.reportId
-                : null
-            }
-          />
+        {screen === "confirmed" && confirmedReportIdValue !== null ? (
+          <ConfirmationScreen reportId={confirmedReportIdValue} />
         ) : null}
+
+        {screen === "opened" ? <GithubDraftOpenedScreen /> : null}
 
         {screen === "preview" ? (
           <PublishPreviewScreen
@@ -673,10 +810,12 @@ export function ReportIssueDialog(
             canSubmit={reportId !== null}
             onCancel={() => handleOpenChange(false)}
             onDone={() => handleOpenChange(false)}
-            onBackToConfirmed={() => setScreen("confirmed")}
+            onBack={() => setScreen(previewOrigin)}
             onSubmit={handleSend}
-            onOpenGithubFallback={() => buildDraftMutation.mutate()}
-            onSaveDiagnosticBundle={() => saveDiagnosticBundleMutation.mutate()}
+            onOpenGithubIssue={handleOpenGithubIssue}
+            onReportOnGithub={handleReportOnGithub}
+            onPostPubliclyOnGithub={enterPreview}
+            onSaveDiagnosticBundle={handleSaveDiagnosticBundle}
             onOpenPublicDraft={() => openPublicDraftMutation.mutate()}
           />
         </DialogFooter>
@@ -700,6 +839,16 @@ function ReportIssueDialogHeader({
         <DialogTitle>Report sent</DialogTitle>
         <DialogDescription className="sr-only">
           Your report was sent privately.
+        </DialogDescription>
+      </DialogHeader>
+    );
+  }
+  if (screen === "opened") {
+    return (
+      <DialogHeader>
+        <DialogTitle>GitHub draft opened</DialogTitle>
+        <DialogDescription className="sr-only">
+          Nothing was sent from this app - finish posting in your browser.
         </DialogDescription>
       </DialogHeader>
     );
@@ -753,6 +902,7 @@ function CaptureScreenBody({
   onLogsTouched,
   onSelectType,
   attachments,
+  legacyContext,
 }: {
   readonly hasErrorEnvelope: boolean;
   readonly cause: ReportIssueDraftContext["privateDiagnostics"]["cause"];
@@ -780,6 +930,11 @@ function CaptureScreenBody({
   readonly onLogsTouched: () => void;
   readonly onSelectType: (type: DesktopReportType) => void;
   readonly attachments: UseReportIssueAttachmentsResult;
+  // KB2: the legacy machine-text context (non-migrated surfaces) is no
+  // longer prefilled into the intent textarea - it renders as its own
+  // captured-context row instead, so it never buries the actual question or
+  // trivially satisfies the evidence gate with zero human signal.
+  readonly legacyContext: string;
 }): ReactNode {
   // Paste is bound at this wrapper, not on the attachment target below: a
   // `paste` DOM event only bubbles through the FOCUSED element's ancestors,
@@ -833,6 +988,10 @@ function CaptureScreenBody({
               </Button>
             ))}
           </div>
+        ) : null}
+
+        {legacyContext !== "" ? (
+          <LegacyCapturedContextRow context={legacyContext} />
         ) : null}
 
         {showLocationSelector ? (
@@ -960,6 +1119,25 @@ function CaptureScreenBody({
   );
 }
 
+// KB2: a compact, read-only line for the legacy machine-text context - never
+// editable (it isn't the user's words) and never counted by the evidence
+// gate; it still rides in the submitted report via
+// `composeIntentForSubmission`.
+function LegacyCapturedContextRow({
+  context,
+}: {
+  readonly context: string;
+}): ReactNode {
+  return (
+    <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
+      <span className="font-medium text-foreground">
+        Captured automatically:{" "}
+      </span>
+      {legacyContextSummaryLine(context)}
+    </div>
+  );
+}
+
 function ReportIssueDialogFooter(props: {
   readonly screen: ReportIssueScreen;
   readonly deliveryResult: DesktopSubmitReportResult | null;
@@ -977,9 +1155,11 @@ function ReportIssueDialogFooter(props: {
   readonly canSubmit: boolean;
   readonly onCancel: () => void;
   readonly onDone: () => void;
-  readonly onBackToConfirmed: () => void;
+  readonly onBack: () => void;
   readonly onSubmit: () => void;
-  readonly onOpenGithubFallback: () => void;
+  readonly onOpenGithubIssue: () => void;
+  readonly onReportOnGithub: () => void;
+  readonly onPostPubliclyOnGithub: () => void;
   readonly onSaveDiagnosticBundle: () => void;
   readonly onOpenPublicDraft: () => void;
 }): ReactNode {
@@ -990,7 +1170,7 @@ function ReportIssueDialogFooter(props: {
           Done
         </Button>
         <Button
-          onClick={props.onOpenGithubFallback}
+          onClick={props.onPostPubliclyOnGithub}
           disabled={props.isBuildingDraft}
         >
           {props.isBuildingDraft ? (
@@ -1005,10 +1185,31 @@ function ReportIssueDialogFooter(props: {
       </>
     );
   }
+  if (props.screen === "opened") {
+    return (
+      <>
+        <Button
+          variant="outline"
+          onClick={props.onSaveDiagnosticBundle}
+          disabled={props.isSaveBundlePending}
+        >
+          {props.isSaveBundlePending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Save diagnostic bundle
+        </Button>
+        <Button onClick={props.onDone}>Done</Button>
+      </>
+    );
+  }
   if (props.screen === "preview") {
     return (
       <>
-        <Button variant="outline" onClick={props.onBackToConfirmed}>
+        <Button variant="outline" onClick={props.onBack}>
           Back
         </Button>
         <Button
@@ -1044,7 +1245,8 @@ function ReportIssueDialogFooter(props: {
         isIngesting={props.isIngesting}
         canSubmit={props.canSubmit}
         onSubmit={props.onSubmit}
-        onOpenGithubFallback={props.onOpenGithubFallback}
+        onOpenGithubIssue={props.onOpenGithubIssue}
+        onReportOnGithub={props.onReportOnGithub}
         onSaveDiagnosticBundle={props.onSaveDiagnosticBundle}
       />
     </>
@@ -1119,6 +1321,24 @@ function intentFromUnmigratedContext(
   return lines.join("\n\n");
 }
 
+// The legacy context still rides in the submitted report (unchanged from
+// before it stopped being prefilled into the textarea) - just appended to
+// whatever the user actually typed, rather than masquerading as their words.
+function composeIntentForSubmission(
+  userIntent: string,
+  legacyContext: string,
+): string {
+  if (legacyContext === "") return userIntent;
+  if (userIntent.trim() === "") return legacyContext;
+  return `${userIntent}\n\n${legacyContext}`;
+}
+
+// Display-only: the captured-context row is one compact line, not the
+// multi-paragraph form `composeIntentForSubmission` sends.
+function legacyContextSummaryLine(legacyContext: string): string {
+  return legacyContext.split("\n\n").join(" · ");
+}
+
 function currentLocationLabel(
   draftContext: ReportIssueDraftContext | null,
 ): string {
@@ -1126,7 +1346,7 @@ function currentLocationLabel(
   if (field === undefined || field.status === "unavailable") {
     return "Current location";
   }
-  return field.value;
+  return humanRouteLabel(field.value);
 }
 
 function ordinal(count: number): string {
@@ -1149,6 +1369,15 @@ function capturedFieldDisplay(
 ): string | null {
   if (field === undefined || field.status === "unavailable") return null;
   return field.value;
+}
+
+// KB3: the "Where" row in the evidence review details is the same raw route
+// template as the location selector's current-location option - same fix.
+function humanRouteFieldDisplay(
+  field: DesktopCapturedField<string> | undefined,
+): string | null {
+  const raw = capturedFieldDisplay(field);
+  return raw === null ? null : humanRouteLabel(raw);
 }
 
 function EvidenceStrip({
@@ -1207,7 +1436,7 @@ function EvidenceStrip({
       </div>
       <EvidenceReviewDetails
         cause={cause}
-        where={capturedFieldDisplay(registry?.routeTemplate)}
+        where={humanRouteFieldDisplay(registry?.routeTemplate)}
         harness={harness}
         model={model}
         snapshot={snapshot}
@@ -1657,33 +1886,49 @@ function FrozenLogTailView(props: {
   );
 }
 
+// KB1: `reportId` is required, not `string | null` - the caller only renders
+// this screen when `confirmedReportId` returned non-null, so the false
+// "sent privately" state (no private report ever minted) is unrepresentable
+// here rather than merely avoided by caller discipline.
 function ConfirmationScreen({
   reportId,
 }: {
-  readonly reportId: string | null;
+  readonly reportId: string;
 }): ReactNode {
   return (
     <div className="grid gap-2 rounded-md border border-emerald-800/40 bg-emerald-950/10 px-3 py-3 text-ui-sm">
       <p className="font-medium text-emerald-600 dark:text-emerald-400">
         Sent privately to the Traycer team.
       </p>
-      {reportId !== null ? (
-        <p className="flex items-center gap-2 font-mono text-code-xs text-muted-foreground">
-          Report ID {reportId}
-          <CopyTextButton
-            value={reportId}
-            label={null}
-            ariaLabel="Copy report ID"
-            disabled={false}
-          />
-        </p>
-      ) : null}
+      <p className="flex items-center gap-2 font-mono text-code-xs text-muted-foreground">
+        Report ID {reportId}
+        <CopyTextButton
+          value={reportId}
+          label={null}
+          ariaLabel="Copy report ID"
+          disabled={false}
+        />
+      </p>
       <p className="text-muted-foreground">
         New reports get a first look within 1 business day.
       </p>
       <p className="text-muted-foreground">
         Want other users to be able to find and follow this?
       </p>
+    </div>
+  );
+}
+
+// KB1's honest terminal state for a public-draft open when nothing was ever
+// privately delivered (no-DSN Case B, or a definite `failed`/rejected
+// submit) - never the green "Sent privately" confirmation.
+function GithubDraftOpenedScreen(): ReactNode {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-muted/20 px-3 py-3 text-ui-sm">
+      <p className="font-medium text-foreground">
+        GitHub draft opened - finish posting in your browser.
+      </p>
+      <p className="text-muted-foreground">Nothing was sent from this app.</p>
     </div>
   );
 }
@@ -1780,7 +2025,8 @@ function ReportIssueFooterActions({
   isIngesting,
   canSubmit,
   onSubmit,
-  onOpenGithubFallback,
+  onOpenGithubIssue,
+  onReportOnGithub,
   onSaveDiagnosticBundle,
 }: {
   readonly deliveryResult: DesktopSubmitReportResult | null;
@@ -1790,7 +2036,8 @@ function ReportIssueFooterActions({
   readonly isIngesting: boolean;
   readonly canSubmit: boolean;
   readonly onSubmit: () => void;
-  readonly onOpenGithubFallback: () => void;
+  readonly onOpenGithubIssue: () => void;
+  readonly onReportOnGithub: () => void;
   readonly onSaveDiagnosticBundle: () => void;
 }): ReactNode {
   if (deliveryResult?.status === "unavailable") {
@@ -1811,7 +2058,7 @@ function ReportIssueFooterActions({
           Save diagnostic bundle
         </Button>
         <Button
-          onClick={onOpenGithubFallback}
+          onClick={onOpenGithubIssue}
           disabled={isBuildingDraft || isIngesting}
         >
           {isBuildingDraft ? (
@@ -1831,7 +2078,7 @@ function ReportIssueFooterActions({
       <>
         <Button
           variant="outline"
-          onClick={onOpenGithubFallback}
+          onClick={onReportOnGithub}
           disabled={isBuildingDraft || isIngesting}
         >
           {isBuildingDraft ? (

@@ -43,6 +43,11 @@ import type {
 } from "@/stores/epics/open-epic/store";
 import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  knownField,
+  setSupportContextSnapshot,
+  __resetSupportContextRegistryForTests,
+} from "@/lib/support-context-registry";
 
 const cloudEpicTasks = vi.hoisted((): { data: TaskLight[] } => ({ data: [] }));
 
@@ -605,6 +610,7 @@ function resetStores(): void {
   });
   setDesktopEpicOwnershipBridge(null);
   disposeAllOpenEpicSessions();
+  __resetSupportContextRegistryForTests();
 }
 
 describe("<DesktopDialogHost />", () => {
@@ -695,7 +701,7 @@ describe("<DesktopDialogHost />", () => {
     });
   });
 
-  it("prefills the intent question from a non-migrated report context", async () => {
+  it("shows a non-migrated report context as a captured-context row, never prefilled into the intent question (KB2)", async () => {
     useDesktopDialogStore.getState().openReportIssueWithContext(
       createReportIssueContext({
         title: "Failed to load epic",
@@ -714,9 +720,89 @@ describe("<DesktopDialogHost />", () => {
     if (!(intent instanceof HTMLTextAreaElement)) {
       throw new Error("Expected the intent textarea.");
     }
-    expect(intent.value).toBe(
-      "Area: Epic snapshot\n\nError code: RPC_ERROR\n\nThe host returned an unexpected response.",
+    // Machine text answering the human question would both bury the actual
+    // prompt and trivially satisfy the evidence gate with zero human signal.
+    expect(intent.value).toBe("");
+    expect(
+      screen.getByText(
+        "Area: Epic snapshot · Error code: RPC_ERROR · The host returned an unexpected response.",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("keeps the evidence gate binding on a non-migrated legacy-context report with no user text (KB2/N1 interaction)", async () => {
+    useDesktopDialogStore.getState().openReportIssueWithContext(
+      createReportIssueContext({
+        title: "Failed to load epic",
+        message: "The host returned an unexpected response.",
+        code: "RPC_ERROR",
+        source: "Epic snapshot",
+      }),
     );
+
+    renderDesktopDialogHost(createRunnerHost([], [], []), "/");
+    await flushDialogEffects();
+
+    // Before KB2, the machine text above trivially satisfied the gate with
+    // zero human signal - now that it's not in `form.intent`, Send with no
+    // user-typed text must still be blocked.
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+    expect(
+      await screen.findByText(
+        "Add a sentence, a screenshot, or pick where it happened - we need at least one to act on the report.",
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Report an issue" }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "Report sent" })).toBeNull();
+  });
+
+  it("shows a human label for the current route template in the location selector, never the raw path (KB3)", async () => {
+    setSupportContextSnapshot({ routeTemplate: knownField("/") });
+    useDesktopDialogStore.getState().openReportIssueWithContext(
+      createReportIssueContext({
+        title: "Something else went wrong",
+        message: "Unexpected state",
+        code: null,
+        source: null,
+      }),
+    );
+
+    renderDesktopDialogHost(createRunnerHost([], [], []), "/");
+    await flushDialogEffects();
+
+    fireEvent.click(screen.getByRole("combobox"));
+    expect(
+      await screen.findByRole("option", { name: "Start page (current)" }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("option", { name: "/ (current)" })).toBeNull();
+  });
+
+  it("falls back to a generic label for an unmapped route template, never the raw path (KB3)", async () => {
+    setSupportContextSnapshot({
+      routeTemplate: knownField("/some/future/$routeId"),
+    });
+    useDesktopDialogStore.getState().openReportIssueWithContext(
+      createReportIssueContext({
+        title: "Something else went wrong",
+        message: "Unexpected state",
+        code: null,
+        source: null,
+      }),
+    );
+
+    renderDesktopDialogHost(createRunnerHost([], [], []), "/");
+    await flushDialogEffects();
+
+    fireEvent.click(screen.getByRole("combobox"));
+    expect(
+      await screen.findByRole("option", { name: "This screen (current)" }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("option", { name: "/some/future/$routeId (current)" }),
+    ).toBeNull();
   });
 
   it("refuses and closes report state when desktop support is unavailable", async () => {
@@ -850,6 +936,15 @@ describe("<DesktopDialogHost />", () => {
     ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Send report" })).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+
+    // N1: the evidence gate guards every report-producing action, not just
+    // Send - Case B's own primary actions need the same signal first.
+    fireEvent.change(
+      screen.getByRole("textbox", {
+        name: "What were you trying to do, and what went wrong?",
+      }),
+      { target: { value: "No private channel, still worth reporting" } },
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: "Save diagnostic bundle" }),
