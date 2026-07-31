@@ -15,11 +15,13 @@ import {
   makeSelectActiveEpicArtifactId,
   makeSelectIsActiveEpicArtifact,
   makeSelectIsActivePane,
+  makeSelectIsActiveTile,
   makeSelectTabActivation,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { isBlankTileRef } from "@/stores/epics/canvas/types";
 import { epicCanvasKey } from "@/lib/persist";
+import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -1101,6 +1103,84 @@ describe("makeSelectIsActiveEpicArtifact", () => {
     expect(makeSelectIsActiveEpicArtifact(tabId, firstActive)(after)).toBe(
       false,
     );
+  });
+});
+
+describe("makeSelectIsActiveTile", () => {
+  it("resolves a renderer-only tile the artifact selector deliberately hides", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pr", "PR");
+    const tile = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+      prNumber: 4226,
+      name: "Remote Host Support",
+    });
+    store.openTileInTab(tabId, tile);
+
+    const state = useEpicCanvasStore.getState();
+    // The artifact selector returns null for a PR tile by design (its id must
+    // never become `lastFocusedArtifactId`), which is exactly why the PR panel
+    // cannot reuse it to light up its row.
+    expect(makeSelectActiveEpicArtifactId(tabId)(state)).toBeNull();
+    expect(makeSelectIsActiveTile(tabId, tile.id)(state)).toBe(true);
+  });
+
+  it("is false for another tile, a null id, and an unknown tab", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pr-2", "PR");
+    const shown = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+      prNumber: 4226,
+      name: "Shown",
+    });
+    const hidden = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      prNumber: 675,
+      name: "Hidden",
+    });
+    store.openTileInTab(tabId, shown);
+
+    const state = useEpicCanvasStore.getState();
+    expect(makeSelectIsActiveTile(tabId, hidden.id)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(tabId, null)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(undefined, shown.id)(state)).toBe(false);
+    expect(makeSelectIsActiveTile("tab-missing", shown.id)(state)).toBe(false);
+  });
+
+  it("follows the ACTIVE pane, so a tile parked in the other pane is not active", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pr-3", "PR");
+    const left = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+      prNumber: 4226,
+      name: "Left",
+    });
+    const right = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      prNumber: 675,
+      name: "Right",
+    });
+    store.openTileInTab(tabId, left);
+    store.openTileInTab(tabId, right);
+
+    const state = useEpicCanvasStore.getState();
+    expect(makeSelectIsActiveTile(tabId, right.id)(state)).toBe(true);
+    expect(makeSelectIsActiveTile(tabId, left.id)(state)).toBe(false);
   });
 });
 
