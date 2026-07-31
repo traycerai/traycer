@@ -445,12 +445,19 @@ export function ReportIssueDialog(
     mutationFn: async (): Promise<void> => {
       if (previewDraft === null) throw new Error("No draft to open");
       const url = buildGitHubIssueUrl({ ...previewDraft, title: previewTitle });
+      // Track the attempt whether the OS handoff succeeds or not - the
+      // analytics event is about the user asking to open, not about the
+      // browser actually launching. Re-throw after tracking so onError keeps
+      // the preview screen and a retryable toast (publish flow: open failure
+      // must never silently claim success or leave the confirmation).
       try {
         await runnerHost.openExternalLink(url);
-      } catch {
-        // Browser open can fail; the attempt still happened and is tracked -
-        // pre-existing tolerance, orthogonal to whether buildPublicDraft
-        // itself succeeded.
+      } catch (error) {
+        Analytics.getInstance().track(
+          AnalyticsEvent.ReportIssuePublicOpenAttempted,
+          null,
+        );
+        throw error;
       }
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePublicOpenAttempted,
