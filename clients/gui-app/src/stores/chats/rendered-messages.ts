@@ -1284,6 +1284,11 @@ function buildSetupCardMessage(
         kind: "setup-card",
         model: row.model,
         viewTabId,
+        // Ticket 13 (decision #28): same predicate the merge below uses for
+        // `pinGenesisCard` (`!setupCardEntries[0].hasCreatingEvent`) - only
+        // window 0 can ever be genesis-pinned, so this is exact, not a guess.
+        anchorMessageId: row.triggeringMessageId,
+        isGenesisPin: windowIndex === 0 && !row.hasCreatingEvent,
       },
     ],
     structuredContent: null,

@@ -452,6 +452,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
       tuiAgentId: "agent-claude",
       harnessSessionId: null,
       forkSourceHarnessSessionId: null,
+      forkSourceTuiAgentId: null,
       terminalAgentArgs: "--permission-mode acceptEdits",
       profileId: null,
     });
@@ -550,6 +551,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
       tuiAgentId: "agent-claude",
       harnessSessionId: "claude-session-reopen",
       forkSourceHarnessSessionId: null,
+      forkSourceTuiAgentId: null,
       terminalAgentArgs: "",
       profileId: null,
     });

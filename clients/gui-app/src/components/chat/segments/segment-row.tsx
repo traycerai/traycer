@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -72,7 +72,11 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
     className,
   } = props;
   const { footer } = props;
-  const measuredOpenChange = useChatMeasuredOpenChange(onOpenChange);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const measuredOpenChange = useChatMeasuredOpenChange(
+    onOpenChange,
+    triggerRef,
+  );
   return (
     <Collapsible
       open={open}
@@ -80,6 +84,7 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
       className={cn("group/work-row", className)}
     >
       <CollapsibleTrigger
+        ref={triggerRef}
         data-find-include="true"
         data-chat-find-unit={headerFindUnitId ?? undefined}
         className={cn(

@@ -41,6 +41,21 @@ import type {
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
+import { evictChatTabState } from "@/stores/chats/chat-tab-state-cache";
+import { evictActivityGroupOpenStores } from "@/stores/chats/activity-group-open-store-core";
+import { evictA2AOpenStores } from "@/stores/chats/a2a-open-store-context";
+import {
+  toolOpenInitializedScopes,
+  useToolOpenStore,
+} from "@/stores/chats/tool-open-store";
+import {
+  subagentOpenInitializedScopes,
+  useSubagentOpenStore,
+} from "@/stores/chats/subagent-open-store";
+import { evictTileFindUi } from "@/stores/tile-find/tile-find-store";
+import { evictChatTurnMinimapActiveEntries } from "@/stores/chats/chat-turn-minimap-active-entry-store";
+import { promoteChatTabPersistenceToDurable } from "@/stores/chats/chat-tab-persistence-eviction";
+import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import {
   closeAllTabs,
   closeOtherTabs as closeOtherTileTabs,
@@ -2550,6 +2565,34 @@ useEpicCanvasStore.subscribe((state) => {
   });
 });
 
+/**
+ * Ticket 15 review round 3: resolves the `(epicId, chatId)` identity a
+ * removed tile HAD, using the canvas/tab snapshots as they stood just
+ * BEFORE this update - `tilesByInstanceId` lives on `canvasByTabId`, but
+ * `epicId` lives on the PARALLEL `tabsById` map (`tabsById[tabId].epicId`),
+ * and a whole-tab close/delete can clear both together in the SAME update,
+ * so a removed tile's tab record can already be gone from the CURRENT
+ * state by the time this runs - both snapshots must be the prior ones.
+ * `null` for a non-chat tile (diff/terminal/workspace-file tiles have no
+ * dual-key persistence family) or if either snapshot is missing the entry.
+ */
+function resolveClosedChatIdentity(
+  priorCanvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
+  priorTabsById: Readonly<Record<string, EpicViewTab | undefined>>,
+  tileInstanceId: string,
+): ChatTabPersistenceIdentity | null {
+  for (const [tabId, canvas] of Object.entries(priorCanvasByTabId)) {
+    if (canvas === undefined) continue;
+    const node = canvas.tilesByInstanceId[tileInstanceId];
+    if (node === undefined) continue;
+    if (!("type" in node) || node.type !== "chat") return null;
+    const epicId = priorTabsById[tabId]?.epicId;
+    if (epicId === undefined) return null;
+    return { tileInstanceId, epicId, chatId: node.id };
+  }
+  return null;
+}
+
 // Evict session scroll anchors for tile instanceIds removed from the canvas.
 // `useScrollRestoration` also checks tile liveness before unmount persistence,
 // so a close cannot clear an anchor here and then have the unmount cleanup
@@ -2558,10 +2601,21 @@ let previousTileInstanceIds: ReadonlySet<string> = new Set<string>();
 let previousCanvasByTabId: Readonly<
   Record<string, EpicCanvasState | undefined>
 > | null = null;
+let previousTabsById: Readonly<Record<string, EpicViewTab | undefined>> | null =
+  null;
 useEpicCanvasStore.subscribe((state) => {
+  // Ticket 15 review round 3: `tabsById` (epicId) and `canvasByTabId` (the
+  // tile tree) can update in SEPARATE `set()` calls (e.g. `openEpicTab`
+  // creates the tab record before any tile is opened into it) - tracking
+  // this UNCONDITIONALLY, not gated behind the `canvasByTabId` equality
+  // check below, is what keeps it from going stale relative to whichever
+  // `canvasByTabId` snapshot this sweep ends up diffing against.
+  const priorTabsById = previousTabsById;
+  previousTabsById = state.tabsById;
   // Tile membership only changes when the canvas map itself changes; skip the
   // live-id scan for unrelated writes (active tab, titles, pane sizes, ...).
   if (state.canvasByTabId === previousCanvasByTabId) return;
+  const priorCanvasByTabId = previousCanvasByTabId;
   previousCanvasByTabId = state.canvasByTabId;
   const current = collectLiveTileInstanceIds(state.canvasByTabId);
   const removed = [...previousTileInstanceIds].filter(
@@ -2569,7 +2623,50 @@ useEpicCanvasStore.subscribe((state) => {
   );
   previousTileInstanceIds = current;
   if (removed.length > 0) {
+    // Ticket 15 review round 3 (the ONE close-commit choke point): promote
+    // each removed chat tile's live tab-side state to durable BEFORE any
+    // of the eviction calls below run - this is the only place that can
+    // commit for an INACTIVE (never-mounted) view's close, since it reads
+    // store state directly rather than depending on a component's own
+    // unmount lifecycle firing (which, for an inactive tab, never does).
+    if (priorCanvasByTabId !== null && priorTabsById !== null) {
+      for (const instanceId of removed) {
+        const identity = resolveClosedChatIdentity(
+          priorCanvasByTabId,
+          priorTabsById,
+          instanceId,
+        );
+        if (identity !== null) promoteChatTabPersistenceToDurable(identity);
+      }
+    }
     useTileScrollAnchorStore.getState().clearAnchors(removed);
+    // Ticket 5: chat-tile-only per-tab persistence, evicted the same way -
+    // proactively on a permanent close, not just LRU/registry-capped. The
+    // reading-position cache and the collapse-state registries key by the
+    // exact same tile instanceId, so one `removed` list covers all of them;
+    // tool/subagent are global stores namespaced by that id via `reset`.
+    evictChatTabState(removed);
+    evictActivityGroupOpenStores(removed);
+    evictA2AOpenStores(removed);
+    // F4 (ticket 5 review): tile-find serves every tile kind, not just chat -
+    // a tile whose adapter unregistered while still live (switched-away, not
+    // closed) is skipped by scheduleUiReclaim's own liveness check and never
+    // revisited if it is later closed without remounting. This sweep is that
+    // revisit.
+    evictTileFindUi(removed);
+    // Ticket 15: the minimap active entry is the 7th per-tab registry -
+    // same tab-key sweep, same "durable chat-key entry survives" contract as
+    // the others above.
+    evictChatTurnMinimapActiveEntries(removed);
+    removed.forEach((instanceId) => {
+      useToolOpenStore.getState().reset(instanceId);
+      useSubagentOpenStore.getState().reset(instanceId);
+      // Ticket 15 review round 3: bounds the initialized-scope markers -
+      // this tileInstanceId can never be seen again (a reopen always mints
+      // a fresh one), so nothing else will ever need this entry.
+      toolOpenInitializedScopes.delete(instanceId);
+      subagentOpenInitializedScopes.delete(instanceId);
+    });
   }
 });
 

@@ -1,5 +1,5 @@
 import { Box, ChevronRight } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -57,7 +57,8 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
     },
     [collapsibleKey, group.id, setFindForcedOpen, setOpen],
   );
-  const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const handleOpenChange = useChatMeasuredOpenChange(updateOpen, triggerRef);
 
   return (
     <Collapsible
@@ -66,6 +67,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger
+        ref={triggerRef}
         data-find-include="true"
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}

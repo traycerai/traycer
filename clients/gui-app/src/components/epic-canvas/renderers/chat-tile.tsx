@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
 import type { ChatForkMode } from "@/components/chat/chat-message";
@@ -59,10 +60,6 @@ import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-se
 import { accumulatedFileChangesFromMessages } from "@/lib/chat/accumulated-file-changes-from-messages";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
-import {
-  buildChatUserMessageMinimapItems,
-  type ChatUserMinimapItem,
-} from "@/components/chat/chat-user-message-minimap-items";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
@@ -88,6 +85,7 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { isChatRunInProgress } from "@/stores/chats/chat-session-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
@@ -161,7 +159,6 @@ import {
   makeSnapshotSegmentDiffTile,
 } from "@/lib/chat/snapshot-diff-tile";
 import {
-  useActivePaneEffect,
   usePaneFocused,
   usePaneVisible,
 } from "@/components/epic-tabs/pane-visibility-context";
@@ -171,6 +168,7 @@ import {
   useLocalSnapshotClearStore,
 } from "@/stores/settings/local-snapshot-clear-store";
 import { ChatTileErrorNoticeToasts } from "./chat-tile-error-notice-toasts";
+import { ChatTileRestoreResultToasts } from "./chat-tile-restore-result-toasts";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
@@ -182,7 +180,6 @@ import {
   normalizeInlineEditForSession,
   canModifyChatMessages,
   shouldGenerateChatTitleForSubmittedMessage,
-  showRestoreResultToast,
   userMessageSenderForProfile,
   plainTextPromptContent,
   composerTurnStatus,
@@ -642,6 +639,19 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
+  // The composer + queue/pinned/agents/background dock now overlays the
+  // transcript (decision log #3, #13) instead of pushing it via flex height,
+  // so its reply stream can flow visually behind it. Measuring the whole
+  // overlay as one unit (rather than composer/queued-surface separately) is
+  // a deliberate ticket-3 scope narrowing - see ticket-3 report for the
+  // follow-up split. `useMeasuredElementHeight` (review finding: extracted so
+  // this measurement -> prop contract is directly testable, ticket 18 rider)
+  // owns the ResizeObserver plumbing.
+  const {
+    setElement: setLowerSurfacesElement,
+    element: lowerSurfacesElement,
+    height: lowerSurfacesHeight,
+  } = useMeasuredElementHeight();
   // Shared transcript jump: resolve the owning message, expand the card via its
   // open-store, and bump the scroll request the messages surface watches. Both
   // the Background panel rows and the autonomous-resume marker route through
@@ -842,57 +852,85 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           data-active={props.isActive ? "true" : "false"}
           className="flex h-full min-h-0 flex-col"
         >
-          <ChatSessionMessagesSurface
-            snapshotLoaded={view.snapshotLoaded}
-            fatalClose={view.fatalClose}
-            onRetry={view.onChatRetry}
-            restoreContext={view.restoreContext}
-            node={view.node}
-            epicId={view.currentEpicId}
-            viewTabId={view.viewTabId}
-            tabHostId={view.tabHostId}
-            workspaceRoots={view.linkResolutionRoots}
-            messages={view.messages}
-            backgroundItems={view.lower.backgroundItems}
-            minimapItems={view.minimapItems}
-            scrollRequest={backgroundScrollRequest}
-            surfaceVisible={view.surfaceVisible}
-            systemOverlayActive={systemOverlayActive}
-            getMessageActions={view.getMessageActions}
-            nextStepActions={view.nextStepActions}
-            planActions={view.planActions}
-          />
+          {/* A flex CONTAINER (not just an item): ChatSessionMessagesSurface's
+           * transcript root relies on `flex-1` from ITS immediate parent to
+           * get a definite height (h-full on LegendList needs a real
+           * containing block all the way up). The overlay dock below is
+           * absolutely positioned, so it does not participate in this flex
+           * layout regardless. */}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <ChatSessionMessagesSurface
+              snapshotLoaded={view.snapshotLoaded}
+              fatalClose={view.fatalClose}
+              onRetry={view.onChatRetry}
+              restoreContext={view.restoreContext}
+              node={view.node}
+              epicId={view.currentEpicId}
+              viewTabId={view.viewTabId}
+              tabHostId={view.tabHostId}
+              workspaceRoots={view.linkResolutionRoots}
+              messages={view.messages}
+              localProvenanceMessageIds={view.localProvenanceMessageIds}
+              consumeLocalProvenance={view.consumeLocalProvenance}
+              backgroundItems={view.lower.backgroundItems}
+              scrollRequest={backgroundScrollRequest}
+              surfaceVisible={view.surfaceVisible}
+              systemOverlayActive={systemOverlayActive}
+              isChatStreaming={view.isChatStreaming}
+              getMessageActions={view.getMessageActions}
+              nextStepActions={view.nextStepActions}
+              planActions={view.planActions}
+              composerOverlayHeight={
+                lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
+              }
+            />
+            {/*
+             * SurfaceActivityProvider narrows catalog/provider query subscriptions
+             * to the one focused pane+tab. A visible split partner keeps rendering
+             * its transcript and scroll state, but releases catalog/provider query
+             * observers and cannot own palette/composer-global work.
+             *
+             * Absolutely overlays the transcript (decision log #3) instead of
+             * pushing its height via flex, so streamed replies flow visually
+             * behind it; `lowerSurfacesHeight` (measured here) feeds the
+             * transcript's bottom content inset.
+             */}
+            {view.snapshotLoaded ? (
+              <div
+                ref={setLowerSurfacesElement}
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+              >
+                <div className="pointer-events-auto">
+                  <SurfaceActivityProvider active={view.surfaceFocused}>
+                    <ChatLowerInteractionSurfaces
+                      epicId={view.currentEpicId}
+                      viewTabId={view.viewTabId}
+                      chatId={view.node.id}
+                      runtime={view.lower.runtime}
+                      access={view.lower.access}
+                      turn={view.lower.turn}
+                      interview={view.lower.interview}
+                      approvals={view.lower.approvals}
+                      queue={view.lower.queue}
+                      composer={view.lower.composer}
+                      todo={view.todo}
+                      restoreContext={view.restoreContext}
+                      backgroundItems={view.lower.backgroundItems}
+                      backgroundStopPendingTaskIds={
+                        view.lower.backgroundStopPendingTaskIds
+                      }
+                      backgroundStopAllPending={
+                        view.lower.backgroundStopAllPending
+                      }
+                      onBackgroundItemClick={scrollToBackgroundItem}
+                    />
+                  </SurfaceActivityProvider>
+                </div>
+              </div>
+            ) : null}
+          </div>
           <ChatTileErrorNoticeToasts handle={view.handle} />
-          {/*
-           * SurfaceActivityProvider narrows catalog/provider query subscriptions
-           * to the one focused pane+tab. A visible split partner keeps rendering
-           * its transcript and scroll state, but releases catalog/provider query
-           * observers and cannot own palette/composer-global work.
-           */}
-          {view.snapshotLoaded ? (
-            <SurfaceActivityProvider active={view.surfaceFocused}>
-              <ChatLowerInteractionSurfaces
-                epicId={view.currentEpicId}
-                viewTabId={view.viewTabId}
-                chatId={view.node.id}
-                runtime={view.lower.runtime}
-                access={view.lower.access}
-                turn={view.lower.turn}
-                interview={view.lower.interview}
-                approvals={view.lower.approvals}
-                queue={view.lower.queue}
-                composer={view.lower.composer}
-                todo={view.todo}
-                restoreContext={view.restoreContext}
-                backgroundItems={view.lower.backgroundItems}
-                backgroundStopPendingTaskIds={
-                  view.lower.backgroundStopPendingTaskIds
-                }
-                backgroundStopAllPending={view.lower.backgroundStopAllPending}
-                onBackgroundItemClick={scrollToBackgroundItem}
-              />
-            </SurfaceActivityProvider>
-          ) : null}
+          <ChatTileRestoreResultToasts handle={view.handle} />
           <RevertOnEditDialog
             open={view.revertOnEdit.open}
             onOpenChange={view.revertOnEdit.onOpenChange}
@@ -1064,6 +1102,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
       pendingUserMessages: s.pendingUserMessages,
+      localProvenanceMessageIds: s.localProvenanceMessageIds,
       currentComposerSettings: s.currentComposerSettings,
       liveAssistantMessage: s.liveAssistantMessage,
       worktreeBinding: s.worktreeBinding,
@@ -1415,13 +1454,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => buildPinnedTodoRenderState(displayedMessages),
     [displayedMessages],
   );
-  // Minimap rail entries mirror the user rows Virtuoso renders; ids are the
-  // rendered row ids (including queue-steer rows), so minimap clicks resolve
-  // directly against the list.
-  const minimapItems = useMemo(
-    () => buildChatUserMessageMinimapItems(pinnedTodoRenderState.messages),
-    [pinnedTodoRenderState.messages],
-  );
   const hostPendingInterviewIds = useMemo(
     () =>
       new Set(state.pendingInterviews.map((interview) => interview.blockId)),
@@ -1466,11 +1498,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const unanswerableInterviewsBusy = unanswerableInterviews.some((interview) =>
     interviewActionBlockIds.has(interview.blockId),
   );
-  const showCompletedRestoreToast = useCallback(() => {
-    if (state.restore === null || state.restore.kind !== "completed") return;
-    showRestoreResultToast(state.restore.results);
-  }, [state.restore]);
-  useActivePaneEffect(showCompletedRestoreToast);
   // All pending approvals route to the composer slot - single or many
   // share one canonical surface. Inline rendering for pending approvals
   // is suppressed; resolved approvals stay inline as turn history.
@@ -2040,9 +2067,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
-    minimapItems,
+    localProvenanceMessageIds: state.localProvenanceMessageIds,
+    consumeLocalProvenance: handle.store.getState().consumeLocalProvenance,
     surfaceVisible,
     surfaceFocused,
+    // Ticket 15 (decision #29): the sanctioned host-owned streaming signal
+    // for the fresh-open policy - NOT the trailing-assistant heuristic.
+    isChatStreaming: isChatRunInProgress(state.runStatus),
     getMessageActions: messageActionsFor,
     nextStepActions,
     planActions,
@@ -2083,16 +2114,22 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly localProvenanceMessageIds: ReadonlySet<string>;
+  readonly consumeLocalProvenance: (messageId: string) => void;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
-  readonly minimapItems: ReadonlyArray<ChatUserMinimapItem>;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
+  /** Ticket 15 (decision #29): host-owned streaming signal for the fresh-open
+   *  policy - NOT the trailing-assistant heuristic. */
+  readonly isChatStreaming: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler;
   readonly planActions: ChatPlanActionsContextValue;
+  /** Measured height of the overlaid composer/queue/pinned/agents dock. */
+  readonly composerOverlayHeight: number;
 }
 
 /**
@@ -2198,16 +2235,19 @@ function ChatSessionMessagesSurface(
             <ChatMessages
               taskTitle={props.node.name}
               taskId={props.node.id}
+              epicId={props.epicId}
               messages={props.messages}
+              localProvenanceMessageIds={props.localProvenanceMessageIds}
+              consumeLocalProvenance={props.consumeLocalProvenance}
               backgroundItems={props.backgroundItems}
-              minimapItems={props.minimapItems}
               scrollRequest={props.scrollRequest}
-              scrollStateKey={props.node.instanceId}
               getMessageActions={props.getMessageActions}
               nextStepActions={props.nextStepActions}
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
               systemOverlayActive={props.systemOverlayActive}
+              isChatStreaming={props.isChatStreaming}
+              composerOverlayHeight={props.composerOverlayHeight}
             />
           </ChatMarkdownLinkProvider>
         </WorkingVerbContext.Provider>

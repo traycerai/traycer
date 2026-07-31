@@ -17,14 +17,18 @@ paths = [
   '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
 ]
 regexes = [
-  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup)$''',
+  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|s4b-reachability-key|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup|t18-pin-c-exhaust)$''',
 ]
 
 [[allowlists]]
-description = "Virtuoso message-list testing license key — a public dummy key (its payload decodes to 'TEST;ex9999999999999'), used only to satisfy @virtuoso.dev/message-list in gui-app unit tests."
+description = "Historical message-list license unit-test fixture. Its payload identifies it as a public test key, not a production credential; require both the exact source path and value."
+condition = "AND"
 regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+]
 regexes = [
-  '''eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==''',
+  '''^eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==$''',
 ]
 
 [[allowlists]]

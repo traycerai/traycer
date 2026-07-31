@@ -18,6 +18,7 @@ export {
   type DiffTileFindSource,
 } from "@/stores/tile-find/diff-tile-find-adapter";
 export {
+  evictTileFindUi,
   selectTileFindUi,
   useTileFindStore,
 } from "@/stores/tile-find/tile-find-store";

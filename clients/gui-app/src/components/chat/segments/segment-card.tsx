@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -97,7 +97,11 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
     bodyFindUnitId,
     className,
   } = props;
-  const measuredOpenChange = useChatMeasuredOpenChange(onOpenChange);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const measuredOpenChange = useChatMeasuredOpenChange(
+    onOpenChange,
+    triggerRef,
+  );
   return (
     <Collapsible
       open={open}
@@ -119,6 +123,7 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
         )}
       >
         <CollapsibleTrigger
+          ref={triggerRef}
           data-find-include="true"
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(

@@ -26,6 +26,7 @@ import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 
 /**
  * Variables for `useEpicCreateChat.mutate`/`mutateAsync`. `hostId` is
@@ -343,6 +344,15 @@ export function useEpicDeleteChat() {
           variables.epicId,
           variables.chatId,
         );
+        // Ticket 15 (decision #29): a deleted chat can never be reopened -
+        // drop its durable chat-key entries across all seven per-tab
+        // registries (the tab-key side, if this chat happened to be open,
+        // is already handled by the canvas store's close sweep when the
+        // caller closes the tile ahead of this mutation).
+        evictChatTabPersistenceForChat({
+          epicId: variables.epicId,
+          chatId: variables.chatId,
+        });
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't delete agent.");

@@ -5800,6 +5800,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -5945,6 +5956,17 @@ export const epicSchemaSurfaceBaseline = {
                   anyOf: [
                     {
                       type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
                     },
                     {
                       type: "null",
@@ -6109,6 +6131,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -6254,6 +6287,17 @@ export const epicSchemaSurfaceBaseline = {
                   anyOf: [
                     {
                       type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
                     },
                     {
                       type: "null",
@@ -12440,6 +12484,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -12463,6 +12518,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12598,6 +12654,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -12629,6 +12696,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12764,6 +12832,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -12787,6 +12866,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12922,6 +13002,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -12953,6 +13044,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
                 "harnessSessionId",
               ],
               additionalProperties: false,
