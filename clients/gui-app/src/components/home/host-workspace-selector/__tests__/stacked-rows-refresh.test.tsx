@@ -1,0 +1,296 @@
+/**
+ * The stacked rows arm's intent edge (traycerai/traycer#711).
+ *
+ * `ActiveHostWorkspaceControls layout="stacked"` is what the fork-chat dialog,
+ * the terminal-agent fork dialog and the add-node launcher render. All three
+ * mount it inside a Radix `Dialog`/`DropdownMenu` with no `forceMount`, so it
+ * unmounts on close and mounts fresh on every open - which makes MOUNT its
+ * intent edge, the counterpart of the picker popover's `onOpenChange`.
+ */
+import "../../../../../__tests__/test-browser-apis";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorktreeWorkspaceSummaryV13 } from "@traycer/protocol/host/worktree-schemas";
+import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
+
+const WORKSPACE_PATH = "/workspace/app";
+
+interface MockHostClient {
+  getActiveHost(): {
+    readonly hostId: string;
+    readonly label: string;
+    readonly kind: "local";
+    readonly websocketUrl: string;
+    readonly version: string;
+    readonly status: "available";
+  };
+  getActiveHostId(): string;
+  getRequestContextUserId(): string;
+  request(method: string, payload: unknown): Promise<unknown>;
+  onChange(): () => void;
+}
+
+const mocks = vi.hoisted(() => {
+  const request =
+    vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
+  const resolvedWorkspace: {
+    current: { readonly folders: readonly ResolvedFolder[] };
+  } = { current: { folders: [] } };
+  return {
+    request,
+    resolvedWorkspace,
+    selectHost: vi.fn(),
+    pickAndPrepareFolders: vi.fn(() => Promise.resolve(null)),
+  };
+});
+
+const RESOLVED_FOLDER: ResolvedFolder = {
+  kind: "resolved",
+  path: WORKSPACE_PATH,
+  name: "app",
+  repoIdentifier: { owner: "acme", repo: "app" },
+};
+
+const SUMMARY: WorktreeWorkspaceSummaryV13 = {
+  workspacePath: WORKSPACE_PATH,
+  isGitRepo: true,
+  repoIdentifier: { owner: "acme", repo: "app" },
+  mainBranch: "development",
+  worktrees: [
+    {
+      worktreePath: WORKSPACE_PATH,
+      branch: "development",
+      head: null,
+      isMain: true,
+      isLocked: false,
+    },
+  ],
+  scripts: null,
+  resolvedAt: 1,
+};
+
+const hostClient: MockHostClient = {
+  getActiveHost: () => ({
+    hostId: "host-home",
+    label: "Home Mac",
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:4917/rpc",
+    version: "0.0.0-test",
+    status: "available",
+  }),
+  getActiveHostId: () => "host-home",
+  getRequestContextUserId: () => "user-home",
+  request: mocks.request,
+  onChange: () => () => undefined,
+};
+
+vi.mock("@/components/ui/select", () => ({
+  Select: (props: { readonly children: ReactNode }) => (
+    <div>{props.children}</div>
+  ),
+  SelectTrigger: (props: { readonly children: ReactNode }) => (
+    <button type="button">{props.children}</button>
+  ),
+  SelectValue: () => <span />,
+  SelectContent: (props: { readonly children: ReactNode }) => (
+    <div>{props.children}</div>
+  ),
+  SelectItem: (props: { readonly children: ReactNode }) => (
+    <div>{props.children}</div>
+  ),
+}));
+
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () => ({ directory: { selectById: mocks.selectHost } }),
+  useHostClient: () => hostClient,
+}));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "host-home",
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [
+      {
+        hostId: "host-home",
+        label: "Home Mac",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version: "0.0.0-test",
+        status: "available",
+      },
+    ],
+  }),
+}));
+
+vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
+  useResolvedWorkspaceFolders: () => mocks.resolvedWorkspace.current,
+}));
+
+vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
+  useWorktreeListByWorkspacePaths: () => ({
+    data: { workspaces: [SUMMARY] },
+    isFetching: false,
+  }),
+  useWorktreeListByWorkspacePathsForClient: () => ({
+    data: { workspaces: [SUMMARY] },
+    isFetching: false,
+    isPending: false,
+    isLoading: false,
+  }),
+  worktreeListByWorkspacePathsParams: (workspacePaths: readonly string[]) => ({
+    workspacePaths: [...workspacePaths],
+    scriptRefs: [],
+    forceRefresh: false,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-queries", () => ({
+  useHostQueries: () => [],
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
+  preparedWorkspaceFolderToWorkspaceFolderInfo: (folder: {
+    readonly workspacePath: string;
+    readonly workspaceName: string;
+    readonly repoIdentifier: unknown;
+  }) => ({
+    path: folder.workspacePath,
+    name: folder.workspaceName,
+    repoIdentifier: folder.repoIdentifier,
+  }),
+  useWorkspaceFolderActions: () => ({
+    pickAndPrepareFolders: mocks.pickAndPrepareFolders,
+  }),
+  useWorkspaceFolderActionsForClient: () => ({
+    pickAndPrepareFolders: mocks.pickAndPrepareFolders,
+  }),
+}));
+
+beforeEach(() => {
+  mocks.request.mockReset();
+  mocks.request.mockResolvedValue({ workspaces: [SUMMARY] });
+  mocks.resolvedWorkspace.current = { folders: [RESOLVED_FOLDER] };
+});
+
+afterEach(cleanup);
+
+describe("stacked rows refresh-on-mount", () => {
+  it("forces one re-derive when the fork / add-node surface mounts", async () => {
+    renderControls("stacked");
+
+    // Without this edge these surfaces render `forceRefresh: false` branch
+    // metadata with no recovery at all when the host's watcher cannot see the
+    // checkout - no network mount, no container, no evicted repo. They carry no
+    // Refresh button of their own: close-and-reopen is the recovery, and only
+    // this makes reopening a real re-derive instead of another cache-only read.
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(1);
+    });
+    expect(forcedRefreshCalls()[0]).toMatchObject({
+      workspacePaths: [WORKSPACE_PATH],
+      forceRefresh: true,
+    });
+  });
+
+  it("forces it exactly once per mount, even when the folder list is rebuilt", async () => {
+    const { rerenderFresh } = renderControls("stacked");
+
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(1);
+    });
+
+    // A NEW array with the same contents - which is what
+    // `useResolvedWorkspaceFolders` hands back on any store touch. That changes
+    // `queryableFolderPaths`, and with it the `refresh` callback's identity, so
+    // an unlatched effect re-runs here. Re-deriving git on every incidental
+    // rebuild is the idle-host burn the retired freshness sweep was removed
+    // for; mount is the intent edge, not "the folder list object moved".
+    mocks.resolvedWorkspace.current = {
+      folders: [...mocks.resolvedWorkspace.current.folders],
+    };
+    rerenderFresh();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(forcedRefreshCalls().length).toBe(1);
+  });
+
+  it("does not burn its one attempt when the host was not reachable", async () => {
+    // `canRefresh` only asserts a non-null client and a non-empty path list,
+    // and the active scope's client is always present - so this fires even when
+    // the bound host is unreachable, and fails. Latching on the ATTEMPT would
+    // spend the surface's only chance before any recovery was possible.
+    mocks.request.mockRejectedValue(new Error("host unreachable"));
+    const { rerenderFresh } = renderControls("stacked");
+
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(1);
+    });
+
+    // Same target, fresh folder-list identity - the effect re-runs, and a latch
+    // released on failure lets it try again.
+    mocks.request.mockResolvedValue({ workspaces: [SUMMARY] });
+    mocks.resolvedWorkspace.current = {
+      folders: [...mocks.resolvedWorkspace.current.folders],
+    };
+    rerenderFresh();
+
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(2);
+    });
+  });
+
+  it("leaves the inline summary arm to its own popover-open edge", async () => {
+    renderControls("inline");
+
+    // The summary arm forces on `onOpenChange`, where the user has actually
+    // asked to look. Firing here too would pay a re-derive for every landing
+    // composer render, where the chip is incidental.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(forcedRefreshCalls()).toEqual([]);
+  });
+});
+
+function forcedRefreshCalls(): Array<Record<string, unknown>> {
+  return mocks.request.mock.calls.flatMap(([method, payload]) => {
+    if (method !== "worktree.listByWorkspacePaths") return [];
+    if (typeof payload !== "object" || payload === null) return [];
+    const record: Record<string, unknown> = { ...payload };
+    return record.forceRefresh === true ? [record] : [];
+  });
+}
+
+function renderControls(layout: "inline" | "stacked"): {
+  /** Re-renders from a FRESH element - React bails out on an identical one. */
+  readonly rerenderFresh: () => void;
+} {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  const buildTree = (): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ActiveHostWorkspaceControls
+          disabled={false}
+          stagingKey={{ surface: "landing", draftId: null }}
+          workspaceSeed={null}
+          seedIntent={null}
+          seedIntentOverride={null}
+          layout={layout}
+          hostScope={{ kind: "active" }}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+  const { rerender } = render(buildTree());
+  return {
+    rerenderFresh: () => {
+      rerender(buildTree());
+    },
+  };
+}

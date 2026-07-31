@@ -1286,6 +1286,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1315,6 +1316,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1394,6 +1396,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1431,6 +1434,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1462,6 +1466,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1509,6 +1514,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1536,6 +1542,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1565,6 +1572,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1589,6 +1597,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1621,6 +1630,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1645,6 +1655,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />

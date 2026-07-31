@@ -33,6 +33,10 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
+import {
+  useWorktreeWorkspacesRefresh,
+  type WorktreeWorkspacesRefresh,
+} from "@/hooks/worktree/use-worktree-workspaces-refresh";
 import { useWorktreeSetEntryModeForClient } from "@/hooks/worktree/use-worktree-set-entry-mode-mutation";
 import { useWorktreeImportForClient } from "@/hooks/worktree/use-worktree-import-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
@@ -161,6 +165,11 @@ type BoundOwnerSurface = {
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
+// Stable identity for "the query has not answered yet", so the summaries array
+// can be threaded straight into memos and the refresh hook without a fresh
+// `[]` per render invalidating every one of them.
+const EMPTY_WORKSPACE_SUMMARIES: ReadonlyArray<WorktreeWorkspaceSummaryV13> =
+  [];
 
 /**
  * Binding-entry → `WorktreeWorkspaceSummaryV13` fallback, rendered for a row until
@@ -516,15 +525,72 @@ function HomeWorkspaceRows(props: {
       enabled: true,
     },
   );
+  const summaries =
+    summariesQuery.data?.workspaces ?? EMPTY_WORKSPACE_SUMMARIES;
+  // Adjacent to the query ON PURPOSE: it writes its forced response into that
+  // query's cache entry, and the path list is part of the key - so both must
+  // read the same `queryableFolderPaths`, not two independently derived lists.
+  const summariesRefresh = useWorktreeWorkspacesRefresh({
+    client: activeHostClient,
+    workspacePaths: queryableFolderPaths,
+    summaries,
+  });
+  // MOUNT is the intent edge for the rows arm.
+  //
+  // The summary arm gets its forced re-derive from the picker popover's
+  // `onOpenChange`. The rows arm has no open/close of its own - it renders
+  // inline in the fork-chat dialog, the terminal-agent fork dialog and the
+  // add-node launcher, each a Radix `Dialog`/`DropdownMenu` with no
+  // `forceMount`, so it unmounts on close and mounts fresh on every open.
+  // Without this, those surfaces render `forceRefresh: false` branch metadata
+  // with no user recovery at all when the host's watcher cannot see a checkout
+  // (network mount, container boundary, LRU eviction, failed arm). They need no
+  // Refresh button of their own: close-and-reopen is the recovery, and with
+  // this edge wired it is a real re-derive rather than another cache-only read.
+  //
+  // Latched per TARGET, not per mount, and released on failure.
+  //
+  // A bare boolean would be wrong in both directions. It never resets, so a
+  // surface that switches hosts in place - or has folders added while open -
+  // would keep the first target's answer and never heal the new one. And
+  // because `canRefresh` only asserts a non-null client and a non-empty path
+  // list, the active scope's always-present default client makes it true even
+  // against an unbound or unreachable host: that attempt fails, toasts, and a
+  // latch set before the request would spend the surface's only chance before
+  // any recovery was possible.
+  const rowsIntentTarget = useRef<string | null>(null);
+  const rowsResting = props.restingMode === "rows";
+  const canRefreshSummaries = summariesRefresh.canRefresh;
+  const refreshSummaries = summariesRefresh.refresh;
+  const rowsIntentKey = useMemo(
+    () =>
+      `${activeHostClient?.getActiveHostId() ?? ""} ${queryableFolderPaths.join(" ")}`,
+    [activeHostClient, queryableFolderPaths],
+  );
+  useEffect(() => {
+    if (!rowsResting || !canRefreshSummaries) return;
+    if (rowsIntentTarget.current === rowsIntentKey) return;
+    rowsIntentTarget.current = rowsIntentKey;
+    // The rows keep rendering the cached view meanwhile, so this costs no blank
+    // frame; the hook toasts its own failure, so the rejection is already
+    // reported by the time it lands here. Releasing the latch on failure lets
+    // the next move of target or readiness try again, without spinning: this
+    // effect only runs when one of its deps actually changes.
+    void refreshSummaries().catch(() => {
+      if (rowsIntentTarget.current === rowsIntentKey) {
+        rowsIntentTarget.current = null;
+      }
+    });
+  }, [canRefreshSummaries, refreshSummaries, rowsIntentKey, rowsResting]);
   const summariesByPath = useMemo<
     ReadonlyMap<string, WorktreeWorkspaceSummaryV13>
   >(() => {
     const map = new Map<string, WorktreeWorkspaceSummaryV13>();
-    for (const ws of summariesQuery.data?.workspaces ?? []) {
+    for (const ws of summaries) {
       map.set(ws.workspacePath, ws);
     }
     return map;
-  }, [summariesQuery.data]);
+  }, [summaries]);
   const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
     (state) => state.setSuspendedWorkspacePaths,
   );
@@ -813,6 +879,7 @@ function HomeWorkspaceRows(props: {
           addFolderPending={addFolderPending}
           onAddFolder={addFolders}
           onEditEnvironment={handleEditEnvironment}
+          refresh={summariesRefresh}
           disabled={props.disabled}
         />
       ) : (
@@ -856,6 +923,7 @@ function HomeWorkspaceSummaryControl(props: {
   readonly addFolderPending: boolean;
   readonly onAddFolder: AddFolderHandler;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly refresh: WorktreeWorkspacesRefresh;
   readonly disabled: boolean;
 }) {
   return (
@@ -882,6 +950,7 @@ function HomeWorkspaceSummaryControl(props: {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={props.onEditEnvironment}
+          refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
           popoverSide="top"
         />
@@ -1460,15 +1529,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     props.hostClient,
     { workspacePaths: bindingWorkspacePaths, enabled: true },
   );
+  const metadataSummaries =
+    metadataQuery.data?.workspaces ?? EMPTY_WORKSPACE_SUMMARIES;
+  // Adjacent to the query ON PURPOSE - see the landing surface's copy: the
+  // forced response is written into that query's cache entry, whose key
+  // includes this exact path list.
+  const summariesRefresh = useWorktreeWorkspacesRefresh({
+    client: props.hostClient,
+    workspacePaths: bindingWorkspacePaths,
+    summaries: metadataSummaries,
+  });
   const summariesByPath = useMemo(
-    () =>
-      new Map(
-        (metadataQuery.data?.workspaces ?? []).map((ws) => [
-          ws.workspacePath,
-          ws,
-        ]),
-      ),
-    [metadataQuery.data],
+    () => new Map(metadataSummaries.map((ws) => [ws.workspacePath, ws])),
+    [metadataSummaries],
   );
   /**
    * Rows the host has actually resolved. Listing reads are served from the
@@ -2196,6 +2269,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 : null
             }
             onEditEnvironment={handleEditEnvironment}
+            refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).
