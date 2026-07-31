@@ -7,6 +7,21 @@ const ITEM_HEIGHT_PX = 90;
 const SPACER_HEIGHT_PX = 40;
 const LARGE_CONTENT_ROW_COUNT = 400;
 
+/**
+ * Optional override for the scroll container's `scrollHeight` (not list-item
+ * shells). Default is a large constant so virtualization has work to do.
+ * Ticket 18 pin B needs a realistic max-scroll so following-end does not park
+ * at the inflated 36_000px ceiling (which makes every near send look "far"
+ * under the 1.5-viewport animated split). Call with `null` to restore default.
+ */
+let scrollContainerScrollHeightOverridePx: number | null = null;
+
+export function setLegendListScrollContainerScrollHeightOverride(
+  heightPx: number | null,
+): void {
+  scrollContainerScrollHeightOverridePx = heightPx;
+}
+
 function rectOf(x: number, y: number, width: number, height: number): DOMRect {
   return {
     x,
@@ -92,6 +107,9 @@ export function installLegendListViewportMetrics(): void {
     function (this: HTMLElement) {
       if (isListItemShell(this) || isSpacerShell(this)) {
         return heightFor(this);
+      }
+      if (scrollContainerScrollHeightOverridePx !== null) {
+        return scrollContainerScrollHeightOverridePx;
       }
       // Large enough that virtualization has work to do.
       return LARGE_CONTENT_ROW_COUNT * ITEM_HEIGHT_PX;

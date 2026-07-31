@@ -59,6 +59,15 @@ type ChatMessageComparableField = Exclude<keyof ChatMessage, "id">;
  * `Record<U, true>` idiom `makeLiteralGuard` uses in `lib/type-guard.ts`,
  * adapted to comparators so `Object.values` below stays fully typed with no
  * cast (`Object.keys` widens to `string[]` and would need one).
+ *
+ * O4 (T3 parity audit): T3 has no equivalent - it does not need per-field
+ * row-reference stability the way this codebase's giant, heterogeneous
+ * assistant rows do (see the epic's T3 differential audit). Kept and
+ * maintained deliberately as an intentional non-T3 cost: the compile-time
+ * exhaustiveness this table buys (a field add/remove/rename fails the build
+ * until this table is updated) is worth the upkeep, since silently missing a
+ * field here would make an actually-changed row look unchanged to LegendList
+ * and freeze a row's rendered content mid-stream.
  */
 const CHAT_MESSAGE_FIELD_UNCHANGED: {
   readonly [K in ChatMessageComparableField]: (

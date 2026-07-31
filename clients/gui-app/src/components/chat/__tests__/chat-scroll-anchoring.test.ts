@@ -238,10 +238,11 @@ describe("getChatAnchoredTurnMetrics", () => {
 });
 
 describe("getChatNaturalMaxScrollWithoutAnchorReserve", () => {
-  // Reviewer numbers: fade header h-16=64 / sm:h-20=80, footer h-10=40,
+  // M4 (T3 parity, ticket 16): fade header h-10=40 / sm:h-12=48, footer
+  // h-3=12 / sm:h-4=16 (T3's own `MessagesTimeline.tsx` sizes - the previous
+  // h-16/h-20/h-10 values were unsanctioned drift, decision log #30).
   // CHAT_LIST_ANCHOR_OFFSET=16. Old bound (targetScrollToRevealEnd) under-
-  // clamps the true no-reserve max by header+footer-anchorOffset = 88 / 104.
-  const FOOTER = 40;
+  // clamps the true no-reserve max by header+footer-anchorOffset = 36 / 48.
   const ANCHOR_OFFSET = CHAT_LIST_ANCHOR_OFFSET;
   const VIEWPORT = 700;
   const END_INSET = 80;
@@ -252,40 +253,42 @@ describe("getChatNaturalMaxScrollWithoutAnchorReserve", () => {
     return Math.max(0, lastBottom - (VIEWPORT - END_INSET - ANCHOR_OFFSET));
   }
 
-  it("matches LegendList no-reserve max and closes the 88px under-clamp below sm", () => {
-    const header = 64; // h-16 fade header
+  it("matches LegendList no-reserve max and closes the 36px under-clamp below sm", () => {
+    const header = 40; // h-10 fade header
+    const footer = 12; // h-3 footer
     const natural = getChatNaturalMaxScrollWithoutAnchorReserve({
       headerSize: header,
-      footerSize: FOOTER,
+      footerSize: footer,
       lastBottom: LAST_BOTTOM,
       endInset: END_INSET,
       viewportLength: VIEWPORT,
     });
-    expect(natural).toBe(header + FOOTER + LAST_BOTTOM + END_INSET - VIEWPORT);
-    // 64 + 40 + 4500 + 80 - 700 = 3984
-    expect(natural).toBe(3984);
+    expect(natural).toBe(header + footer + LAST_BOTTOM + END_INSET - VIEWPORT);
+    // 40 + 12 + 4500 + 80 - 700 = 3932
+    expect(natural).toBe(3932);
     const oldBound = oldRevealBound(LAST_BOTTOM);
     // 4500 - (700 - 80 - 16) = 4500 - 604 = 3896
     expect(oldBound).toBe(3896);
-    expect(natural - oldBound).toBe(header + FOOTER - ANCHOR_OFFSET);
-    expect(natural - oldBound).toBe(88);
+    expect(natural - oldBound).toBe(header + footer - ANCHOR_OFFSET);
+    expect(natural - oldBound).toBe(36);
   });
 
-  it("matches LegendList no-reserve max and closes the 104px under-clamp at sm+", () => {
-    const header = 80; // sm:h-20 fade header
+  it("matches LegendList no-reserve max and closes the 48px under-clamp at sm+", () => {
+    const header = 48; // sm:h-12 fade header
+    const footer = 16; // sm:h-4 footer
     const natural = getChatNaturalMaxScrollWithoutAnchorReserve({
       headerSize: header,
-      footerSize: FOOTER,
+      footerSize: footer,
       lastBottom: LAST_BOTTOM,
       endInset: END_INSET,
       viewportLength: VIEWPORT,
     });
-    expect(natural).toBe(header + FOOTER + LAST_BOTTOM + END_INSET - VIEWPORT);
-    // 80 + 40 + 4500 + 80 - 700 = 4000
-    expect(natural).toBe(4000);
+    expect(natural).toBe(header + footer + LAST_BOTTOM + END_INSET - VIEWPORT);
+    // 48 + 16 + 4500 + 80 - 700 = 3944
+    expect(natural).toBe(3944);
     const oldBound = oldRevealBound(LAST_BOTTOM);
-    expect(natural - oldBound).toBe(header + FOOTER - ANCHOR_OFFSET);
-    expect(natural - oldBound).toBe(104);
+    expect(natural - oldBound).toBe(header + footer - ANCHOR_OFFSET);
+    expect(natural - oldBound).toBe(48);
   });
 
   it("floors at 0 when content is shorter than the viewport", () => {

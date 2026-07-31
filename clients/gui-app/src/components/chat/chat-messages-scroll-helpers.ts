@@ -29,6 +29,70 @@ export function anchorMoverShouldYieldToReader(
   );
 }
 
+export type ChatWheelVerticalDirection = "down" | "up" | "ambiguous";
+
+/**
+ * `WheelEvent.deltaY`'s SIGN convention (positive = scrolling toward the
+ * content's end) is invariant across all three `deltaMode` values (pixel/
+ * line/page) - only the MAGNITUDE's unit changes with the mode. Direction
+ * classification only ever looks at the sign, so it deliberately never reads
+ * `deltaMode` - doing the pixel/line/page conversion would only matter for a
+ * magnitude-based epsilon, which nothing here uses. A zero delta (some
+ * synthetic events, or a real trackpad's very first sub-pixel sample) is
+ * `"ambiguous"` - not a direction to reason about.
+ */
+export function chatWheelVerticalDirection(
+  deltaY: number,
+): ChatWheelVerticalDirection {
+  if (deltaY > 0) return "down";
+  if (deltaY < 0) return "up";
+  return "ambiguous";
+}
+
+/**
+ * Ticket 14 (direction A, root-cause: rootcause-follow-loss field bug H-B):
+ * a DOWNWARD wheel arriving while the viewport is already at the actual live
+ * edge (`isAtLiveEdge` - cannot advance further) must NOT cancel follow.
+ * macOS trackpad momentum keeps firing `wheel` events after the viewport has
+ * clamped at the bottom; a clamped wheel moves nothing, so no `scroll` event
+ * ever fires to restore follow afterward, and repeated momentum ticks used to
+ * cancel it over and over. An UPWARD wheel always cancels - unambiguous
+ * departure intent regardless of position. A zero/ambiguous delta preserves
+ * the pre-fix behavior (cancel), since there is no direction to reason about.
+ *
+ * The exemption is further scoped to `isFollowingEnd` (review fix, ticket
+ * 14): `anchoredEndSpace` parks `anchoring-new-turn` sessions at the maximum
+ * REACHABLE scroll (a reserve, not the true content end), and LegendList
+ * derives `isAtEnd` purely from that reachable geometry - so an anchoring
+ * session can report `isAtEnd=true` well short of the turn's real end. A
+ * downward wheel arriving there is real departure intent (the reader wants
+ * to see past the reserve) and must still cancel/exit anchoring, same as
+ * every other non-following mode. Only `following-end` - where "at the live
+ * edge" and "at the true content end" coincide - gets the exemption.
+ *
+ * `isAtLiveEdge` and `isFollowingEnd` are both expected to be FRESH reads
+ * taken at the moment the wheel fires (LegendList's own small-epsilon
+ * `getState().isAtEnd`, the same strict signal ticket 11 uses for "did the
+ * reader reach the live edge"; `timelineScrollModeRef.current ===
+ * "following-end"`) - not values captured earlier in a closure. `isAtEnd` is
+ * recomputed both on scroll and on content-size changes, so a chunk
+ * streaming in while the reader is already following is reflected before
+ * the next wheel event can possibly fire (there is no same-tick race
+ * between a content mutation and a subsequent input event). LegendList's
+ * own epsilon additionally absorbs overscroll/rubber-band bounce - a
+ * momentary elastic overshoot past the clamped edge still reads as "at the
+ * edge", so it does not cancel either.
+ */
+export function chatWheelShouldCancelLiveFollow(
+  deltaY: number,
+  isAtLiveEdge: boolean,
+  isFollowingEnd: boolean,
+): boolean {
+  const direction = chatWheelVerticalDirection(deltaY);
+  if (direction === "down" && isFollowingEnd) return !isAtLiveEdge;
+  return true;
+}
+
 export function buildMessageIdToIndex(
   messages: ReadonlyArray<ChatMessageModel>,
 ): ReadonlyMap<string, number> {
@@ -114,6 +178,36 @@ export function chatTimelineNavigationLandedAtLocation(
   }
   const actualOffset = position + state.topOffsetAdjustment - state.scroll;
   return Math.abs(actualOffset - location.viewOffset) <= epsilonPx;
+}
+
+/**
+ * Ticket 18 (near/far animation split, extracted per review finding - the
+ * inline version left the distance branch untestable independent of the
+ * jsdom-blind animated-scroll paths). Trusts an ANIMATED anchor scroll only
+ * within a bounded distance of the current position - a long jump across
+ * many unmeasured rows can drift its estimated pixel endpoint mid-flight
+ * (root-cause: rootcause-send-undershoot report; the validated convergence
+ * loop guarantees the eventual landing either way, this only bounds how far
+ * a single animated hop is trusted to travel accurately). An unmeasured
+ * target (`expectedTargetScrollTop === null`) is unknowable, so it is
+ * treated as far - never guessed near. `anchorAnimated` is the caller's own
+ * animated INTENT (`false` only for the fresh-open seed, decision #15) -
+ * short-circuits to instant regardless of distance, same as before
+ * extraction.
+ */
+export function chatTimelineAnchorShouldAnimateInitialIssue(input: {
+  readonly anchorAnimated: boolean;
+  readonly currentScrollTop: number;
+  readonly expectedTargetScrollTop: number | null;
+  readonly viewportLength: number;
+  readonly maxAnimateViewports: number;
+}): boolean {
+  if (!input.anchorAnimated) return false;
+  if (input.expectedTargetScrollTop === null) return false;
+  const distance = Math.abs(
+    input.currentScrollTop - input.expectedTargetScrollTop,
+  );
+  return distance <= input.maxAnimateViewports * input.viewportLength;
 }
 
 function isUserMessage(message: ChatMessageModel): boolean {
@@ -351,13 +445,12 @@ export function viewportActiveUserMessageId(
 // underlying detection (suffix removal, branch reset, non-tail
 // weave/genesis-pin/out-of-order arrival) keeps its semantics; only the
 // vocabulary for expressing the outcome changes; from a `ScrollModifier`
-// to a plain `scroll-to-end` / `scroll-to-index` / `none`
+// to a plain `scroll-to-end` / `none` / `anchor-new-turn`
 // action plus an optional forced mode transition.
 
 export type ChatEdgeMutationAction =
   | { readonly kind: "none" }
   | { readonly kind: "scroll-to-end" }
-  | { readonly kind: "scroll-to-index"; readonly index: number }
   | {
       readonly kind: "anchor-new-turn";
       readonly messageId: string;
@@ -393,9 +486,30 @@ interface ChatEdgeMutationInput {
    *  and this classifier share ownership of that first authoritative
    *  snapshot. */
   readonly hadSavedScrollState: boolean;
+  /** Host-owned run-in-progress (decision #29 / ticket 15). On the
+   *  mount-time first non-empty path (`previousMessages === null` and no
+   *  saved state), a streaming chat must NOT re-derive the idle fresh-open
+   *  anchor - it stays following-end so the live tail remains in view. The
+   *  mount-seed in `ChatMessages` already gates the same way; this field
+   *  keeps the classifier's own mount branch in lockstep. */
+  readonly isChatStreaming: boolean;
   /** Message ids THIS client minted and successfully dispatched
    *  (`chat-session-store.ts`) - the unconditional-anchor ground truth. */
   readonly localProvenanceMessageIds: ReadonlySet<string>;
+  /**
+   * Ticket 17: message id of the last (bottom-most) row actually visible in
+   * the viewport, tracked continuously from LegendList's own
+   * `getState().end` - BEFORE this transition (the caller reads it from a
+   * ref, same "snapshot ahead of the mutation" reasoning as `isFollowingEnd`
+   * above; the array shrinking during a suffix removal makes a raw index
+   * meaningless post-mutation, so the id is resolved back against
+   * `previousMessages` inside the suffix-removal branch below, not
+   * `nextMessages`). `null` when no measurement has ever landed (nothing
+   * scrolled since mount) - treated as "unknown", never as "safely above the
+   * boundary": a guessed position is exactly the "unknown place" this ticket
+   * exists to eliminate.
+   */
+  readonly lastVisibleMessageId: string | null;
 }
 
 /**
@@ -437,6 +551,7 @@ export function classifyChatEdgeMutation(
     previousMessages,
     isFollowingEnd,
     localProvenanceMessageIds,
+    lastVisibleMessageId,
   } = input;
   if (nextMessages.length === 0) {
     return { action: { kind: "none" }, nextMode: "following-end" };
@@ -450,12 +565,12 @@ export function classifyChatEdgeMutation(
     nextMessages,
   );
   if (removedSuffixAnchorIndex !== null) {
-    return {
-      action: isFollowingEnd
-        ? { kind: "scroll-to-end" }
-        : { kind: "scroll-to-index", index: removedSuffixAnchorIndex },
-      nextMode: isFollowingEnd ? "following-end" : null,
-    };
+    return classifySuffixRemoval({
+      previousMessages,
+      isFollowingEnd,
+      lastVisibleMessageId,
+      firstRemovedIndex: removedSuffixAnchorIndex + 1,
+    });
   }
 
   // Decision #14: a pure prepend (older-history hydration) keeps retained
@@ -517,6 +632,16 @@ export function classifyChatEdgeMutation(
   return NONE_OUTCOME;
 }
 
+function findLocalProvenanceUserMessage(
+  nextMessages: ReadonlyArray<ChatMessageModel>,
+  localProvenanceMessageIds: ReadonlySet<string>,
+): ChatMessageModel | undefined {
+  return nextMessages.find(
+    (message) =>
+      isUserMessage(message) && localProvenanceMessageIds.has(message.id),
+  );
+}
+
 function classifyFirstNonEmptyChatEdge(
   input: ChatEdgeMutationInput,
 ): ChatEdgeMutationOutcome {
@@ -525,35 +650,49 @@ function classifyFirstNonEmptyChatEdge(
     previousMessages,
     isFollowingEnd,
     hadSavedScrollState,
+    isChatStreaming,
     localProvenanceMessageIds,
   } = input;
-  const localMessage = nextMessages.find(
-    (message) =>
-      isUserMessage(message) && localProvenanceMessageIds.has(message.id),
-  );
-  if (localMessage !== undefined) {
-    return {
-      action: {
-        kind: "anchor-new-turn",
-        messageId: localMessage.id,
-        animated: true,
-      },
-      nextMode: null,
-    };
-  }
 
   if (previousMessages === null) {
     // ChatMessages has one production mount path, gated behind the
     // authoritative chat snapshot. `null` therefore means this is that
-    // initial render: saved-state restore owns it, while a genuinely fresh
-    // open anchors the last user row without animation (decision #15).
+    // initial render.
+    //
+    // Ticket 15 review round (F9, orchestrator ruling): RESTORE-FIRST is
+    // LITERAL - a saved scroll state wins over EVERYTHING at mount,
+    // including a local-provenance match (e.g. a send that was in flight
+    // when the tab was last closed and has since completed) - the restored
+    // position is what the reader asked for by returning to this chat. Only
+    // when there is genuinely nothing saved does a fresh open anchor the
+    // last user row without animation (decision #15) - local provenance
+    // first, then the general anchor-candidate scan. This does NOT affect
+    // an actively open chat's OWN live send (the branch below, decisions
+    // #8/#18) - that always anchors through the live edge-mutation path
+    // unconditionally, regardless of what happened to be true at ITS mount.
     // Decision #27 widens the candidate to a `forked-chat-link` marker - a
     // fork's copied history + marker are already present in this very first
     // snapshot (a fork is always fresh-open, never a saved-state restore),
     // so this mount-time branch is precisely where a freshly opened fork
     // lands on its own marker.
-    if (hadSavedScrollState) {
+    // Decision #29: a streaming fresh open stays following-end (no idle
+    // anchor re-derive) - must match the mount-seed gate in ChatMessages.
+    if (hadSavedScrollState || isChatStreaming) {
       return { action: { kind: "none" }, nextMode: null };
+    }
+    const localMessage = findLocalProvenanceUserMessage(
+      nextMessages,
+      localProvenanceMessageIds,
+    );
+    if (localMessage !== undefined) {
+      return {
+        action: {
+          kind: "anchor-new-turn",
+          messageId: localMessage.id,
+          animated: true,
+        },
+        nextMode: null,
+      };
     }
     const lastAnchorCandidate = nextMessages.findLast(
       isChatAnchorCandidateMessage,
@@ -572,13 +711,31 @@ function classifyFirstNonEmptyChatEdge(
   }
 
   // An empty array can only occur after that snapshot-gated mount: a real
-  // empty chat has now received its first live turn. Treat a passive row
-  // exactly like any later queued/A2A arrival (decision #9) - anchor the
-  // tail-most user only while following; a reader who relinquished follow
-  // stays parked. Widened to `isChatAnchorCandidateMessage` for consistency
-  // with decision #27, though a fork marker realistically never reaches this
-  // branch (a fork's history is already present at mount, never arriving as
-  // a live batch into a genuinely empty chat).
+  // empty chat has now received its first live turn - an actively open
+  // chat's own send, which always anchors unconditionally regardless of
+  // saved state (decisions #8, #18; `hadSavedScrollState` is a mount-only
+  // concern, not consulted here).
+  const localMessage = findLocalProvenanceUserMessage(
+    nextMessages,
+    localProvenanceMessageIds,
+  );
+  if (localMessage !== undefined) {
+    return {
+      action: {
+        kind: "anchor-new-turn",
+        messageId: localMessage.id,
+        animated: true,
+      },
+      nextMode: null,
+    };
+  }
+
+  // Treat a passive row exactly like any later queued/A2A arrival (decision
+  // #9) - anchor the tail-most user only while following; a reader who
+  // relinquished follow stays parked. Widened to `isChatAnchorCandidateMessage`
+  // for consistency with decision #27, though a fork marker realistically
+  // never reaches this branch (a fork's history is already present at
+  // mount, never arriving as a live batch into a genuinely empty chat).
   const gatedTarget = nextMessages.findLast(isChatAnchorCandidateMessage);
   if (isFollowingEnd && gatedTarget !== undefined) {
     return {
@@ -645,6 +802,63 @@ function removedMessageSuffixAnchorIndex(
     if (previousMessages[index].id !== nextMessages[index]?.id) return null;
   }
   return nextMessages.length - 1;
+}
+
+/**
+ * Ticket 17 (viewport-aware suffix removal, refines decision #14, root-cause:
+ * rootcause-delete-landing report): a deleted user query is a suffix removal
+ * whose landing depends on where the reader actually was, not just the mode
+ * flag - the old unconditional `scroll-to-index`/`scroll-to-end` split
+ * blindly overwrote LegendList's own MVCP preservation for a reader who never
+ * even saw the deleted rows.
+ *
+ * - Already following-end: unchanged - force `scroll-to-end` (existing path).
+ * - Free-scrolling AND the last visible row was strictly above the first
+ *   removed index (`suffixRemovalViewportUntouched`): nothing in view
+ *   changed - `none`, no write, no suppression; LegendList's own
+ *   preservation already has it right (Scroll Engineering principle 13).
+ * - Free-scrolling AND the viewport touched the removed suffix (or the
+ *   reader's last-visible position is unknown): their place no longer
+ *   exists - force `following-end` and land at the new true end, same as the
+ *   already-following case. Unknown deliberately defaults here, never to the
+ *   untouched case - a guessed "probably fine" is exactly the "unknown
+ *   place" this ticket exists to eliminate.
+ */
+function classifySuffixRemoval(input: {
+  readonly previousMessages: ReadonlyArray<ChatMessageModel>;
+  readonly isFollowingEnd: boolean;
+  readonly lastVisibleMessageId: string | null;
+  readonly firstRemovedIndex: number;
+}): ChatEdgeMutationOutcome {
+  const {
+    previousMessages,
+    isFollowingEnd,
+    lastVisibleMessageId,
+    firstRemovedIndex,
+  } = input;
+  if (
+    !isFollowingEnd &&
+    suffixRemovalViewportUntouched(
+      previousMessages,
+      lastVisibleMessageId,
+      firstRemovedIndex,
+    )
+  ) {
+    return NONE_OUTCOME;
+  }
+  return { action: { kind: "scroll-to-end" }, nextMode: "following-end" };
+}
+
+function suffixRemovalViewportUntouched(
+  previousMessages: ReadonlyArray<ChatMessageModel>,
+  lastVisibleMessageId: string | null,
+  firstRemovedIndex: number,
+): boolean {
+  if (lastVisibleMessageId === null) return false;
+  const lastVisibleIndex = previousMessages.findIndex(
+    (message) => message.id === lastVisibleMessageId,
+  );
+  return lastVisibleIndex !== -1 && lastVisibleIndex < firstRemovedIndex;
 }
 
 /** Every row kept the same id at the same index - a pure in-place content

@@ -1,13 +1,13 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
 import type { ChatForkMode } from "@/components/chat/chat-message";
@@ -85,6 +85,7 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { isChatRunInProgress } from "@/stores/chats/chat-session-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
@@ -643,27 +644,14 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // so its reply stream can flow visually behind it. Measuring the whole
   // overlay as one unit (rather than composer/queued-surface separately) is
   // a deliberate ticket-3 scope narrowing - see ticket-3 report for the
-  // follow-up split.
-  const [lowerSurfacesElement, setLowerSurfacesElement] =
-    useState<HTMLDivElement | null>(null);
-  const [lowerSurfacesHeight, setLowerSurfacesHeight] = useState(0);
-  useLayoutEffect(() => {
-    if (!lowerSurfacesElement) return;
-    const updateHeight = () => {
-      const nextHeight = Math.ceil(
-        lowerSurfacesElement.getBoundingClientRect().height,
-      );
-      if (nextHeight <= 0) return;
-      setLowerSurfacesHeight((current) =>
-        current === nextHeight ? current : nextHeight,
-      );
-    };
-    updateHeight();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(lowerSurfacesElement);
-    return () => observer.disconnect();
-  }, [lowerSurfacesElement]);
+  // follow-up split. `useMeasuredElementHeight` (review finding: extracted so
+  // this measurement -> prop contract is directly testable, ticket 18 rider)
+  // owns the ResizeObserver plumbing.
+  const {
+    setElement: setLowerSurfacesElement,
+    element: lowerSurfacesElement,
+    height: lowerSurfacesHeight,
+  } = useMeasuredElementHeight();
   // Shared transcript jump: resolve the owning message, expand the card via its
   // open-store, and bump the scroll request the messages surface watches. Both
   // the Background panel rows and the autonomous-resume marker route through
@@ -888,6 +876,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
               scrollRequest={backgroundScrollRequest}
               surfaceVisible={view.surfaceVisible}
               systemOverlayActive={systemOverlayActive}
+              isChatStreaming={view.isChatStreaming}
               getMessageActions={view.getMessageActions}
               nextStepActions={view.nextStepActions}
               planActions={view.planActions}
@@ -2072,6 +2061,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     consumeLocalProvenance: handle.store.getState().consumeLocalProvenance,
     surfaceVisible,
     surfaceFocused,
+    // Ticket 15 (decision #29): the sanctioned host-owned streaming signal
+    // for the fresh-open policy - NOT the trailing-assistant heuristic.
+    isChatStreaming: isChatRunInProgress(state.runStatus),
     getMessageActions: messageActionsFor,
     nextStepActions,
     planActions,
@@ -2118,6 +2110,9 @@ interface ChatSessionMessagesSurfaceProps {
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
+  /** Ticket 15 (decision #29): host-owned streaming signal for the fresh-open
+   *  policy - NOT the trailing-assistant heuristic. */
+  readonly isChatStreaming: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
@@ -2230,17 +2225,18 @@ function ChatSessionMessagesSurface(
             <ChatMessages
               taskTitle={props.node.name}
               taskId={props.node.id}
+              epicId={props.epicId}
               messages={props.messages}
               localProvenanceMessageIds={props.localProvenanceMessageIds}
               consumeLocalProvenance={props.consumeLocalProvenance}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
-              scrollStateKey={props.node.instanceId}
               getMessageActions={props.getMessageActions}
               nextStepActions={props.nextStepActions}
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
               systemOverlayActive={props.systemOverlayActive}
+              isChatStreaming={props.isChatStreaming}
               composerOverlayHeight={props.composerOverlayHeight}
             />
           </ChatMarkdownLinkProvider>

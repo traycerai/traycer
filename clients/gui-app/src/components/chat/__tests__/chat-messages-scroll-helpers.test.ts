@@ -3,9 +3,12 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 import {
   buildMessageIdToIndex,
+  chatTimelineAnchorShouldAnimateInitialIssue,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
   chatViewportAnchorRowIndex,
+  chatWheelShouldCancelLiveFollow,
+  chatWheelVerticalDirection,
   classifyChatEdgeMutation,
   isChatAnchorCandidateMessage,
   resolveChatAnchorTargetWithSetupCard,
@@ -196,6 +199,64 @@ describe("buildMessageIdToIndex", () => {
   });
 });
 
+/** Ticket 14 (direction A): pure sign classification for wheel intent. */
+describe("chatWheelVerticalDirection", () => {
+  it("classifies positive deltaY as down", () => {
+    expect(chatWheelVerticalDirection(40)).toBe("down");
+    expect(chatWheelVerticalDirection(0.1)).toBe("down");
+  });
+
+  it("classifies negative deltaY as up", () => {
+    expect(chatWheelVerticalDirection(-40)).toBe("up");
+    expect(chatWheelVerticalDirection(-0.1)).toBe("up");
+  });
+
+  it("classifies zero deltaY as ambiguous", () => {
+    expect(chatWheelVerticalDirection(0)).toBe("ambiguous");
+  });
+});
+
+/**
+ * Ticket 14 (direction A): edge-aware live-follow cancellation policy.
+ * Downward at the live edge while following-end must NOT cancel; every other
+ * combination (upward, ambiguous, or downward-at-edge in any non-following
+ * mode - e.g. `anchoring-new-turn`'s reserve-capped `isAtEnd`) always does.
+ */
+describe("chatWheelShouldCancelLiveFollow", () => {
+  it("does not cancel a downward wheel at the live edge while following-end", () => {
+    expect(chatWheelShouldCancelLiveFollow(40, true, true)).toBe(false);
+  });
+
+  it("cancels a downward wheel when not at the live edge (following-end)", () => {
+    expect(chatWheelShouldCancelLiveFollow(40, false, true)).toBe(true);
+  });
+
+  it("cancels a downward wheel at the live edge when not following-end (e.g. anchoring-new-turn's reserve-capped isAtEnd)", () => {
+    expect(chatWheelShouldCancelLiveFollow(40, true, false)).toBe(true);
+  });
+
+  it("cancels a downward wheel when neither at the live edge nor following-end", () => {
+    expect(chatWheelShouldCancelLiveFollow(40, false, false)).toBe(true);
+  });
+
+  it("cancels an upward wheel at the live edge regardless of mode", () => {
+    expect(chatWheelShouldCancelLiveFollow(-40, true, true)).toBe(true);
+    expect(chatWheelShouldCancelLiveFollow(-40, true, false)).toBe(true);
+  });
+
+  it("cancels an upward wheel when not at the live edge regardless of mode", () => {
+    expect(chatWheelShouldCancelLiveFollow(-40, false, true)).toBe(true);
+    expect(chatWheelShouldCancelLiveFollow(-40, false, false)).toBe(true);
+  });
+
+  it("cancels an ambiguous (zero) wheel regardless of edge or mode", () => {
+    expect(chatWheelShouldCancelLiveFollow(0, true, true)).toBe(true);
+    expect(chatWheelShouldCancelLiveFollow(0, false, true)).toBe(true);
+    expect(chatWheelShouldCancelLiveFollow(0, true, false)).toBe(true);
+    expect(chatWheelShouldCancelLiveFollow(0, false, false)).toBe(true);
+  });
+});
+
 describe("chatTimelineLocationForMessage", () => {
   it("returns navigation location with the fixed view offset", () => {
     const indexById = buildMessageIdToIndex([user("a", 1), assistant("b", 2)]);
@@ -276,6 +337,72 @@ describe("chatTimelineNavigationLandedAtLocation (Ticket 10)", () => {
         location,
         1,
       ),
+    ).toBe(true);
+  });
+});
+
+describe("chatTimelineAnchorShouldAnimateInitialIssue (Ticket 18)", () => {
+  // 700px viewport, 1.5x threshold -> 1050px is the exact near/far boundary.
+  const VIEWPORT_LENGTH_PX = 700;
+  const MAX_ANIMATE_VIEWPORTS = 1.5;
+
+  it("(truth table: near + animated) returns true when the target is within the viewport multiple", () => {
+    expect(
+      chatTimelineAnchorShouldAnimateInitialIssue({
+        anchorAnimated: true,
+        currentScrollTop: 1_000,
+        expectedTargetScrollTop: 1_900, // distance 900 <= 1050
+        viewportLength: VIEWPORT_LENGTH_PX,
+        maxAnimateViewports: MAX_ANIMATE_VIEWPORTS,
+      }),
+    ).toBe(true);
+  });
+
+  it("(truth table: far + animated) returns false when the target is beyond the viewport multiple", () => {
+    expect(
+      chatTimelineAnchorShouldAnimateInitialIssue({
+        anchorAnimated: true,
+        currentScrollTop: 0,
+        expectedTargetScrollTop: 2_000, // distance 2000 > 1050
+        viewportLength: VIEWPORT_LENGTH_PX,
+        maxAnimateViewports: MAX_ANIMATE_VIEWPORTS,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: unmeasured target) returns false regardless of how close the current position happens to be", () => {
+    expect(
+      chatTimelineAnchorShouldAnimateInitialIssue({
+        anchorAnimated: true,
+        currentScrollTop: 1_000,
+        expectedTargetScrollTop: null,
+        viewportLength: VIEWPORT_LENGTH_PX,
+        maxAnimateViewports: MAX_ANIMATE_VIEWPORTS,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: fresh-open / animated intent false) returns false regardless of distance", () => {
+    expect(
+      chatTimelineAnchorShouldAnimateInitialIssue({
+        anchorAnimated: false,
+        currentScrollTop: 1_000,
+        expectedTargetScrollTop: 1_000, // distance 0 - would be "near" if intent were true
+        viewportLength: VIEWPORT_LENGTH_PX,
+        maxAnimateViewports: MAX_ANIMATE_VIEWPORTS,
+      }),
+    ).toBe(false);
+  });
+
+  it("is inclusive at the exact threshold boundary", () => {
+    expect(
+      chatTimelineAnchorShouldAnimateInitialIssue({
+        anchorAnimated: true,
+        currentScrollTop: 0,
+        expectedTargetScrollTop: 1_050, // distance exactly maxAnimateViewports * viewportLength
+        viewportLength: VIEWPORT_LENGTH_PX,
+        maxAnimateViewports: MAX_ANIMATE_VIEWPORTS,
+      }),
     ).toBe(true);
   });
 });
@@ -403,16 +530,20 @@ describe("chatViewportAnchorRowIndex + viewportActiveUserMessageId", () => {
   });
 });
 
-/** Every existing call site passes all five fields explicitly (no optional
+/** Every existing call site passes all six fields explicitly (no optional
  *  params/defaults, per repo convention) - this just saves re-typing the
  *  common `hadSavedScrollState: true, localProvenanceMessageIds: NO_PROVENANCE`
- *  pair for the many tests that don't care about either. */
+ *  pair for the many tests that don't care about either. Ticket 17 adds
+ *  `lastVisibleMessageId` (inert outside the suffix-removal branch; pass
+ *  `null` there). */
 function classify(input: {
   readonly previousMessages: ReadonlyArray<ChatMessageModel> | null;
   readonly nextMessages: ReadonlyArray<ChatMessageModel>;
   readonly isFollowingEnd: boolean;
   readonly hadSavedScrollState: boolean;
+  readonly isChatStreaming: boolean;
   readonly localProvenanceMessageIds: ReadonlySet<string>;
+  readonly lastVisibleMessageId: string | null;
 }) {
   return classifyChatEdgeMutation(input);
 }
@@ -439,22 +570,26 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: [],
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: "following-end" });
     });
   });
 
   describe("(b) first non-empty render (decision #8/#15)", () => {
-    it("anchors unconditionally when the first row is a local-provenance match (send into a brand-new empty chat)", () => {
+    it("anchors unconditionally when the first row is a local-provenance match and there is no saved state (send into a brand-new empty chat)", () => {
       const firstMessage = userWithPersistentId("first-local-send", 1, null);
       expect(
         classify({
           previousMessages: null,
           nextMessages: [firstMessage],
           isFollowingEnd: false,
-          hadSavedScrollState: true,
+          hadSavedScrollState: false,
+          isChatStreaming: false,
           localProvenanceMessageIds: provenance("first-local-send"),
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -464,6 +599,24 @@ describe("classifyChatEdgeMutation", () => {
         },
         nextMode: null,
       });
+    });
+
+    it("RESTORE-FIRST is literal (ticket 15 review F9): a saved scroll state wins over a mount-time local-provenance match", () => {
+      // A send that was in flight when the tab was last closed and has
+      // since completed - the restored position is what the reader asked
+      // for by returning to this chat, not a jump to their own old send.
+      const firstMessage = userWithPersistentId("first-local-send", 1, null);
+      expect(
+        classify({
+          previousMessages: null,
+          nextMessages: [firstMessage],
+          isFollowingEnd: false,
+          hadSavedScrollState: true,
+          isChatStreaming: false,
+          localProvenanceMessageIds: provenance("first-local-send"),
+          lastVisibleMessageId: null,
+        }),
+      ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
 
     it("re-derives fresh-open (non-animated, last user message) when no saved state and no local match", () => {
@@ -476,12 +629,31 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: base,
           isFollowingEnd: false,
           hadSavedScrollState: false,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: { kind: "anchor-new-turn", messageId: "u1", animated: false },
         nextMode: null,
       });
+    });
+
+    it("ticket 15: streaming fresh-open does not re-derive the idle anchor (stays none)", () => {
+      // Mount-seed and classifier share ownership of the first authoritative
+      // snapshot. Decision #29: while the chat is actively streaming, the
+      // idle last-user anchor must not fire - following-end owns the tail.
+      expect(
+        classify({
+          previousMessages: null,
+          nextMessages: base,
+          isFollowingEnd: true,
+          hadSavedScrollState: false,
+          isChatStreaming: true,
+          localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
+        }),
+      ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
 
     it("does nothing on the initial saved-state snapshot when there is no local match", () => {
@@ -491,7 +663,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: base,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -503,7 +677,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: base,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -520,9 +696,37 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: base,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
+    });
+
+    it("anchors unconditionally on local provenance for a live empty->non-empty send, regardless of isFollowingEnd or hadSavedScrollState (decisions #8/#18)", () => {
+      const firstMessage = userWithPersistentId("live-local-send", 1, null);
+      // Not following, AND a saved state exists - neither should matter
+      // here: `hadSavedScrollState` is a mount-only concern (ticket 15
+      // review F9), and this is the reader's OWN live send in an already
+      // open chat, not a restore.
+      expect(
+        classify({
+          previousMessages: [],
+          nextMessages: [firstMessage],
+          isFollowingEnd: false,
+          hadSavedScrollState: true,
+          isChatStreaming: false,
+          localProvenanceMessageIds: provenance("live-local-send"),
+          lastVisibleMessageId: null,
+        }),
+      ).toEqual({
+        action: {
+          kind: "anchor-new-turn",
+          messageId: "live-local-send",
+          animated: true,
+        },
+        nextMode: null,
+      });
     });
 
     it("does nothing when there is no saved state but also no user row to anchor", () => {
@@ -533,7 +737,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: assistantOnly,
           isFollowingEnd: false,
           hadSavedScrollState: false,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -553,7 +759,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: messages,
           isFollowingEnd: false,
           hadSavedScrollState: false,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -576,10 +784,16 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: messages,
           isFollowingEnd: false,
           hadSavedScrollState: false,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
-        action: { kind: "anchor-new-turn", messageId: "u-new", animated: false },
+        action: {
+          kind: "anchor-new-turn",
+          messageId: "u-new",
+          animated: false,
+        },
         nextMode: null,
       });
     });
@@ -592,7 +806,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: messages,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -609,59 +825,121 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: messages,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
   });
 
   describe("(c) suffix removal", () => {
+    // base = [u0, a0, u1, a1]; next keeps the first two → firstRemovedIndex = 2.
+    // Ticket 17 viewport cases (a)/(b)/(c) are independent of this describe's
+    // own "(c)" label (third category of message-array transition).
     const next = base.slice(0, 2);
+    const FOLLOWING_END_OUTCOME = {
+      action: { kind: "scroll-to-end" as const },
+      nextMode: "following-end" as const,
+    };
 
-    it("scrolls to end and stays following when isFollowingEnd", () => {
+    it("scrolls to end and stays following when isFollowingEnd (ticket 17 case c)", () => {
+      // Already following: viewport position is irrelevant.
       expect(
         classify({
           previousMessages: base,
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
-      ).toEqual({
-        action: { kind: "scroll-to-end" },
-        nextMode: "following-end",
-      });
+      ).toEqual(FOLLOWING_END_OUTCOME);
     });
 
-    it("scrolls to the new last index without forcing mode when free-scrolling", () => {
+    it("does nothing when free-scrolling and last visible row is strictly above the removed suffix (ticket 17 case a)", () => {
+      // last visible = a0 (index 1) < firstRemovedIndex 2 → viewport untouched.
       expect(
         classify({
           previousMessages: base,
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: "a0",
         }),
-      ).toEqual({
-        action: { kind: "scroll-to-index", index: 1 },
-        nextMode: null,
-      });
+      ).toEqual({ action: { kind: "none" }, nextMode: null });
+    });
+
+    it("forces following-end + scroll-to-end when free-scrolling and last visible row is at/past the first removed index (ticket 17 case b)", () => {
+      // last visible = u1 (index 2) === firstRemovedIndex → content vanished.
+      expect(
+        classify({
+          previousMessages: base,
+          nextMessages: next,
+          isFollowingEnd: false,
+          hadSavedScrollState: true,
+          isChatStreaming: false,
+          localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: "u1",
+        }),
+      ).toEqual(FOLLOWING_END_OUTCOME);
+    });
+
+    it("forces following-end + scroll-to-end when free-scrolling and last visible id is unknown/unmeasured (ticket 17 case b, unknown defaults to b never a)", () => {
+      // null is "never measured" - must NOT be treated as safely above the
+      // boundary (old unconditional scroll-to-index polarity flipped here).
+      expect(
+        classify({
+          previousMessages: base,
+          nextMessages: next,
+          isFollowingEnd: false,
+          hadSavedScrollState: true,
+          isChatStreaming: false,
+          localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
+        }),
+      ).toEqual(FOLLOWING_END_OUTCOME);
+    });
+
+    it("forces following-end + scroll-to-end when free-scrolling and last visible id is no longer in previousMessages", () => {
+      // Stale id that does not resolve → treated as unknown → case b.
+      expect(
+        classify({
+          previousMessages: base,
+          nextMessages: next,
+          isFollowingEnd: false,
+          hadSavedScrollState: true,
+          isChatStreaming: false,
+          localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: "already-gone",
+        }),
+      ).toEqual(FOLLOWING_END_OUTCOME);
     });
 
     it("does not treat a non-prefix shrink as suffix removal", () => {
-      // Different first row → not a strict prefix.
+      // Different first row → not a strict prefix. Candidate detection sees
+      // a new user id ("other") with no local provenance while following-end
+      // → decision #9 gated anchor (NOT suffix-removal's scroll-to-end +
+      // following-end, and not the deleted scroll-to-index outcome).
       const diverged = [user("other", 1), assistant("a0", 2)];
       const outcome = classify({
         previousMessages: base,
         nextMessages: diverged,
         isFollowingEnd: true,
         hadSavedScrollState: true,
+        isChatStreaming: false,
         localProvenanceMessageIds: NO_PROVENANCE,
+        lastVisibleMessageId: null,
       });
-      // Hits the candidate-detection / fallback path instead of suffix
-      // removal's scroll-to-end + following-end.
-      expect(outcome).not.toEqual({
-        action: { kind: "scroll-to-index", index: 1 },
+      expect(outcome).toEqual({
+        action: {
+          kind: "anchor-new-turn",
+          messageId: "other",
+          animated: true,
+        },
         nextMode: null,
       });
     });
@@ -682,7 +960,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: provenance("u-branch"),
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -705,7 +985,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: provenance("u-send"),
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -729,7 +1011,9 @@ describe("classifyChatEdgeMutation", () => {
         nextMessages: next,
         isFollowingEnd: true,
         hadSavedScrollState: true,
+        isChatStreaming: false,
         localProvenanceMessageIds: provenance("history-0"),
+        lastVisibleMessageId: null,
       });
       expect(outcome).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -747,7 +1031,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -770,7 +1056,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -792,7 +1080,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -809,7 +1099,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -825,7 +1117,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -842,7 +1136,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -864,7 +1160,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: provenance("local-co-arrival"),
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -889,7 +1187,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
 
@@ -899,7 +1199,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -921,7 +1223,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -944,7 +1248,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -970,7 +1276,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: { kind: "none" },
@@ -992,7 +1300,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -1006,7 +1316,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: base,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -1021,7 +1333,9 @@ describe("classifyChatEdgeMutation", () => {
         nextMessages: next,
         isFollowingEnd: false,
         hadSavedScrollState: true,
+        isChatStreaming: false,
         localProvenanceMessageIds: NO_PROVENANCE,
+        lastVisibleMessageId: null,
       });
       expect(outcome).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -1036,14 +1350,19 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: [],
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: "following-end" });
     });
 
     it("checks suffix removal before candidate detection", () => {
       // A shorter strict prefix could also look like a "change" but suffix
-      // removal is first and must win.
+      // removal is first and must win. Unknown last-visible (`null`) defaults
+      // to ticket 17 case (b) — scroll-to-end + following-end — which is
+      // clearly different from any candidate-detection outcome (anchor /
+      // none) for this shape.
       const next = base.slice(0, 3);
       expect(
         classify({
@@ -1051,11 +1370,13 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: false,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
-        action: { kind: "scroll-to-index", index: 2 },
-        nextMode: null,
+        action: { kind: "scroll-to-end" },
+        nextMode: "following-end",
       });
     });
 
@@ -1072,7 +1393,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: provenance("prepended-local"),
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -1088,7 +1411,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: provenance("u-send"),
+          lastVisibleMessageId: null,
         }),
       ).toEqual({
         action: {
@@ -1115,7 +1440,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });
@@ -1135,7 +1462,9 @@ describe("classifyChatEdgeMutation", () => {
           nextMessages: next,
           isFollowingEnd: true,
           hadSavedScrollState: true,
+          isChatStreaming: false,
           localProvenanceMessageIds: NO_PROVENANCE,
+          lastVisibleMessageId: null,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
     });

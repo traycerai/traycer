@@ -21,6 +21,11 @@ import {
 } from "@/components/chat/chat-turn-minimap-logic";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { cn } from "@/lib/utils";
+import {
+  restoreChatTurnMinimapActiveEntry,
+  saveChatTurnMinimapActiveEntry,
+} from "@/stores/chats/chat-turn-minimap-active-entry-store";
+import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 
 export interface ChatTurnMinimapProps {
   /** Same row array LegendList renders - rail indices key directly into it. */
@@ -41,13 +46,19 @@ export interface ChatTurnMinimapProps {
    *  than measuring a clipping parent, since it is positioned within the
    *  same relative box the dock overlays. */
   readonly bottomInset: number;
-  /** Imperative refresh registered here and invoked by the timeline's
-   *  row-remeasurement callback without re-rendering the controller. */
+  /** Imperative refresh registered here and invoked by the timeline's own
+   *  scroll callback AND its row-remeasurement callback (O2, ticket 16: the
+   *  minimap no longer attaches a second scroll listener of its own) without
+   *  re-rendering the controller. */
   readonly inViewRefreshRef: RefObject<() => void>;
   /** Cancels manual-nav follow ownership, then animate-scrolls to the
    *  target row through the same suppression-arming wrapper find/deep-link
    *  navigation uses (decision #21). */
   readonly onSelect: (messageId: string) => void;
+  /** Dual-key identity (ticket 15) the active entry restores/persists
+   *  against - tab-key while switching away and back, chat-key across a
+   *  full close/reopen. */
+  readonly identity: ChatTabPersistenceIdentity;
 }
 
 interface ChatTurnMinimapItem {
@@ -114,7 +125,11 @@ function chatTurnMinimapEventTargetsPreview(target: EventTarget): boolean {
 }
 
 /** The preview anchors to the active strip's own top edge, except at the
- *  rail's very ends where that would push it off-screen. */
+ *  rail's very ends where that would push it off-screen. O3 (T3 parity,
+ *  ticket 16): T3 itself inlines this as a nested ternary - this repo's
+ *  lint forbids `no-nested-ternary`, so this one stays an extracted
+ *  if-chain rather than the true one-liners (aria-label, wrapper opacity,
+ *  active-state resolution) that ARE inlined below. */
 function resolveChatTurnMinimapTooltipTranslate(
   resolvedActiveIndex: number | null,
   itemCount: number,
@@ -125,7 +140,9 @@ function resolveChatTurnMinimapTooltipTranslate(
   return "-50%";
 }
 
-/** Strip width scales down with distance from the active strip. */
+/** Strip width scales down with distance from the active strip. Same
+ *  no-nested-ternary reasoning as `resolveChatTurnMinimapTooltipTranslate`
+ *  above - stays extracted. */
 function resolveChatTurnMinimapStripWidthClassName(
   activeDistance: number | null,
 ): string {
@@ -141,6 +158,8 @@ interface ChatTurnMinimapActiveState {
   readonly activeTopPercent: number;
 }
 
+/** Kept extracted (not inlined like T3) for the same complexity-ceiling
+ *  reason as the two functions above. */
 function resolveChatTurnMinimapActiveState(
   items: ReadonlyArray<ChatTurnMinimapItem>,
   activeIndex: number | null,
@@ -160,48 +179,6 @@ function resolveChatTurnMinimapActiveState(
   };
 }
 
-function resolveChatTurnMinimapWrapperOpacityClassName(
-  hasPersistentGutter: boolean,
-): string {
-  if (hasPersistentGutter) return "opacity-100";
-  return "opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100";
-}
-
-function resolveChatTurnMinimapAriaLabel(
-  activeItem: ChatTurnMinimapItem | null,
-): string {
-  return `Jump to message: ${activeItem?.userText ?? "User message"}`;
-}
-
-function ChatTurnMinimapPreview(props: {
-  readonly activeItem: ChatTurnMinimapItem;
-  readonly topPercent: number;
-  readonly tooltipTranslate: string;
-}) {
-  return (
-    <span
-      className="pointer-events-auto absolute left-8 w-[min(20rem,calc(100vw-3rem))] cursor-text select-text"
-      data-chat-turn-minimap-preview=""
-      onMouseMove={(event) => event.stopPropagation()}
-      style={{
-        top: `${props.topPercent}%`,
-        transform: `translateY(${props.tooltipTranslate})`,
-      }}
-    >
-      <span className="block rounded-xl border border-border/60 bg-popover p-3 text-left text-popover-foreground shadow-lg">
-        <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-ui-xs font-medium leading-5">
-          {props.activeItem.userText ?? "User message"}
-        </span>
-        {props.activeItem.assistantText === null ? null : (
-          <span className="mt-1 line-clamp-3 text-muted-foreground text-ui-xs leading-5">
-            {props.activeItem.assistantText}
-          </span>
-        )}
-      </span>
-    </span>
-  );
-}
-
 /**
  * Left-rail turn minimap (decision #20).
  * One evenly spaced strip per HUMAN user turn; hover/focus opens a 22rem
@@ -214,6 +191,7 @@ function ChatTurnMinimapPreview(props: {
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const {
     bottomInset,
+    identity,
     inViewRefreshRef,
     listRef,
     messages,
@@ -223,7 +201,12 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   } = props;
   const items = useMemo(() => deriveChatTurnMinimapItems(messages), [messages]);
   const [stripMap] = useState(() => new Map<string, HTMLSpanElement>());
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [activeIndex, setActiveIndex] = useState<number | null>(() => {
+    const savedActiveMessageId = restoreChatTurnMinimapActiveEntry(identity);
+    if (savedActiveMessageId === null) return null;
+    const index = items.findIndex((item) => item.id === savedActiveMessageId);
+    return index === -1 ? null : index;
+  });
   const [hasPersistentGutter, setHasPersistentGutter] = useState(false);
   const [hitStripWidth, setHitStripWidth] = useState(0);
 
@@ -257,7 +240,14 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   // In-view strip highlighting from LegendList's own measured positions - no
   // DOM rect probing (jsdom/perf lesson; the old reading-line probe died on
   // exactly this). Written directly to each strip's dataset, bypassing React
-  // state, so a scroll tick never triggers a re-render of the whole rail.
+  // state, so a scroll tick never triggers a re-render of the whole rail. O2
+  // (T3 parity, ticket 16): this used to run off a second scroll listener
+  // this component attached to the scrollable node itself (rAF-polling
+  // attach + native listener + detach, duplicating a lifecycle ChatTimeline
+  // already runs) - it now runs only via `inViewRefreshRef`, invoked from
+  // ChatTimeline's own `onScroll` (chat-messages.tsx's `handleScroll`) and
+  // from `onItemSizeChanged` (non-scroll remeasurement, e.g. a disclosure
+  // toggling with no scroll of its own).
   const updateInView = useCallback((): void => {
     const rawState = listRef.current?.getState();
     if (rawState === undefined) return;
@@ -303,43 +293,33 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     return () => cancelAnimationFrame(frame);
   }, [updateInView]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let pollFrame: number | null = null;
-    let attachedNode: HTMLElement | null = null;
-
-    const detach = (): void => {
-      if (attachedNode === null) return;
-      attachedNode.removeEventListener("scroll", updateInView);
-      attachedNode = null;
-    };
-    const tryAttach = (): void => {
-      if (cancelled) return;
-      const scrollNode = listRef.current?.getScrollableNode() ?? null;
-      if (scrollNode === null) {
-        pollFrame = requestAnimationFrame(tryAttach);
-        return;
-      }
-      if (scrollNode === attachedNode) return;
-      detach();
-      scrollNode.addEventListener("scroll", updateInView, { passive: true });
-      attachedNode = scrollNode;
-    };
-    pollFrame = requestAnimationFrame(tryAttach);
-
-    return () => {
-      cancelled = true;
-      if (pollFrame !== null) cancelAnimationFrame(pollFrame);
-      detach();
-    };
-  }, [listRef, updateInView]);
-
+  // O3 (T3 parity, ticket 16): `ChatTurnMinimap` sits at this repo's
+  // complexity-16 lint ceiling (T3 has no such limit) - inlining this
+  // 3-branch resolution here (as T3 does) pushed it over, so it stays
+  // extracted; the true one-liners (aria-label, wrapper opacity) below ARE
+  // inlined.
   const { resolvedActiveIndex, activeItem, activeTopPercent } =
     resolveChatTurnMinimapActiveState(items, activeIndex);
   const activeTooltipTranslate = resolveChatTurnMinimapTooltipTranslate(
     resolvedActiveIndex,
     items.length,
   );
+
+  // Ticket 15 (decision #29): mirror the active entry into the tab-key
+  // registry on every genuine change - keyed off the resolved item's id
+  // (not `activeItem` itself, a fresh object each render) so this does not
+  // re-fire every render. Survives a switch-away-then-back remount (same
+  // tileInstanceId).
+  //
+  // Ticket 15 review round 3 (mandated simplification): the durable
+  // chat-key half no longer commits from this component at all - the
+  // canvas close sweep's promotion choke point (store.ts) reads the
+  // tab-key registry directly before eviction, covering both an active
+  // AND an inactive (never-mounted) view's close.
+  const activeItemId = activeItem?.id ?? null;
+  useEffect(() => {
+    saveChatTurnMinimapActiveEntry(identity, activeItemId);
+  }, [identity, activeItemId]);
 
   const resolveActiveIndexFromPointer = useCallback(
     (event: ReactMouseEvent<HTMLElement>): number | null => {
@@ -442,7 +422,9 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     <div
       className={cn(
         "group/chat-turn-minimap pointer-events-none absolute top-0 left-0 z-40 hidden w-18 [@media(pointer:fine)]:block",
-        resolveChatTurnMinimapWrapperOpacityClassName(hasPersistentGutter),
+        hasPersistentGutter
+          ? "opacity-100"
+          : "opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100",
       )}
       data-testid="chat-turn-minimap"
       data-persistent-gutter={hasPersistentGutter ? "true" : "false"}
@@ -451,7 +433,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       <div className="relative h-full w-full select-none">
         <button
           aria-hidden={isInert ? "true" : undefined}
-          aria-label={resolveChatTurnMinimapAriaLabel(activeItem)}
+          aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
           className={cn(
             "absolute top-1/2 left-3 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
             // The strip is width-capped to the side gutter so it never
@@ -510,11 +492,26 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
             );
           })}
           {activeItem === null ? null : (
-            <ChatTurnMinimapPreview
-              activeItem={activeItem}
-              topPercent={activeTopPercent}
-              tooltipTranslate={activeTooltipTranslate}
-            />
+            <span
+              className="pointer-events-auto absolute left-8 w-[min(20rem,calc(100vw-3rem))] cursor-text select-text"
+              data-chat-turn-minimap-preview=""
+              onMouseMove={(event) => event.stopPropagation()}
+              style={{
+                top: `${activeTopPercent}%`,
+                transform: `translateY(${activeTooltipTranslate})`,
+              }}
+            >
+              <span className="block rounded-xl border border-border/60 bg-popover p-3 text-left text-popover-foreground shadow-lg">
+                <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-ui-xs font-medium leading-5">
+                  {activeItem.userText ?? "User message"}
+                </span>
+                {activeItem.assistantText === null ? null : (
+                  <span className="mt-1 line-clamp-3 text-muted-foreground text-ui-xs leading-5">
+                    {activeItem.assistantText}
+                  </span>
+                )}
+              </span>
+            </span>
           )}
         </button>
       </div>

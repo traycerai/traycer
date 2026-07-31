@@ -85,6 +85,7 @@ interface RenderTimelineOptions {
   readonly "data-testid"?: string;
   readonly topFadeEnabled?: boolean;
   readonly followEnabled?: boolean;
+  readonly onItemSizeChanged?: () => void;
 }
 
 function renderTimeline(options: RenderTimelineOptions) {
@@ -113,6 +114,7 @@ function renderTimeline(options: RenderTimelineOptions) {
         data-testid={options["data-testid"]}
         topFadeEnabled={options.topFadeEnabled}
         followEnabled={options.followEnabled}
+        onItemSizeChanged={options.onItemSizeChanged}
       />
     </div>
   );
@@ -343,5 +345,84 @@ describe("ChatTimeline", () => {
 
     // Action bar only mounts when getMessageActions returned user actions.
     expect(screen.getByLabelText("Edit message")).not.toBeNull();
+  });
+
+  // Ticket 17 (chat-messages.tsx review round 2, finding 2 residual):
+  // establishes the LIBRARY-LEVEL contract the fix depends on - a row's
+  // real measured size CAN change under the SAME `data` array with NO
+  // scroll event at all (an activity-group disclosure collapsing/expanding
+  // is exactly this shape: that open/closed state lives outside `messages`,
+  // so LegendList sees no data change and jsdom's `MockResizeObserver` never
+  // fires on its own). `setItemSize` is the ref-exposed imperative path
+  // production would only reach via a real ResizeObserver (a no-op in this
+  // test environment) - calling it directly here still runs through
+  // LegendList's own `applyItemSize`/`onItemSizeChanged` pipeline for real,
+  // which is the part `chat-messages.tsx`'s `onTimelineItemSizeChanged` (not
+  // exercised by this file - `ChatMessages` does not expose `chatTimelineRef`
+  // to tests) depends on being reachable at all.
+  it("onItemSizeChanged fires for a real size delta on an already-measured row, with no scroll and no data change", async () => {
+    const messages: ChatMessageModel[] = [
+      makeMessage(0, "user"),
+      makeMessage(1, "assistant"),
+      makeMessage(2, "user"),
+    ];
+    const onItemSizeChanged = vi.fn();
+    const { listRef } = renderTimeline({ messages, onItemSizeChanged });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(listRef.current).not.toBeNull();
+    });
+
+    onItemSizeChanged.mockClear();
+    act(() => {
+      listRef.current?.setItemSize("message-0", { height: 40, width: 800 });
+    });
+
+    expect(onItemSizeChanged).toHaveBeenCalled();
+  });
+
+  // M1 (T3 parity, ticket 16): `scrollbar-gutter-both` reserves the
+  // scrollbar's track width on both edges so the centered column never
+  // shifts when the bar appears/disappears - replaces the old one-sided
+  // `mr-1` margin hack (see index.css's `.chat-timeline-scroll-fade` for the
+  // matching gutter-exclusion band on the fade mask).
+  it("reserves a symmetric scrollbar gutter via scrollbar-gutter-both, not the old one-sided mr-1 margin", () => {
+    const messages: ChatMessageModel[] = [makeMessage(0, "user")];
+    const { getByTestId } = renderTimeline({
+      messages,
+      "data-testid": "chat-timeline",
+    });
+
+    const listElement = getByTestId("chat-timeline");
+    expect(listElement.className).toContain("scrollbar-gutter-both");
+    expect(listElement.className).not.toContain("mr-1");
+  });
+
+  // M4 (T3 parity, ticket 16): header/footer 40px -> 12/16px, fade header
+  // 64/80px -> 40/48px (T3's own MessagesTimeline.tsx sizes).
+  it("sizes the header/footer/fade-header spacers to T3's values, not the old 40/64/80px drift", () => {
+    const messages: ChatMessageModel[] = [makeMessage(0, "user")];
+
+    function spacerClasses(container: HTMLElement): ReadonlyArray<string> {
+      // Only the header/footer/fade-header spacer divs - not the row action
+      // buttons' lucide icon SVGs, which also carry aria-hidden.
+      return Array.from(
+        container.querySelectorAll('div[aria-hidden="true"]'),
+      ).map((node) => node.getAttribute("class") ?? "");
+    }
+
+    const { container } = renderTimeline({ messages, topFadeEnabled: false });
+    expect(spacerClasses(container)).toEqual(["h-3 sm:h-4", "h-3 sm:h-4"]);
+    cleanup();
+
+    const { container: fadeContainer } = renderTimeline({
+      messages,
+      topFadeEnabled: true,
+    });
+    expect(spacerClasses(fadeContainer)).toEqual([
+      "h-10 sm:h-12",
+      "h-3 sm:h-4",
+    ]);
   });
 });

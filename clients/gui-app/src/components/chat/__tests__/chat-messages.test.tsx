@@ -6,11 +6,17 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { ReactElement, ReactNode } from "react";
+import {
+  StrictMode,
+  useCallback,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi } from "zustand/vanilla";
 import {
   CHAT_ANCHOR_SETTLE_FALLBACK_MS,
+  CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
@@ -25,13 +31,17 @@ import {
   CHAT_LIST_ANCHOR_OFFSET,
   getChatNaturalMaxScrollWithoutAnchorReserve,
 } from "@/components/chat/chat-scroll-anchoring";
+import { appLogger } from "@/lib/logger";
 import { preserveChatScrollAcrossDisclosureChange } from "@/components/chat/chat-scroll-disclosure";
 import {
   evictChatTabState,
+  evictChatTabStateForChat,
   hasSavedChatTabState,
   restoreChatTabState,
   saveChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
+import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { evictChatTabPersistenceForEpic } from "@/stores/chats/chat-tab-persistence-eviction";
 import { getOrCreateActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import type { ActivityGroupOpenState } from "@/stores/chats/activity-group-open-store-context";
 import { getOrCreateA2AOpenStore } from "@/stores/chats/a2a-open-store-context";
@@ -50,6 +60,7 @@ import {
 } from "./chat-message-fixtures";
 import {
   installLegendListViewportMetrics,
+  setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "./legend-list-test-environment";
 
@@ -97,6 +108,127 @@ vi.mock("@/components/chat/chat-message", () => ({
   },
 }));
 
+// Ticket 17 (review round 2, finding 2 residual): a thin, behavior-preserving
+// pass-through around the REAL `LegendList` component - re-exports everything
+// unchanged, wraps only the component itself to tee its ref into a
+// module-scope holder. The real component renders and behaves identically;
+// this is not the mocked-primitive trap - it exists purely so this file's
+// tests can drive `setItemSize` directly (the only way to fire a genuine,
+// no-scroll `onItemSizeChanged` in this jsdom harness: the ResizeObserver is
+// globally a no-op, and there is no other way to simulate a row's real
+// measured size changing). Zero production delta - `chat-messages.tsx` and
+// `chat-timeline.tsx` are untouched; `ChatMessages` still never exposes its
+// internal `chatTimelineRef`.
+const legendListRefHolder = vi.hoisted(() => ({
+  current: null as import("@legendapp/list/react").LegendListRef | null,
+}));
+
+vi.mock("@legendapp/list/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@legendapp/list/react")>();
+  const TeedLegendList: typeof actual.LegendList = (props) => {
+    const { ref, ...rest } = props;
+    const teeRef = useCallback(
+      (instance: import("@legendapp/list/react").LegendListRef | null) => {
+        legendListRefHolder.current = instance;
+        if (typeof ref === "function") {
+          ref(instance);
+        } else if (ref) {
+          ref.current = instance;
+        }
+      },
+      [ref],
+    );
+    return <actual.LegendList {...rest} ref={teeRef} />;
+  };
+  return { ...actual, LegendList: TeedLegendList };
+});
+
+// Ticket 17 (review round 3, finding 2 residual): LegendList's per-element
+// size/layout notifications (row remeasure AND scroll-container resize) both
+// route through ONE module-cached `ResizeObserver` singleton
+// (`getGlobalResizeObserver()` in the installed 3.2.0 bundle), lazily
+// constructed on the FIRST element it ever observes - a swap done from
+// inside a single `it()` is too late, since some earlier test in this file
+// has already triggered that construction using the real, globally no-op
+// `MockResizeObserver` (`test-browser-apis.ts`). Installing a controllable
+// class at MODULE-LOAD time (before any test's `beforeEach`/render ever
+// runs) is early enough: the singleton is constructed lazily, on this
+// file's FIRST LegendList mount, which happens after this module finishes
+// evaluating. Mirrors `chat-turn-minimap.test.tsx`'s own
+// `installControllableResizeObserver` shape - `observe`/`unobserve` are
+// no-ops (LegendList keeps its OWN per-element dispatch table internally,
+// keyed by the same `element` object passed to `observe`, so a genuinely
+// no-op stub here does not break that routing), so every one of this
+// file's other 200+ tests keeps seeing exactly the same non-firing
+// behavior it always has. Only `triggerLegendListResizeObserverEntry`
+// (called explicitly, by name, from one test) ever invokes the callback.
+// NOTE: `ChatMessages` mounts MULTIPLE independent `new ResizeObserver(...)`
+// consumers under one render (LegendList's own shared per-item/per-container
+// singleton, `ChatTurnMinimap`'s own instance, per-row `chat-message-user-body`
+// instances) - capturing only the LAST-constructed callback (mirroring
+// `chat-turn-minimap.test.tsx`'s single-consumer pattern) silently captured
+// the WRONG one here. Track every constructed callback and invoke all of
+// them on trigger - non-LegendList consumers ignore an entry for an element
+// they never observed (their own `entries` argument is unused - verified
+// against `chat-turn-minimap.test.tsx`'s own trigger, which already calls
+// its captured callback with an EMPTY entries array and still works, i.e.
+// that callback re-measures its own DOM directly rather than reading
+// `entries`), so invoking everyone is harmless.
+const capturedResizeObserverCallbacks: Array<ResizeObserverCallback> = [];
+
+class ControllableGlobalResizeObserver implements ResizeObserver {
+  constructor(callback: ResizeObserverCallback) {
+    capturedResizeObserverCallbacks.push(callback);
+  }
+
+  observe(): void {}
+
+  unobserve(): void {}
+
+  disconnect(): void {}
+}
+
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  writable: true,
+  value: ControllableGlobalResizeObserver,
+});
+
+function triggerLegendListResizeObserverEntry(
+  target: Element,
+  contentRect: { readonly width: number; readonly height: number },
+): void {
+  if (capturedResizeObserverCallbacks.length === 0) {
+    throw new Error(
+      "No ResizeObserver has been constructed yet - no element has been observed",
+    );
+  }
+  const entry: ResizeObserverEntry = {
+    target,
+    contentRect: {
+      ...contentRect,
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: contentRect.width,
+      bottom: contentRect.height,
+      toJSON: () => ({}),
+    },
+    borderBoxSize: [],
+    contentBoxSize: [],
+    devicePixelContentBoxSize: [],
+  };
+  const dummyObserverArg: ResizeObserver = {
+    observe: () => undefined,
+    unobserve: () => undefined,
+    disconnect: () => undefined,
+  };
+  for (const callback of capturedResizeObserverCallbacks) {
+    callback([entry], dummyObserverArg);
+  }
+}
+
 vi.mock(
   "@/stores/chats/activity-group-open-store-core",
   async (importOriginal) => {
@@ -132,11 +264,17 @@ vi.mock(
     }
     return {
       ...actual,
-      createActivityGroupOpenStore: () =>
-        wrapWithSetOpenTracking(actual.createActivityGroupOpenStore()),
-      getOrCreateActivityGroupOpenStore: (tileInstanceId: string) =>
+      createActivityGroupOpenStore: (
+        initialOpenIds: ReadonlySet<string> | null,
+      ) =>
         wrapWithSetOpenTracking(
-          actual.getOrCreateActivityGroupOpenStore(tileInstanceId),
+          actual.createActivityGroupOpenStore(initialOpenIds),
+        ),
+      getOrCreateActivityGroupOpenStore: (
+        identity: ChatTabPersistenceIdentity,
+      ) =>
+        wrapWithSetOpenTracking(
+          actual.getOrCreateActivityGroupOpenStore(identity),
         ),
     };
   },
@@ -377,11 +515,36 @@ async function waitForRevealPassTick(): Promise<void> {
 }
 
 /**
- * Anchor engine settle: LegendList frames + the `CHAT_ANCHOR_SETTLE_FALLBACK_MS`
- * `awaitScrollSettle` fallback (jsdom never fires native `scrollend`), plus
- * slack for the settle callback's own scheduling.
+ * Anchor engine settle: LegendList frames + the anchor engine's own
+ * (review-fix-widened) `CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS`
+ * watchdog - deliberately longer than the plain-nav `CHAT_ANCHOR_SETTLE_
+ * FALLBACK_MS` (750ms) other settle paths use, since it must clear
+ * LegendList's own 1500ms animated-scroll ownership ceiling with margin
+ * (see that constant's own doc comment) - plus slack for the settle
+ * callback's own scheduling.
  */
 async function waitForAnchorEngineSettle(): Promise<void> {
+  await settleLegendList();
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS + 150);
+    });
+  });
+}
+
+/**
+ * Plain-navigation settle (`scrollToEnd`/`navigateToMessage`, ticket 10):
+ * these paths still use the DOM-`scrollend`-based `awaitScrollSettle` and
+ * the shorter `CHAT_ANCHOR_SETTLE_FALLBACK_MS` - NOT the anchor engine's own
+ * (review-fix-widened) `CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS`.
+ * Waiting the anchor engine's much longer window here observably regresses
+ * this suite (LegendList's own readiness/settle polling reacts differently
+ * to how long a real idle gap it observes) - matching each wait to the
+ * mechanism it is actually waiting on avoids that, and is also just more
+ * correct: this file's `waitForAnchorEngineSettle` name is anchor-specific
+ * for a reason.
+ */
+async function waitForNavigationSettle(): Promise<void> {
   await settleLegendList();
   await act(async () => {
     await new Promise<void>((resolve) => {
@@ -455,6 +618,24 @@ async function fireScrollTopAndFlush(scrollTop: number): Promise<void> {
   });
 }
 
+/**
+ * Ticket 15 review (live pass S5 round 3): sets `scrollTop` and fires the
+ * scroll event WITHOUT yielding an animation frame afterward - deliberately
+ * leaves `scheduleActiveViewportUpdate`'s rAF-throttled reading-line mirror
+ * (`scrolledActiveUserMessageIdRef`) unserviced, exactly as a real close
+ * that races the pending frame does (`requestAnimationFrame` never fires
+ * for a backgrounded/closing tab; `useAnimationFrameThrottle`'s own cleanup
+ * cancels the pending frame on unmount either way). Pairs with an immediate
+ * unmount to reproduce the field race.
+ */
+function fireScrollTopWithoutFlush(scrollTop: number): void {
+  const scrollNode = getScrollNode();
+  act(() => {
+    scrollNode.scrollTop = scrollTop;
+    fireEvent.scroll(scrollNode);
+  });
+}
+
 /** Dispatch a keydown with target inside the keyboard-scroll scope. */
 function dispatchKeyInScope(key: string): void {
   const scrollNode = getScrollNode();
@@ -500,8 +681,17 @@ async function selectLastChatTurnMinimapItem(): Promise<void> {
 
 interface RenderChatMessagesOptions {
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  /**
+   * Tab-key half of the dual-key identity (ticket 15). Prefer this over a
+   * separate `instanceId` when a test only cares about the cache key - the
+   * production path keys everything by `instanceId` now (scrollStateKey was
+   * dropped as a redundant prop).
+   */
   readonly scrollStateKey?: string;
   readonly instanceId?: string;
+  readonly epicId?: string;
+  readonly taskId?: string;
+  readonly isChatStreaming?: boolean;
   readonly visible?: boolean;
   readonly composerOverlayHeight?: number;
   readonly taskTitle?: string;
@@ -541,21 +731,45 @@ interface ChatMessagesRenderState {
   tileActive: boolean;
   composerOverlayHeight: number;
   localProvenanceMessageIds: ReadonlySet<string>;
+  isChatStreaming: boolean;
+}
+
+/** Synthetic dual-key identity for tests (ticket 15). */
+function makeTestIdentity(
+  tileInstanceId: string,
+  epicId: string,
+  chatId: string,
+): ChatTabPersistenceIdentity {
+  return { tileInstanceId, epicId, chatId };
+}
+
+/** Default harness identity (epic-1 / task-1) for call sites that only vary the tile key. */
+function makeDefaultTestIdentity(
+  tileInstanceId: string,
+): ChatTabPersistenceIdentity {
+  return makeTestIdentity(tileInstanceId, "epic-1", "task-1");
 }
 
 function renderChatMessages(options: RenderChatMessagesOptions) {
-  const scrollStateKey =
-    options.scrollStateKey ??
-    `scroll-key-${Math.random().toString(36).slice(2)}`;
+  // Production keys the dual-key tab half by `instanceId`. Call sites that
+  // only pass `scrollStateKey` still work: it becomes the instanceId.
   const instanceId =
-    options.instanceId ?? `instance-${Math.random().toString(36).slice(2)}`;
+    options.instanceId ??
+    options.scrollStateKey ??
+    `instance-${Math.random().toString(36).slice(2)}`;
+  const epicId = options.epicId ?? "epic-1";
+  const taskId = options.taskId ?? "task-1";
+  const identity = makeTestIdentity(instanceId, epicId, taskId);
+  // Alias kept for existing call-site destructuring (`scrollStateKey`).
+  const scrollStateKey = instanceId;
   const groupId = options.groupId ?? "pane-1";
 
-  if (options.freshOpen !== true && !hasSavedChatTabState(scrollStateKey)) {
+  if (options.freshOpen !== true && !hasSavedChatTabState(identity)) {
     saveChatTabState({
-      key: scrollStateKey,
+      identity,
       mode: "following-end",
       anchorMessageId: null,
+      anchorIndex: null,
       offset: 0,
     });
   }
@@ -569,6 +783,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     tileActive: options.tileActive ?? true,
     composerOverlayHeight: options.composerOverlayHeight ?? 80,
     localProvenanceMessageIds: options.localProvenanceMessageIds ?? new Set(),
+    isChatStreaming: options.isChatStreaming ?? false,
   };
 
   const jsx = (): ReactNode => (
@@ -584,7 +799,8 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       >
         <ChatMessages
           taskTitle={options.taskTitle ?? "Test chat"}
-          taskId="task-1"
+          taskId={taskId}
+          epicId={epicId}
           messages={state.messages}
           localProvenanceMessageIds={state.localProvenanceMessageIds}
           consumeLocalProvenance={(messageId) => {
@@ -595,12 +811,12 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
             result.rerender(jsx());
           }}
           backgroundItems={state.backgroundItems}
-          scrollStateKey={scrollStateKey}
           getMessageActions={() => null}
           nextStepActions={null}
           instanceId={instanceId}
           visible={state.visible}
           systemOverlayActive={state.systemOverlayActive}
+          isChatStreaming={state.isChatStreaming}
           scrollRequest={state.scrollRequest}
           composerOverlayHeight={state.composerOverlayHeight}
         />
@@ -618,6 +834,9 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     ...result,
     scrollStateKey,
     instanceId,
+    identity,
+    epicId,
+    taskId,
     /** Ticket 13: read the harness-local provenance set so pins can assert
      *  `consumeLocalProvenance` was invoked with the raw send id (not a
      *  setup-card substitute). */
@@ -661,6 +880,11 @@ describe("ChatMessages scroll policy", () => {
     // Do not restoreAllMocks - it clears module mocks for isMac / activity store.
     platformMock.isMac = true;
     tileLiveness.live = false;
+    setLegendListScrollContainerScrollHeightOverride(null);
+    // Ticket 15: dual-key durable entries survive tab-key cleanup - clear the
+    // harness default epic so later tests' freshOpen paths see a true empty
+    // chat-key cache rather than a leftover following-end/free-scrolling seed.
+    evictChatTabPersistenceForEpic("epic-1");
   });
 
   it("starts following-end (no jump pill) when scroll cache is bottom-following", async () => {
@@ -678,9 +902,10 @@ describe("ChatMessages scroll policy", () => {
     const messages = makeTranscript(12);
     const scrollStateKey = "restored-free-key";
     saveChatTabState({
-      key: scrollStateKey,
+      identity: makeDefaultTestIdentity(scrollStateKey),
       mode: "free-scrolling",
       anchorMessageId: messages[0]?.id ?? null,
+      anchorIndex: null,
       offset: 0,
     });
 
@@ -774,6 +999,118 @@ describe("ChatMessages scroll policy", () => {
 
       unmount();
     }
+  });
+
+  /**
+   * Ticket 14 (direction A): edge-aware wheel cancellation. A downward wheel
+   * at the true live edge must not cancel follow (clamped momentum shape:
+   * wheel with no accompanying scroll). Upward / ambiguous wheels and
+   * touchmove remain unconditional cancels.
+   */
+  describe("edge-aware wheel live-follow cancellation (ticket 14)", () => {
+    async function renderFollowingAtLiveEdge(
+      scrollStateKey: string,
+    ): Promise<HTMLElement> {
+      const messages = makeTranscript(20);
+      renderChatMessages({ messages, scrollStateKey });
+      await settleLegendList();
+      act(() => {
+        fireScrollToEnd();
+      });
+      const scrollNode = getScrollNode();
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      return scrollNode;
+    }
+
+    it("downward wheel at the live edge does not cancel follow", async () => {
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-down-at-edge-key",
+      );
+      const scrollTopBefore = scrollNode.scrollTop;
+
+      fireEvent.wheel(scrollNode, { deltaY: 40 });
+
+      expect(scrollNode.scrollTop).toBe(scrollTopBefore);
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+    });
+
+    it("upward wheel at the live edge cancels follow", async () => {
+      const scrollNode = await renderFollowingAtLiveEdge("t14-up-at-edge-key");
+
+      fireEvent.wheel(scrollNode, { deltaY: -40 });
+
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+    });
+
+    it("repeated downward clamped-momentum wheels at the live edge keep follow", async () => {
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-momentum-at-edge-key",
+      );
+      const scrollTopBefore = scrollNode.scrollTop;
+
+      for (let tick = 0; tick < 5; tick += 1) {
+        fireEvent.wheel(scrollNode, { deltaY: 40 });
+        expect(scrollNode.scrollTop).toBe(scrollTopBefore);
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      }
+    });
+
+    it("touchmove at the live edge still cancels follow unconditionally", async () => {
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-touchmove-at-edge-key",
+      );
+
+      fireEvent.touchMove(scrollNode);
+
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+    });
+
+    it("ambiguous wheel (deltaY 0) at the live edge still cancels follow", async () => {
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-ambiguous-at-edge-key",
+      );
+
+      fireEvent.wheel(scrollNode, { deltaY: 0 });
+
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+    });
+
+    it("downward wheel during a non-overflowing anchoring-new-turn session still cancels (review fix: isAtEnd alone is not 'the live edge')", async () => {
+      // anchoredEndSpace parks a non-overflowing anchor at the maximum
+      // REACHABLE scroll - a reserve/natural-bottom clamp, not necessarily
+      // the turn's true content end - so LegendList's own getState().isAtEnd
+      // can read true while the mode machine is still legitimately
+      // "anchoring-new-turn" (the overflow-gated reconciliation branch in
+      // onIsAtEndChange never fires, since anchoredTurnOverflowsViewportRef
+      // stays false for a turn this short). A downward wheel arriving there
+      // is real departure intent and must still cancel - the direction-A
+      // exemption only applies while genuinely `following-end`.
+      const sendId = "t14-anchoring-isatend-send";
+      const messages = makeCompletedTranscript(10);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t14-anchoring-isatend-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      await waitForAnchorEngineSettle();
+      // Precondition the finding depends on: the anchor settled without ever
+      // reconciling to following-end - still legitimately anchoring.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      const scrollNode = getScrollNode();
+      fireEvent.wheel(scrollNode, { deltaY: 40 });
+
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+    });
   });
 
   it("free-scrolling NEVER moves scroll position on streamed growth", async () => {
@@ -939,6 +1276,12 @@ describe("ChatMessages scroll policy", () => {
 
   describe("edge-mutation wiring", () => {
     it("suffix removal while free-scrolling does not throw and remounts the list", async () => {
+      // Ticket 17: free-scrolling at the top (scrollTop 0) means the last
+      // visible row is early in the transcript - at/past firstRemovedIndex
+      // when shrinking to 4 rows - so this lands case (b) (following-end),
+      // not the old unconditional free-scrolling scroll-to-index. Only the
+      // "does not throw / stays mounted" contract is pinned here; the three
+      // viewport cases have dedicated pins below.
       const messages = makeTranscript(24);
       const { rerenderMessages } = renderChatMessages({
         messages,
@@ -1012,6 +1355,492 @@ describe("ChatMessages scroll policy", () => {
         },
         { timeout: 3_000 },
       );
+    });
+  });
+
+  describe("ticket 17 delete-landing (viewport-aware suffix removal)", () => {
+    // Diagnosis harness numbers (ticket body): 120 uniform 90px rows, 700px
+    // viewport, header/footer spacers 40px, delete keeping a long prefix.
+    // Reference pins were (a) scrollTop 940→940 zero writes; (b) 9940 →
+    // {following-end, 8500}; (c) already following → {following-end, 8500}.
+    // Fixture-derived true-end may differ from 8500 when endInset/composer
+    // differ - assert the qualitative contract with the app's own natural-max
+    // formula, never jsdom's faked scrollHeight (LARGE_CONTENT_ROW_COUNT
+    // constant - prior diagnosis silently passed on broken code that way).
+    const T17_ROW_COUNT = 120;
+    const T17_KEEP_COUNT = 100;
+    const T17_FIRST_REMOVED_INDEX = T17_KEEP_COUNT;
+    const T17_ITEM_PX = TICKET_13_ROW_HEIGHT_PX;
+    const T17_HEADER_PX = LEGEND_LIST_HEADER_PX;
+    const T17_FOOTER_PX = LEGEND_LIST_HEADER_PX;
+    // Case (a) reference: scrollTop 940 → last visible well before index 100.
+    const T17_CASE_A_SCROLL_TOP = 940;
+    // Case (b) reference: scrollTop 9940 → deep into the deleted region.
+    const T17_CASE_B_SCROLL_TOP = 9940;
+    // Fixture-derived true end after keeping 100 rows under this harness
+    // (matches the ticket's diagnosis pin of 8500). Do not derive from
+    // jsdom's faked scrollHeight; do not assume save-path endInset accounting
+    // matches LegendList's scrollToEnd geometry exactly.
+    const T17_TRUE_END_SCROLL_TOP = 8500;
+    // Naive "include footer" bound used only to catch the old last-row-only
+    // regression (which landed footer-height short of the true end).
+    const T17_NAIVE_WITH_FOOTER =
+      T17_KEEP_COUNT * T17_ITEM_PX +
+      T17_HEADER_PX +
+      T17_FOOTER_PX -
+      VIEWPORT_HEIGHT_PX;
+    // Old buggy last-row navigation excluded the footer spacer.
+    const T17_OLD_BUGGY_LAST_ROW_ONLY =
+      T17_KEEP_COUNT * T17_ITEM_PX + T17_HEADER_PX - VIEWPORT_HEIGHT_PX;
+
+    /** Free-scroll, seed an explicit scrollTop, fire scroll + settle so the
+     *  rAF-throttled `viewportLastVisibleSnapshotRef` tracks the real
+     *  LegendList `getState().end` before the delete. */
+    async function t17SeedFreeScrollingAt(scrollTop: number): Promise<void> {
+      const scrollNode = getScrollNode();
+      act(() => {
+        fireEvent.wheel(scrollNode, { deltaY: -80 });
+        scrollNode.scrollTop = scrollTop;
+        fireEvent.scroll(scrollNode);
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().scrollTop).toBe(scrollTop);
+    }
+
+    it("(a) free-scrolling above the deletion boundary: no scroll write, mode and scrollTop unchanged", async () => {
+      const messages = makeTranscript(T17_ROW_COUNT);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t17-case-a-untouched",
+      });
+      await settleLegendList();
+
+      await t17SeedFreeScrollingAt(T17_CASE_A_SCROLL_TOP);
+
+      const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo");
+      const scrollToCallsBefore = scrollToSpy.mock.calls.length;
+      const modeBefore = getScrollNode().dataset.scrollMode;
+      const scrollTopBefore = getScrollNode().scrollTop;
+
+      // firstRemovedIndex = 100; last visible at scrollTop 940 is ~index 17
+      // (strictly before 100) → case (a) none.
+      expect(T17_CASE_A_SCROLL_TOP).toBeLessThan(
+        T17_FIRST_REMOVED_INDEX * T17_ITEM_PX,
+      );
+
+      rerenderMessages(messages.slice(0, T17_KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe(modeBefore);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().scrollTop).toBe(scrollTopBefore);
+      expect(getScrollNode().scrollTop).toBe(T17_CASE_A_SCROLL_TOP);
+      expect(scrollToSpy.mock.calls.length).toBe(scrollToCallsBefore);
+    });
+
+    it("(b) free-scrolling inside the deleted region: following-end at the true end (not last-row-short)", async () => {
+      const messages = makeTranscript(T17_ROW_COUNT);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t17-case-b-vanished",
+      });
+      await settleLegendList();
+
+      await t17SeedFreeScrollingAt(T17_CASE_B_SCROLL_TOP);
+
+      // Sanity: 9940 lands past firstRemovedIndex * item height.
+      expect(T17_CASE_B_SCROLL_TOP).toBeGreaterThan(
+        T17_FIRST_REMOVED_INDEX * T17_ITEM_PX,
+      );
+
+      rerenderMessages(messages.slice(0, T17_KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      // Do NOT derive expected from scrollNode.scrollHeight (jsdom fakes a
+      // large constant for virtualization bootstrap). Pin the fixture's true
+      // end (8500, same as the ticket diagnosis) and prove we are not the
+      // old last-row-only landing (footer excluded → 40px short of naive).
+      expect(getScrollNode().scrollTop).toBe(T17_TRUE_END_SCROLL_TOP);
+      expect(T17_TRUE_END_SCROLL_TOP).toBeGreaterThanOrEqual(
+        T17_NAIVE_WITH_FOOTER,
+      );
+      expect(getScrollNode().scrollTop).toBeGreaterThan(
+        T17_OLD_BUGGY_LAST_ROW_ONLY,
+      );
+      expect(
+        getScrollNode().scrollTop - T17_OLD_BUGGY_LAST_ROW_ONLY,
+      ).toBeGreaterThanOrEqual(T17_FOOTER_PX);
+    });
+
+    it("(c) already following-end: stays following-end at the true end after suffix removal", async () => {
+      const messages = makeTranscript(T17_ROW_COUNT);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t17-case-c-following",
+      });
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+      rerenderMessages(messages.slice(0, T17_KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(getScrollNode().scrollTop).toBe(T17_TRUE_END_SCROLL_TOP);
+    });
+
+    // Review round (stack review, finding 2, CONFIRMED HIGH): the
+    // `viewportLastVisibleSnapshotRef` snapshot must be gated on the EXACT
+    // `messages` array identity it was observed against, not trusted by
+    // ordering alone. Both pins below arrange a suffix delete to land BEFORE
+    // any real scroll/rAF observation has ever populated the ref - anchored
+    // to an EARLY restored row (index 10, strictly before firstRemovedIndex
+    // 100) so that the OLD unconditional (pre-fix) reading-line-anchor seed
+    // would have masqueraded as a real "last visible row" observation and
+    // wrongly resolved case (a). Post-fix, an un-observed snapshot resolves
+    // to `null` (unknown) regardless of what the seed claims, and unknown
+    // defaults to case (b) - never a guessed case (a).
+    it("(review finding 2) restored free-scrolling, delete arrives before the first rAF observation: unknown defaults to case (b), never a guessed case (a)", async () => {
+      const messages = makeTranscript(T17_ROW_COUNT);
+      const scrollStateKey = "t17-finding2-mount-before-rjaf";
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(scrollStateKey),
+        mode: "free-scrolling",
+        anchorMessageId: messages[10]?.id ?? null,
+        anchorIndex: null,
+        offset: 0,
+      });
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey,
+      });
+
+      // Deliberately no `await settleLegendList()` / scroll event here: the
+      // mount-time classify effect's own tail call schedules an
+      // rAF-throttled `getState().end` read (`scheduleActiveViewportUpdate`),
+      // but no animation frame has fired yet - this is still the same tick
+      // as mount. Delete immediately on top of that.
+      rerenderMessages(messages.slice(0, T17_KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(getScrollNode().scrollTop).toBe(T17_TRUE_END_SCROLL_TOP);
+    });
+
+    it("(review finding 2) a layout/size change with no scroll event does not manufacture an observation - delete before the first rAF still defaults to case (b)", async () => {
+      const messages = makeTranscript(T17_ROW_COUNT);
+      const scrollStateKey = "t17-finding2-layout-before-rjaf";
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(scrollStateKey),
+        mode: "free-scrolling",
+        anchorMessageId: messages[10]?.id ?? null,
+        anchorIndex: null,
+        offset: 0,
+      });
+      const { rerenderMessages, rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey,
+      });
+
+      // `composerOverlayHeight` is not a dependency of the edge-mutation
+      // effect and does not touch `messages` - this re-render neither
+      // writes to nor invalidates the snapshot ref; it only proves a
+      // layout/size change alone cannot manufacture a fake observation.
+      // `renderChatMessages`'s default is 80px - growing it here also
+      // genuinely shifts the true end scroll target (a bigger bottom inset
+      // needs a bigger scrollTop to clear it), so the expected true end
+      // below accounts for that observed, non-hardcoded delta.
+      const T17_GROWN_COMPOSER_OVERLAY_HEIGHT_PX = 400;
+      rerenderWith({
+        composerOverlayHeight: T17_GROWN_COMPOSER_OVERLAY_HEIGHT_PX,
+      });
+
+      // Still before the first rAF - same timing constraint as the pin
+      // above, now with an intervening layout change that touches neither
+      // `messages` nor the snapshot ref.
+      rerenderMessages(messages.slice(0, T17_KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      // True end shifts 1:1 with the grown composer inset relative to the
+      // default 80px other ticket-17 pins render with (observed, not
+      // derived from a formula - same methodology as T17_TRUE_END_SCROLL_TOP
+      // itself).
+      expect(getScrollNode().scrollTop).toBe(
+        T17_TRUE_END_SCROLL_TOP + (T17_GROWN_COMPOSER_OVERLAY_HEIGHT_PX - 80),
+      );
+    });
+
+    // Review round 2, finding 2 residual (CONFIRMED HIGH): the reviewer's
+    // literal schedule - establish an authoritative snapshot, then a REAL
+    // row-size change under the SAME `messages` array with NO scroll event
+    // pushes the true last-visible row past the deletion boundary, then
+    // delete. Driven via `legendListRefHolder.current.setItemSize` (the
+    // real LegendList `setItemSize` ref method, teed through the
+    // pass-through mock above) - this is the one lever that bypasses
+    // jsdom's globally no-op ResizeObserver and fires a genuine
+    // `onItemSizeChanged` with a real diff, matching how an activity-group
+    // disclosure collapsing (state lives outside `messages`) would move
+    // rows into view in a real browser.
+    it("(review round 2, finding 2 residual) a real row-size change with no scroll crosses the deletion boundary - delete lands case (b), not a stale case (a)", async () => {
+      const ROW_COUNT = 30;
+      const KEEP_COUNT = 25;
+      const messages = makeTranscript(ROW_COUNT);
+      const scrollStateKey = "t17-finding2-r2-item-size";
+      // Restore free-scrolling anchored at row 0 so the initial mount
+      // bootstraps there, measuring the early rows we are about to shrink
+      // before we scroll away to the authoritative snapshot position.
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(scrollStateKey),
+        mode: "free-scrolling",
+        anchorMessageId: messages[0]?.id ?? null,
+        anchorIndex: null,
+        offset: 0,
+      });
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey,
+      });
+      await settleLegendList();
+
+      // Authoritative snapshot: scrolled to a row strictly before
+      // KEEP_COUNT (25) - roughly rows 10-17 at this scrollTop.
+      await t17SeedFreeScrollingAt(900);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+
+      // Shrink 10 already-measured early rows (0-9) - a genuine,
+      // no-scroll, same-array size change, pushing more rows into view
+      // for the same scrollTop (the disclosure-collapse shape).
+      act(() => {
+        for (let index = 0; index < 10; index += 1) {
+          legendListRefHolder.current?.setItemSize(`message-${index}`, {
+            height: 5,
+            width: VIEWPORT_WIDTH_PX,
+          });
+        }
+      });
+
+      rerenderMessages(messages.slice(0, KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+    });
+
+    // Review round 3, finding 2 residual (CONFIRMED HIGH): a height-only
+    // pane resize changes LegendList's `state.scrollLength` via its internal
+    // `handleLayout`, WITHOUT firing a scroll event, a row remeasure
+    // (`onTimelineItemSizeChanged`), or a header/footer change
+    // (`onListMetricsChange`) - none of the earlier hooks see it. Driven via
+    // `triggerLegendListResizeObserverEntry` (the controllable global
+    // `ResizeObserver` installed at module-load time above) firing a
+    // synthetic entry for the scroll container itself - this flows through
+    // LegendList's REAL `useOnLayoutSync` -> `onLayoutChange` ->
+    // `handleLayout` pipeline exactly as a genuine browser resize would,
+    // recalculating items-in-view for the unchanged scrollTop.
+    it("(review round 3, finding 2 residual) a height-only pane resize with no scroll/no row-remeasure/no header-footer-change crosses the deletion boundary - delete lands case (b)", async () => {
+      const ROW_COUNT = 30;
+      const KEEP_COUNT = 25;
+      const messages = makeTranscript(ROW_COUNT);
+      const scrollStateKey = "t17-finding2-r3-viewport-resize";
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(scrollStateKey),
+        mode: "free-scrolling",
+        anchorMessageId: messages[0]?.id ?? null,
+        anchorIndex: null,
+        offset: 0,
+      });
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey,
+      });
+      await settleLegendList();
+
+      // Authoritative snapshot: scrolled to a row strictly before
+      // KEEP_COUNT (25) - roughly rows 10-17 at this scrollTop.
+      await t17SeedFreeScrollingAt(900);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      const stateBeforeResize = legendListRefHolder.current?.getState();
+      expect(stateBeforeResize?.scrollLength).toBe(VIEWPORT_HEIGHT_PX);
+      expect(stateBeforeResize?.end).toBeLessThan(KEEP_COUNT);
+
+      // Height-only pane resize: same messages array, no scroll event, no
+      // row remeasure, no header/footer change - grows the viewport so more
+      // rows fit at the same scrollTop, crossing KEEP_COUNT (25). Real
+      // evidence this reaches LegendList's genuine `handleLayout`, not a
+      // no-op: `scrollLength`/`end` are asserted below to have actually
+      // moved, through the real library, before the delete even happens.
+      const GROWN_VIEWPORT_HEIGHT_PX = VIEWPORT_HEIGHT_PX + 800;
+      act(() => {
+        triggerLegendListResizeObserverEntry(getScrollNode(), {
+          width: VIEWPORT_WIDTH_PX,
+          height: GROWN_VIEWPORT_HEIGHT_PX,
+        });
+      });
+      const stateAfterResize = legendListRefHolder.current?.getState();
+      expect(stateAfterResize?.scrollLength).toBe(GROWN_VIEWPORT_HEIGHT_PX);
+      expect(stateAfterResize?.end).toBeGreaterThanOrEqual(KEEP_COUNT);
+
+      rerenderMessages(messages.slice(0, KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+    });
+  });
+
+  describe("live pass S4B: suffix delete during a programmatically-parked anchoring session", () => {
+    // Live shape (retest/S4B, run-1275860c): a real composer send entered
+    // `anchoring-new-turn`; the reader then parked deep in the transcript via
+    // a PROGRAMMATIC `scrollTop` write (no wheel/touchmove/pointerdown/
+    // keydown - the harness's own JS-driven scroll, not a real gesture); mode
+    // stayed `anchoring-new-turn` since nothing in that path cancels it.
+    // Deleting a user message above the parked position (a real suffix
+    // removal) was then expected to land at the new live edge
+    // (`following-end`) but did not move.
+    it("(reachability) a programmatic scrollTop write during anchoring-new-turn does not cancel the session - documents current behavior, not a fix", async () => {
+      const sendId = "s4b-reachability-send";
+      const messages = makeCompletedTranscript(30);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "s4b-reachability-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // Programmatic scrollTop write, no gesture event of any kind - the
+      // live harness's exact entry mechanism. A real user parking mid-history
+      // uses wheel/minimap/keys, all of which cancel or suppress the
+      // anchoring session; this path is reachable only through a
+      // non-gesture, script-driven scroll.
+      const scrollNode = getScrollNode();
+      act(() => {
+        scrollNode.scrollTop = 900;
+        fireEvent.scroll(scrollNode);
+      });
+
+      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(scrollNode.scrollTop).toBe(900);
+    });
+
+    it("(delete pin) a suffix delete that sweeps a programmatically-parked anchoring session lands at the new live edge", async () => {
+      const sendId = "s4b-delete-send";
+      const ROW_COUNT = 30;
+      const KEEP_COUNT = 10;
+      const messages = makeCompletedTranscript(ROW_COUNT);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "s4b-delete-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // Same programmatic park as the reachability pin above - lands well
+      // past KEEP_COUNT (10), so the reader's current viewport (and the
+      // anchored send itself, at index ROW_COUNT=30) both fall inside the
+      // to-be-deleted suffix.
+      const scrollNode = getScrollNode();
+      act(() => {
+        scrollNode.scrollTop = 900;
+        fireEvent.scroll(scrollNode);
+      });
+      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // Real suffix delete: a user message above the parked viewport is
+      // removed, taking everything after it (including the parked position
+      // and the anchored send) with it.
+      rerenderMessages(afterSend.slice(0, KEEP_COUNT));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+    });
+
+    // Review round (fix 1's own pin gap): the delete pin above always
+    // deletes the anchored send ITSELF, where `resolveChatListAnchoredEndSpace`
+    // already fails to find the row post-delete regardless of whether
+    // `timelineAnchorMessageId` was cleared - it cannot distinguish "the
+    // teardown ran" from "the row is simply gone". This pin covers the
+    // OTHER shape the reviewer named: the anchored message SURVIVES a case
+    // (b) delete (only later content is removed) - the only schedule where
+    // the teardown's own effect (clearing `timelineAnchorMessageId`) is
+    // observable at all.
+    it("(fix 1 pin) a surviving anchored message's end-space reserve is torn down by a case (b) delete", async () => {
+      const sendId = "s4b-survives-send";
+      const messages = makeCompletedTranscript(30);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "s4b-survives-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // A streamed reply chunk arrives after the send - `sendId` (index 30)
+      // now survives well before the array's own tail.
+      const withReply: ReadonlyArray<ChatMessageModel> = [
+        ...afterSend,
+        {
+          ...makeMessageAt(0, "assistant", 700_001),
+          id: "s4b-survives-reply-1",
+          content: "chunk",
+          completedAt: null,
+          runState: "running",
+        },
+      ];
+      rerenderMessages(withReply);
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // Case (b): delete removes only the reply chunk, keeping `sendId` -
+      // the anchored row's own reserved end-space sits within the
+      // anchoring-new-turn viewport, so the classifier's viewport snapshot
+      // reads this as touched by the removed suffix.
+      rerenderMessages(afterSend);
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+      // Fix 1's own observable, empirically isolated: `resolveChatListAnchored
+      // EndSpace` (chat-scroll-anchoring.ts) only returns truthy while
+      // `timelineAnchorMessageId` is non-null AND that row still exists (it
+      // does here - `sendId` survived) - its reserve inflates the target
+      // `scrollToEnd({animated:false})` (issued by this same "scroll-to-end"
+      // case, unconditionally) computes. Fixture-observed (not derived from a
+      // formula, same methodology as this file's other true-end pins):
+      // WITHOUT the teardown, the stale reserve for the now-inert `sendId`
+      // session pushes the landing to 2764; WITH it (`timelineAnchorMessageId`
+      // cleared, `anchoredEndSpace` undefined, no reserve), it lands at the
+      // true natural end, 2290 - a 474px gap matching the reserve exactly.
+      expect(getScrollNode().scrollTop).toBe(2290);
     });
   });
 
@@ -1299,9 +2128,14 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("H3 suppressFollowRestoreRef persists across programmatic scrolls, cleared only by a real gesture", () => {
-    it("suffix removal (non-animated) stays free-scrolling through a duplicate/correction true report, then settles on scrollend", async () => {
-      // Enough rows that free-scroll is meaningful; after shrink to 3 rows the
-      // remaining content fits the viewport so isNearEnd becomes true.
+    it("suffix removal whose viewport touched the removed region enters following-end (ticket 17 case b; no free-scrolling suppress path)", async () => {
+      // Pre-ticket-17 free-scrolling suffix removal did scroll-to-index +
+      // nextMode:null + suppressFollowRestoreRef and this test pinned H3
+      // multi-report free-scrolling survival. Ticket 17: with scrollTop 0 the
+      // last visible row is early in the list - at/past firstRemovedIndex
+      // after shrinking to 3 rows - so classification is case (b): force
+      // following-end + scroll-to-end. H3 suppress multi-report coverage for
+      // free-scrolling programmatic landings lives on the minimap test below.
       const messages = makeTranscript(30);
       const { rerenderMessages } = renderChatMessages({
         messages,
@@ -1314,49 +2148,13 @@ describe("ChatMessages scroll policy", () => {
       });
       await waitForPillVisible();
       expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
-      // Free-scrolling suffix removal → scroll-to-index + nextMode:null +
-      // suppressFollowRestoreRef=true (non-animated: no intermediate
-      // false frames, but LegendList can still re-notify the settled
-      // position more than once - a "duplicate/correction" report).
       const next = messages.slice(0, 3);
       rerenderMessages(next);
       await settleLegendList();
 
-      const scrollNode = getScrollNode();
-      const settledScrollTop = Math.max(
-        0,
-        scrollNode.scrollHeight - scrollNode.clientHeight,
-      );
-
-      // First `true` report at the settled position: a ONE-SHOT token would
-      // already have been consumed by whatever report preceded this (or, if
-      // this were the very first, would be fine here but fail below).
-      // Checked via `dataset.scrollMode`, not pill visibility - the shrunk
-      // (3-row) transcript now genuinely fits one viewport, so LegendList's
-      // own `isContentLess` makes EVERY report `isAtEnd: true` regardless of
-      // scrollTop; Ticket 11 fix #3 correctly hides the pill for all of them
-      // (decision #16: nothing is out of view). Mode is the precise claim
-      // this test makes ("stays free-scrolling") and is unaffected by that.
-      await fireScrollTopAndFlush(settledScrollTop);
-      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
-
-      // Duplicate/correction `true` report: a slightly different scrollTop
-      // (not an exact repeat, so LegendList does not skip it as a no-op)
-      // that is STILL within the near-end band. This is exactly what a
-      // one-shot token cannot survive: it was already consumed by the
-      // report above, so this one falls through to the normal
-      // reconciliation path and incorrectly restores follow.
-      await fireScrollTopAndFlush(Math.max(0, settledScrollTop - 20));
-      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
-
-      // Settle the operation (scrollend) - suppression is NOT auto-cleared
-      // by settle (no timer survives the collapse); still free regardless,
-      // since nothing further reports a NEW isAtEnd value.
-      act(() => {
-        scrollNode.dispatchEvent(new Event("scrollend"));
-      });
-      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
     });
 
     it("minimap/navigateToMessage (animated) stays free-scrolling across false->true intermediate frames, then across a stream append", async () => {
@@ -1429,8 +2227,12 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("a REAL subsequent near-end gesture still restores follow after a suppressed programmatic scroll settles", async () => {
+      // Ticket 17 removed free-scrolling suffix removal as a suppress path
+      // (case a is none; case b forces following-end). Minimap navigation is
+      // still a free-scrolling programmatic landing that sets
+      // suppressFollowRestoreRef - use that to pin the companion contract.
       const messages = makeTranscript(28);
-      const { rerenderMessages } = renderChatMessages({
+      renderChatMessages({
         messages,
         scrollStateKey: "h3-companion-restore",
       });
@@ -1441,10 +2243,9 @@ describe("ChatMessages scroll policy", () => {
       });
       await waitForPillVisible();
 
-      // Programmatic free-scrolling suffix removal (sets suppression).
-      const short = messages.slice(0, 4);
-      rerenderMessages(short);
+      await selectLastChatTurnMinimapItem();
       await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(isJumpPillVisible()).toBe(true);
 
       // A REAL gesture clears suppression immediately - there is no
@@ -1879,6 +2680,61 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
+  // O2 (T3 parity, ticket 16 batch review, F8): proves the FULL production
+  // chain end to end - a real LegendList scroll -> ChatTimeline's own
+  // `onScroll` -> ChatMessages's `handleScroll` ->
+  // `minimapInViewRefreshRef.current()` -> the minimap's `updateInView` ->
+  // the strip's `data-in-view` dataset write. chat-turn-minimap.test.tsx's
+  // own pins call `inViewRefreshRef.current()` directly (proving the
+  // minimap's OWN contract in isolation); this one is the wiring pin that a
+  // deleted link anywhere in that chain would fail.
+  describe("minimap in-view highlighting via the real scroll chain (O2, ticket 16)", () => {
+    it("updates minimap strip in-view state through a real fireEvent.scroll, not a direct inViewRefreshRef call", async () => {
+      const messages = makeCompletedTranscript(12);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "o2-minimap-real-scroll-chain",
+      });
+      await settleLegendList();
+
+      // Free-scrolling, not the default following-end - a stable, non-
+      // drifting position (M3b's own comment above: following-end's reveal
+      // pass keeps chasing the jsdom shim's fixed large scrollHeight).
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("chat-turn-minimap")).toBeTruthy();
+      });
+
+      const firstUserStrip = (): Element | null =>
+        document.querySelector(
+          '[data-chat-turn-minimap-strip][data-message-id="message-0"]',
+        );
+      const lastUserStrip = (): Element | null =>
+        document.querySelector(
+          '[data-chat-turn-minimap-strip][data-message-id="message-10"]',
+        );
+
+      // Parked at scrollTop 0: the first user turn is in view, the last is not.
+      await waitFor(() => {
+        expect(firstUserStrip()?.getAttribute("data-in-view")).toBe("true");
+        expect(lastUserStrip()?.getAttribute("data-in-view")).toBe("false");
+      });
+
+      // Scroll deep into real (non-fake-ceiling) content - well below the
+      // ~540px natural max for this 12-row/90px-shim transcript.
+      await fireScrollTopAndFlush(500);
+
+      await waitFor(() => {
+        expect(lastUserStrip()?.getAttribute("data-in-view")).toBe("true");
+        expect(firstUserStrip()?.getAttribute("data-in-view")).toBe("false");
+      });
+    });
+  });
+
   describe("M1 isAtEndRef null sentinel on cancel", () => {
     it("reconciles follow when a cancel happens while still in the near-end band", async () => {
       const messages = makeTranscript(20);
@@ -1962,16 +2818,13 @@ describe("ChatMessages scroll policy", () => {
 
   describe("followEnabled gates LegendList's own maintainScrollAtEnd (review fix)", () => {
     it("free-scrolling parked near the true end does NOT auto-follow a subsequent append", async () => {
-      // Shrink to a handful of rows via a free-scrolling suffix removal
-      // (H3 path: scroll-to-index + nextMode:null + suppress) so the
-      // remaining content fits within one viewport - the resulting
-      // scrollTop lands at (or essentially at) the true max, well inside
-      // BOTH onEndReachedThreshold and LegendList's own internal
-      // maintainScrollAtEndThreshold (also 0.1 by default). Pre-fix,
-      // `maintainScrollAtEnd` was gated only on `anchoredEndSpace` (always
-      // absent here) - never on the mode machine - so LegendList's OWN
-      // stick-to-bottom would still fire on the append below even though
-      // the reader had relinquished follow. `followEnabled` closes that.
+      // Pre-ticket-17 setup used free-scrolling suffix removal (H3:
+      // scroll-to-index + suppress) to land near the true max while free.
+      // Ticket 17: that path is gone (viewport-touching suffix removal
+      // forces following-end). Mirror the H3 minimap suppress path: navigate
+      // near-tail (sets suppressFollowRestoreRef), settle the operation,
+      // park a forced near-end scrollTop under free-scrolling, then assert
+      // followEnabled keeps LegendList stick-to-bottom off on append.
       const messages = makeTranscript(30);
       const { rerenderMessages } = renderChatMessages({
         messages,
@@ -1985,22 +2838,31 @@ describe("ChatMessages scroll policy", () => {
       await waitForPillVisible();
       expect(isJumpPillVisible()).toBe(true);
 
-      const shrunk = messages.slice(0, 3);
-      rerenderMessages(shrunk);
-      await settleLegendList();
-      // Still free-scrolling (H3): the near-end landing did not silently
-      // restore follow. Checked via `dataset.scrollMode` directly, not pill
-      // visibility - the shrunk transcript now genuinely fits one viewport,
-      // so Ticket 11 fix #3 correctly hides the pill here (decision #16:
-      // nothing is out of view) even though mode stays free-scrolling.
+      await selectLastChatTurnMinimapItem();
+      const scrollNode = getScrollNode();
+      // Settle the animated nav (clears in-flight re-issue; suppression stays).
+      act(() => {
+        scrollNode.dispatchEvent(new Event("scrollend"));
+      });
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
-      const parkedAtNearEnd = getScrollNode().scrollTop;
-      rerenderMessages(appendAssistant(shrunk, "follow-gate-stream", 120_000));
+      // Park inside the near-end band under suppress (same trick as H3's
+      // multi-report pin - faked scrollHeight is huge, so a large scrollTop
+      // is still free-scrolling thanks to suppress, not following-end).
+      const nearEndPark = Math.max(
+        0,
+        scrollNode.scrollHeight - scrollNode.clientHeight - 40,
+      );
+      await fireScrollTopAndFlush(nearEndPark);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      const parkedScrollTop = getScrollNode().scrollTop;
+      rerenderMessages(
+        appendAssistant(messages, "follow-gate-stream", 120_000),
+      );
       await settleLegendList();
 
-      expect(getScrollNode().scrollTop).toBe(parkedAtNearEnd);
-      // Mode is still what actually matters here, not just the position.
+      expect(getScrollNode().scrollTop).toBe(parkedScrollTop);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
     });
 
@@ -3259,7 +4121,9 @@ describe("ChatMessages scroll policy", () => {
       // data-scroll-mode is the honest pin (not scrollHeight-derived maxScroll).
       const messages = makeCompletedTranscript(20);
       const scrollStateKey = `t4-fresh-open-${Math.random().toString(36).slice(2)}`;
-      expect(hasSavedChatTabState(scrollStateKey)).toBe(false);
+      expect(
+        hasSavedChatTabState(makeDefaultTestIdentity(scrollStateKey)),
+      ).toBe(false);
 
       renderChatMessages({
         messages,
@@ -3533,8 +4397,12 @@ describe("ChatMessages scroll policy", () => {
 
         // The unmount save captured THIS exact scrollTop via the real
         // capture pipeline (whichever row it anchored to) - not a value this
-        // test invented via a seeded saveChatTabState call.
-        const saved = restoreChatTabState(scrollStateKey, messages);
+        // test invented via a seeded saveChatTabState call. Tab-key is the
+        // tile instanceId (ticket 15).
+        const saved = restoreChatTabState(
+          makeDefaultTestIdentity(instanceId),
+          messages,
+        );
         expect(saved.mode).toBe("free-scrolling");
         expect(saved.anchorMessageId).not.toBeNull();
         // Capture folds topOffsetAdjustment (header) into the saved viewOffset
@@ -3650,7 +4518,10 @@ describe("ChatMessages scroll policy", () => {
         // Red-on-baseline: before the fix, `anchorMessageId` is `null` here
         // (the human-only gate never resolved a candidate for this
         // transcript shape) and the position is lost.
-        const saved = restoreChatTabState(scrollStateKey, messages);
+        const saved = restoreChatTabState(
+          makeDefaultTestIdentity(instanceId),
+          messages,
+        );
         expect(saved.mode).toBe("free-scrolling");
         expect(saved.anchorMessageId).not.toBeNull();
         expect(typeof saved.offset).toBe("number");
@@ -3684,9 +4555,10 @@ describe("ChatMessages scroll policy", () => {
       // as ticket 3 H3. After bootstrap arms suppression, a subsequent
       // programmatic near-end landing must NOT flip to following-end.
       saveChatTabState({
-        key: scrollStateKey,
+        identity: makeDefaultTestIdentity(scrollStateKey),
         mode: "free-scrolling",
         anchorMessageId: anchorId,
+        anchorIndex: null,
         offset: 40,
       });
 
@@ -3713,8 +4585,11 @@ describe("ChatMessages scroll policy", () => {
       const sendId = "t5-mid-anchor-send";
       const scrollStateKey = `t5-mid-anchor-${Math.random().toString(36).slice(2)}`;
       const instanceId = `t5-mid-anchor-inst-${Math.random().toString(36).slice(2)}`;
-      // Matches legend-list-test-environment spacer measurement for
-      // aria-hidden header/footer shells (not production h-16/h-20).
+      // Matches legend-list-test-environment's fixed SPACER_HEIGHT_PX for any
+      // aria-hidden header/footer shell (the harness measures every spacer
+      // the same regardless of its real Tailwind height class, so this is
+      // independent of the production chat-timeline.tsx sizes - ticket 16/M4
+      // changed those to h-3/h-4 sm:h-4/h-12, not 40px).
       const HARNESS_HEADER_PX = 40;
       const HARNESS_FOOTER_PX = 40;
       const HARNESS_ITEM_PX = 90;
@@ -3778,7 +4653,10 @@ describe("ChatMessages scroll policy", () => {
       // Unmount while still mid-anchor - do NOT wait for settle.
       first.unmount();
 
-      const saved = restoreChatTabState(scrollStateKey, afterSend);
+      const saved = restoreChatTabState(
+        makeDefaultTestIdentity(instanceId),
+        afterSend,
+      );
       // anchoring-new-turn never round-trips through the cache.
       expect(saved.mode).toBe("free-scrolling");
       expect(saved.mode).not.toBe("following-end");
@@ -3818,17 +4696,25 @@ describe("ChatMessages scroll policy", () => {
       const messages = makeCompletedTranscript(12);
       const scrollStateKey = `t5-stale-free-${Math.random().toString(36).slice(2)}`;
 
+      // Legacy save without anchorIndex (pre-ticket-15 shape): when the id is
+      // gone AND no index was recorded, still degrade to null-anchor rather
+      // than inventing a neighbor. Ticket 15's nearest-neighbor pin covers
+      // the anchorIndex path separately.
       saveChatTabState({
-        key: scrollStateKey,
+        identity: makeDefaultTestIdentity(scrollStateKey),
         mode: "free-scrolling",
         anchorMessageId: "message-removed-while-away",
+        anchorIndex: null,
         offset: 64,
       });
 
       // restoreChatTabState keeps mode, drops the stale anchor.
-      expect(restoreChatTabState(scrollStateKey, messages)).toEqual({
+      expect(
+        restoreChatTabState(makeDefaultTestIdentity(scrollStateKey), messages),
+      ).toEqual({
         mode: "free-scrolling",
         anchorMessageId: null,
+        anchorIndex: null,
         offset: 0,
       });
 
@@ -3841,14 +4727,18 @@ describe("ChatMessages scroll policy", () => {
       // following-end + stale anchor: mode preserved, no crash.
       const followKey = `t5-stale-follow-${Math.random().toString(36).slice(2)}`;
       saveChatTabState({
-        key: followKey,
+        identity: makeDefaultTestIdentity(followKey),
         mode: "following-end",
         anchorMessageId: "also-gone",
+        anchorIndex: null,
         offset: 12,
       });
-      expect(restoreChatTabState(followKey, messages)).toEqual({
+      expect(
+        restoreChatTabState(makeDefaultTestIdentity(followKey), messages),
+      ).toEqual({
         mode: "following-end",
         anchorMessageId: null,
+        anchorIndex: null,
         offset: 0,
       });
 
@@ -3859,15 +4749,16 @@ describe("ChatMessages scroll policy", () => {
       expect(isJumpPillVisible()).toBe(false);
     });
 
-    it("does not resurrect hasSavedChatTabState on unmount when the tile is no longer live", async () => {
+    it("commits the closing position to durable but never resurrects the tab-key entry (ticket 15 review F1)", async () => {
       const messages = makeCompletedTranscript(16);
-      const scrollStateKey = `t5-liveness-guard-${Math.random().toString(36).slice(2)}`;
+      // Single key: production tab-key is instanceId; keep them aligned so
+      // the canvas-style tab eviction targets the real entry.
       const instanceId = `t5-liveness-inst-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
 
       tileLiveness.live = true;
       const { unmount } = renderChatMessages({
         messages,
-        scrollStateKey,
         instanceId,
       });
       await settleLegendList();
@@ -3877,16 +4768,33 @@ describe("ChatMessages scroll policy", () => {
       });
       await waitForPillVisible();
 
-      // Permanent close: canvas sweep drops the entry before unmount cleanup.
-      evictChatTabState([scrollStateKey]);
-      expect(hasSavedChatTabState(scrollStateKey)).toBe(false);
+      // Production order (ticket 15 review F1): the canvas sweep drops the
+      // TAB-key entry and flips liveness false SYNCHRONOUSLY, before this
+      // component's own unmount cleanup ever runs.
+      evictChatTabState([instanceId]);
       tileLiveness.live = false;
 
       unmount();
 
-      // Without the save-side liveness guard, free-scrolling unmount would
-      // re-save and resurrect the entry the sweep just cleared.
-      expect(hasSavedChatTabState(scrollStateKey)).toBe(false);
+      // The non-live unmount commits the CURRENT free-scrolling position to
+      // the DURABLE chat-key entry - that is the fix: a genuine close is the
+      // only chance this view's final position ever reaches durable at all
+      // (a liveness guard that fully skips saving on close was the original
+      // bug - it left reopens with either nothing, or a stale earlier
+      // durable entry).
+      expect(restoreChatTabState(identity, messages).mode).toBe(
+        "free-scrolling",
+      );
+
+      // What the guard must still prevent: resurrecting the TAB-key entry.
+      // Proof: dropping ONLY the durable entry must make the saved state
+      // disappear entirely - if the tab-key had been resurrected underneath,
+      // `hasSavedChatTabState` would still read true here.
+      evictChatTabStateForChat({
+        epicId: identity.epicId,
+        chatId: identity.chatId,
+      });
+      expect(hasSavedChatTabState(identity)).toBe(false);
     });
 
     it("keeps tool, subagent, and activity-group open state across unmount+remount with the same instanceId", async () => {
@@ -3911,10 +4819,10 @@ describe("ChatMessages scroll policy", () => {
         useSubagentOpenStore
           .getState()
           .setOpen(instanceId, subagentSegmentId, true);
-        getOrCreateActivityGroupOpenStore(instanceId)
+        getOrCreateActivityGroupOpenStore(makeDefaultTestIdentity(instanceId))
           .getState()
           .setOpen(activityGroupId, true);
-        getOrCreateA2AOpenStore(instanceId)
+        getOrCreateA2AOpenStore(makeDefaultTestIdentity(instanceId))
           .getState()
           .setSentOpen(a2aSentId, true);
       });
@@ -3930,12 +4838,12 @@ describe("ChatMessages scroll policy", () => {
           .openIds.has(scopedChatOpenId(instanceId, subagentSegmentId)),
       ).toBe(true);
       expect(
-        getOrCreateActivityGroupOpenStore(instanceId)
+        getOrCreateActivityGroupOpenStore(makeDefaultTestIdentity(instanceId))
           .getState()
           .openIds.has(activityGroupId),
       ).toBe(true);
       expect(
-        getOrCreateA2AOpenStore(instanceId)
+        getOrCreateA2AOpenStore(makeDefaultTestIdentity(instanceId))
           .getState()
           .sentOpenIds.has(a2aSentId),
       ).toBe(true);
@@ -3961,26 +4869,28 @@ describe("ChatMessages scroll policy", () => {
           .openIds.has(scopedChatOpenId(instanceId, subagentSegmentId)),
       ).toBe(true);
       expect(
-        getOrCreateActivityGroupOpenStore(instanceId)
+        getOrCreateActivityGroupOpenStore(makeDefaultTestIdentity(instanceId))
           .getState()
           .openIds.has(activityGroupId),
       ).toBe(true);
       expect(
-        getOrCreateA2AOpenStore(instanceId)
+        getOrCreateA2AOpenStore(makeDefaultTestIdentity(instanceId))
           .getState()
           .sentOpenIds.has(a2aSentId),
       ).toBe(true);
       // Registry identity: remount must reattach the same store instance.
-      const activityStoreA = getOrCreateActivityGroupOpenStore(instanceId);
+      const activityStoreA = getOrCreateActivityGroupOpenStore(
+        makeDefaultTestIdentity(instanceId),
+      );
       second.unmount();
       const third = renderChatMessages({
         messages,
         scrollStateKey,
         instanceId,
       });
-      expect(getOrCreateActivityGroupOpenStore(instanceId)).toBe(
-        activityStoreA,
-      );
+      expect(
+        getOrCreateActivityGroupOpenStore(makeDefaultTestIdentity(instanceId)),
+      ).toBe(activityStoreA);
       third.unmount();
     });
 
@@ -4256,9 +5166,10 @@ describe("ChatMessages scroll policy", () => {
       const scrollStateKey = `t11-d-suppressed-${Math.random().toString(36).slice(2)}`;
 
       saveChatTabState({
-        key: scrollStateKey,
+        identity: makeDefaultTestIdentity(scrollStateKey),
         mode: "free-scrolling",
         anchorMessageId: anchorId,
+        anchorIndex: null,
         offset: 40,
       });
 
@@ -4534,8 +5445,8 @@ describe("ChatMessages scroll policy", () => {
           });
         });
 
-        await waitForAnchorEngineSettle();
-        await waitForAnchorEngineSettle();
+        await waitForNavigationSettle();
+        await waitForNavigationSettle();
 
         // Exact landing: scrollTop = positionAtIndex + header - viewOffset.
         // Row height is uniform 90px under the jsdom shim; header spacer 40.
@@ -4597,8 +5508,8 @@ describe("ChatMessages scroll policy", () => {
         fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
         expect(getScrollNode().dataset.scrollMode).toBe("following-end");
 
-        await waitForAnchorEngineSettle();
-        await waitForAnchorEngineSettle();
+        await waitForNavigationSettle();
+        await waitForNavigationSettle();
 
         const recovered = getScrollNode().scrollTop;
         // Recovered past the free-scroll park and past the intentional
@@ -4611,7 +5522,7 @@ describe("ChatMessages scroll policy", () => {
         Reflect.deleteProperty(scrollNode, "scrollTop");
         scrollNode.scrollTop = recovered;
         fireEvent.click(getScrollToEndPill());
-        await waitForAnchorEngineSettle();
+        await waitForNavigationSettle();
         expect(
           Math.abs(getScrollNode().scrollTop - recovered),
         ).toBeLessThanOrEqual(2);
@@ -5011,9 +5922,10 @@ describe("ChatMessages scroll policy", () => {
       const scrollStateKey = `t12-suppress-${Math.random().toString(36).slice(2)}`;
 
       saveChatTabState({
-        key: scrollStateKey,
+        identity: makeDefaultTestIdentity(scrollStateKey),
         mode: "free-scrolling",
         anchorMessageId: anchorId,
+        anchorIndex: null,
         offset: 40,
       });
 
@@ -5087,9 +5999,20 @@ describe("ChatMessages scroll policy", () => {
       history: ReadonlyArray<ChatMessageModel>,
       keyPrefix: string,
     ): Promise<{ scrollTop: number; unmount: () => void }> {
+      // Ticket 15 review (live pass S5): a unique `epicId` per call, not just
+      // a unique `scrollStateKey` - callers in this describe block invoke
+      // this twice per test (control, subject) against the SAME default
+      // epicId/taskId, so without this they share one durable chat-key.
+      // Control's non-live unmount below commits its landed position to
+      // THAT shared durable entry (F1's fix), which the hydration-retry
+      // effect (live pass S5 fix) now genuinely chases as subject's
+      // `messages` grows from `[]` - a real fix correctly acting on
+      // leftover state that used to be silently dropped, surfacing this
+      // test's own cross-call sharing rather than a defect in the fix.
       const { rerenderMessages, unmount } = renderChatMessages({
         messages: [],
         scrollStateKey: `${keyPrefix}-${Math.random().toString(36).slice(2)}`,
+        epicId: `${keyPrefix}-epic-${Math.random().toString(36).slice(2)}`,
         freshOpen: true,
       });
       await settleLegendList();
@@ -5235,9 +6158,19 @@ describe("ChatMessages scroll policy", () => {
       const sendId = "user-pin-c-send";
       const cardId = "setup-card:owner-1:0:pin-c";
 
+      // Ticket 15 review (live pass S5 round 3): a unique `epicId` per
+      // render, not just a unique `scrollStateKey` - `control` and
+      // `subject` otherwise share the default epicId/taskId durable
+      // chat-key. `control`'s unmount below now (correctly, per the round-3
+      // fix) commits a coherent durable entry for its collapsed
+      // "anchoring-new-turn" -> "free-scrolling" position; without this
+      // isolation, `subject`'s own mount would inherit it via
+      // `hasSavedChatTabState`/`restoredTabState`, skipping the
+      // following-end default this test's `subject` assumes.
       const control = renderChatMessages({
         messages: history,
         scrollStateKey: `t13-pin-c-control-${Math.random().toString(36).slice(2)}`,
+        epicId: `t13-pin-c-control-epic-${Math.random().toString(36).slice(2)}`,
         localProvenanceMessageIds: new Set([sendId]),
       });
       await settleLegendList();
@@ -5259,6 +6192,7 @@ describe("ChatMessages scroll policy", () => {
       const subject = renderChatMessages({
         messages: history,
         scrollStateKey: `t13-pin-c-subject-${Math.random().toString(36).slice(2)}`,
+        epicId: `t13-pin-c-subject-epic-${Math.random().toString(36).slice(2)}`,
         localProvenanceMessageIds: new Set([sendId]),
       });
       await settleLegendList();
@@ -5323,9 +6257,7 @@ describe("ChatMessages scroll policy", () => {
       // The `setup.creating` event lands async - the card weaves in directly
       // above the send row (by `triggeringMessageId`), at the exact index
       // the send row used to occupy.
-      const sendIndex = afterSend.findIndex(
-        (message) => message.id === sendId,
-      );
+      const sendIndex = afterSend.findIndex((message) => message.id === sendId);
       const card = setupCardRow(
         `setup-card:owner-1:0:${sendId}`,
         499_999,
@@ -5472,6 +6404,1025 @@ describe("ChatMessages scroll policy", () => {
       // Second send's provenance was consumed on the anchor-new-turn outcome
       // (raw send id, not the previous turn's card).
       expect(getLocalProvenanceMessageIds().has(secondSendId)).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Ticket 18: send-anchor validated convergence (rootcause-send-undershoot).
+  // The engine now shares ticket 10's settle/re-issue helper, writes
+  // settledTimelineAnchorRef ONLY on a validated landing, fails safe to
+  // free-scrolling + pill on exhaustion, and repairs anchor-position drift
+  // BEFORE the reveal pass's overflow early-return.
+  //
+  // jsdom-blind (declared): the ANIMATED-vs-INSTANT visual undershoot mid-
+  // flight (smooth scroll physically not arrived when rows remeasure) is not
+  // reproducible here - the shared scrollTo shim applies offsets
+  // synchronously. What jsdom CAN pin is (A) validated reissue CONVERGENCE
+  // math and (B) near/far ANIMATED-FLAG selection via scrollTo behavior.
+  // -------------------------------------------------------------------------
+  describe("ticket 18: send-anchor validated convergence", () => {
+    const T18_ROW_HEIGHT_PX = 90;
+    const T18_HEADER_PX = LEGEND_LIST_HEADER_PX;
+
+    /**
+     * Ticket 10 F2-style undershoot: force programmatic scroll jumps short of
+     * their requested target so the first settle's validate fails and the
+     * re-issue path must recover. `maxCorruptJumps` limits how many large
+     * jumps are sabotaged (cleared afterward so a later reissue can land).
+     *
+     * Harness note: free-scroll-to-top + anchor scrollToIndex does not stick
+     * scrollTop in this jsdom LegendList setup (0 HTMLElement.scrollTo calls
+     * observed) - the same limitation ticket 4's free-scroll send pin never
+     * asserted absolute offsets for. Pins below drive from following-end
+     * (where scrollToIndex is known to stick) and sabotage landings instead.
+     */
+    function installAnchorScrollUndershoot(
+      scrollNode: HTMLElement,
+      undershootPx: number,
+      maxCorruptJumps: number,
+    ): { setEnabled: (enabled: boolean) => void; dispose: () => void } {
+      let enabled = true;
+      let remainingCorrupt = maxCorruptJumps;
+      let stored = scrollNode.scrollTop;
+      Object.defineProperty(scrollNode, "scrollTop", {
+        configurable: true,
+        get() {
+          return stored;
+        },
+        set(value: number) {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            stored = 0;
+            return;
+          }
+          if (
+            enabled &&
+            remainingCorrupt > 0 &&
+            Math.abs(numeric - stored) > 80
+          ) {
+            remainingCorrupt -= 1;
+            // Jump toward the end is numeric > stored; short landing = less
+            // travel. Jump upward is the inverse.
+            stored =
+              numeric > stored
+                ? Math.max(0, numeric - undershootPx)
+                : numeric + undershootPx;
+            return;
+          }
+          stored = numeric;
+        },
+      });
+      return {
+        setEnabled: (next: boolean) => {
+          enabled = next;
+        },
+        dispose: () => {
+          Reflect.deleteProperty(scrollNode, "scrollTop");
+          scrollNode.scrollTop = stored;
+        },
+      };
+    }
+
+    function expectedAnchorScrollTopForIndex(anchorIndex: number): number {
+      return (
+        anchorIndex * T18_ROW_HEIGHT_PX +
+        T18_HEADER_PX -
+        CHAT_LIST_ANCHOR_OFFSET
+      );
+    }
+
+    async function waitForMultiRetryAnchorSettle(): Promise<void> {
+      // Initial issue + up to 3 reissues. Promise settle is usually fast in
+      // jsdom (sync scrollTo); cover the anchor engine's own (wider,
+      // review-fix) watchdog window per attempt, not the shorter plain-nav
+      // fallback other settle paths use.
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(
+            resolve,
+            (CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS + 100) * 5,
+          );
+        });
+      });
+    }
+
+    function scrollToOptionsFromCallArg(
+      arg: unknown,
+    ):
+      | { readonly top: number; readonly behavior: ScrollBehavior | undefined }
+      | undefined {
+      if (arg === null || typeof arg !== "object") return undefined;
+      if (!("top" in arg)) return undefined;
+      const record = arg as { top: unknown; behavior?: unknown };
+      if (typeof record.top !== "number" || !Number.isFinite(record.top)) {
+        return undefined;
+      }
+      const behavior =
+        typeof record.behavior === "string"
+          ? (record.behavior as ScrollBehavior)
+          : undefined;
+      return { top: record.top, behavior };
+    }
+
+    function firstScrollBehaviorAfter(
+      scrollToSpy: {
+        readonly mock: {
+          readonly calls: ReadonlyArray<ReadonlyArray<unknown>>;
+        };
+      },
+      callsBefore: number,
+    ): ScrollBehavior | undefined {
+      const newCalls = scrollToSpy.mock.calls.slice(callsBefore);
+      for (const call of newCalls) {
+        const options = scrollToOptionsFromCallArg(call[0]);
+        if (options === undefined) continue;
+        return options.behavior;
+      }
+      return undefined;
+    }
+
+    async function flushAnchorPositionFrames(): Promise<void> {
+      await act(async () => {
+        for (let frame = 0; frame < 10; frame += 1) {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        }
+      });
+    }
+
+    it("(pin A) send recovers via validated reissue to the exact 16px anchor offset after short landings", async () => {
+      // Regression pin for the validated-convergence loop (rootcause probe's
+      // "instant OR animated + reissue → 16px" half). jsdom cannot freeze a
+      // mid-flight animated pixel endpoint; F2 undershoot is the deterministic
+      // stand-in for estimate drift.
+      const history = makeCompletedTranscript(40);
+      const sendId = "t18-pin-a-send";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t18-pin-a",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      // Sabotage the first two large jumps; the next reissue lands honestly.
+      const undershoot = installAnchorScrollUndershoot(scrollNode, 500, 2);
+      try {
+        const afterSend = appendOptimisticUserSend(history, sendId, 700_000);
+        rerenderMessages(afterSend);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        await waitForMultiRetryAnchorSettle();
+
+        const expected = expectedAnchorScrollTopForIndex(afterSend.length - 1);
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(
+          Math.abs(getScrollNode().scrollTop - expected),
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        undershoot.dispose();
+      }
+    });
+
+    it("(pin B near) initial scrollToIndex is animated for a near multi-turn send", async () => {
+      // Second turn from a settled first: distance is one short reply + send
+      // (~2 rows) ≪ 1.5 viewports, and prior rows are measured so
+      // expectedScrollTopAtIssue is finite (unmeasured targets default to
+      // far/instant). Real send keeps anchorAnimatedRef true → smooth.
+      const initial = makeCompletedTranscript(8);
+      const turn1Id = "t18-pin-b-near-t1";
+      const turn2Id = "t18-pin-b-near-t2";
+      const realisticScrollHeight =
+        (initial.length + 12) * T18_ROW_HEIGHT_PX + T18_HEADER_PX + 2_000;
+      setLegendListScrollContainerScrollHeightOverride(realisticScrollHeight);
+      try {
+        const { rerenderMessages } = renderChatMessages({
+          messages: initial,
+          scrollStateKey: "t18-pin-b-near",
+          localProvenanceMessageIds: new Set([turn1Id, turn2Id]),
+        });
+        await settleLegendList();
+
+        const afterTurn1 = appendOptimisticUserSend(initial, turn1Id, 100_000);
+        rerenderMessages(afterTurn1);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${turn1Id}`)).toBeTruthy();
+        });
+        await waitForAnchorEngineSettle();
+
+        const afterTurn1Reply: ReadonlyArray<ChatMessageModel> = [
+          ...afterTurn1,
+          {
+            ...makeMessageAt(0, "assistant", 100_001),
+            id: "t18-pin-b-near-reply",
+            content: "OK",
+            completedAt: 100_002,
+            runState: null,
+          },
+        ];
+        rerenderMessages(afterTurn1Reply);
+        await settleLegendList();
+
+        const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo");
+        const callsBefore = scrollToSpy.mock.calls.length;
+
+        const afterTurn2 = appendOptimisticUserSend(
+          afterTurn1Reply,
+          turn2Id,
+          200_000,
+        );
+        rerenderMessages(afterTurn2);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${turn2Id}`)).toBeTruthy();
+        });
+        await flushAnchorPositionFrames();
+
+        const expectedTop = expectedAnchorScrollTopForIndex(
+          afterTurn2.length - 1,
+        );
+        const newCalls = scrollToSpy.mock.calls.slice(callsBefore);
+        let anchorBehavior: ScrollBehavior | undefined;
+        for (const call of newCalls) {
+          const options = scrollToOptionsFromCallArg(call[0]);
+          if (options === undefined) continue;
+          if (Math.abs(options.top - expectedTop) > 2) continue;
+          anchorBehavior = options.behavior;
+          break;
+        }
+        expect(anchorBehavior).toBe("smooth");
+      } finally {
+        setLegendListScrollContainerScrollHeightOverride(null);
+      }
+    });
+
+    it("(pin B far/instant intent) fresh-open seed issues instant scroll (animated:false)", async () => {
+      // Distance-based far jump is jsdom-limited (park-away leaves
+      // scrollToIndex unissued in this harness). Pin the OTHER half of
+      // shouldAnimateInitialIssue: anchorAnimatedRef is false for the
+      // fresh-open seed (decision #15) → instant regardless of distance.
+      const messages = makeCompletedTranscript(24);
+      const scrollStateKey = `t18-pin-b-fresh-${Math.random().toString(36).slice(2)}`;
+      expect(
+        hasSavedChatTabState(makeDefaultTestIdentity(scrollStateKey)),
+      ).toBe(false);
+
+      const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo");
+      const callsBefore = scrollToSpy.mock.calls.length;
+
+      renderChatMessages({
+        messages,
+        scrollStateKey,
+        freshOpen: true,
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await settleLegendList();
+      await flushAnchorPositionFrames();
+      await waitForAnchorEngineSettle();
+
+      // Fresh-open may bootstrap via initialScrollIndex rather than a later
+      // scrollToIndex; when a post-mount scroll DOES fire it must be instant.
+      const behavior = firstScrollBehaviorAfter(scrollToSpy, callsBefore);
+      if (behavior !== undefined) {
+        expect(behavior).toBe("auto");
+      }
+      // Mode + target row still pin the seed path ran.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitFor(() => {
+        expect(screen.getByTestId("mock-message-message-22")).toBeTruthy();
+      });
+    });
+
+    it("(pin C) retry exhaustion fails safe to free-scrolling + pill and warns once (never writes settled)", async () => {
+      const history = makeCompletedTranscript(24);
+      const sendId = "t18-pin-c-exhaust-send";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t18-pin-c-exhaust",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+      const scrollNode = getScrollNode();
+      // Permanent undershoot: every attempt lands short → validate never
+      // passes across initial + 3 retries.
+      const undershoot = installAnchorScrollUndershoot(scrollNode, 400, 99);
+      try {
+        const afterSend = appendOptimisticUserSend(history, sendId, 740_000);
+        rerenderMessages(afterSend);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+        await waitForMultiRetryAnchorSettle();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        expect(isJumpPillVisible()).toBe(true);
+
+        const exhaustWarns = warnSpy.mock.calls.filter(
+          (call) =>
+            call[0] ===
+            "[chat-messages] anchor settle exhausted retries without a validated landing",
+        );
+        expect(exhaustWarns).toHaveLength(1);
+        expect(exhaustWarns[0]?.[1]).toMatchObject({
+          messageId: sendId,
+        });
+      } finally {
+        undershoot.dispose();
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("(pin D) scroll-only reader departure mid-settle fails safe without the exhaust warn", async () => {
+      // OS-scrollbar-drag style: scrollTop moves up with no wheel/touch/
+      // pointerdown generation bump. shouldYieldToReader must win and
+      // onSettledInvalid must NOT log the non-convergence warn.
+      // Pure-function coverage of anchorMoverShouldYieldToReader already
+      // exists in ticket 4 ("distinguishes a scroll-only settle departure…");
+      // this pin is the NEW loop-integration behavior.
+      const history = makeCompletedTranscript(24);
+      const sendId = "t18-pin-d-yield-send";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t18-pin-d-yield",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+      const scrollNode = getScrollNode();
+      // Keep landings short so settle stays in-flight long enough for a
+      // mid-loop yield without converging first.
+      const undershoot = installAnchorScrollUndershoot(scrollNode, 400, 99);
+      try {
+        const afterSend = appendOptimisticUserSend(history, sendId, 750_000);
+        rerenderMessages(afterSend);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+        // Let the first issue land short, then simulate an OS-scrollbar drag
+        // upward (no generation-bumping gesture).
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 120);
+          });
+        });
+        undershoot.setEnabled(false);
+        const departed = Math.max(0, getScrollNode().scrollTop - 500);
+        act(() => {
+          scrollNode.scrollTop = departed;
+          fireEvent.scroll(scrollNode);
+        });
+
+        await waitForMultiRetryAnchorSettle();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        const exhaustWarns = warnSpy.mock.calls.filter(
+          (call) =>
+            call[0] ===
+            "[chat-messages] anchor settle exhausted retries without a validated landing",
+        );
+        expect(exhaustWarns).toHaveLength(0);
+      } finally {
+        undershoot.dispose();
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("(pin E) overflowed anchored turn still repairs content-above drift (reveal-effect reorder regression)", async () => {
+      // Pre-ticket-18 order: overflow early-return ran BEFORE the anchor-
+      // position repair, so a turn that already overflows never corrected
+      // content-above growth. Existing ticket 4 pin covers the non-overflow
+      // content-above case; this one requires overflow first.
+      const history = makeCompletedTranscript(10);
+      const sendId = "t18-pin-e-overflow-repair";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t18-pin-e-overflow-repair",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(history, sendId, 760_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // Grow past usable viewport → streaming pill (overflow true).
+      let current = afterSend;
+      let overflowed = false;
+      for (let chunkIndex = 0; chunkIndex < 20; chunkIndex += 1) {
+        current = appendOneStreamingChunk(current, chunkIndex, 760_000);
+        rerenderMessages(current);
+        await waitForRevealPassTick();
+        if (isJumpPillVisible()) {
+          overflowed = true;
+          break;
+        }
+      }
+      expect(overflowed).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const scrollAtOverflow = getScrollNode().scrollTop;
+
+      // Content ABOVE the still-anchored send grows after overflow.
+      const anchorIndex = current.findIndex((message) => message.id === sendId);
+      expect(anchorIndex).toBeGreaterThan(0);
+      const withLateMetadata: ReadonlyArray<ChatMessageModel> = [
+        ...current.slice(0, anchorIndex),
+        {
+          ...makeMessageAt(0, "assistant", 759_000),
+          id: "t18-pin-e-late-above",
+          content: "Thought for 4s",
+          completedAt: 759_001,
+          runState: null,
+        },
+        ...current.slice(anchorIndex),
+      ];
+      rerenderMessages(withLateMetadata);
+      await waitForRevealPassTick();
+      await waitForRevealPassTick();
+
+      // Repair must still run despite overflowsUsableViewport: scroll grows
+      // by exactly one row so the anchor holds its 16px offset.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollAtOverflow).toBe(
+        T18_ROW_HEIGHT_PX,
+      );
+    });
+
+    it("(pin F) same-turn steer path also converges to the exact 16px offset (not send-only)", async () => {
+      // Decision #8 events share beginAnchoringNewTurn. Ticket 4 already pins
+      // mode engagement for send/steer/queued/fresh-open; this extends the
+      // NEW convergence landing assertion to the steer-shaped insert.
+      const base = makeCompletedTranscript(24);
+      const trailingAssistant: ChatMessageModel = {
+        ...makeMessageAt(0, "assistant", 400_000),
+        id: "t18-pin-f-trailing-asst",
+        content: "still running",
+        completedAt: null,
+        runState: "running",
+      };
+      const initial: ReadonlyArray<ChatMessageModel> = [
+        ...base,
+        trailingAssistant,
+      ];
+      const steerId = "t18-pin-f-steer";
+      const { rerenderMessages } = renderChatMessages({
+        messages: initial,
+        scrollStateKey: "t18-pin-f-steer",
+        localProvenanceMessageIds: new Set([steerId]),
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      const undershoot = installAnchorScrollUndershoot(scrollNode, 400, 2);
+      try {
+        // Steer shape: new local user spliced BEFORE the still-present
+        // trailing assistant (H2 / same-turn steering).
+        const afterSteer: ReadonlyArray<ChatMessageModel> = [
+          ...base,
+          {
+            ...makeMessageAt(0, "user", 401_000),
+            id: steerId,
+            content: "steer instruction",
+            persistentMessageId: null,
+          },
+          trailingAssistant,
+        ];
+        rerenderMessages(afterSteer);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${steerId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        await waitForMultiRetryAnchorSettle();
+
+        const steerIndex = afterSteer.findIndex(
+          (message) => message.id === steerId,
+        );
+        const expected = expectedAnchorScrollTopForIndex(steerIndex);
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(
+          Math.abs(getScrollNode().scrollTop - expected),
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        undershoot.dispose();
+      }
+    });
+
+    it("(pin G, review round 2 residual) a watchdog-timeout wakeup never settles even when the DOM sits exactly at the target - it reissues/fails safe instead", async () => {
+      // Source-proven residual: LegendList's own contract is TWO sequential
+      // windows before its promise resolves - a readiness poll up to
+      // IMPERATIVE_SCROLL_SETTLE_MAX_WAIT_MS (800ms) BEFORE it even issues
+      // the scroll, then SCROLL_END_MAX_MS (1500ms) of animated ownership
+      // after. A finite fallback can still fire while the DOM is
+      // TRANSIENTLY at the target without the library's own promise having
+      // resolved. `validate` must therefore treat a timed-out wakeup as an
+      // unconditional failure - never settle off it - regardless of what
+      // the geometry says. Simulated here by applying the REAL scroll (so
+      // the DOM lands exactly where the library would place it - the
+      // "transient crossing" case) but returning a promise that never
+      // resolves, so only the watchdog can ever wake this settle.
+      const history = makeCompletedTranscript(24);
+      const sendId = "t18-pin-g-watchdog-send";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t18-pin-g-watchdog",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
+      const hangingScrollToIndex = vi
+        .spyOn(list, "scrollToIndex")
+        .mockImplementation((params) => {
+          void originalScrollToIndex(params);
+          return new Promise<void>(() => {});
+        });
+      const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+      try {
+        const afterSend = appendOptimisticUserSend(history, sendId, 770_000);
+        rerenderMessages(afterSend);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+        // Every attempt's promise hangs -> every attempt times out ->
+        // validate is unconditionally false regardless of the (actually
+        // correct) DOM position -> retries exhaust -> fail-safe, never a
+        // phantom settle at the transiently-correct position.
+        await waitForMultiRetryAnchorSettle();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        expect(isJumpPillVisible()).toBe(true);
+
+        const exhaustWarns = warnSpy.mock.calls.filter(
+          (call) =>
+            call[0] ===
+            "[chat-messages] anchor settle exhausted retries without a validated landing",
+        );
+        expect(exhaustWarns).toHaveLength(1);
+        expect(exhaustWarns[0]?.[1]).toMatchObject({ messageId: sendId });
+      } finally {
+        hangingScrollToIndex.mockRestore();
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("ticket 15: dual-key restore + streaming-aware fresh-open", () => {
+    afterEach(() => {
+      // Dual-key durable entries survive tab-key eviction - clear the epic
+      // used by this harness so later suites don't inherit a seed.
+      evictChatTabPersistenceForEpic("epic-1");
+    });
+
+    it("RESTORE-FIRST: free-scrolling and following-end saved states win over fresh-open policy", async () => {
+      const messages = makeCompletedTranscript(16);
+      const freeKey = `t15-restore-free-${Math.random().toString(36).slice(2)}`;
+      const followKey = `t15-restore-follow-${Math.random().toString(36).slice(2)}`;
+      const anchorId = messages[4]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(freeKey),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex: 4,
+        offset: 24,
+      });
+      renderChatMessages({ messages, scrollStateKey: freeKey });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      cleanup();
+
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(followKey),
+        mode: "following-end",
+        anchorMessageId: null,
+        anchorIndex: null,
+        offset: 0,
+      });
+      renderChatMessages({ messages, scrollStateKey: followKey });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("streaming fresh-open (no saved state) seeds following-end, not the idle anchor candidate", async () => {
+      const messages = makeCompletedTranscript(16);
+      const key = `t15-stream-fresh-${Math.random().toString(36).slice(2)}`;
+      expect(hasSavedChatTabState(makeDefaultTestIdentity(key))).toBe(false);
+
+      renderChatMessages({
+        messages,
+        scrollStateKey: key,
+        freshOpen: true,
+        isChatStreaming: true,
+      });
+      await settleLegendList();
+
+      // Idle fresh-open would enter anchoring-new-turn on the last user
+      // message. Streaming fresh-open skips that scan and stays following-end.
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(getScrollNode().dataset.scrollMode).not.toBe("anchoring-new-turn");
+      expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("idle fresh-open still anchors the last user message (ticket-13 path unchanged)", async () => {
+      const messages = makeCompletedTranscript(16);
+      const key = `t15-idle-fresh-${Math.random().toString(36).slice(2)}`;
+      expect(hasSavedChatTabState(makeDefaultTestIdentity(key))).toBe(false);
+
+      renderChatMessages({
+        messages,
+        scrollStateKey: key,
+        freshOpen: true,
+        isChatStreaming: false,
+      });
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+    });
+
+    it("reopen-after-close restores free-scrolling via the durable chat-key (field symptom)", async () => {
+      const messages = makeCompletedTranscript(16);
+      const closedInstance = `t15-closed-${Math.random().toString(36).slice(2)}`;
+      const reopenedInstance = `t15-reopen-${Math.random().toString(36).slice(2)}`;
+      const epicId = "epic-1";
+      const taskId = "task-1";
+      const closedIdentity = makeTestIdentity(closedInstance, epicId, taskId);
+      const reopenedIdentity = makeTestIdentity(
+        reopenedInstance,
+        epicId,
+        taskId,
+      );
+
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages,
+        instanceId: closedInstance,
+        epicId,
+        taskId,
+      });
+      await settleLegendList();
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await fireScrollTopAndFlush(360);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // PRODUCTION ORDER (ticket 15 review F1): a real close removes the
+      // tile from the canvas and runs the tile-removal sweep (tab-key
+      // eviction) SYNCHRONOUSLY, before React ever gets around to unmounting
+      // this component - `isEpicCanvasTileInstanceLive` already reads false
+      // by the time our own cleanup fires. The earlier version of this pin
+      // unmounted BEFORE evicting (the reverse order), which never actually
+      // exercised the guard this ticket depends on.
+      evictChatTabState([closedInstance]);
+      tileLiveness.live = false;
+      first.unmount();
+
+      // Same chat, brand-new tileInstanceId - must still restore via durable,
+      // which the non-live unmount above just committed (F1's durable-only
+      // commit path) - nothing else in this test ever wrote it.
+      expect(hasSavedChatTabState(reopenedIdentity)).toBe(true);
+      // Ticket 15 review (live pass S5 round 3): a mode-only assertion
+      // stayed green through two live failures - a poisoned
+      // {anchorMessageId, anchorIndex, offset} triple (a stale anchor row
+      // paired with the live scroll offset) still reports `mode:
+      // "free-scrolling"`. Assert the full triple is internally coherent -
+      // a real, non-null anchor with an index the offset was actually
+      // captured relative to.
+      const restoredTriple = restoreChatTabState(reopenedIdentity, messages);
+      expect(restoredTriple.mode).toBe("free-scrolling");
+      expect(restoredTriple.anchorMessageId).not.toBeNull();
+      expect(restoredTriple.anchorIndex).not.toBeNull();
+
+      const second = renderChatMessages({
+        messages,
+        instanceId: reopenedInstance,
+        epicId,
+        taskId,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      // The reopened viewport lands back at the position that was actually
+      // on screen when the tab closed - not just "some free-scrolling row".
+      expect(getScrollNode().scrollTop).toBe(360);
+      second.unmount();
+
+      // Sanity: the closed tab-key alone is not what restored us.
+      expect(restoreChatTabState(closedIdentity, messages).mode).toBe(
+        "free-scrolling",
+      ); // durable still answers for same chat
+    });
+
+    // Ticket 15 review (live pass S5 round 3): a small (16-row) transcript
+    // and a shallow scroll target let the OLD code's clamping accidentally
+    // land "close enough" even with a stale anchor - the poisoned pair
+    // only breaks catastrophically once the stale row and the true
+    // scrolled row are far apart, matching the live shape (a landmark deep
+    // in a long transcript). 100 rows, scrolled to row 50 (far past
+    // `enterFreeScrollingAwayFromEnd`'s row-0 park), makes the mismatch
+    // large enough to be unmissable.
+    const RACE_ROW_COUNT = 100;
+    const RACE_TARGET_ROW = 50;
+    const RACE_TARGET_SCROLL_TOP =
+      RACE_TARGET_ROW * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX;
+
+    it("close races the unserviced rAF viewport mirror: the saved triple still matches the actual scrolled position (live pass S5 round 3, confirmed defect)", async () => {
+      const messages = makeCompletedTranscript(RACE_ROW_COUNT);
+      const closedInstance = `t15-race-closed-${Math.random().toString(36).slice(2)}`;
+      const reopenedInstance = `t15-race-reopen-${Math.random().toString(36).slice(2)}`;
+      const epicId = "epic-1";
+      const taskId = "task-1";
+      const reopenedIdentity = makeTestIdentity(
+        reopenedInstance,
+        epicId,
+        taskId,
+      );
+
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages,
+        instanceId: closedInstance,
+        epicId,
+        taskId,
+      });
+      await settleLegendList();
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      // Live evidence: scroll then close BEFORE the pending
+      // `scheduleActiveViewportUpdate` rAF ever services
+      // `scrolledActiveUserMessageIdRef` - `requestAnimationFrame` never
+      // fires for a backgrounded/closing tab, and `useAnimationFrameThrottle`
+      // cancels the pending frame on unmount either way. No flush here is
+      // the point of this pin.
+      fireScrollTopWithoutFlush(RACE_TARGET_SCROLL_TOP);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      evictChatTabState([closedInstance]);
+      tileLiveness.live = false;
+      first.unmount();
+
+      // The saved triple must be internally coherent with the ACTUAL
+      // scrolled position (row 50), not a stale reading-line row paired
+      // with the live offset - on the old code this produced an anchor at
+      // whatever row `scrolledActiveUserMessageIdRef` last held (row 0,
+      // pre-scroll) combined with an offset computed against the live
+      // scrollTop, clamping the reopen far from row 50.
+      const restoredTriple = restoreChatTabState(reopenedIdentity, messages);
+      expect(restoredTriple.mode).toBe("free-scrolling");
+      expect(restoredTriple.anchorMessageId).not.toBeNull();
+      expect(restoredTriple.anchorIndex).toBeGreaterThan(RACE_TARGET_ROW - 2);
+      expect(restoredTriple.anchorIndex).toBeLessThan(RACE_TARGET_ROW + 2);
+
+      const second = renderChatMessages({
+        messages,
+        instanceId: reopenedInstance,
+        epicId,
+        taskId,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().scrollTop).toBe(RACE_TARGET_SCROLL_TOP);
+      second.unmount();
+    });
+
+    it("close races the unserviced rAF viewport mirror under StrictMode (dev effect replay must not resurrect the stale row-0 reading)", async () => {
+      const messages = makeCompletedTranscript(RACE_ROW_COUNT);
+      const closedInstance = `t15-strict-closed-${Math.random().toString(36).slice(2)}`;
+      const reopenedInstance = `t15-strict-reopen-${Math.random().toString(36).slice(2)}`;
+      const epicId = "epic-1";
+      const taskId = "task-1";
+      const reopenedIdentity = makeTestIdentity(
+        reopenedInstance,
+        epicId,
+        taskId,
+      );
+
+      tileLiveness.live = true;
+      const first = render(
+        <StrictMode>
+          <div
+            data-chat-keyboard-scroll-scope
+            data-active="true"
+            style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
+          >
+            <ChatMessages
+              taskTitle="Test chat"
+              taskId={taskId}
+              epicId={epicId}
+              messages={messages}
+              localProvenanceMessageIds={new Set()}
+              consumeLocalProvenance={() => undefined}
+              backgroundItems={undefined}
+              getMessageActions={() => null}
+              nextStepActions={null}
+              instanceId={closedInstance}
+              visible
+              systemOverlayActive={false}
+              isChatStreaming={false}
+              scrollRequest={null}
+              composerOverlayHeight={80}
+            />
+          </div>
+        </StrictMode>,
+      );
+      await settleLegendList();
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      fireScrollTopWithoutFlush(RACE_TARGET_SCROLL_TOP);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      evictChatTabState([closedInstance]);
+      tileLiveness.live = false;
+      first.unmount();
+
+      const restoredTriple = restoreChatTabState(reopenedIdentity, messages);
+      expect(restoredTriple.mode).toBe("free-scrolling");
+      expect(restoredTriple.anchorMessageId).not.toBeNull();
+      expect(restoredTriple.anchorIndex).toBeGreaterThan(RACE_TARGET_ROW - 2);
+      expect(restoredTriple.anchorIndex).toBeLessThan(RACE_TARGET_ROW + 2);
+
+      const second = renderChatMessages({
+        messages,
+        instanceId: reopenedInstance,
+        epicId,
+        taskId,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().scrollTop).toBe(RACE_TARGET_SCROLL_TOP);
+      second.unmount();
+    });
+
+    it("hydration catch-up: a saved anchor absent from a still-hydrating mount-time transcript is re-resolved once the full transcript arrives (live pass S5, confirmed defect)", async () => {
+      const fullMessages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const anchorId = fullMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      // The retry effect lands via `navigateToMessage` (same jump-and-land
+      // machinery every other programmatic navigation in this file already
+      // uses - minimap/find/deep-link), which targets a FIXED navigation
+      // padding, not the saved sub-row pixel offset (that refinement only
+      // ever applied to the ORIGINAL mount-time bootstrap, unaffected by
+      // this fix) - same formula T17's own pins use to verify a computed
+      // landing position independent of jsdom's faked scrollHeight.
+      const expectedScrollTop =
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX +
+        LEGEND_LIST_HEADER_PX -
+        CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+
+      // Repro: reopen races hydration - the FIRST commit only has the tail
+      // of the transcript (chat.subscribe's snapshot can still grow after
+      // this tile's own snapshotLoaded first flips true; see
+      // chat-session-store.ts's reconnect/rehydrate comments) - the saved
+      // anchor (idx 20) is not present yet.
+      const catchupKey = `t15-hydration-catchup-${Math.random().toString(36).slice(2)}`;
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(catchupKey),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: 24,
+      });
+      const partialMessages = fullMessages.slice(180);
+      const { rerenderMessages } = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: catchupKey,
+      });
+      await settleLegendList();
+      // Confirms the gap is real: the mount-time restore could not have
+      // found the true anchor in this partial transcript, and the scroll
+      // position is nowhere near the true anchor's row.
+      expect(screen.queryByTestId(`mock-message-${anchorId}`)).toBeNull();
+      expect(getScrollNode().scrollTop).not.toBe(expectedScrollTop);
+
+      // The rest of the transcript arrives (a later onSnapshot/backfill commit).
+      rerenderMessages(fullMessages);
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+    });
+
+    it("hydration catch-up survives MANY anchor-absent messages transitions before the anchor arrives (live pass S5 round 2, confirmed defect)", async () => {
+      // Live evidence: a reopen can replay dozens of incremental `messages`
+      // reference changes (onSnapshot + a burst of backfill/append events)
+      // in well under 2 seconds, all before the saved anchor's own commit
+      // ever lands. An earlier version of this fix counted every
+      // anchor-absent transition as a bounded "attempt" (20) and disarmed
+      // itself long before the anchor showed up - this reproduces that
+      // exact shape: 25 distinct anchor-absent commits, THEN the anchor.
+      const fullMessages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const anchorId = fullMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const expectedScrollTop =
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX +
+        LEGEND_LIST_HEADER_PX -
+        CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+
+      const key = `t15-hydration-many-absent-${Math.random().toString(36).slice(2)}`;
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(key),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: 24,
+      });
+      const { rerenderMessages } = renderChatMessages({
+        messages: fullMessages.slice(180, 181),
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      expect(screen.queryByTestId(`mock-message-${anchorId}`)).toBeNull();
+
+      // 25 DISTINCT array references, none containing the anchor (all drawn
+      // from the tail, past index 20) - more than the old bounded budget.
+      for (let i = 2; i <= 26; i += 1) {
+        rerenderMessages(fullMessages.slice(180, 180 + i));
+      }
+      await settleLegendList();
+      expect(screen.queryByTestId(`mock-message-${anchorId}`)).toBeNull();
+
+      // The anchor's own commit finally lands.
+      rerenderMessages(fullMessages);
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+    });
+
+    it("hydration catch-up does not disturb the true-deletion nearest-neighbor fallback (branch-edited anchor, never resolves)", async () => {
+      const messages = makeCompletedTranscript(16);
+      const key = `t15-hydration-deleted-${Math.random().toString(36).slice(2)}`;
+
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(key),
+        mode: "free-scrolling",
+        anchorMessageId: "gone-branch-deleted",
+        anchorIndex: 5,
+        offset: 24,
+      });
+      renderChatMessages({ messages, scrollStateKey: key });
+      await settleLegendList();
+
+      // The round-1 stale-anchor nearest-neighbor fallback still applies
+      // exactly as before this fix - the hydration-retry effect never finds
+      // "gone-branch-deleted" (it does not exist in ANY commit, complete or
+      // not) and gives up within its bounded attempt budget rather than
+      // hanging or repeatedly disturbing the clamped position.
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(
+        screen.queryByTestId("mock-message-gone-branch-deleted"),
+      ).toBeNull();
+    });
+
+    it("composer-resize alone does not write scroll state (endInset not in save-effect deps)", async () => {
+      const messages = makeCompletedTranscript(12);
+      const instanceId = `t15-composer-resize-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+
+      // Truly fresh: no seed, not streaming.
+      expect(hasSavedChatTabState(identity)).toBe(false);
+      tileLiveness.live = true;
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        instanceId,
+        freshOpen: true,
+        composerOverlayHeight: 80,
+      });
+      await settleLegendList();
+      expect(hasSavedChatTabState(identity)).toBe(false);
+
+      // Resize the overlaid composer - previously re-ran the unmount-save
+      // effect cleanup because endInset was in the dep array, flipping
+      // "no saved state" permanently.
+      rerenderWith({ composerOverlayHeight: 240 });
+      await settleLegendList();
+
+      expect(hasSavedChatTabState(identity)).toBe(false);
     });
   });
 });

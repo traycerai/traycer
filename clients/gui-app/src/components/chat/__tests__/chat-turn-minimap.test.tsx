@@ -19,11 +19,26 @@ import {
   CHAT_TURN_MINIMAP_PERSISTENT_GUTTER,
 } from "@/components/chat/chat-turn-minimap-logic";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import {
+  evictChatTurnMinimapActiveEntries,
+  evictChatTurnMinimapActiveEntryForChat,
+} from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import { makeMessage } from "./chat-message-fixtures";
+
+const DEFAULT_MINIMAP_IDENTITY: ChatTabPersistenceIdentity = {
+  tileInstanceId: "minimap-test-tile",
+  epicId: "epic-1",
+  chatId: "task-1",
+};
 
 afterEach(() => {
   cleanup();
   document.body.replaceChildren();
+  // Ticket 15: active-entry persistence is dual-keyed - clear both halves so
+  // a prior test's saved active id does not seed the next mount.
+  evictChatTurnMinimapActiveEntries([DEFAULT_MINIMAP_IDENTITY.tileInstanceId]);
+  evictChatTurnMinimapActiveEntryForChat(DEFAULT_MINIMAP_IDENTITY);
 });
 
 /** Flush the mount-time rAF that measures viewport width / in-view strips. */
@@ -259,6 +274,7 @@ function renderMinimap(options: RenderOptions): {
       viewportRef={viewportRef}
       bottomInset={options.bottomInset ?? 0}
       onSelect={onSelect}
+      identity={DEFAULT_MINIMAP_IDENTITY}
     />
   );
   const result = render(tree);
@@ -281,6 +297,7 @@ function renderMinimap(options: RenderOptions): {
           viewportRef={viewportRef}
           bottomInset={next.bottomInset ?? 0}
           onSelect={next.onSelect ?? onSelect}
+          identity={DEFAULT_MINIMAP_IDENTITY}
         />,
       );
     },
@@ -301,6 +318,7 @@ describe("ChatTurnMinimap item derivation / filtering", () => {
         viewportRef={createRef()}
         bottomInset={0}
         onSelect={vi.fn()}
+        identity={DEFAULT_MINIMAP_IDENTITY}
       />,
     );
     expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
@@ -660,7 +678,46 @@ describe("ChatTurnMinimap in-view highlighting", () => {
     });
   });
 
-  it("updates data-in-view when the list scroll node fires a scroll event", async () => {
+  // O2 (T3 parity, ticket 16): the minimap no longer attaches its own scroll
+  // listener to the list's scrollable node - production now drives this via
+  // `inViewRefreshRef`, invoked from ChatTimeline's own `onScroll` callback
+  // (chat-messages.tsx's `handleScroll`). This pin exercises the same
+  // scroll-position-changed scenario the old native-listener test covered,
+  // through the new caller-driven contract instead of a raw DOM event.
+  it("updates data-in-view when the caller notifies a scroll position change", async () => {
+    const messages = makeTwoTurnTranscript();
+    const listState: FakeListState = {
+      scroll: 0,
+      scrollLength: 100, // band [0, 100) - only row 0 intersects
+      positions: [0, 80, 250, 330],
+      sizes: [60, 60, 60, 60],
+    };
+    const { inViewRefreshRef } = renderMinimap({ messages, listState });
+    await flushMinimapFrames(3);
+
+    const strip0 = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-0"]',
+    );
+    const strip2 = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-2"]',
+    );
+    await waitFor(() => {
+      expect(strip0?.getAttribute("data-in-view")).toBe("true");
+      expect(strip2?.getAttribute("data-in-view")).toBe("false");
+    });
+
+    // Scroll the band over the second user row
+    listState.scroll = 200;
+    listState.scrollLength = 300;
+    act(() => {
+      inViewRefreshRef.current();
+    });
+
+    expect(strip0?.getAttribute("data-in-view")).toBe("false");
+    expect(strip2?.getAttribute("data-in-view")).toBe("true");
+  });
+
+  it("does not update data-in-view on a raw scroll DOM event with no caller-driven refresh (no second listener)", async () => {
     const messages = makeTwoTurnTranscript();
     const listState: FakeListState = {
       scroll: 0,
@@ -682,15 +739,13 @@ describe("ChatTurnMinimap in-view highlighting", () => {
       expect(strip2?.getAttribute("data-in-view")).toBe("false");
     });
 
-    // Scroll the band over the second user row
     listState.scroll = 200;
     listState.scrollLength = 300;
     fireEvent.scroll(scrollNode);
-
-    await waitFor(() => {
-      expect(strip0?.getAttribute("data-in-view")).toBe("false");
-      expect(strip2?.getAttribute("data-in-view")).toBe("true");
-    });
+    // No inViewRefreshRef call follows - the strips must NOT have moved,
+    // since the component owns no listener of its own on this node anymore.
+    expect(strip0?.getAttribute("data-in-view")).toBe("true");
+    expect(strip2?.getAttribute("data-in-view")).toBe("false");
   });
 
   it("updates data-in-view when LegendList reports a row remeasurement", async () => {

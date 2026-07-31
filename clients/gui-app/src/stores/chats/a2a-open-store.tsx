@@ -16,7 +16,7 @@ interface A2AOpenStoreProviderProps {
 }
 
 export function A2AOpenStoreProvider(props: A2AOpenStoreProviderProps) {
-  const [fallbackStore] = useState(createA2AOpenStore);
+  const [fallbackStore] = useState(() => createA2AOpenStore(null));
   const store = props.store ?? fallbackStore;
   return (
     <A2AOpenStoreContext.Provider value={store}>

@@ -4,7 +4,6 @@ import {
   use,
   useCallback,
   useMemo,
-  useState,
   type RefObject,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -25,6 +24,7 @@ import { chatTimelineGetItemType } from "@/components/chat/chat-messages-scroll-
 import {
   computeStableChatTimelineRows,
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+  type StableChatTimelineRowsState,
 } from "./chat-stable-rows";
 
 /**
@@ -50,11 +50,20 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
-const CHAT_TIMELINE_LIST_HEADER = <div aria-hidden="true" className="h-10" />;
-const CHAT_TIMELINE_LIST_FADE_HEADER = (
-  <div aria-hidden="true" className="h-16 sm:h-20" />
+// M4 (T3 parity, ticket 16): sizes match T3's `MessagesTimeline.tsx` exactly
+// (`TIMELINE_LIST_HEADER`/`_FADE_HEADER`/`_FOOTER`) - the 40px header/footer
+// and 64/80px fade header were unsanctioned drift (decision log #30).
+// Consumers read the live measured size via `onListMetricsChange`, so they
+// adapt automatically; nothing here is a hardcoded assumption elsewhere.
+const CHAT_TIMELINE_LIST_HEADER = (
+  <div aria-hidden="true" className="h-3 sm:h-4" />
 );
-const CHAT_TIMELINE_LIST_FOOTER = <div aria-hidden="true" className="h-10" />;
+const CHAT_TIMELINE_LIST_FADE_HEADER = (
+  <div aria-hidden="true" className="h-10 sm:h-12" />
+);
+const CHAT_TIMELINE_LIST_FOOTER = (
+  <div aria-hidden="true" className="h-3 sm:h-4" />
+);
 
 /** Ticket 5: LegendList's own `initialScrollIndex` shape - a row index plus
  *  the exact pixel offset/anchoring edge to bootstrap-scroll to. */
@@ -198,7 +207,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
-  const rows = useStableChatTimelineRows(messages);
+  const rows = useStableChatTimelineRows(listRef, messages);
 
   const sharedState = useMemo<ChatTimelineRowSharedState>(
     () => ({
@@ -326,7 +335,13 @@ export const ChatTimeline = memo(function ChatTimeline({
           ? { onMetricsChange: onListMetricsChange }
           : {})}
         className={cn(
-          "chat-scrollbar-native-thin mr-1 h-full overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
+          // M1 (T3 parity): `scrollbar-gutter-both` (T3's `MessagesTimeline.tsx`)
+          // reserves the scrollbar's track width on BOTH edges permanently, so
+          // the centered `max-w-3xl` column never shifts when the bar
+          // appears/disappears - the previous one-sided `mr-1` margin hack
+          // only reserved the right edge, and the fade mask's own gutter
+          // exclusion band (index.css) is sized to match this.
+          "chat-scrollbar-native-thin scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
           topFadeEnabled && "chat-timeline-scroll-fade",
           className,
         )}
@@ -381,20 +396,63 @@ function chatTimelineRowSizeHintClassName(
   return "[contain-intrinsic-size:auto_14rem]";
 }
 
+/**
+ * Module-scope cache (never `useState`/`useRef`-owned - not a hook value the
+ * compiler tracks for immutability at all), keyed by each `ChatTimeline`
+ * mount's own `listRef` object - a stable identity for the lifetime of that
+ * mounted instance (chat tiles remount wholesale per tab switch, decision
+ * #17, so a fresh `listRef` naturally starts a fresh cache entry; multiple
+ * simultaneously-mounted tiles never share one). Same shape as
+ * `rendered-messages.ts`'s per-context `WeakMap`s.
+ *
+ * Review fix (F4, ticket 16 batch review): the earlier `useState`-held `Map`
+ * mutated mid-render was flagged as a lint loophole, not real purity - a
+ * speculative/discarded React render still executes `useMemo`'s callback and
+ * could publish a cache write that a LATER, actually-committed render then
+ * reads. This shape is safe under that scenario for the same reason
+ * `rendered-messages.ts`'s caches are: every read is immediately followed by
+ * a fresh, from-scratch correctness check against the CURRENT real input,
+ * never a trust-the-cache-blindly hit. Walking the scenario -
+ * `computeStableChatTimelineRows(rows, previous)` per row either (a) reuses
+ * `previous.byId.get(row.id)` ONLY when `isChatMessageUnchanged` confirms
+ * every tracked field matches the CURRENT real `row`, or (b) falls back to
+ * `row` itself - the fresh object the CURRENT real props already carry,
+ * never a value derived FROM `previous`. So if a discarded speculative
+ * render (rows never actually committed) writes a polluted `previous` into
+ * the cache, the next REAL render can only ever (a) correctly reuse a
+ * reference when its content genuinely, byte-for-byte matches what's
+ * already cached - reuse is never wrong merely because of which past render
+ * produced the cached value - or (b) miss and fall back to its own real,
+ * already-correct `row` - never displaying wrong content. The one possible
+ * cost of pollution is a missed reuse opportunity (an extra `ChatMessage`
+ * memo-bail re-render), the same failure mode `rendered-messages.ts`'s own
+ * cache-key mismatch path has, not a correctness bug.
+ */
+const stableChatTimelineRowsCache = new WeakMap<
+  RefObject<LegendListRef | null>,
+  StableChatTimelineRowsState
+>();
+
 /** Returns a structurally-shared copy of `rows`: for each row whose content
  *  hasn't changed since last call, the previous object reference is reused.
- *  Guarded adjust-state-during-render (same idiom as
- *  `use-mounted-pane-tabs.ts`'s LRU derivation) - a ref would need mutating
- *  mid-render, which the React Compiler forbids. */
+ *  `messages` is rebuilt wholesale on every store update (every streaming
+ *  token), so this runs on nearly every render - a `use-mounted-pane-tabs.ts`
+ *  -style adjust-state-during-render retry would cost a genuine extra render
+ *  pass on that hot path, not just a Strict Mode dev artifact. See
+ *  `stableChatTimelineRowsCache`'s own doc comment for the cache shape and
+ *  why it stays correct under a discarded speculative render. */
 function useStableChatTimelineRows(
+  listRef: RefObject<LegendListRef | null>,
   rows: ReadonlyArray<ChatMessageModel>,
 ): ReadonlyArray<ChatMessageModel> {
-  const [state, setState] = useState(EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE);
-  const nextState = computeStableChatTimelineRows(rows, state);
-  if (nextState !== state) {
-    setState(nextState);
-  }
-  return nextState.result;
+  return useMemo(() => {
+    const previous =
+      stableChatTimelineRowsCache.get(listRef) ??
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE;
+    const next = computeStableChatTimelineRows(rows, previous);
+    stableChatTimelineRowsCache.set(listRef, next);
+    return next.result;
+  }, [rows, listRef]);
 }
 
 /**
