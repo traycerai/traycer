@@ -24,6 +24,7 @@ import type {
   DesktopReportIssueForm,
   DesktopSubmitReportResult,
   DesktopSupportBuildPublicDraftResult,
+  DesktopSupportBridge,
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
@@ -277,7 +278,9 @@ function createBaseRunnerHost(): IRunnerHost {
   };
 }
 
-function createRunnerHost(harness: SupportBridgeHarness): IRunnerHost {
+function createRunnerHost(
+  harness: SupportBridgeHarness,
+): IRunnerHost & { readonly support: DesktopSupportBridge } {
   return Object.assign(createBaseRunnerHost(), {
     openExternalLink: (url: string) => harness.openExternalLink(url),
     support: {
@@ -1328,6 +1331,38 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(harness.submittedForms).toEqual([]);
     });
 
+    it("fails closed when the support snapshot cannot be loaded", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () => {
+          throw new Error("submitReport must not be called without a snapshot");
+        },
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      const runnerHost = createRunnerHost(harness);
+      const support = runnerHost.support;
+      openManualReport();
+      renderReportIssueDialog(
+        Object.assign(runnerHost, {
+          support: {
+            ...support,
+            getSnapshot: () => Promise.reject(new Error("snapshot failed")),
+          },
+        }),
+      );
+
+      expect(
+        await screen.findByText(
+          "Private reporting is not available in this build. You can save a diagnostic bundle and open a GitHub issue instead.",
+        ),
+      ).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Send report" })).toBeNull();
+      expect(harness.submittedForms).toEqual([]);
+    });
+
     it("renders unavailable after a submit that returns status unavailable", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
@@ -1946,6 +1981,44 @@ describe("Report issue capture dialog (deep interactions)", () => {
       ).not.toBeNull();
     });
 
+    it("ignores drops while report submission disables attachments", async () => {
+      let finishSubmit!: (result: DesktopSubmitReportResult) => void;
+      const submitPending = new Promise<DesktopSubmitReportResult>(
+        (resolve) => {
+          finishSubmit = resolve;
+        },
+      );
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () => submitPending,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Submitting while a screenshot is dropped" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      const target = screen.getByRole("button", { name: "Attach screenshots" });
+      await waitFor(() => {
+        expect(target.getAttribute("aria-disabled")).toBe("true");
+      });
+      fireEvent.drop(target, {
+        dataTransfer: makeFileTransfer([makePngFile("ignored.png")]),
+      });
+      expect(screen.queryByRole("img", { name: "ignored.png" })).toBeNull();
+
+      finishSubmit({ status: "delivered", reportId: "rpt_test" });
+      expect(
+        await screen.findByRole("heading", { name: "Report sent" }),
+      ).not.toBeNull();
+    });
+
     it("attaches via paste on the attachment target", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
@@ -2045,6 +2118,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
     });
 
     it("includes attached image fileName/mimeType/bytes on the submitted form", async () => {
+      const track = vi.spyOn(Analytics.getInstance(), "track");
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -2074,6 +2148,14 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(form.images[0]?.mimeType).toBe("image/png");
       expect(form.images[0]?.bytes).toBeInstanceOf(ArrayBuffer);
       expect(form.images[0]?.bytes.byteLength).toBeGreaterThan(0);
+      expect(track).toHaveBeenCalledWith(
+        AnalyticsEvent.ReportIssuePrivateSubmit,
+        {
+          outcome: "confirmed",
+          blocker: null,
+          attachment_count: 1,
+        },
+      );
     });
 
     it("sends an image-only report end to end with no typed text (G15)", async () => {

@@ -95,7 +95,9 @@ const PATH_COMPONENT = String.raw`${PATH_COMPONENT_CHAR}+(?: +[A-Z]${PATH_COMPON
 const WINDOWS_PATH_SEPARATOR = String.raw`[\\/]+`;
 
 const POSIX_ABSOLUTE_PATH_PATTERN = new RegExp(
-  String.raw`\/(?:${POSIX_PATH_ROOT_NAMES.join("|")})(?:\/${PATH_COMPONENT})*`,
+  // Without the boundary, a root such as `home` can claim only the prefix of
+  // `/homework` while the optional component tail matches zero times.
+  String.raw`\/(?:${POSIX_PATH_ROOT_NAMES.join("|")})(?!${PATH_COMPONENT_CHAR})(?:\/${PATH_COMPONENT})*`,
   "g",
 );
 
@@ -229,7 +231,9 @@ function scrubValueAtDepth(value: unknown, depth: number): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return scrubSupportText(value);
   if (typeof value === "number" || typeof value === "boolean") return value;
-  if (depth >= MAX_DEEP_SCRUB_DEPTH) return value;
+  // Fail closed at the structural bound. Returning a container here would
+  // expose every unsanitized string nested below it.
+  if (depth >= MAX_DEEP_SCRUB_DEPTH) return "<depth-limit>";
   if (Array.isArray(value)) {
     return value
       .slice(0, MAX_DEEP_SCRUB_ARRAY_ITEMS)

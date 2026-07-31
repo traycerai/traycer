@@ -152,18 +152,9 @@ export function useEpicCanvas(tabId: string | undefined): EpicCanvasState {
 }
 
 export function makeSelectActiveEpicArtifactId(tabId: string | undefined) {
-  return (state: EpicCanvasStore): string | null => {
-    if (tabId === undefined) return null;
-    const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
-    if (canvas.activePaneId === null) return null;
-    const pane = findPaneById(canvas.root, canvas.activePaneId);
-    if (pane === null || pane.activeTabId === null) return null;
-    const active = canvas.tilesByInstanceId[pane.activeTabId];
-    if (active === undefined) return null;
-    if (active.type === WORKSPACE_FILE_TAB_KIND) return null;
-    if (isDiffTileRef(active)) return null;
-    return active.id;
-  };
+  const selectRef = makeSelectActiveEpicArtifactRef(tabId);
+  return (state: EpicCanvasStore): string | null =>
+    selectRef(state)?.id ?? null;
 }
 
 export function useActiveEpicArtifactId(

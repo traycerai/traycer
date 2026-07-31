@@ -752,7 +752,7 @@ function assertHasSubmittableEvidence(input: {
     hasErrorEnvelope ||
     input.intent.trim().length > 0 ||
     input.images.length > 0 ||
-    input.location !== null;
+    (input.location !== null && input.location.trim().length > 0);
   if (!hasEvidence) {
     throw new Error(
       "supportSubmitReport requires a sentence, a screenshot, a location, or a captured error - none were present",

@@ -380,16 +380,6 @@ export class DesktopSupportService {
     // image bytes).
     const imageAttachments = sentryAttachmentsForImages(form.images);
     const eventId = sentryEventIdFromReportId(frozen.reportId);
-    // Registered before `captureFeedback` so the listener is live the instant
-    // our envelope goes out - `afterSendEvent` carries the transport's real
-    // response (a status code even for a 4xx/5xx rejection; nothing at all on
-    // a network-level failure), which `flush` alone cannot distinguish from
-    // success: `flush` resolves true once the queue has drained, and the
-    // queue drains identically whether the store accepted the event or
-    // definitively rejected it - only a genuine hang (never settling either
-    // way) makes `flush` resolve false. That gap is what let a Sentry 500 or
-    // a destroyed connection come back as `delivered`.
-    const sendOutcome = watchSentrySendOutcome(eventId);
     // Deep-scrubbed as a whole right before it rides in the Sentry event:
     // `layer0.evidence`/`raw` are free text off a filesystem error and can
     // carry absolute paths (host.log is unredacted at source), and
@@ -436,6 +426,11 @@ export class DesktopSupportService {
             : { registry: { ...privateDiagnostics.registry } }),
         })
       : {};
+    // Registered after context construction but before `captureFeedback`, so
+    // the listener is live when the envelope goes out and every later exit is
+    // covered by the `finally` below. `afterSendEvent` carries the transport's
+    // real response, which `flush` alone cannot distinguish from rejection.
+    const sendOutcome = watchSentrySendOutcome(eventId);
     try {
       try {
         Sentry.captureFeedback(

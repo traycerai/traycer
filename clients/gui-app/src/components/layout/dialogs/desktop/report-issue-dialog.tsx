@@ -265,6 +265,7 @@ interface ReportIssueDeliveryFlags {
 
 function deriveDeliveryFlags(input: {
   readonly snapshot: DesktopSupportSnapshot | null;
+  readonly snapshotIsError: boolean;
   readonly submitIsSuccess: boolean;
   readonly submitData: DesktopSubmitReportResult | undefined;
   readonly submitIsError: boolean;
@@ -273,7 +274,8 @@ function deriveDeliveryFlags(input: {
     ? (input.submitData ?? null)
     : null;
   const deliveryUnavailableUpfront =
-    input.snapshot !== null && !input.snapshot.privateDeliveryAvailable;
+    input.snapshotIsError ||
+    (input.snapshot !== null && !input.snapshot.privateDeliveryAvailable);
   // A rejected submitReport promise (IPC/parser/bridge exception - not a
   // typed `{status:"failed"}` result) must still land on the same terminal
   // action set as a definite failure - "Try again" + "Report on GitHub
@@ -342,6 +344,7 @@ function deriveReportIssueFlags(input: {
   readonly gateErrorVisible: boolean;
   readonly occurrence: DesktopFingerprintOccurrence | null;
   readonly snapshot: DesktopSupportSnapshot | null;
+  readonly snapshotIsError: boolean;
   readonly submitIsSuccess: boolean;
   readonly submitData: DesktopSubmitReportResult | undefined;
   readonly submitIsError: boolean;
@@ -370,6 +373,22 @@ function fingerprintOccurrenceQueryOptions(
       return support.getFingerprintOccurrence(fingerprint);
     },
     enabled: support !== null && fingerprint !== null,
+  });
+}
+
+function supportSnapshotQueryOptions(
+  support: DesktopSupportDialogProps["support"],
+  open: boolean,
+) {
+  return queryOptions({
+    queryKey: runnerQueryKeys.supportSnapshot(support),
+    queryFn: (): Promise<DesktopSupportSnapshot> => {
+      if (support === null) {
+        return Promise.reject(new Error("Support bridge unavailable"));
+      }
+      return support.getSnapshot();
+    },
+    enabled: open && support !== null,
   });
 }
 
@@ -406,7 +425,6 @@ export function ReportIssueDialog(
       getSupportContextSnapshot().routeTemplate,
   );
 
-  const [snapshot, setSnapshot] = useState<DesktopSupportSnapshot | null>(null);
   // Minted once at report-open (T2/T3) and reused by every retry as the
   // Sentry idempotency key. Null until the freeze IPC resolves; submit stays
   // disabled until then so it can never race ahead of the frozen evidence.
@@ -466,11 +484,8 @@ export function ReportIssueDialog(
     // draftContext is captured at open and is immutable for the draft's life.
   }, [draftId, support, draftContext, fingerprint]);
 
-  useEffect(() => {
-    if (!open || support === null) return;
-    void support.getSnapshot().then(setSnapshot, () => null);
-  }, [open, support]);
-
+  const snapshotQuery = useQuery(supportSnapshotQueryOptions(support, open));
+  const snapshot = snapshotQuery.data ?? null;
   const occurrenceQuery = useQuery(
     fingerprintOccurrenceQueryOptions(support, fingerprint),
   );
@@ -586,6 +601,7 @@ export function ReportIssueDialog(
     gateErrorVisible,
     occurrence,
     snapshot,
+    snapshotIsError: snapshotQuery.isError,
     submitIsSuccess: submitMutation.isSuccess,
     submitData: submitMutation.data,
     submitIsError: submitMutation.isError,
@@ -1601,6 +1617,7 @@ function AttachmentSection({
   // comment there. This target still owns drag-drop and click-to-browse.
   function handleDrop(event: DragEvent<HTMLDivElement>): void {
     setIsDragOver(false);
+    if (disabled) return;
     if (!hasClaimableFileTransfer(event.dataTransfer)) return;
     event.preventDefault();
     const { files } = collectFileTransferEntries(event.dataTransfer);

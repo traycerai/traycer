@@ -26,6 +26,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   DesktopReportIssueForm,
   DesktopSubmitReportResult,
+  DesktopSupportBridge,
   DesktopSupportBuildPublicDraftResult,
   DesktopWindowsBridge,
   DesktopSupportLogTarget,
@@ -168,6 +169,33 @@ function echoPublicDraft(
   });
 }
 
+function createSupportBridgeFixture(input: {
+  readonly getSnapshot: () => Promise<DesktopSupportSnapshot>;
+  readonly revealLog: DesktopSupportBridge["revealLog"];
+  readonly submitReport: DesktopSupportBridge["submitReport"];
+  readonly tailLog: DesktopSupportBridge["tailLog"];
+  readonly saveDiagnosticBundle: DesktopSupportBridge["saveDiagnosticBundle"];
+}): DesktopSupportBridge {
+  return {
+    getSnapshot: input.getSnapshot,
+    revealLog: input.revealLog,
+    submitReport: input.submitReport,
+    tailLog: input.tailLog,
+    freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+    discardFrozenEvidence: () => Promise.resolve(),
+    readFrozenLogTail: (frozenInput) =>
+      Promise.resolve({
+        target: frozenInput.target,
+        path: "",
+        lines: [],
+        truncated: false,
+      }),
+    saveDiagnosticBundle: input.saveDiagnosticBundle,
+    getFingerprintOccurrence: () => Promise.resolve(null),
+    buildPublicDraft: echoPublicDraft,
+  };
+}
+
 function createRunnerHost(
   revealed: DesktopSupportLogTarget[],
   openedLinks: string[],
@@ -178,7 +206,7 @@ function createRunnerHost(
       openedLinks.push(url);
       return Promise.resolve();
     },
-    support: {
+    support: createSupportBridgeFixture({
       getSnapshot: () => Promise.resolve(snapshot),
       revealLog: (target: DesktopSupportLogTarget) => {
         revealed.push(target);
@@ -202,21 +230,8 @@ function createRunnerHost(
           lines: logLines.slice(-input.tailLines),
           truncated: logLines.length > input.tailLines,
         }),
-      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
-      discardFrozenEvidence: () => Promise.resolve(),
-      readFrozenLogTail: (input: {
-        readonly target: DesktopSupportLogTarget;
-      }) =>
-        Promise.resolve({
-          target: input.target,
-          path: "",
-          lines: [],
-          truncated: false,
-        }),
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
-      getFingerprintOccurrence: () => Promise.resolve(null),
-      buildPublicDraft: echoPublicDraft,
-    },
+    }),
   });
 }
 
@@ -227,7 +242,7 @@ function createRunnerHostWithSubmit(
   ) => Promise<DesktopSubmitReportResult>,
 ): IRunnerHost {
   return Object.assign(createRunnerHost([], openedLinks, []), {
-    support: {
+    support: createSupportBridgeFixture({
       getSnapshot: () => Promise.resolve(snapshot),
       revealLog: (target: DesktopSupportLogTarget) =>
         Promise.resolve({ target, path: "" }),
@@ -242,21 +257,8 @@ function createRunnerHostWithSubmit(
           lines: [],
           truncated: false,
         }),
-      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
-      discardFrozenEvidence: () => Promise.resolve(),
-      readFrozenLogTail: (input: {
-        readonly target: DesktopSupportLogTarget;
-      }) =>
-        Promise.resolve({
-          target: input.target,
-          path: "",
-          lines: [],
-          truncated: false,
-        }),
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
-      getFingerprintOccurrence: () => Promise.resolve(null),
-      buildPublicDraft: echoPublicDraft,
-    },
+    }),
   });
 }
 
@@ -265,7 +267,7 @@ function createRunnerHostWithoutPrivateDelivery(
   saveDiagnosticBundle: () => Promise<{ readonly path: string }>,
 ): IRunnerHost {
   return Object.assign(createRunnerHost([], openedLinks, []), {
-    support: {
+    support: createSupportBridgeFixture({
       getSnapshot: () =>
         Promise.resolve({ ...snapshot, privateDeliveryAvailable: false }),
       revealLog: (target: DesktopSupportLogTarget) =>
@@ -281,21 +283,8 @@ function createRunnerHostWithoutPrivateDelivery(
           lines: [],
           truncated: false,
         }),
-      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
-      discardFrozenEvidence: () => Promise.resolve(),
-      readFrozenLogTail: (input: {
-        readonly target: DesktopSupportLogTarget;
-      }) =>
-        Promise.resolve({
-          target: input.target,
-          path: "",
-          lines: [],
-          truncated: false,
-        }),
       saveDiagnosticBundle,
-      getFingerprintOccurrence: () => Promise.resolve(null),
-      buildPublicDraft: echoPublicDraft,
-    },
+    }),
   });
 }
 

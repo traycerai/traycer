@@ -811,6 +811,19 @@ describe("parseSupportSubmitReportRequest", () => {
       expect(result.location).toBe("Chat");
     });
 
+    it("rejects a blank location when no other evidence is present", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          intent: "",
+          location: "  \n\t",
+          images: [],
+        }),
+      ).toThrow(
+        /requires a sentence, a screenshot, a location, or a captured error/,
+      );
+    });
+
     it("accepts an empty intent for an error-triggered report (a captured cause is its own evidence)", () => {
       const result = parseSupportSubmitReportRequest({
         ...VALID_FORM,

@@ -88,6 +88,19 @@ const EMPTY_ACTIVE_HARNESS_CONTEXT: ActiveHarnessContext = {
   profileId: null,
 };
 
+function harnessContextsEqual(
+  left: ActiveHarnessContext,
+  right: ActiveHarnessContext,
+): boolean {
+  return (
+    left.chatId === right.chatId &&
+    left.agentId === right.agentId &&
+    left.harnessId === right.harnessId &&
+    left.model === right.model &&
+    left.profileId === right.profileId
+  );
+}
+
 /**
  * Resolves harness/model/profile for the active tile via the module-scoped
  * open-epic session registry (`getOpenEpicRegistry`) rather than
@@ -186,8 +199,9 @@ export function SupportContextRegistryBridge(
   useEffect(() => {
     if (epicId === null || artifactRef === null) return undefined;
     const apply = () => {
-      setSubscribedHarnessContext(
-        resolveActiveHarnessContext(epicId, artifactRef),
+      const next = resolveActiveHarnessContext(epicId, artifactRef);
+      setSubscribedHarnessContext((current) =>
+        harnessContextsEqual(current, next) ? current : next,
       );
     };
     apply();

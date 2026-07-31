@@ -62,13 +62,9 @@ export function buildGitHubIssueUrl(draft: PublicIssueDraft): string {
 }
 
 function issueFormParams(draft: PublicIssueDraft): Record<string, string> {
-  const common = { template: draft.template, title: draft.title };
-  switch (draft.template) {
-    case "bug_report.yml":
-      return { ...common, ...draft.fields };
-    case "feature_request.yml":
-      return { ...common, ...draft.fields };
-    case "general.yml":
-      return { ...common, ...draft.fields };
-  }
+  return {
+    template: draft.template,
+    title: draft.title,
+    ...draft.fields,
+  };
 }

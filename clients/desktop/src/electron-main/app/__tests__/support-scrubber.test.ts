@@ -57,6 +57,11 @@ describe("scrubSupportText", () => {
     expect(scrubSupportText(input)).toBe(input);
   });
 
+  it("does not partially replace words that merely begin with a POSIX root name", () => {
+    const input = "notes /homework/notes.txt and /dataset stay intact";
+    expect(scrubSupportText(input)).toBe(input);
+  });
+
   it("reuses the same path pseudonym for identical paths within one call", () => {
     const input =
       "first /Users/anurag/project/a.ts then again /Users/anurag/project/a.ts";
@@ -352,6 +357,41 @@ describe("deepScrubSupportValue", () => {
       processMetrics: {
         cpu: 12.5,
         mem: 1024,
+      },
+    });
+  });
+
+  it("drops containers beyond the depth bound instead of leaking their strings", () => {
+    const input = {
+      one: {
+        two: {
+          three: {
+            four: {
+              five: {
+                six: {
+                  seven: {
+                    secret: "/Users/anurag/private/token.txt",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const scrubbed = deepScrubSupportValue(input);
+    expect(JSON.stringify(scrubbed)).not.toContain("/Users/anurag");
+    expect(scrubbed).toEqual({
+      one: {
+        two: {
+          three: {
+            four: {
+              five: {
+                six: "<depth-limit>",
+              },
+            },
+          },
+        },
       },
     });
   });

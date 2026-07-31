@@ -330,14 +330,15 @@ export async function getFingerprintOccurrence(
   const nowMs = Date.now();
   const state = pruneReportLedgerState(loaded, nowMs, defaultBounds());
   // Opportunistic persist of TTL/LRU eviction so expired history does not sit
-  // on disk indefinitely. Cheap: only rewrite when prune actually dropped
-  // something. Fresh sightings already rewrite via applyMutation.
+  // on disk indefinitely. Route it through applyMutation so a concurrent
+  // sighting cannot be overwritten by this read's stale snapshot, and so a
+  // cleanup write failure stays best-effort instead of rejecting the read.
   if (
     Object.keys(state.fingerprints).length !==
       Object.keys(loaded.fingerprints).length ||
     state.reports.length !== loaded.reports.length
   ) {
-    await getStore().save(state);
+    await applyMutation((current) => current);
   }
   const sighting = state.fingerprints[fingerprint];
   if (sighting === undefined) return null;

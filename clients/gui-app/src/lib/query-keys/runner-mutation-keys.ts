@@ -145,6 +145,10 @@ export const runnerQueryKeys = {
     ["runner.support.logList", support] as const,
   supportLogTail: (support: object | null, target: string) =>
     ["runner.support.logTail", support, target] as const,
+  // Report-issue dialog's machine/user/delivery snapshot. Scoped by bridge
+  // identity so shell swaps never reuse another bridge's cached state.
+  supportSnapshot: (support: object | null) =>
+    ["runner.support.snapshot", support] as const,
   // Report-issue consent panel's log "view" affordance (ticket 07/04): reads
   // the tail FROZEN at report-open, not a live tail, so what the user reviews
   // is exactly what a submit would send. Scoped by draftId (frozen evidence

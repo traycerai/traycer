@@ -27,6 +27,12 @@ vi.mock(
   },
 );
 
+const actualReportImagesExceedBudget = (
+  await vi.importActual<
+    typeof import("@traycer-clients/shared/support/image-attachment-guards")
+  >("@traycer-clients/shared/support/image-attachment-guards")
+).reportImagesExceedBudget;
+
 function pngBytes(length: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(length);
   bytes[0] = 0x89;
@@ -140,8 +146,7 @@ beforeEach(() => {
     value: createImageBitmapMock,
   });
   vi.mocked(reportImagesExceedBudget).mockImplementation(
-    (total: number) =>
-      total + 2 * REPORT_LOG_TAIL_MAX_BYTES > TOTAL_ATTACHMENT_BUDGET_BYTES,
+    actualReportImagesExceedBudget,
   );
 });
 
