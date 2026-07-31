@@ -12,11 +12,13 @@ const FIRST: WorkspaceFolderInfo = {
   path: "/tmp/first-repo",
   name: "first-repo",
   repoIdentifier: null,
+  hostId: null,
 };
 const PINNED: WorkspaceFolderInfo = {
   path: "/tmp/pinned-repo",
   name: "pinned-repo",
   repoIdentifier: null,
+  hostId: null,
 };
 
 function resetStores(): void {

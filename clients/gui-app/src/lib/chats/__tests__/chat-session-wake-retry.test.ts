@@ -203,6 +203,131 @@ describe("subscribeChatSessionWakeRetry", () => {
     expect(resumeDispose).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a reconnecting session that becomes terminally closed after the wake pulse", () => {
+    const runnerHost = makeRunnerHost();
+    const { fireResume } = wireResumeSpy(runnerHost);
+
+    const harness = createHarness(CHAT_ID);
+    __getChatSessionRegistryForTests().acquire(
+      EPIC_ID,
+      CHAT_ID,
+      "wake-test-scope",
+      () => harness.handle,
+    );
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+
+    const dispose = subscribeChatSessionWakeRetry(runnerHost);
+
+    // The wake scan sees a live/reconnecting session, so the durable transport
+    // owns the first recovery attempt and no replacement client is built yet.
+    fireResume();
+    expect(harness.factoryRuns()).toBe(1);
+
+    // Auth/endpoint recovery can resolve asynchronously after the wake pulse.
+    // If that path gives up terminally, the same wake episode must still rebuild
+    // the disposed stream instead of leaving the warm composer disabled.
+    driveTerminallyClosed(harness);
+    expect(harness.factoryRuns()).toBe(2);
+    expect(harness.handle.store.getState().connectionStatus).toBe("connecting");
+    expect(harness.handle.store.getState().fatalClose).toBeNull();
+
+    // A permanent failure after the replacement does not spin within the same
+    // wake episode; a future physical wake may try it once more.
+    driveTerminallyClosed(harness);
+    expect(harness.factoryRuns()).toBe(2);
+
+    dispose();
+  });
+
+  it("disarms late-close recovery after the wake reconnect opens", () => {
+    const runnerHost = makeRunnerHost();
+    const { fireResume } = wireResumeSpy(runnerHost);
+
+    const harness = createHarness(CHAT_ID);
+    __getChatSessionRegistryForTests().acquire(
+      EPIC_ID,
+      CHAT_ID,
+      "wake-test-scope",
+      () => harness.handle,
+    );
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+
+    const dispose = subscribeChatSessionWakeRetry(runnerHost);
+
+    fireResume();
+    harness.callbacks().onConnectionStatus("open", null);
+
+    // Once the wake reconnect succeeds, a later unrelated terminal close must
+    // not consume a stale wake recovery attempt.
+    driveTerminallyClosed(harness);
+    expect(harness.factoryRuns()).toBe(1);
+
+    dispose();
+  });
+
+  it("re-arms a transiently open wake reconnect that drops again within the episode", () => {
+    const runnerHost = makeRunnerHost();
+    const { fireResume } = wireResumeSpy(runnerHost);
+    let nowMs = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+
+    const harness = createHarness(CHAT_ID);
+    __getChatSessionRegistryForTests().acquire(
+      EPIC_ID,
+      CHAT_ID,
+      "wake-test-scope",
+      () => harness.handle,
+    );
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+
+    const dispose = subscribeChatSessionWakeRetry(runnerHost);
+
+    fireResume();
+    harness.callbacks().onConnectionStatus("open", null);
+    nowMs += 100;
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+
+    // Once re-armed inside the bounded episode, the in-flight reconnect may
+    // resolve terminally after the episode window without losing its one retry.
+    nowMs += WAKE_RETRY_EPISODE_MS;
+    driveTerminallyClosed(harness);
+    expect(harness.factoryRuns()).toBe(2);
+
+    // The replacement's terminal close cannot loop within the same episode.
+    driveTerminallyClosed(harness);
+    expect(harness.factoryRuns()).toBe(2);
+
+    dispose();
+  });
+
+  it("does not re-arm a stale wake episode when reconnecting starts outside its window", () => {
+    const runnerHost = makeRunnerHost();
+    const { fireResume } = wireResumeSpy(runnerHost);
+    let nowMs = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+
+    const harness = createHarness(CHAT_ID);
+    __getChatSessionRegistryForTests().acquire(
+      EPIC_ID,
+      CHAT_ID,
+      "wake-test-scope",
+      () => harness.handle,
+    );
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+
+    const dispose = subscribeChatSessionWakeRetry(runnerHost);
+
+    fireResume();
+    harness.callbacks().onConnectionStatus("open", null);
+    nowMs += WAKE_RETRY_EPISODE_MS;
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    driveTerminallyClosed(harness);
+
+    expect(harness.factoryRuns()).toBe(1);
+
+    dispose();
+  });
+
   it("folds a burst of wake pulses into one dial per episode for a fast-re-closing session", () => {
     const runnerHost = makeRunnerHost();
     const { fireResume } = wireResumeSpy(runnerHost);

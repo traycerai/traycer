@@ -92,6 +92,7 @@ vi.mock("../../service/install-lifecycle", () => ({
     lifecycle: {
       beforeSwap: async () => {},
       afterSwap: async () => {},
+      swapLockRecovery: null,
     },
   }),
 }));

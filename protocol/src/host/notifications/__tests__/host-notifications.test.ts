@@ -22,6 +22,16 @@ import {
   hostNotificationsSetConfig,
   hostNotificationsSubscribeV10,
   hostNotificationsFeedSubscribeV10,
+  hostNotificationsCloudFeedSubscribeV10,
+  hostNotificationsCloudFeedRowSchema,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
+  hostNotificationsCloudFeedEntryRequestSchema,
+  hostNotificationsCloudFeedClearAllRequestSchema,
+  hostNotificationsCloudFeedMutationResponseSchema,
+  hostNotificationsCloudFeedMarkRead,
+  hostNotificationsCloudFeedResolve,
+  hostNotificationsCloudFeedClear,
+  hostNotificationsCloudFeedClearAll,
   hostNotificationsSubscribeClientFrameSchema,
   hostNotificationsSubscribeServerFrameSchema,
   hostNotificationsSubscribeServerFrameSchemaV10,
@@ -29,6 +39,10 @@ import {
   hostNotificationsSubscribeOpenRequestSchemaV10,
   hostNotificationsSummarySchema,
 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  buildStreamManifest,
+  checkStreamMethodCompatibility,
+} from "@traycer/protocol/framework/stream-compat";
 
 const APPROVAL_ENTRY = {
   id: "notification-1",
@@ -722,6 +736,163 @@ describe("host.notifications.feed.subscribe@1.0 successor stream", () => {
   });
 });
 
+describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
+  const CLOUD_ROW = {
+    entryId: "0195a1f0-7c2a-7b1e-9f3d-8a4c1e2b6d70",
+    originHostId: "host-a",
+    coalesceKey: "approval.requested:chat-1",
+    entry: APPROVAL_ENTRY,
+    presentation: { epicTitle: "Checkout", chatTitle: "Deploy fix" },
+  };
+
+  it("carries entryId, originHostId and coalesceKey on a row - and nothing occurrence-shaped", () => {
+    const row = hostNotificationsCloudFeedRowSchema.parse(CLOUD_ROW);
+
+    expect(row.entryId).toBe("0195a1f0-7c2a-7b1e-9f3d-8a4c1e2b6d70");
+    expect(row.originHostId).toBe("host-a");
+    expect(row.coalesceKey).toBe("approval.requested:chat-1");
+    // The retired ordered-replication row fields must not survive parsing:
+    // an occurrence token or a per-row revision would reintroduce exactly the
+    // guards the immutable-entry model exists to delete.
+    expect(Object.hasOwn(row, "occurrenceToken")).toBe(false);
+    expect(Object.hasOwn(row, "feedRevision")).toBe(false);
+    expect(Object.hasOwn(row, "notificationId")).toBe(false);
+  });
+
+  it("treats entryId as opaque - any non-empty string parses, no UUID shape imposed on the client", () => {
+    expect(
+      hostNotificationsCloudFeedRowSchema.parse({
+        ...CLOUD_ROW,
+        entryId: "migration-minted-id",
+      }).entryId,
+    ).toBe("migration-minted-id");
+    expect(
+      hostNotificationsCloudFeedRowSchema.safeParse({
+        ...CLOUD_ROW,
+        entryId: "",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("admits only snapshot, connectionState and pong server frames", () => {
+    const snapshot =
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV10.parse({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 7,
+        rows: [CLOUD_ROW],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      });
+    expect(snapshot.kind === "snapshot" ? snapshot.version : null).toBe(7);
+    expect(
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV10.parse({
+        kind: "connectionState",
+        hasBinaryPayload: false,
+        connectionState: "reconnecting",
+      }).kind,
+    ).toBe("connectionState");
+    // No incremental frames exist. A client that cannot apply a delta cannot
+    // apply one out of order, drop one, or double-apply one.
+    expect(
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV10.safeParse({
+        kind: "changes",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 8,
+        rows: [],
+        removals: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("addresses a per-entry mutation by entryId alone", () => {
+    expect(
+      hostNotificationsCloudFeedEntryRequestSchema.parse({
+        entryId: "entry-1",
+        occurrenceToken: "token-1",
+        idempotencyKey: "key-1",
+      }),
+    ).toEqual({ entryId: "entry-1" });
+    expect(
+      hostNotificationsCloudFeedEntryRequestSchema.safeParse({}).success,
+    ).toBe(false);
+  });
+
+  it("bounds clearAll by the observed version, and allows the unbounded null form", () => {
+    expect(
+      hostNotificationsCloudFeedClearAllRequestSchema.parse({
+        observedVersion: 12,
+      }).observedVersion,
+    ).toBe(12);
+    expect(
+      hostNotificationsCloudFeedClearAllRequestSchema.parse({
+        observedVersion: null,
+      }).observedVersion,
+    ).toBeNull();
+    expect(
+      hostNotificationsCloudFeedClearAllRequestSchema.safeParse({
+        observedVersion: -1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("answers a mutation with a status and a version that is null exactly when unavailable", () => {
+    expect(
+      hostNotificationsCloudFeedMutationResponseSchema.parse({
+        status: "applied",
+        version: 9,
+      }),
+    ).toEqual({ status: "applied", version: 9 });
+    expect(
+      hostNotificationsCloudFeedMutationResponseSchema.parse({
+        status: "unavailable",
+        version: null,
+      }),
+    ).toEqual({ status: "unavailable", version: null });
+    expect(
+      hostNotificationsCloudFeedMutationResponseSchema.safeParse({
+        status: "applied",
+        version: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsCloudFeedMutationResponseSchema.safeParse({
+        status: "unavailable",
+        version: 9,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("registers the whole family on the unary registry as optional methods", () => {
+    expect(
+      hostRpcRegistry["host.notifications.cloudFeed.markRead"][1].versions[0]
+        .contract,
+    ).toBe(hostNotificationsCloudFeedMarkRead);
+    expect(
+      hostRpcRegistry["host.notifications.cloudFeed.resolve"][1].versions[0]
+        .contract,
+    ).toBe(hostNotificationsCloudFeedResolve);
+    expect(
+      hostRpcRegistry["host.notifications.cloudFeed.clear"][1].versions[0]
+        .contract,
+    ).toBe(hostNotificationsCloudFeedClear);
+    expect(
+      hostRpcRegistry["host.notifications.cloudFeed.clearAll"][1].versions[0]
+        .contract,
+    ).toBe(hostNotificationsCloudFeedClearAll);
+    for (const method of [
+      "host.notifications.cloudFeed.markRead",
+      "host.notifications.cloudFeed.resolve",
+      "host.notifications.cloudFeed.clear",
+      "host.notifications.cloudFeed.clearAll",
+    ] as const) {
+      expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
+    }
+  });
+});
+
 describe("host.notifications registry membership", () => {
   it("registers list majors 1 and 2 with the V10↔V20 upgrade/downgrade bridges", () => {
     expect(
@@ -758,7 +929,7 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsIndicatorState);
   });
 
-  it("registers both the frozen subscribe stream and the feed successor without colliding with global notifications.subscribe", () => {
+  it("keeps the released feed stream canonical and advertises cloud feed as an optional method", () => {
     expect(hostStreamRpcRegistry["notifications.subscribe"]).toBeDefined();
     expect(
       hostStreamRpcRegistry["host.notifications.subscribe"][1].versions[0]
@@ -768,5 +939,49 @@ describe("host.notifications registry membership", () => {
       hostStreamRpcRegistry["host.notifications.feed.subscribe"][1].versions[0]
         .contract,
     ).toBe(hostNotificationsFeedSubscribeV10);
+    expect(
+      Object.hasOwn(hostStreamRpcRegistry["host.notifications.feed.subscribe"], "2"),
+    ).toBe(false);
+    expect(
+      hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1]
+        .versions[0].contract,
+    ).toBe(hostNotificationsCloudFeedSubscribeV10);
+  });
+
+  it("keeps the local-feed method compatible in both directions while cloud feed remains explicitly unsupported by an old peer", () => {
+    const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const { ["host.notifications.cloudFeed.subscribe"]: _cloudFeed, ...oldManifest } =
+      currentManifest;
+
+    expect(
+      checkStreamMethodCompatibility(
+        hostStreamRpcRegistry,
+        currentManifest,
+        oldManifest,
+        "host",
+        "host.notifications.feed.subscribe",
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      checkStreamMethodCompatibility(
+        hostStreamRpcRegistry,
+        oldManifest,
+        currentManifest,
+        "client",
+        "host.notifications.feed.subscribe",
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      checkStreamMethodCompatibility(
+        hostStreamRpcRegistry,
+        currentManifest,
+        oldManifest,
+        "client",
+        "host.notifications.cloudFeed.subscribe",
+      ),
+    ).toMatchObject({
+      ok: false,
+      details: { code: "INCOMPATIBLE", upgradeGuidance: { hostShouldUpgrade: true } },
+    });
   });
 });

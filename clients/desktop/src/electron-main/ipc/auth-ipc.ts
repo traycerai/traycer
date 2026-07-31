@@ -149,7 +149,14 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.listUserSessions,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "listUserSessions.bearerToken");
-      return listUserSessionsViaHttp(bridge.options.authnBaseUrl, bearerToken);
+      // No caller signal: an `AbortSignal` cannot cross the context bridge, so
+      // a renderer that cancels settles its own side (`settleOnAbort`) and this
+      // GET simply runs out its bounded timeout with nobody reading the reply.
+      return listUserSessionsViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        null,
+      );
     },
   );
 

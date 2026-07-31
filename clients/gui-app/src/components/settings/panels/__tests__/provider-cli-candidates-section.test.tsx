@@ -98,6 +98,12 @@ function providerState(args: {
     providerId: "claude-code",
     enabled: true,
     disabledBy: null,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     selected: args.selected,
     candidates: [...args.candidates],
     auth: {

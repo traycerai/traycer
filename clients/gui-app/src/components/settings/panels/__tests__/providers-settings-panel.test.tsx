@@ -9,6 +9,8 @@ import {
   type ProviderProfile,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
 import {
   act,
   cleanup,
@@ -19,6 +21,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
+function selectTab(name: string): void {
+  fireEvent.mouseDown(screen.getByRole("tab", { name }));
+}
 
 type StartLoginVariables = {
   readonly providerId: ProviderCliState["providerId"];
@@ -144,6 +151,76 @@ const providerMocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
+}));
+
+vi.mock("@/hooks/providers/use-providers-plugins-list-query", () => ({
+  useProvidersPluginsList: () => ({
+    data: { plugins: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-plugins-mutate-mutation", () => ({
+  useProvidersPluginsMutate: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
+  useProvidersSkillsList: () => ({
+    data: { skills: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
+  useProvidersSkillsMutate: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+// Sibling ticket 11 owns the MCP tab; mock its hooks so panel tests stay isolated.
+vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
+  useProvidersMcpList: () => ({
+    data: { servers: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
+  useProvidersMcpMutate: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-discover-mutation", () => ({
+  useProvidersMcpDiscover: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
+  useProvidersMcpAuth: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 // The candidates table's failed-pack arm reaches `providers.ensurePack`, which
@@ -342,7 +419,12 @@ vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({
-    data: { harnesses: [] },
+    data: {
+      harnesses: [
+        { id: "claude", modes: ["gui", "tui"] },
+        { id: "codex", modes: ["gui", "tui"] },
+      ],
+    },
   }),
 }));
 
@@ -360,6 +442,35 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     openExternalLink: providerMocks.openExternalLink,
   }),
+}));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: providerMocks.openExternalLink,
+  }),
+}));
+
+// MCP Project scope resolves workspaces via host query; this harness has no
+// QueryClient, so stub a stable empty host-resolved set.
+vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
+  useResolvedWorkspaceFolders: () => ({
+    folders: [],
+    isLoading: false,
+    isFetching: false,
+  }),
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => null,
+    useHostClient: () => null,
+  };
+});
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "host-1",
 }));
 
 // The Traycer provider mounts the subscription card; stub its credits query so
@@ -519,7 +630,9 @@ function providerState(input: {
   readonly selected: ProviderSelection;
   readonly candidates: readonly ProviderCliCandidate[];
   readonly envOverrides: ProviderCliState["envOverrides"];
+  readonly nativeCapabilities?: ProviderNativeCapabilities;
   readonly profiles?: readonly ProviderProfile[];
+  readonly terminalAgentArgs?: string;
 }): ProviderCliState {
   return {
     providerId: input.providerId,
@@ -536,10 +649,12 @@ function providerState(input: {
     authPending: false,
     checkedAt: null,
     apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
+    terminalAgentArgs: input.terminalAgentArgs ?? "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities:
+      input.nativeCapabilities ?? DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
@@ -559,6 +674,96 @@ function providerStateWithAuth(
 ): ProviderCliState {
   return { ...providerState(input), auth, authPending };
 }
+
+const BOTH_SCOPES = ["global", "project"] as const;
+
+const SAMPLE_MCP: NonNullable<ProviderNativeCapabilities["mcp"]> = {
+  transports: ["stdio", "http"],
+  authTypes: ["none", "header"],
+  authActions: ["login", "logout"],
+  actionScopes: {
+    list: [...BOTH_SCOPES],
+    add: [...BOTH_SCOPES],
+    update: [...BOTH_SCOPES],
+    remove: [...BOTH_SCOPES],
+    toggleServer: [...BOTH_SCOPES],
+    toggleTool: [...BOTH_SCOPES],
+    discover: [...BOTH_SCOPES],
+    auth: [...BOTH_SCOPES],
+  },
+  addServer: "cli",
+  removeServer: "cli",
+  updateServer: "patch",
+  perToolBacking: "native",
+  statusSource: "probe",
+  toolsSource: "probe",
+  schemasSource: "probe",
+  instructionsSource: "probe",
+  traycerSessionsOnlyEnforcement: false,
+  stdioDegradeNotice: false,
+  oauthDegradesToConfigOnly: true,
+};
+
+const FULL_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["general", "env", "usage", "mcp", "plugins", "skills"],
+  mcp: SAMPLE_MCP,
+  plugins: {
+    addModes: ["cli-source"],
+    marketplaceBrowse: false,
+    actionScopes: {
+      list: ["global"],
+      add: ["global"],
+      remove: ["global"],
+      setEnabled: ["global"],
+    },
+    traycerSessionToolsNotice: false,
+  },
+  skills: {
+    actionScopes: {
+      list: ["global"],
+      add: ["global"],
+      create: ["global"],
+      import: [],
+      remove: ["global"],
+    },
+  },
+};
+
+const CURSOR_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["env", "mcp", "plugins", "skills"],
+  mcp: {
+    ...SAMPLE_MCP,
+    perToolBacking: "degraded-server-level",
+    instructionsSource: "none",
+  },
+  plugins: {
+    addModes: ["read-only"],
+    marketplaceBrowse: false,
+    actionScopes: {
+      list: ["global"],
+      add: [],
+      remove: [],
+      setEnabled: [],
+    },
+    traycerSessionToolsNotice: false,
+  },
+  skills: {
+    actionScopes: {
+      list: ["global"],
+      add: ["global"],
+      create: ["global"],
+      import: [],
+      remove: ["global"],
+    },
+  },
+};
+
+const ENV_ONLY_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["env"],
+  mcp: null,
+  plugins: null,
+  skills: null,
+};
 
 type TestProfileInput = {
   readonly profileId: string;
@@ -776,8 +981,21 @@ function createRunnerHost(): MockRunnerHost {
   });
 }
 
+/**
+ * Profiles render on the "Profiles & Limits" tab, not General, so every profile
+ * assertion has to activate that tab after mounting. Kept as one helper so the
+ * next time the section moves this is a one-line change, not forty.
+ */
+function openProfilesTab(): void {
+  selectTab("Profiles & Limits");
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusTab: null,
+    });
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -785,18 +1003,21 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: OPENCODE_CANDIDATES,
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "traycer",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "openrouter",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -848,6 +1069,13 @@ describe("<ProvidersSettingsPanel />", () => {
     vi.useRealTimers();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     cleanup();
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+      focusTab: null,
+    });
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
@@ -1232,12 +1460,14 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: OPENCODE_CANDIDATES,
           envOverrides: [{ key: "OPENAI_API_KEY", value: null }],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "traycer",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -1247,6 +1477,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    selectTab("Env");
 
     expect(screen.getByText("Environment variables")).toBeDefined();
     expect(screen.getByDisplayValue("OPENAI_API_KEY")).toBeDefined();
@@ -1273,6 +1505,7 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -1292,6 +1525,292 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("renders capability-driven tabs and hides unsupported ones", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    expect(screen.getByRole("tab", { name: "General" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "Profiles & Limits" }),
+    ).toBeDefined();
+    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+
+    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Profiles & Limits" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+  });
+
+  it("keeps the current tab across providers when both support it", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [{ key: "A", value: "1" }],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [{ key: "B", value: "2" }],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Env");
+    expect(screen.getByDisplayValue("A")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    expect(screen.getByDisplayValue("B")).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
+    ).toBe("active");
+  });
+
+  it("falls back to the first supported tab when the current tab is missing", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: ENV_ONLY_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("MCP");
+    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Amp" }));
+    expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(screen.getByText("Environment variables")).toBeDefined();
+  });
+
+  it("deep-links focusTab once-and-clear alongside focusHarnessId", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("mcp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "MCP" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+  });
+
+  it("ignores focusTab when the target provider does not support it", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("general");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
+    ).toBe("active");
+  });
+
+  it("shows Plugins tab body and Skills tab body", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Plugins");
+    expect(screen.getByText("Installed plugins")).toBeDefined();
+
+    selectTab("Skills");
+    expect(
+      screen.getByText(/Invoked by the agent when relevant/),
+    ).toBeDefined();
+  });
+
+  it("does not flush terminal-agent args on keystroke alone", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    providerMocks.setTerminalAgentArgsMutate.mockClear();
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("General");
+    const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
+    fireEvent.change(input, { target: { value: "--foo" } });
+
+    expect(providerMocks.setTerminalAgentArgsMutate).not.toHaveBeenCalled();
+  });
+
+  it("saves terminal-agent args once across the post-save remount", () => {
+    // `TerminalAgentArgsSection` is keyed on `state.terminalAgentArgs`, so a
+    // successful save remounts it. That remount is the dangerous moment: any
+    // commit-on-unmount or commit-on-mount path would re-fire the mutation
+    // with the value it just saved. The `next === saved` guard in `commit()`
+    // plus having no unmount cleanup is what keeps it at exactly one call.
+    const args = "--foo";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    providerMocks.setTerminalAgentArgsMutate.mockClear();
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("General");
+    const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
+    fireEvent.change(input, { target: { value: args } });
+    fireEvent.blur(input);
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      terminalAgentArgs: args,
+    });
+
+    // The host now reports the saved value: the key changes and the section
+    // remounts with `saved === draft`.
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          terminalAgentArgs: args,
+        }),
+      ],
+    };
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
   });
 
   it("does not render profile management when the host reports no profiles", () => {
@@ -1344,6 +1863,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     expect(
       screen.getByRole("button", {
@@ -1477,6 +1998,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Default" },
@@ -1574,6 +2097,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -1734,6 +2259,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Unsaved profile" },
@@ -1813,6 +2340,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile and shows its persisted label, along
     // with its drift notice, tier, and redacted email.
@@ -1915,6 +2444,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile - select "Work" to bring its email
     // into view.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
@@ -1971,6 +2502,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2034,6 +2567,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
@@ -2091,6 +2626,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2168,6 +2705,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2233,6 +2772,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2304,6 +2845,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2350,6 +2893,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2432,6 +2977,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2460,6 +3007,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2532,6 +3081,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -2595,6 +3146,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -2689,6 +3242,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2757,6 +3312,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2817,6 +3374,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2875,6 +3434,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2963,6 +3524,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -3059,6 +3622,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -3137,6 +3702,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
@@ -3199,6 +3766,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // First attempt fails after the await phase - the section banner appears.
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
@@ -3333,6 +3902,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -3396,6 +3967,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3467,6 +4040,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3544,6 +4119,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -3617,6 +4194,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3709,6 +4288,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     expect(
       screen
         .getByRole("button", { name: "Claude Code", hidden: true })
@@ -3783,6 +4364,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile - select "Work" (signed out) first.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
@@ -3934,6 +4517,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -4022,6 +4607,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -4064,6 +4651,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -4124,6 +4713,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -4173,6 +4764,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -4737,6 +5330,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -4797,6 +5392,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     expect(screen.getAllByText("ChatGPT Pro 20x Subscription").length).toBe(1);
   });
 
@@ -4839,6 +5436,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile - select "Work" to bring its editable
     // details dialog (name field, actions) into view.
@@ -4911,6 +5510,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -5017,6 +5618,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));

@@ -52,7 +52,7 @@ describe("devices/sessions authn fetcher", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await listUserSessionsViaHttp(AUTHN, "jwt-abc");
+    const result = await listUserSessionsViaHttp(AUTHN, "jwt-abc", null);
 
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
@@ -64,6 +64,39 @@ describe("devices/sessions authn fetcher", () => {
     expect((init?.headers as Record<string, string>).Authorization).toBe(
       "Bearer jwt-abc",
     );
+  });
+
+  it("aborts the session-list request when the reader's signal aborts", async () => {
+    // The in-process shells (browser/dev) own this request, so a cancelled
+    // read must abort the real fetch rather than just discard its reply. The
+    // per-call timeout has to survive alongside it.
+    const fetchMock = vi.fn(
+      async (_url: string, init: RequestInit | undefined) => {
+        await new Promise<void>((resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason);
+          });
+        });
+        return jsonResponse(200, sessionListBody());
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const controller = new AbortController();
+    const pending = listUserSessionsViaHttp(
+      AUTHN,
+      "jwt-abc",
+      controller.signal,
+    );
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(init?.signal?.aborted).toBe(false);
+
+    controller.abort();
+
+    expect(init?.signal?.aborted).toBe(true);
+    // An abort is indistinguishable from any other transport failure here; the
+    // only caller re-checks its own signal before reading this result.
+    await expect(pending).resolves.toEqual({ kind: "network-error" });
   });
 
   it("maps per-session 401 step_up_required to step-up-required", async () => {

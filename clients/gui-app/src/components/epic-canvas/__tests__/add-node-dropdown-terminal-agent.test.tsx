@@ -84,6 +84,7 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
       path: "/repo/global",
       name: "global",
       repoIdentifier: null,
+      hostId: null,
     };
     const entry = {
       kind: "worktree" as const,
