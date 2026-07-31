@@ -16,6 +16,7 @@ import type {
   SupportBuildPublicDraftResult,
   SupportHostLayer0Snapshot,
   SupportFreezeEvidenceResult,
+  SupportImageAttachmentInput,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -33,11 +34,18 @@ import {
 } from "./report-ledger";
 import { buildPublicDraftFields } from "./support-public-draft";
 import { deepScrubSupportValue, scrubSupportText } from "./support-scrubber";
+import {
+  REPORT_LOG_TAIL_MAX_BYTES,
+  reportImageMediaTypeForMimeType,
+} from "@traycer-clients/shared/support/image-attachment-guards";
 
 const LOG_TAIL_LINES = 500;
 // Per attachment. Two logs stay well inside Sentry's envelope limits, and the
 // transport gzips before sending, so this is ~50 KB on the wire in practice.
-const LOG_ATTACHMENT_MAX_BYTES = 512_000;
+// Imported from the shared image-attachment-guards module (not redefined
+// here) since ticket 08's total attachment budget arithmetic depends on this
+// exact value staying in sync with the renderer's attach-time check.
+const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
 // The user is watching a spinner, but losing the report costs far more than
 // waiting: 2s was not enough to upload two log attachments on a slow link.
 const SENTRY_FLUSH_TIMEOUT_MS = 10_000;
@@ -343,6 +351,15 @@ export class DesktopSupportService {
     // client can never smuggle identity past an unchecked box.
     const userEmail = form.allowContact ? snapshot.user.email : null;
     const privateDiagnostics = form.privateDiagnostics;
+    // Images ride to Sentry as opaque binary attachments, built directly from
+    // `form.images` below - deliberately never folded into `contexts` (the
+    // object passed to `deepScrubSupportValue`). The scrubber's deep walk
+    // treats a plain object's own enumerable keys as scrubbable fields; an
+    // `ArrayBuffer`/`Buffer` handed to it would be walked as if it were a
+    // record of numeric-string keys, corrupting the bytes for no privacy
+    // benefit (accepted trade-off, ticket 08: the scrubber does not touch
+    // image bytes).
+    const imageAttachments = sentryAttachmentsForImages(form.images);
     // Deep-scrubbed as a whole right before it rides in the Sentry event:
     // `layer0.evidence`/`raw` are free text off a filesystem error and can
     // carry absolute paths (host.log is unredacted at source), and
@@ -421,6 +438,9 @@ export class DesktopSupportService {
             ...(form.includeHostLog && frozen.host.content
               ? [{ filename: "local-host.log", data: frozen.host.content }]
               : []),
+            // Screenshots attach here only - never to the GitHub URL/public
+            // draft (ticket 08).
+            ...imageAttachments,
           ],
         },
       );
@@ -472,6 +492,13 @@ export class DesktopSupportService {
    * scrubber exists - the bundle gains both frozen log tails (already
    * scrubbed at freeze time, see `captureLogTail`): this is a local file the
    * user can hand to anyone, so nothing in it may ship unscrubbed.
+   *
+   * Screenshots (`form.images`, ticket 08) are deliberately NOT included:
+   * this bundle is a single JSON file, and base64-inlining a few MB of image
+   * data into it would bloat an otherwise small diagnostic file for no real
+   * benefit - the user already reviewed the thumbnails in the dialog before
+   * choosing to save. Not "trivially includable" the way the already-text
+   * log tails are.
    */
   async saveDiagnosticBundle(
     form: SupportSubmitReportRequest,
@@ -532,6 +559,7 @@ export class DesktopSupportService {
       hostVersion: snapshot.host.version,
       reportId: frozen?.reportId ?? null,
       privateDiagnostics: form.privateDiagnostics,
+      imageCount: form.images.length,
     });
   }
 
@@ -631,6 +659,37 @@ function truncateToTrailingBytes(text: string, maxBytes: number): string {
   // The byte cut can land mid-codepoint or mid-line; drop the partial head.
   const firstNewline = kept.indexOf("\n");
   return firstNewline === -1 ? kept : kept.slice(firstNewline + 1);
+}
+
+/**
+ * Builds Sentry's `attachments` entries straight from the already-validated
+ * `form.images` (ticket 08 / T5) - never routed through `scrubSupportText`
+ * or `deepScrubSupportValue`, since both operate on text/JSON, not opaque
+ * binary. `support-ipc.ts`'s parser already enforced the MIME allowlist,
+ * magic bytes, per-image size, and the total attachment budget, so
+ * `reportImageMediaTypeForMimeType` here can never legitimately return
+ * `null`; a defensive throw beats silently mislabeling the content type.
+ */
+function sentryAttachmentsForImages(
+  images: readonly SupportImageAttachmentInput[],
+): ReadonlyArray<{
+  readonly filename: string;
+  readonly data: Uint8Array;
+  readonly contentType: string;
+}> {
+  return images.map((image) => {
+    const mediaType = reportImageMediaTypeForMimeType(image.mimeType);
+    if (mediaType === null) {
+      throw new Error(
+        `[support] validated image attachment carries an unsupported mimeType: ${image.mimeType}`,
+      );
+    }
+    return {
+      filename: image.fileName,
+      data: new Uint8Array(image.bytes),
+      contentType: mediaType,
+    };
+  });
 }
 
 function generateReportId(): string {

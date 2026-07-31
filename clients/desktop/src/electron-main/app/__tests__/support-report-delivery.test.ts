@@ -5,12 +5,17 @@ import { join } from "node:path";
 
 interface CapturedAttachment {
   readonly filename: string;
-  readonly data: string;
+  /** Log tails ship as strings; image attachments ship as Uint8Array. */
+  readonly data: string | Uint8Array;
+  readonly contentType?: string;
 }
 
 interface CapturedHint {
   readonly event_id: string;
-  readonly captureContext: { readonly tags: Record<string, string> };
+  readonly captureContext: {
+    readonly tags: Record<string, string>;
+    readonly contexts?: Record<string, unknown>;
+  };
   readonly attachments: readonly CapturedAttachment[];
 }
 
@@ -67,6 +72,7 @@ const FORM: SupportSubmitReportRequest = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  images: [],
 };
 
 const LOG_ATTACHMENT_MAX_BYTES = 512_000;
@@ -689,6 +695,83 @@ describe("DesktopSupportService.buildPublicDraft", () => {
   });
 });
 
+function pngArrayBuffer(length: number): ArrayBuffer {
+  const bytes = new Uint8Array(length);
+  bytes[0] = 0x89;
+  bytes[1] = 0x50;
+  bytes[2] = 0x4e;
+  bytes[3] = 0x47;
+  return bytes.buffer;
+}
+
+function smallPngArrayBuffer(): ArrayBuffer {
+  return pngArrayBuffer(32);
+}
+
+describe("DesktopSupportService.submitReport - image attachments (ticket 08)", () => {
+  it("appends image attachments to captureFeedback alongside log tails", async () => {
+    const pngBytes = smallPngArrayBuffer();
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      {
+        ...FORM,
+        images: [
+          {
+            fileName: "ui-shot.png",
+            mimeType: "image/png",
+            bytes: pngBytes,
+          },
+        ],
+      },
+      KEY,
+    );
+
+    const filenames = lastHint().attachments.map((a) => a.filename);
+    expect(filenames).toEqual(["desktop.log", "local-host.log", "ui-shot.png"]);
+    const image = lastHint().attachments.find(
+      (a) => a.filename === "ui-shot.png",
+    );
+    expect(image?.contentType).toBe("image/png");
+    expect(image?.data).toBeInstanceOf(Uint8Array);
+    expect(image?.data).toEqual(new Uint8Array(pngBytes));
+  });
+
+  it("never folds images into captureContext.contexts", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      {
+        ...FORM,
+        images: [
+          {
+            fileName: "ui-shot.png",
+            mimeType: "image/png",
+            bytes: smallPngArrayBuffer(),
+          },
+        ],
+      },
+      KEY,
+    );
+
+    const contexts = lastHint().captureContext.contexts;
+    if (contexts !== undefined) {
+      expect(contexts).not.toHaveProperty("images");
+      for (const value of Object.values(contexts)) {
+        expect(JSON.stringify(value)).not.toContain("ui-shot.png");
+      }
+    }
+  });
+
+  it("ships only log tails when images is empty", async () => {
+    await freezeAndSubmit(buildService(null));
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+      "local-host.log",
+    ]);
+  });
+});
+
 describe("DesktopSupportService.saveDiagnosticBundle", () => {
   it("writes scrubbed form fields and frozen log tails under logs.desktop/host", async () => {
     // Seed real log content with a path/token so freeze captures scrubbed tails.
@@ -764,5 +847,30 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     };
     expect(bundle.logs.desktop).toBe("");
     expect(bundle.logs.host).not.toBe("");
+  });
+
+  it("deliberately omits form.images from the diagnostic bundle JSON", async () => {
+    // Screenshots are reviewed in-dialog and are not base64-inlined into the
+    // local JSON bundle (ticket 08 design). Assert absence, not presence.
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const { path } = await service.saveDiagnosticBundle(
+      {
+        ...FORM,
+        images: [
+          {
+            fileName: "secret-screen.png",
+            mimeType: "image/png",
+            bytes: smallPngArrayBuffer(),
+          },
+        ],
+      },
+      KEY,
+    );
+    const raw = await readFile(path, "utf8");
+    const bundle = JSON.parse(raw) as Record<string, unknown>;
+    expect(bundle).not.toHaveProperty("images");
+    expect(raw).not.toContain("secret-screen.png");
+    expect(raw).not.toContain("image/png");
   });
 });

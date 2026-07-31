@@ -68,6 +68,10 @@ export interface BuildPublicDraftInput {
   // every placeholder field falls back to the report-id-free copy.
   readonly reportId: string | null;
   readonly privateDiagnostics: SupportPrivateDiagnostics | undefined;
+  // Count only (ticket 08 / T5) - the images themselves never reach the
+  // public draft; this just drives the "N screenshot(s) attached to the
+  // private report" line below.
+  readonly imageCount: number;
 }
 
 export function buildPublicDraftFields(
@@ -86,6 +90,7 @@ export function buildPublicDraftFields(
     }),
     frequency: input.frequency,
     reportId: input.reportId,
+    imageCount: input.imageCount,
   });
 
   switch (input.type) {
@@ -196,19 +201,17 @@ function composeEnvironmentSummary(input: {
 }
 
 // The richer publish body (tech-plan T4): the user's narrative, a sanitized
-// environment summary, frequency (if given), and the support report id -
-// folded into whichever template field carries the narrative (what-happened
-// for bug, problem for idea, details for other), since GitHub issue forms
-// take one text box per field, not a separate box per line here.
-//
-// Deferred to ticket 08: a "Screenshot attached to the private report." line
-// once image ingest exists to attach one - there is nothing to condition it
-// on yet.
+// environment summary, frequency (if given), the support report id, and
+// (ticket 08) whether screenshots were attached - folded into whichever
+// template field carries the narrative (what-happened for bug, problem for
+// idea, details for other), since GitHub issue forms take one text box per
+// field, not a separate box per line here.
 function composeReportBody(input: {
   readonly narrative: string;
   readonly environmentSummary: string;
   readonly frequency: SupportReportFrequency | null;
   readonly reportId: string | null;
+  readonly imageCount: number;
 }): string {
   const frequencyLine =
     input.frequency !== null
@@ -219,13 +222,25 @@ function composeReportBody(input: {
   const metaLine = [frequencyLine, reportLine]
     .filter((line): line is string => line !== null)
     .join(" · ");
+  // Never "N screenshots attached" bare - a public reader must not learn
+  // image content exists without also learning where it actually lives
+  // (never here, never the GitHub URL - only the private report).
+  const attachmentLine = attachmentLineFor(input.imageCount);
   return [
     input.narrative.trim(),
     `Environment: ${input.environmentSummary}`,
     metaLine,
+    attachmentLine,
   ]
+    .filter((section): section is string => section !== null)
     .filter((section) => section.trim() !== "")
     .join("\n\n");
+}
+
+function attachmentLineFor(imageCount: number): string | null {
+  if (imageCount <= 0) return null;
+  const noun = imageCount === 1 ? "screenshot" : "screenshots";
+  return `${imageCount} ${noun} attached to the private report.`;
 }
 
 // Shared shape for a required template field this ticket has no direct UI

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_REPORT_IMAGE_BYTES,
+  MAX_REPORT_IMAGES,
+  REPORT_LOG_TAIL_MAX_BYTES,
+  TOTAL_ATTACHMENT_BUDGET_BYTES,
+} from "@traycer-clients/shared/support/image-attachment-guards";
+import {
   parseSupportFreezeEvidenceInput,
   parseSupportReadFrozenLogTailInput,
   parseSupportSubmitReportRequest,
@@ -14,7 +20,73 @@ const VALID_FORM = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  images: [],
 };
+
+/** Small valid PNG magic + padding. */
+function pngArrayBuffer(length: number): ArrayBuffer {
+  const bytes = new Uint8Array(length);
+  bytes[0] = 0x89;
+  bytes[1] = 0x50;
+  bytes[2] = 0x4e;
+  bytes[3] = 0x47;
+  return bytes.buffer;
+}
+
+function jpegArrayBuffer(length: number): ArrayBuffer {
+  const bytes = new Uint8Array(length);
+  bytes[0] = 0xff;
+  bytes[1] = 0xd8;
+  bytes[2] = 0xff;
+  return bytes.buffer;
+}
+
+function gifArrayBuffer(length: number): ArrayBuffer {
+  const bytes = new Uint8Array(length);
+  bytes[0] = 0x47;
+  bytes[1] = 0x49;
+  bytes[2] = 0x46;
+  bytes[3] = 0x38;
+  return bytes.buffer;
+}
+
+function webpArrayBuffer(length: number): ArrayBuffer {
+  const bytes = new Uint8Array(Math.max(length, 12));
+  bytes[0] = 0x52;
+  bytes[1] = 0x49;
+  bytes[2] = 0x46;
+  bytes[3] = 0x46;
+  bytes[8] = 0x57;
+  bytes[9] = 0x45;
+  bytes[10] = 0x42;
+  bytes[11] = 0x50;
+  return bytes.buffer;
+}
+
+const SMALL_PNG = (): ArrayBuffer => pngArrayBuffer(32);
+const SMALL_JPEG = (): ArrayBuffer => jpegArrayBuffer(32);
+const SMALL_GIF = (): ArrayBuffer => gifArrayBuffer(32);
+const SMALL_WEBP = (): ArrayBuffer => webpArrayBuffer(32);
+
+function imageAttachment(overrides: {
+  readonly fileName: string | undefined;
+  readonly mimeType: string | undefined;
+  readonly bytes: ArrayBuffer | undefined;
+}) {
+  return {
+    fileName: overrides.fileName ?? "shot.png",
+    mimeType: overrides.mimeType ?? "image/png",
+    bytes: overrides.bytes ?? SMALL_PNG(),
+  };
+}
+
+function defaultImageAttachment() {
+  return imageAttachment({
+    fileName: undefined,
+    mimeType: undefined,
+    bytes: undefined,
+  });
+}
 
 const VALID_CAUSE = {
   type: "RangeError",
@@ -356,6 +428,260 @@ describe("parseSupportSubmitReportRequest", () => {
         },
       }),
     ).toThrow();
+  });
+
+  describe("images", () => {
+    it("accepts an empty images array", () => {
+      const result = parseSupportSubmitReportRequest(VALID_FORM);
+      expect(result.images).toEqual([]);
+    });
+
+    it("rejects a missing images key - the wire always carries it", () => {
+      const { images: _images, ...withoutImages } = VALID_FORM;
+      expect(() => parseSupportSubmitReportRequest(withoutImages)).toThrow();
+    });
+
+    it("rejects a non-array images value", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({ ...VALID_FORM, images: null }),
+      ).toThrow();
+      expect(() =>
+        parseSupportSubmitReportRequest({ ...VALID_FORM, images: {} }),
+      ).toThrow();
+    });
+
+    it.each([
+      ["image/png", SMALL_PNG()],
+      ["image/jpeg", SMALL_JPEG()],
+      ["image/jpg", SMALL_JPEG()],
+      ["image/gif", SMALL_GIF()],
+      ["image/webp", SMALL_WEBP()],
+    ] as const)("accepts a well-formed %s attachment", (mimeType, bytes) => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        images: [
+          imageAttachment({
+            fileName: undefined,
+            mimeType,
+            bytes,
+          }),
+        ],
+      });
+      expect(result.images).toHaveLength(1);
+      expect(result.images[0]?.mimeType).toBe(mimeType);
+      expect(result.images[0]?.bytes).toBe(bytes);
+    });
+
+    it("accepts up to MAX_REPORT_IMAGES attachments", () => {
+      const images = Array.from({ length: MAX_REPORT_IMAGES }, (_, i) =>
+        imageAttachment({
+          fileName: `shot-${i}.png`,
+          mimeType: undefined,
+          bytes: undefined,
+        }),
+      );
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        images,
+      });
+      expect(result.images).toHaveLength(MAX_REPORT_IMAGES);
+    });
+
+    it("rejects more than MAX_REPORT_IMAGES attachments", () => {
+      const images = Array.from({ length: MAX_REPORT_IMAGES + 1 }, (_, i) =>
+        imageAttachment({
+          fileName: `shot-${i}.png`,
+          mimeType: undefined,
+          bytes: undefined,
+        }),
+      );
+      expect(() =>
+        parseSupportSubmitReportRequest({ ...VALID_FORM, images }),
+      ).toThrow(/at most 3 images/);
+    });
+
+    it("rejects an attachment with an unlisted key", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [{ ...defaultImageAttachment(), extra: true }],
+        }),
+      ).toThrow();
+    });
+
+    it("rejects an attachment missing a required key", () => {
+      const { fileName: _fileName, ...withoutName } = defaultImageAttachment();
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [withoutName],
+        }),
+      ).toThrow();
+    });
+
+    it("rejects a non-string fileName or mimeType", () => {
+      // Build malformed payloads without type assertions: the parser takes
+      // `unknown`, so a Record with the wrong runtime types is enough.
+      const badFileName: Record<string, unknown> = {
+        fileName: 42,
+        mimeType: "image/png",
+        bytes: SMALL_PNG(),
+      };
+      const badMimeType: Record<string, unknown> = {
+        fileName: "shot.png",
+        mimeType: 42,
+        bytes: SMALL_PNG(),
+      };
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [badFileName],
+        }),
+      ).toThrow();
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [badMimeType],
+        }),
+      ).toThrow();
+    });
+
+    it("rejects bytes that are not an ArrayBuffer instance", () => {
+      const uint8Payload: Record<string, unknown> = {
+        fileName: "shot.png",
+        mimeType: "image/png",
+        bytes: new Uint8Array(SMALL_PNG()),
+      };
+      const bufferPayload: Record<string, unknown> = {
+        fileName: "shot.png",
+        mimeType: "image/png",
+        bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      };
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [uint8Payload],
+        }),
+      ).toThrow();
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [bufferPayload],
+        }),
+      ).toThrow();
+    });
+
+    it("rejects an unsupported mimeType such as image/svg+xml", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [
+            imageAttachment({
+              fileName: undefined,
+              mimeType: "image/svg+xml",
+              bytes: SMALL_PNG(),
+            }),
+          ],
+        }),
+      ).toThrow(/mimeType/);
+    });
+
+    it("rejects empty bytes", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [
+            imageAttachment({
+              fileName: undefined,
+              mimeType: undefined,
+              bytes: new ArrayBuffer(0),
+            }),
+          ],
+        }),
+      ).toThrow(/empty/);
+    });
+
+    it("rejects bytes larger than MAX_REPORT_IMAGE_BYTES", () => {
+      const oversized = pngArrayBuffer(MAX_REPORT_IMAGE_BYTES + 1);
+      expect(oversized.byteLength).toBe(MAX_REPORT_IMAGE_BYTES + 1);
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [
+            imageAttachment({
+              fileName: undefined,
+              mimeType: undefined,
+              bytes: oversized,
+            }),
+          ],
+        }),
+      ).toThrow(/limit/);
+    });
+
+    it("rejects magic bytes that do not match the declared media type", () => {
+      // PNG magic declared as JPEG
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [
+            imageAttachment({
+              fileName: undefined,
+              mimeType: "image/jpeg",
+              bytes: SMALL_PNG(),
+            }),
+          ],
+        }),
+      ).toThrow(/does not match declared type/);
+    });
+
+    it("accepts three max-size images (still under the total budget)", () => {
+      // Arithmetic: 3 * 5 MiB = 15_728_640; budget ceiling for images is
+      // TOTAL - 2 * LOG = 20_971_520 - 1_024_000 = 19_947_520. Headroom is
+      // intentional (ticket 08 / G5).
+      const images = Array.from({ length: MAX_REPORT_IMAGES }, (_, i) =>
+        imageAttachment({
+          fileName: `max-${i}.png`,
+          mimeType: undefined,
+          bytes: pngArrayBuffer(MAX_REPORT_IMAGE_BYTES),
+        }),
+      );
+      const total = images.reduce((sum, img) => sum + img.bytes.byteLength, 0);
+      expect(total + 2 * REPORT_LOG_TAIL_MAX_BYTES).toBeLessThanOrEqual(
+        TOTAL_ATTACHMENT_BUDGET_BYTES,
+      );
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        images,
+      });
+      expect(result.images).toHaveLength(MAX_REPORT_IMAGES);
+    });
+
+    it("rejects a payload larger than the per-image size limit before the budget check", () => {
+      // With current constants, MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES
+      // (15_728_640) is still under the budget ceiling
+      // (TOTAL - 2*LOG = 19_947_520), so a pure budget-exceed path is not
+      // reachable through valid per-image sizes. The size gate fires first
+      // for any buffer large enough to threaten the total budget alone.
+      // Predicate boundary coverage lives in image-attachment-guards.test.ts.
+      const maxFitting =
+        TOTAL_ATTACHMENT_BUDGET_BYTES - 2 * REPORT_LOG_TAIL_MAX_BYTES;
+      expect(MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES).toBeLessThan(
+        maxFitting,
+      );
+      expect(maxFitting).toBeGreaterThan(MAX_REPORT_IMAGE_BYTES);
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          images: [
+            imageAttachment({
+              fileName: undefined,
+              mimeType: undefined,
+              bytes: pngArrayBuffer(maxFitting),
+            }),
+          ],
+        }),
+      ).toThrow(/limit/);
+    });
   });
 });
 

@@ -2,12 +2,15 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type ReactNode,
   type RefObject,
 } from "react";
-import { Bug } from "lucide-react";
+import { Bug, X } from "lucide-react";
 import { toast } from "sonner";
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
+import { MAX_REPORT_IMAGES } from "@traycer-clients/shared/support/image-attachment-guards";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,6 +41,16 @@ import {
   serializeReportIssuePrivateDiagnostics,
   type ReportIssueDraftContext,
 } from "@/lib/report-issue-draft-context";
+import {
+  useReportIssueAttachments,
+  type ReportIssueAttachmentImage,
+  type UseReportIssueAttachmentsResult,
+} from "@/hooks/support/use-report-issue-attachments";
+import {
+  classifyFileTransferDrag,
+  collectFileTransferEntries,
+  hasClaimableFileTransfer,
+} from "@/lib/files/file-transfer-paths";
 import type {
   DesktopCapturedField,
   DesktopFingerprintOccurrence,
@@ -194,13 +207,19 @@ function deriveGateFlags(input: {
   readonly form: ReportIssueFormState;
   readonly gateErrorVisible: boolean;
   readonly occurrence: DesktopFingerprintOccurrence | null;
+  readonly hasImages: boolean;
 }): ReportIssueGateFlags {
   const gateApplies = !input.hasErrorEnvelope;
   const locationSatisfiesGate =
     input.form.type === "bug" && input.form.locationChanged;
   const intentSatisfiesGate = input.form.intent.trim().length > 0;
+  // Flow 1/2's evidence gate: a sentence, an image, or (bug-only) an
+  // actively-changed location - any one satisfies it (tech-plan T4/T5).
   const gateSatisfied =
-    !gateApplies || intentSatisfiesGate || locationSatisfiesGate;
+    !gateApplies ||
+    intentSatisfiesGate ||
+    locationSatisfiesGate ||
+    input.hasImages;
   const occurrenceIsRepeat =
     input.occurrence !== null && input.occurrence.count > 1;
   return {
@@ -220,6 +239,7 @@ function deriveReportIssueFlags(input: {
   readonly submitIsSuccess: boolean;
   readonly submitData: DesktopSubmitReportResult | undefined;
   readonly submitIsError: boolean;
+  readonly hasImages: boolean;
 }): ReportIssueDerivedFlags {
   const delivery = deriveDeliveryFlags(input);
   const gate = deriveGateFlags(input);
@@ -325,6 +345,8 @@ export function ReportIssueDialog(
   );
   const occurrence = occurrenceQuery.data ?? null;
 
+  const attachments = useReportIssueAttachments();
+
   function buildRequest(): DesktopReportIssueForm {
     return {
       draftId,
@@ -336,6 +358,11 @@ export function ReportIssueDialog(
       allowContact: form.allowContact,
       includeDesktopLog: form.includeDesktopLog,
       includeHostLog: form.includeHostLog,
+      images: attachments.images.map((image) => ({
+        fileName: image.fileName,
+        mimeType: image.mimeType,
+        bytes: image.bytes,
+      })),
       ...(draftContext === null || !form.includeDiagnostics
         ? {}
         : {
@@ -355,7 +382,10 @@ export function ReportIssueDialog(
     onSuccess: (result) => {
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePrivateSubmit,
-        reportIssuePrivateSubmitPropertiesFromResult(result),
+        reportIssuePrivateSubmitPropertiesFromResult(
+          result,
+          attachments.images.length,
+        ),
       );
       if (result.status !== "delivered") return;
       setLastConfirmedReport({ draftId, reportId: result.reportId });
@@ -365,6 +395,7 @@ export function ReportIssueDialog(
       Analytics.getInstance().track(AnalyticsEvent.ReportIssuePrivateSubmit, {
         outcome: "failed",
         blocker: analyticsBlockerFromError(error),
+        attachment_count: attachments.images.length,
       });
     },
   });
@@ -405,6 +436,7 @@ export function ReportIssueDialog(
     submitIsSuccess: submitMutation.isSuccess,
     submitData: submitMutation.data,
     submitIsError: submitMutation.isError,
+    hasImages: attachments.images.length > 0,
   });
 
   useEffect(() => {
@@ -549,6 +581,7 @@ export function ReportIssueDialog(
             contactEmail={snapshot?.user.email ?? null}
             onLogsTouched={() => setLogsTouchedByUser(true)}
             onSelectType={selectType}
+            attachments={attachments}
           />
         ) : null}
 
@@ -674,6 +707,7 @@ function CaptureScreenBody({
   contactEmail,
   onLogsTouched,
   onSelectType,
+  attachments,
 }: {
   readonly hasErrorEnvelope: boolean;
   readonly cause: ReportIssueDraftContext["privateDiagnostics"]["cause"];
@@ -700,9 +734,28 @@ function CaptureScreenBody({
   readonly contactEmail: string | null;
   readonly onLogsTouched: () => void;
   readonly onSelectType: (type: DesktopReportType) => void;
+  readonly attachments: UseReportIssueAttachmentsResult;
 }): ReactNode {
+  // Paste is bound at this wrapper, not on the attachment target below: a
+  // `paste` DOM event only bubbles through the FOCUSED element's ancestors,
+  // and the intent textarea (the dialog's natural focus target) is this
+  // div's sibling, not the target's descendant - scoping the handler to the
+  // small target box would silently never fire while the user is typing.
+  // `handleBodyPaste` only intercepts when the clipboard actually carries a
+  // claimable image (mirrors the composer's own `hasClaimableFileTransfer`
+  // gate), so ordinary text paste into the textarea is untouched.
+  function handleBodyPaste(event: ClipboardEvent<HTMLDivElement>): void {
+    if (isPending) return;
+    if (!hasClaimableFileTransfer(event.clipboardData)) return;
+    const { files } = collectFileTransferEntries(event.clipboardData);
+    const imageFiles = files.filter(isImageFile);
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    attachments.addFiles(imageFiles);
+  }
+
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="flex-1 overflow-y-auto" onPaste={handleBodyPaste}>
       <div className="grid gap-4 py-1 pr-1">
         {hasErrorEnvelope ? (
           <EvidenceStrip
@@ -827,7 +880,7 @@ function CaptureScreenBody({
           </div>
         ) : null}
 
-        <AttachmentDropTarget />
+        <AttachmentSection attachments={attachments} disabled={isPending} />
 
         <ConsentPanel
           expanded={consentExpanded}
@@ -1207,13 +1260,147 @@ function ReviewRow({
   );
 }
 
-function AttachmentDropTarget(): ReactNode {
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/");
+}
+
+/**
+ * The dialog's attachment target (ticket 08 / T5): paste, drop, and
+ * click-to-browse all funnel into `attachments.addFiles`, which owns every
+ * attach-time rejection (count/type/size/budget - see
+ * `use-report-issue-attachments.ts`). The review-warning line renders only
+ * once the first thumbnail exists - never beside an empty target - per the
+ * capture flow's wireframe.
+ */
+function AttachmentSection({
+  attachments,
+  disabled,
+}: {
+  readonly attachments: UseReportIssueAttachmentsResult;
+  readonly disabled: boolean;
+}): ReactNode {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const { images, isIngesting, rejection, canAddMore, addFiles, removeImage } =
+    attachments;
+
+  // Paste is handled once, at `CaptureScreenBody`'s outer wrapper - see the
+  // comment there. This target still owns drag-drop and click-to-browse.
+  function handleDrop(event: DragEvent<HTMLDivElement>): void {
+    setIsDragOver(false);
+    if (!hasClaimableFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    const { files } = collectFileTransferEntries(event.dataTransfer);
+    const imageFiles = files.filter(isImageFile);
+    if (imageFiles.length === 0) return;
+    addFiles(imageFiles);
+  }
+
   return (
-    <div
-      aria-disabled
-      className="cursor-not-allowed rounded-md border border-dashed border-border px-3 py-2.5 text-center text-ui-xs text-muted-foreground opacity-60"
-    >
-      Paste or drop screenshots (coming soon)
+    <div className="grid gap-1.5">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        multiple
+        tabIndex={-1}
+        aria-hidden="true"
+        className="hidden"
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = "";
+          if (files.length > 0) addFiles(files);
+        }}
+      />
+      <div
+        role="button"
+        tabIndex={disabled || !canAddMore ? -1 : 0}
+        aria-label="Attach screenshots"
+        aria-disabled={disabled || !canAddMore}
+        onDragOver={(event) => {
+          if (classifyFileTransferDrag(event.dataTransfer) === null) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDragEnter={(event) => {
+          if (classifyFileTransferDrag(event.dataTransfer) === null) return;
+          event.preventDefault();
+          setIsDragOver(true);
+        }}
+        onDragLeave={() => setIsDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => {
+          if (disabled || !canAddMore) return;
+          inputRef.current?.click();
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          if (disabled || !canAddMore) return;
+          event.preventDefault();
+          inputRef.current?.click();
+        }}
+        className={cn(
+          "rounded-md border border-dashed border-border px-3 py-2.5 text-center text-ui-xs text-muted-foreground outline-none transition-colors",
+          !disabled && canAddMore && "cursor-pointer",
+          isDragOver && "border-primary bg-primary/5",
+          (disabled || !canAddMore) && "cursor-not-allowed opacity-60",
+        )}
+      >
+        {canAddMore
+          ? `Paste or drop screenshots (up to ${MAX_REPORT_IMAGES}, kept private)`
+          : `${MAX_REPORT_IMAGES} screenshots attached`}
+        {isIngesting ? "..." : null}
+      </div>
+      {rejection !== null ? (
+        <p className="text-ui-xs text-destructive">{rejection.message}</p>
+      ) : null}
+      {images.length > 0 ? (
+        <>
+          <div className="flex flex-wrap gap-1.5">
+            {images.map((image) => (
+              <AttachmentThumbnail
+                key={image.id}
+                image={image}
+                disabled={disabled}
+                onRemove={() => removeImage(image.id)}
+              />
+            ))}
+          </div>
+          <p className="text-ui-xs text-muted-foreground">
+            Check images for anything you would not share - screens often show
+            code.
+          </p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function AttachmentThumbnail({
+  image,
+  disabled,
+  onRemove,
+}: {
+  readonly image: ReportIssueAttachmentImage;
+  readonly disabled: boolean;
+  readonly onRemove: () => void;
+}): ReactNode {
+  return (
+    <div className="relative h-[38px] w-14 shrink-0 overflow-hidden rounded border border-border bg-muted">
+      <img
+        src={image.previewUrl}
+        alt={image.fileName}
+        className="h-full w-full object-cover"
+      />
+      <button
+        type="button"
+        aria-label={`Remove ${image.fileName}`}
+        disabled={disabled}
+        onClick={onRemove}
+        className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
+      >
+        <X className="size-2.5" />
+      </button>
     </div>
   );
 }

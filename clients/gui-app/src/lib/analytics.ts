@@ -739,10 +739,26 @@ export interface AnalyticsEventProperties {
     readonly report_type: "bug" | "idea" | "other";
   };
   readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
-    | { readonly outcome: "confirmed"; readonly blocker: null }
-    | { readonly outcome: "unconfirmed"; readonly blocker: null }
-    | { readonly outcome: "failed"; readonly blocker: AnalyticsBlocker }
-    | { readonly outcome: "unavailable"; readonly blocker: null };
+    | {
+        readonly outcome: "confirmed";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "unconfirmed";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "failed";
+        readonly blocker: AnalyticsBlocker;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "unavailable";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      };
   readonly [AnalyticsEvent.ReportIssuePublicOpenAttempted]: null;
   readonly [AnalyticsEvent.AppQuitRequested]: SourceProperties;
   readonly [AnalyticsEvent.TabCloseBlocked]: {
@@ -1263,7 +1279,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
   ...eventKeyEntries([AnalyticsEvent.ReportIssueBlocked], ["report_type"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ReportIssuePrivateSubmit],
-    ["outcome", "blocker"],
+    ["outcome", "blocker", "attachment_count"],
   ),
   ...eventKeyEntries([AnalyticsEvent.TabCloseBlocked], ["decision"]),
 ]);
@@ -1540,6 +1556,7 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
 const COUNT_PROPERTY_KEYS = new Set<string>([
   "answer_count",
   "artifact_count",
+  "attachment_count",
   "failed_count",
   "file_count",
   "requested_count",
@@ -1966,6 +1983,11 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
  * `Error` to classify, so it gets a fixed `unknown` blocker; a thrown
  * exception from the mutation itself still goes through
  * `analyticsBlockerFromError` on the `onError` path.
+ *
+ * `attachmentCount` (ticket 08 / T5) is the number of images on the request
+ * that produced `result` - a low-cardinality integer the count-property
+ * validator already accepts, so it rides along on every outcome rather than
+ * needing its own event.
  */
 export function reportIssuePrivateSubmitPropertiesFromResult(
   result:
@@ -1973,20 +1995,53 @@ export function reportIssuePrivateSubmitPropertiesFromResult(
     | { readonly status: "unconfirmed" }
     | { readonly status: "unavailable" }
     | { readonly status: "failed" },
+  attachmentCount: number,
 ):
-  | { readonly outcome: "confirmed"; readonly blocker: null }
-  | { readonly outcome: "unconfirmed"; readonly blocker: null }
-  | { readonly outcome: "unavailable"; readonly blocker: null }
-  | { readonly outcome: "failed"; readonly blocker: AnalyticsBlocker } {
+  | {
+      readonly outcome: "confirmed";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "unconfirmed";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "unavailable";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "failed";
+      readonly blocker: AnalyticsBlocker;
+      readonly attachment_count: number;
+    } {
   switch (result.status) {
     case "delivered":
-      return { outcome: "confirmed", blocker: null };
+      return {
+        outcome: "confirmed",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
     case "unconfirmed":
-      return { outcome: "unconfirmed", blocker: null };
+      return {
+        outcome: "unconfirmed",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
     case "unavailable":
-      return { outcome: "unavailable", blocker: null };
+      return {
+        outcome: "unavailable",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
     case "failed":
-      return { outcome: "failed", blocker: "unknown" };
+      return {
+        outcome: "failed",
+        blocker: "unknown",
+        attachment_count: attachmentCount,
+      };
   }
 }
 

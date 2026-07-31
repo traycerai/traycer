@@ -552,6 +552,53 @@ describe("Report issue capture dialog (deep interactions)", () => {
       );
     });
 
+    it("satisfies the gate for idea/other with an attached image and empty intent text", async () => {
+      // Mirror the "satisfies the gate by typing intent" shape, but evidence
+      // is a screenshot instead of typed text (ticket 08 / D7 hasImages).
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+      await screen.findByText(
+        "Add a sentence or a screenshot - we need at least one to act on the report.",
+      );
+      expect(harness.submittedForms).toEqual([]);
+
+      await attachPngAndWaitForThumbnail("idea-shot.png");
+      expect(
+        await screen.findByRole("img", { name: "idea-shot.png" }),
+      ).not.toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      expect(
+        await screen.findByRole("heading", { name: "Report sent" }),
+      ).not.toBeNull();
+      expect(
+        screen.queryByText(
+          "Add a sentence or a screenshot - we need at least one to act on the report.",
+        ),
+      ).toBeNull();
+      const form = lastSubmittedForm(harness);
+      expect(form.type).toBe("idea");
+      expect(form.intent).toBe("");
+      expect(form.images).toHaveLength(1);
+      expect(form.images[0]?.fileName).toBe("idea-shot.png");
+      expect(form.images[0]?.mimeType).toBe("image/png");
+      expect(form.images[0]?.bytes).toBeInstanceOf(ArrayBuffer);
+      expect(form.images[0]?.bytes.byteLength).toBeGreaterThan(0);
+    });
+
     it("satisfies the gate by actively changing the location selector (not the pre-filled current value)", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
@@ -1512,4 +1559,265 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(otherParams.get("template")).toBe("general.yml");
     });
   });
+
+  describe("image attachments (ticket 08 / T5)", () => {
+    beforeEach(() => {
+      URL.createObjectURL = vi.fn(() => "blob:mock/report-shot");
+      URL.revokeObjectURL = vi.fn();
+    });
+
+    it("attaches a File via the hidden file input and shows a thumbnail", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      await attachPngAndWaitForThumbnail("from-input.png");
+
+      expect(
+        await screen.findByRole("img", { name: "from-input.png" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Remove from-input.png" }),
+      ).not.toBeNull();
+    });
+
+    it("attaches via drop on the attachment target", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      const target = screen.getByRole("button", { name: "Attach screenshots" });
+      fireEvent.drop(target, {
+        dataTransfer: makeFileTransfer([makePngFile("dropped.png")]),
+      });
+
+      expect(
+        await screen.findByRole("img", { name: "dropped.png" }),
+      ).not.toBeNull();
+    });
+
+    it("attaches via paste on the attachment target", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      const target = screen.getByRole("button", { name: "Attach screenshots" });
+      fireEvent.paste(target, {
+        clipboardData: makeFileTransfer([makePngFile("pasted.png")]),
+      });
+
+      expect(
+        await screen.findByRole("img", { name: "pasted.png" }),
+      ).not.toBeNull();
+    });
+
+    it("surfaces an attach-time count rejection before any submit attempt", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      await attachPngAndWaitForThumbnail("one.png");
+      await attachPngAndWaitForThumbnail("two.png");
+      await attachPngAndWaitForThumbnail("three.png");
+      await screen.findByRole("img", { name: "three.png" });
+
+      // 4th attach must show the count rejection inline, before Send.
+      await attachPngViaFileInput("four.png", { expectThumbnail: false });
+      expect(
+        await screen.findByText("You can attach up to 3 screenshots."),
+      ).not.toBeNull();
+      expect(harness.submittedForms).toEqual([]);
+      expect(screen.queryByRole("img", { name: "four.png" })).toBeNull();
+    });
+
+    it("removes a thumbnail when its remove button is pressed", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      await attachPngAndWaitForThumbnail("removable.png");
+      expect(
+        await screen.findByRole("img", { name: "removable.png" }),
+      ).not.toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove removable.png" }),
+      );
+
+      await waitFor(() => {
+        expect(screen.queryByRole("img", { name: "removable.png" })).toBeNull();
+      });
+    });
+
+    it("shows the review-warning copy only after the first thumbnail exists", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      const warning =
+        "Check images for anything you would not share - screens often show code.";
+      expect(screen.queryByText(warning)).toBeNull();
+
+      await attachPngAndWaitForThumbnail("warned.png");
+      expect(await screen.findByText(warning)).not.toBeNull();
+    });
+
+    it("includes attached image fileName/mimeType/bytes on the submitted form", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Bug with a screenshot" },
+      });
+      await attachPngAndWaitForThumbnail("submit-me.png");
+      await screen.findByRole("img", { name: "submit-me.png" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+      expect(
+        await screen.findByRole("heading", { name: "Report sent" }),
+      ).not.toBeNull();
+
+      const form = lastSubmittedForm(harness);
+      expect(form.images).toHaveLength(1);
+      expect(form.images[0]?.fileName).toBe("submit-me.png");
+      expect(form.images[0]?.mimeType).toBe("image/png");
+      expect(form.images[0]?.bytes).toBeInstanceOf(ArrayBuffer);
+      expect(form.images[0]?.bytes.byteLength).toBeGreaterThan(0);
+    });
+  });
 });
+
+// --- image attachment helpers (ticket 08) ---------------------------------
+
+function makePngFile(name: string): File {
+  const bytes = new Uint8Array(32);
+  bytes[0] = 0x89;
+  bytes[1] = 0x50;
+  bytes[2] = 0x4e;
+  bytes[3] = 0x47;
+  return new File([bytes], name, { type: "image/png" });
+}
+
+interface FileTransferLike {
+  readonly files: ReadonlyArray<File>;
+  readonly types: ReadonlyArray<string>;
+  readonly items: ReadonlyArray<{
+    readonly kind: string;
+    readonly type: string;
+    getAsFile: () => File | null;
+  }>;
+  getData: (type: string) => string;
+}
+
+function makeFileTransfer(files: ReadonlyArray<File>): FileTransferLike {
+  return {
+    files,
+    types: files.length > 0 ? ["Files"] : [],
+    items: files.map((file) => ({
+      kind: "file",
+      type: file.type,
+      getAsFile: () => file,
+    })),
+    getData: () => "",
+  };
+}
+
+async function attachPngViaFileInput(
+  fileName: string,
+  options: { readonly expectThumbnail: boolean },
+): Promise<void> {
+  const input = document.querySelector(
+    'input[type="file"][accept*="image/png"]',
+  );
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error("Expected hidden image file input in the dialog");
+  }
+  const file = makePngFile(fileName);
+  // jsdom does not let tests assign to input.files directly; fire change
+  // with a FileList-shaped value via Object.defineProperty.
+  Object.defineProperty(input, "files", {
+    configurable: true,
+    value: {
+      0: file,
+      length: 1,
+      item: (index: number) => (index === 0 ? file : null),
+      [Symbol.iterator]: function* () {
+        yield file;
+      },
+    },
+  });
+  fireEvent.change(input);
+  if (options.expectThumbnail) {
+    await waitFor(() => {
+      expect(screen.getByRole("img", { name: fileName })).not.toBeNull();
+    });
+  } else {
+    // Let the async ingest loop settle without requiring a thumbnail.
+    await act(async () => {
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+    });
+  }
+}
+
+async function attachPngAndWaitForThumbnail(fileName: string): Promise<void> {
+  await attachPngViaFileInput(fileName, { expectThumbnail: true });
+}

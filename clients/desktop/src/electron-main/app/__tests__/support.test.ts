@@ -46,6 +46,7 @@ const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  images: [],
 };
 
 // Frozen-evidence key is composed in the IPC layer (sender id + draftId);
@@ -328,5 +329,50 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
         );
       },
     );
+  });
+
+  it("ships image attachments on captureFeedback and keeps them out of contexts (ticket 08)", async () => {
+    const png = new Uint8Array(24);
+    png[0] = 0x89;
+    png[1] = 0x50;
+    png[2] = 0x4e;
+    png[3] = 0x47;
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      await service.submitReport(
+        {
+          ...EMPTY_REPORT_FORM,
+          images: [
+            {
+              fileName: "layer0-context.png",
+              mimeType: "image/png",
+              bytes: png.buffer,
+            },
+          ],
+        },
+        KEY,
+      );
+
+      expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
+      const [, hint] = vi.mocked(Sentry.captureFeedback).mock.calls[0] as [
+        unknown,
+        {
+          attachments?: ReadonlyArray<{
+            filename: string;
+            data: unknown;
+            contentType?: string;
+          }>;
+          captureContext?: { contexts?: Record<string, unknown> };
+        },
+      ];
+      const image = hint?.attachments?.find(
+        (a) => a.filename === "layer0-context.png",
+      );
+      expect(image?.contentType).toBe("image/png");
+      expect(image?.data).toBeInstanceOf(Uint8Array);
+      // Images must never ride through the scrubbed contexts object.
+      expect(hint?.captureContext?.contexts ?? {}).not.toHaveProperty("images");
+    });
   });
 });

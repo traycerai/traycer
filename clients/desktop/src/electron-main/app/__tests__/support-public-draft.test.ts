@@ -64,6 +64,7 @@ const baseInput: BuildPublicDraftInput = {
   hostVersion: null,
   reportId: "rpt_abc123",
   privateDiagnostics: undefined,
+  imageCount: 0,
 };
 
 const BASE_ENVIRONMENT_LINE = "Environment: Traycer 1.2.3 · darwin arm64";
@@ -278,6 +279,79 @@ describe("buildPublicDraftFields", () => {
       if (result.template !== "general.yml") return;
       expect(result.truncated).toBe(true);
       expect(result.fields.details.endsWith(TRUNCATION_MARKER)).toBe(true);
+    });
+  });
+
+  describe("imageCount attachment line (ticket 08)", () => {
+    const ATTACHMENT_ONE = "1 screenshot attached to the private report.";
+    const ATTACHMENT_TWO = "2 screenshots attached to the private report.";
+    const ATTACHMENT_THREE = "3 screenshots attached to the private report.";
+
+    it("omits any attachment line when imageCount is 0", () => {
+      const result = buildPublicDraftFields({ ...baseInput, imageCount: 0 });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).not.toContain("screenshot");
+      expect(result.fields["what-happened"]).not.toContain(
+        "attached to the private report",
+      );
+      expect(result.title).not.toContain("screenshot");
+    });
+
+    it("omits any attachment line when imageCount is negative", () => {
+      const result = buildPublicDraftFields({ ...baseInput, imageCount: -1 });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).not.toContain(
+        "attached to the private report",
+      );
+    });
+
+    it("appends a singular attachment line for imageCount === 1 in the narrative only", () => {
+      const result = buildPublicDraftFields({ ...baseInput, imageCount: 1 });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).toBe(
+        `The app crashed\n\n${BASE_ENVIRONMENT_LINE}\n\n${BASE_REPORT_LINE}\n\n${ATTACHMENT_ONE}`,
+      );
+      // Title must never carry the attachment line.
+      expect(result.title).toBe("The app crashed");
+      expect(result.title).not.toContain("screenshot");
+    });
+
+    it("appends a plural attachment line for imageCount >= 2", () => {
+      const two = buildPublicDraftFields({ ...baseInput, imageCount: 2 });
+      expect(two.template).toBe("bug_report.yml");
+      if (two.template !== "bug_report.yml") return;
+      expect(two.fields["what-happened"]).toContain(ATTACHMENT_TWO);
+      expect(two.fields["what-happened"]).not.toContain(ATTACHMENT_ONE);
+
+      const three = buildPublicDraftFields({ ...baseInput, imageCount: 3 });
+      expect(three.template).toBe("bug_report.yml");
+      if (three.template !== "bug_report.yml") return;
+      expect(three.fields["what-happened"]).toContain(ATTACHMENT_THREE);
+    });
+
+    it("places the attachment line on idea.problem and other.details, never title", () => {
+      const idea = buildPublicDraftFields({
+        ...baseInput,
+        type: "idea",
+        imageCount: 1,
+      });
+      expect(idea.template).toBe("feature_request.yml");
+      if (idea.template !== "feature_request.yml") return;
+      expect(idea.fields.problem).toContain(ATTACHMENT_ONE);
+      expect(idea.title).not.toContain("screenshot");
+
+      const other = buildPublicDraftFields({
+        ...baseInput,
+        type: "other",
+        imageCount: 2,
+      });
+      expect(other.template).toBe("general.yml");
+      if (other.template !== "general.yml") return;
+      expect(other.fields.details).toContain(ATTACHMENT_TWO);
+      expect(other.title).not.toContain("screenshot");
     });
   });
 });

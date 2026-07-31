@@ -473,6 +473,17 @@ export type DesktopReportType = "bug" | "idea" | "other";
 export type DesktopReportFrequency =
   "once" | "sometimes" | "every_time" | "not_sure";
 
+/**
+ * Field-for-field match with ticket 08's `SupportImageAttachmentInput`
+ * (`ipc-contracts/window-types.ts`). Bytes cross IPC as a raw `ArrayBuffer`,
+ * never base64.
+ */
+export interface DesktopImageAttachmentInput {
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly bytes: ArrayBuffer;
+}
+
 export interface DesktopReportIssueForm {
   readonly draftId: number;
   readonly type: DesktopReportType;
@@ -490,6 +501,9 @@ export interface DesktopReportIssueForm {
   // the private submission / diagnostic bundle when false.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  // Up to 3 screenshots (ticket 08 / T5) - always present, empty when none
+  // attached.
+  readonly images: readonly DesktopImageAttachmentInput[];
   readonly privateDiagnostics?: DesktopPrivateDiagnostics;
 }
 

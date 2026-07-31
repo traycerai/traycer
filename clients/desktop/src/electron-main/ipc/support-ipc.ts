@@ -16,6 +16,7 @@ import type {
   SupportCapturedField,
   SupportContextRegistrySnapshot,
   SupportFreezeEvidenceInput,
+  SupportImageAttachmentInput,
   SupportLogTarget,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
@@ -24,6 +25,13 @@ import type {
   SupportReportType,
   SupportSubmitReportRequest,
 } from "../../ipc-contracts/window-types";
+import {
+  MAX_REPORT_IMAGE_BYTES,
+  MAX_REPORT_IMAGES,
+  matchesReportImageMagicBytes,
+  reportImageMediaTypeForMimeType,
+  reportImagesExceedBudget,
+} from "@traycer-clients/shared/support/image-attachment-guards";
 
 export function registerSupportIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
@@ -261,7 +269,14 @@ const SUPPORT_SUBMIT_REPORT_KEYS = new Set([
   "allowContact",
   "includeDesktopLog",
   "includeHostLog",
+  "images",
   "privateDiagnostics",
+]);
+
+const SUPPORT_IMAGE_ATTACHMENT_KEYS = new Set([
+  "fileName",
+  "mimeType",
+  "bytes",
 ]);
 
 function parseSupportReportType(
@@ -547,6 +562,83 @@ function parsePrivateDiagnostics(
   };
 }
 
+function assertArrayBuffer(
+  value: unknown,
+  context: string,
+): asserts value is ArrayBuffer {
+  if (!(value instanceof ArrayBuffer)) {
+    throw new Error(`${context} must be an ArrayBuffer`);
+  }
+}
+
+/**
+ * Full revalidation of one attached screenshot, independent of whatever the
+ * renderer's attach-time checks already did (ticket 08 guardrail: Electron
+ * main trusts nothing from the renderer). Checks shape, the MIME allowlist,
+ * per-image size, and the actual magic bytes against the declared type - a
+ * mismatched extension/Content-Type pair is exactly what a crafted payload
+ * would present.
+ */
+function parseSupportImageAttachment(
+  value: unknown,
+  context: string,
+): SupportImageAttachmentInput {
+  assertPlainObject(value, context);
+  assertOnlyAllowedKeys(value, SUPPORT_IMAGE_ATTACHMENT_KEYS, context);
+  assertString(value.fileName, `${context}.fileName`);
+  assertString(value.mimeType, `${context}.mimeType`);
+  assertArrayBuffer(value.bytes, `${context}.bytes`);
+  const mediaType = reportImageMediaTypeForMimeType(value.mimeType);
+  if (mediaType === null) {
+    throw new Error(
+      `${context}.mimeType must be one of image/png, image/jpeg, image/gif, image/webp`,
+    );
+  }
+  if (value.bytes.byteLength === 0) {
+    throw new Error(`${context}.bytes must not be empty`);
+  }
+  if (value.bytes.byteLength > MAX_REPORT_IMAGE_BYTES) {
+    throw new Error(
+      `${context}.bytes exceeds the ${MAX_REPORT_IMAGE_BYTES}-byte limit`,
+    );
+  }
+  if (!matchesReportImageMagicBytes(new Uint8Array(value.bytes), mediaType)) {
+    throw new Error(
+      `${context}.bytes does not match declared type ${mediaType}`,
+    );
+  }
+  return {
+    fileName: value.fileName,
+    mimeType: value.mimeType,
+    bytes: value.bytes,
+  };
+}
+
+function parseSupportImageAttachments(
+  value: unknown,
+  context: string,
+): readonly SupportImageAttachmentInput[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array`);
+  }
+  if (value.length > MAX_REPORT_IMAGES) {
+    throw new Error(
+      `${context} must contain at most ${MAX_REPORT_IMAGES} images`,
+    );
+  }
+  const images = value.map((entry, index) =>
+    parseSupportImageAttachment(entry, `${context}[${index}]`),
+  );
+  const totalBytes = images.reduce(
+    (sum, image) => sum + image.bytes.byteLength,
+    0,
+  );
+  if (reportImagesExceedBudget(totalBytes)) {
+    throw new Error(`${context} exceeds the total attachment size budget`);
+  }
+  return images;
+}
+
 export function parseSupportSubmitReportRequest(
   form: unknown,
 ): SupportSubmitReportRequest {
@@ -577,6 +669,13 @@ export function parseSupportSubmitReportRequest(
     "supportSubmitReport.includeDesktopLog",
   );
   assertBoolean(form.includeHostLog, "supportSubmitReport.includeHostLog");
+  // Always present on the wire (empty array when nothing attached), matching
+  // frequency/location's "no missing key" contract.
+  assertHasKey(form, "images", "supportSubmitReport");
+  const images = parseSupportImageAttachments(
+    form.images,
+    "supportSubmitReport.images",
+  );
   const privateDiagnostics = parsePrivateDiagnostics(form.privateDiagnostics);
   return {
     draftId: form.draftId,
@@ -587,6 +686,7 @@ export function parseSupportSubmitReportRequest(
     allowContact: form.allowContact,
     includeDesktopLog: form.includeDesktopLog,
     includeHostLog: form.includeHostLog,
+    images,
     ...(privateDiagnostics === undefined ? {} : { privateDiagnostics }),
   };
 }

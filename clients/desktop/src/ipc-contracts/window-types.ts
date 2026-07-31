@@ -336,6 +336,19 @@ export type SupportReportType = "bug" | "idea" | "other";
 export type SupportReportFrequency =
   "once" | "sometimes" | "every_time" | "not_sure";
 
+/**
+ * One attached screenshot, crossing IPC as a raw byte array (never base64 -
+ * ticket 08 / T5) so no string-encoding step ever touches image content.
+ * `mimeType` is the browser-reported `File.type` at attach time; Electron
+ * main revalidates it against the actual bytes (magic-byte check) rather
+ * than trusting it - see `support-ipc.ts`'s `parseSupportImageAttachments`.
+ */
+export interface SupportImageAttachmentInput {
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly bytes: ArrayBuffer;
+}
+
 export interface SupportSubmitReportRequest {
   // Keys the frozen evidence (both log tails + the report id minted at
   // report-open) that `submitReport` and every retry must reuse.
@@ -364,6 +377,11 @@ export interface SupportSubmitReportRequest {
   // exists to remove.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  // Up to 3 screenshots (ticket 08 / T5), already gated by the renderer's
+  // attach-time checks - always present (empty array when none attached),
+  // matching `frequency`/`location`'s "always on the wire" contract so a
+  // missing key is a parser violation, not an omitted optional.
+  readonly images: readonly SupportImageAttachmentInput[];
   readonly privateDiagnostics?: SupportPrivateDiagnostics;
 }
 
