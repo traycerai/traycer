@@ -562,6 +562,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
     [profilesByHarnessId, resolvedActiveProviderId],
   );
+  // The browsed provider's full CLI state, for the panel's ambient-auth line
+  // (which credential a single-profile provider is actually running on - e.g.
+  // Copilot riding the GitHub CLI's login). Same `providers.list` response the
+  // rail already reads for degraded/profile state - no extra query.
+  const activeProviderState = useMemo(
+    () =>
+      providersQuery.data?.providers.find(
+        (provider) =>
+          providerIdToGuiHarnessId(provider.providerId) ===
+          resolvedActiveProviderId,
+      ) ?? null,
+    [providersQuery.data, resolvedActiveProviderId],
+  );
   // Which profile each harness's rail dot reflects: the active provider's
   // browsed profile, plus the composer's already-committed selection's
   // profile when browsing a DIFFERENT provider (so its dot doesn't silently
@@ -862,6 +875,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         activeProfileId={activePanelProfileId}
         activeProfileIdByHarnessId={activeProfileIdByHarnessId}
         activeProviderProfiles={activeProviderProfiles}
+        activeProviderState={activeProviderState}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}
         preparingByHarnessId={preparingByHarnessId}
@@ -1024,12 +1038,16 @@ function degradedHarnessIdsFromProviderStates(
   );
 }
 
+// The definitive "this ambient account cannot run a turn" verdict - the same
+// predicate the composer's send gate reads, so the rail's degraded treatment
+// and the send gate cannot drift. Since `railHarnessDegraded` applies this set
+// regardless of availability, membership must stay limited to the definitive
+// signed-out verdict: a missing API key is NOT one (`requiresApiKey` handles
+// it under `!available`, and a keyless provider's auth probe reports its own
+// definitive `unauthenticated` anyway), and folding it in here would degrade
+// live providers on a transient probe state.
 function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
-  return (
-    provider.enabled &&
-    (isProviderAmbientSignedOut(provider) ||
-      (provider.apiKey.supported && !provider.apiKey.configured))
-  );
+  return provider.enabled && isProviderAmbientSignedOut(provider);
 }
 
 function profilesByHarnessIdFromProviderStates(

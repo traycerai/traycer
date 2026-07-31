@@ -3,6 +3,7 @@ import type { HarnessOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
+  railHarnessDegraded,
   resolveActiveProfileForHarness,
   visibleRailEntries,
 } from "@/components/home/pickers/harness-rail-providers";
@@ -282,6 +283,64 @@ describe("visibleRailEntries: managed-pack readiness", () => {
     });
 
     expect(entries[0].preparing).toBeNull();
+  });
+});
+
+describe("railHarnessDegraded", () => {
+  it("degrades a signed-out provider even while its harness reports available", () => {
+    // Availability probes binary presence, never auth - an installed but
+    // signed-out provider (Copilot after a real logout) keeps reporting
+    // `available: true`. The signed-out set must degrade WITHOUT the
+    // availability gate, or the rail offers a fully-lit, selectable tab for a
+    // provider the send gate then refuses to run.
+    expect(
+      railHarnessDegraded(harness("claude"), new Set<GuiHarnessId>(["claude"])),
+    ).toBe(true);
+  });
+
+  it("keeps a healthy available provider non-degraded", () => {
+    expect(railHarnessDegraded(harness("claude"), new Set())).toBe(false);
+  });
+
+  it("keeps the API-key arm availability-gated", () => {
+    const apiKeyHarness: HarnessOption = {
+      ...harness("codex"),
+      requiresApiKey: true,
+    };
+    // An available API-key provider is running on SOME key - not degraded.
+    expect(railHarnessDegraded(apiKeyHarness, new Set())).toBe(false);
+    // Unavailable, it stays visible-but-degraded for the add-key CTA.
+    expect(
+      railHarnessDegraded({ ...apiKeyHarness, available: false }, new Set()),
+    ).toBe(true);
+  });
+
+  it("leaves an unavailable keyless provider non-degraded - the hidden path", () => {
+    expect(
+      railHarnessDegraded({ ...harness("codex"), available: false }, new Set()),
+    ).toBe(false);
+  });
+});
+
+describe("visibleRailEntries: signed-out while available", () => {
+  it("sinks a signed-out-but-available provider below the ready ones", () => {
+    // Degrading codex, which sorts FIRST canonically (see the pack-readiness
+    // block above) - proving the deprioritization fires without
+    // `available: false`.
+    const entries = visibleRailEntries({
+      harnesses: [harness("claude"), harness("codex")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set<GuiHarnessId>(["codex"]),
+      preparingByHarnessId: NO_PREPARING,
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries.map((entry) => entry.harness.id)).toEqual([
+      "claude",
+      "codex",
+    ]);
+    expect(entries[1].degraded).toBe(true);
   });
 });
 
