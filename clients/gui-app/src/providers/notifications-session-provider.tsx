@@ -6,11 +6,15 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { NotificationsStreamClient } from "@traycer-clients/shared/host-transport/notifications-stream-client";
+import {
+  NotificationsStreamClient,
+  type NotificationsStreamCallbacks,
+} from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import {
+  openNotificationsAwarenessStream,
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
@@ -92,7 +96,7 @@ export function NotificationsSessionProvider(
   const disposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const cloudDisposerRef = useRef<(() => void) | null>(null);
-  // The stream client BOTH notification streams were opened against. Stream
+  // The stream client all notification streams were opened against. Stream
   // ownership follows the client instance: when the provider context serves a
   // different client (the app-wide liveness rebuild, or any same-identity
   // replacement), the old client's sessions are already dead, so the streams
@@ -315,11 +319,32 @@ export function NotificationsSessionProvider(
     if (activeHostId === null) return;
     const streamHostId = activeHostId;
     openedStreamClientRef.current = wsStreamClient;
+    const createNotificationsStream = (
+      callbacks: NotificationsStreamCallbacks,
+    ) => {
+      const override = getNotificationsStreamFactoryOverride();
+      if (override !== null) {
+        return override(callbacks);
+      }
+      if (wsStreamClient === null) {
+        throw new Error(
+          "NotificationsSessionProvider: WsStreamClient missing at open time.",
+        );
+      }
+      return new NotificationsStreamClient({
+        wsStreamClient,
+        callbacks,
+      });
+    };
     if (notificationFeedMode === "cloud") {
-      // Cloud-enabled display never opens either local stream. In particular,
-      // don't let the legacy Yjs feed act as an outage fallback or contribute
-      // a composite badge while the relay is reconnecting.
+      // Cloud owns notification rows, but global agent-activity presence still
+      // arrives through the per-user notifications room's awareness channel.
+      // The awareness-only reader deliberately ignores legacy Yjs rows.
       if (wsStreamClient === null) return;
+      disposerRef.current = openNotificationsAwarenessStream(
+        createNotificationsStream,
+        onAuthError,
+      );
       cloudDisposerRef.current = openCloudNotificationsStream(
         wsStreamClient,
         onAuthError,
@@ -338,21 +363,10 @@ export function NotificationsSessionProvider(
       useCloudNotificationsStore.getState().setConnectionState("unavailable");
       return;
     }
-    disposerRef.current = openNotificationsStream((callbacks) => {
-      const override = getNotificationsStreamFactoryOverride();
-      if (override !== null) {
-        return override(callbacks);
-      }
-      if (wsStreamClient === null) {
-        throw new Error(
-          "NotificationsSessionProvider: WsStreamClient missing at open time.",
-        );
-      }
-      return new NotificationsStreamClient({
-        wsStreamClient,
-        callbacks,
-      });
-    }, onAuthError);
+    disposerRef.current = openNotificationsStream(
+      createNotificationsStream,
+      onAuthError,
+    );
     if (
       hostDisposerRef.current === null &&
       getNotificationsStreamFactoryOverride() === null &&
