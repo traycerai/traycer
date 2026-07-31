@@ -238,12 +238,12 @@ export interface DesktopSupportSaveDiagnosticBundleResult {
 }
 
 /**
- * Field-for-field match with ticket 09's `SupportBuildPublicDraftFields`
+ * Field-for-field match with ticket 09's `SupportBugReportDraftFields`
  * (`ipc-contracts/window-types.ts`). Keys match the GitHub issue form's field
  * ids verbatim so `buildGitHubIssueUrl` (`@traycer-clients/shared/support/
  * issue-reporter`) can assemble `URLSearchParams` straight from this object.
  */
-export interface DesktopSupportBuildPublicDraftFields {
+export interface DesktopSupportBugReportDraftFields {
   readonly "what-happened": string;
   readonly version: string;
   readonly os: string;
@@ -251,16 +251,44 @@ export interface DesktopSupportBuildPublicDraftFields {
   readonly repro: string;
 }
 
+/** Field-for-field match with ticket 07's `SupportFeatureRequestDraftFields`. */
+export interface DesktopSupportFeatureRequestDraftFields {
+  readonly problem: string;
+  readonly proposal: string;
+  readonly alternatives: string;
+  readonly component: string;
+}
+
+/** Field-for-field match with ticket 07's `SupportGeneralDraftFields`. */
+export interface DesktopSupportGeneralDraftFields {
+  readonly details: string;
+}
+
 /**
  * Result of `support.buildPublicDraft`: the single main-process producer of
  * all public text, always behind the deep scrubber. Field-for-field match
- * with ticket 09's `SupportBuildPublicDraftResult`.
+ * with ticket 09/07's `SupportBuildPublicDraftResult` - a discriminated union
+ * since bug/idea/other route to GitHub issue forms with different field ids.
  */
-export interface DesktopSupportBuildPublicDraftResult {
-  readonly title: string;
-  readonly fields: DesktopSupportBuildPublicDraftFields;
-  readonly truncated: boolean;
-}
+export type DesktopSupportBuildPublicDraftResult =
+  | {
+      readonly template: "bug_report.yml";
+      readonly title: string;
+      readonly fields: DesktopSupportBugReportDraftFields;
+      readonly truncated: boolean;
+    }
+  | {
+      readonly template: "feature_request.yml";
+      readonly title: string;
+      readonly fields: DesktopSupportFeatureRequestDraftFields;
+      readonly truncated: boolean;
+    }
+  | {
+      readonly template: "general.yml";
+      readonly title: string;
+      readonly fields: DesktopSupportGeneralDraftFields;
+      readonly truncated: boolean;
+    };
 
 /**
  * Field-for-field match with ticket 05's `PrivateErrorCause`
@@ -438,13 +466,30 @@ export interface DesktopHostControllerStatusBridge {
   };
 }
 
+// Ticket 07 (T4): "bug" routes to bug_report.yml, "idea" to
+// feature_request.yml, "other" to general.yml.
+export type DesktopReportType = "bug" | "idea" | "other";
+
+export type DesktopReportFrequency =
+  "once" | "sometimes" | "every_time" | "not_sure";
+
 export interface DesktopReportIssueForm {
   readonly draftId: number;
-  readonly title: string;
-  readonly whatHappened: string;
-  readonly stepsToReproduce: string;
-  readonly expectedBehavior: string;
-  readonly actualBehavior: string;
+  readonly type: DesktopReportType;
+  // The single required question ("What were you trying to do?").
+  readonly intent: string;
+  // D9: null when left unselected (default) or hidden because the ledger
+  // already knows the repeat count.
+  readonly frequency: DesktopReportFrequency | null;
+  // D7: only non-null when the user actively changed the pre-filled
+  // "Where did this happen?" selector away from its default.
+  readonly location: string | null;
+  // G1: identity is attached to the private report only when this is true.
+  readonly allowContact: boolean;
+  // Consent panel's two log toggles (default on): withholds the tail from
+  // the private submission / diagnostic bundle when false.
+  readonly includeDesktopLog: boolean;
+  readonly includeHostLog: boolean;
   readonly privateDiagnostics?: DesktopPrivateDiagnostics;
 }
 

@@ -43,7 +43,6 @@ import type {
 } from "@/stores/epics/open-epic/store";
 import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { toast } from "sonner";
 
 const cloudEpicTasks = vi.hoisted((): { data: TaskLight[] } => ({ data: [] }));
 
@@ -138,41 +137,27 @@ const snapshot: DesktopSupportSnapshot = {
 
 const EPIC_A = { id: "e-a", name: "A", draft: false };
 
-interface Deferred<T> {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-  readonly reject: (error: Error) => void;
-}
-
-function createDeferred<T>(): Deferred<T> {
-  let resolveValue: (value: T) => void = () => undefined;
-  let rejectValue: (error: Error) => void = () => undefined;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolveValue = resolve;
-    rejectValue = reject;
-  });
-  return { promise, resolve: resolveValue, reject: rejectValue };
-}
-
-// A faithful-enough stand-in for `support:buildPublicDraft` (ticket 09 / T6):
+// A faithful-enough stand-in for `support:buildPublicDraft` (ticket 09/07):
 // echoes the form back the way the real builder would with no
 // `privateDiagnostics.cause` (these tests never attach one) - the derived
-// title falls back to the user's own (unmodified, since these fixtures never
-// contain anything the scrubber would touch), and the narrative/repro map
-// straight through. Good enough for assertions that check the opened URL's
-// `title`/`what-happened` params; it does not model scrubbing or the 8 KiB
-// truncation budget.
+// title falls back to the user's own intent text (unmodified, since these
+// fixtures never contain anything the scrubber would touch), always routed
+// to the bug template. Good enough for assertions that check the opened
+// URL's `title`/`what-happened` params; it does not model scrubbing or the
+// 8 KiB truncation budget.
 function echoPublicDraft(
   form: DesktopReportIssueForm,
 ): Promise<DesktopSupportBuildPublicDraftResult> {
   return Promise.resolve({
-    title: form.title,
+    template: "bug_report.yml",
+    title: form.intent,
     fields: {
-      "what-happened": form.whatHappened,
+      "what-happened": form.intent,
       version: "1.2.3",
       os: "darwin (arm64)",
       component: "Desktop app",
-      repro: form.stepsToReproduce,
+      repro:
+        "Not captured step-by-step - see the private support report rpt_test.",
     },
     truncated: false,
   });
@@ -266,48 +251,6 @@ function createRunnerHostWithSubmit(
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
       getFingerprintOccurrence: () => Promise.resolve(null),
       buildPublicDraft: echoPublicDraft,
-    },
-  });
-}
-
-function createRunnerHostWithFailingPublicDraft(
-  openedLinks: string[],
-  buildPublicDraft: () => Promise<DesktopSupportBuildPublicDraftResult>,
-): IRunnerHost {
-  return Object.assign(createRunnerHost([], openedLinks, []), {
-    support: {
-      getSnapshot: () => Promise.resolve(snapshot),
-      revealLog: (target: DesktopSupportLogTarget) =>
-        Promise.resolve({ target, path: "" }),
-      submitReport: () =>
-        Promise.resolve({
-          status: "delivered" as const,
-          reportId: "rpt_test",
-        }),
-      tailLog: (input: {
-        readonly target: DesktopSupportLogTarget;
-        readonly tailLines: number;
-      }) =>
-        Promise.resolve({
-          target: input.target,
-          path: "",
-          lines: [],
-          truncated: false,
-        }),
-      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
-      discardFrozenEvidence: () => Promise.resolve(),
-      readFrozenLogTail: (input: {
-        readonly target: DesktopSupportLogTarget;
-      }) =>
-        Promise.resolve({
-          target: input.target,
-          path: "",
-          lines: [],
-          truncated: false,
-        }),
-      saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
-      getFingerprintOccurrence: () => Promise.resolve(null),
-      buildPublicDraft,
     },
   });
 }
@@ -725,7 +668,34 @@ describe("<DesktopDialogHost />", () => {
     });
   });
 
-  it("prefills a contextual report and clears it when the dialog closes", async () => {
+  // Deeper interaction coverage (gate focus behavior, consent toggles,
+  // type-chip routing, all four delivery states, confirmation persistence,
+  // preview flow) lives in report-issue-capture-dialog.test.tsx - these are
+  // wire-level smoke tests proving the store <-> dialog <-> support bridge
+  // round trip still works after the ticket 07 rewrite.
+
+  it("opens a true manual report with type chips and an empty intent field", async () => {
+    useDesktopDialogStore.getState().openReportIssue();
+    renderDesktopDialogHost(createRunnerHost([], [], []), "/");
+    await flushDialogEffects();
+
+    expect(screen.getByRole("radio", { name: "Bug" })).not.toBeNull();
+    const intent = screen.getByRole("textbox", {
+      name: "What were you trying to do, and what went wrong?",
+    });
+    if (!(intent instanceof HTMLTextAreaElement)) {
+      throw new Error("Expected the intent textarea.");
+    }
+    expect(intent.value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: null,
+      reportIssueContext: null,
+    });
+  });
+
+  it("prefills the intent question from a non-migrated report context", async () => {
     useDesktopDialogStore.getState().openReportIssueWithContext(
       createReportIssueContext({
         title: "Failed to load epic",
@@ -738,62 +708,15 @@ describe("<DesktopDialogHost />", () => {
     renderDesktopDialogHost(createRunnerHost([], [], []), "/");
     await flushDialogEffects();
 
-    const title = screen.getByRole("textbox", { name: "Title" });
-    if (!(title instanceof HTMLInputElement)) {
-      throw new Error("Expected the report title field.");
-    }
-    expect(title.value).toBe("Failed to load epic");
-    const whatHappened = screen.getByRole("textbox", {
-      name: "What happened?",
+    const intent = screen.getByRole("textbox", {
+      name: "What were you trying to do, and what went wrong?",
     });
-    if (!(whatHappened instanceof HTMLTextAreaElement)) {
-      throw new Error("Expected the report description field.");
+    if (!(intent instanceof HTMLTextAreaElement)) {
+      throw new Error("Expected the intent textarea.");
     }
-    expect(whatHappened.value).toBe(
+    expect(intent.value).toBe(
       "Area: Epic snapshot\n\nError code: RPC_ERROR\n\nThe host returned an unexpected response.",
     );
-
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(useDesktopDialogStore.getState()).toMatchObject({
-      activeDialog: null,
-      reportIssueContext: null,
-    });
-  });
-
-  it("replaces an edited draft when a later report context is selected", async () => {
-    useDesktopDialogStore.getState().openReportIssueWithContext(
-      createReportIssueContext({
-        title: "Earlier error",
-        message: null,
-        code: null,
-        source: "Earlier area",
-      }),
-    );
-    renderDesktopDialogHost(createRunnerHost([], [], []), "/");
-    await flushDialogEffects();
-
-    const titleInput = screen.getByPlaceholderText(
-      "Short summary of the issue",
-    );
-    if (!(titleInput instanceof HTMLInputElement)) {
-      throw new Error("Expected the report title input.");
-    }
-    fireEvent.change(titleInput, { target: { value: "My edited draft" } });
-    expect(titleInput.value).toBe("My edited draft");
-
-    act(() => {
-      useDesktopDialogStore.getState().openReportIssueWithContext(
-        createReportIssueContext({
-          title: "Most recent error",
-          message: "A fixed safe message.",
-          code: "RPC_ERROR",
-          source: "Latest area",
-        }),
-      );
-    });
-
-    expect(await screen.findByDisplayValue("Most recent error")).not.toBeNull();
-    expect(screen.queryByDisplayValue("My edited draft")).toBeNull();
   });
 
   it("refuses and closes report state when desktop support is unavailable", async () => {
@@ -811,7 +734,7 @@ describe("<DesktopDialogHost />", () => {
     renderDesktopDialogHost(createBaseRunnerHost(), "/");
 
     expect(
-      screen.queryByRole("heading", { name: "Report an Issue" }),
+      screen.queryByRole("heading", { name: "Report an issue" }),
     ).toBeNull();
     await waitFor(() => {
       expect(useDesktopDialogStore.getState()).toMatchObject({
@@ -822,15 +745,59 @@ describe("<DesktopDialogHost />", () => {
     });
   });
 
-  it("keeps a failed submission inline, focused, and preserves the form", async () => {
-    useDesktopDialogStore.getState().openReportIssueWithContext(
-      createReportIssueContext({
-        title: "Original title",
-        message: "Original details",
-        code: null,
-        source: "Test",
-      }),
+  it("blocks an unsatisfied manual bug submit, focuses the intent field, and never calls submitReport", async () => {
+    const submitReport = vi.fn((): Promise<DesktopSubmitReportResult> =>
+      Promise.resolve({ status: "delivered", reportId: "rpt_test" }),
     );
+    useDesktopDialogStore.getState().openReportIssue();
+    renderDesktopDialogHost(createRunnerHostWithSubmit([], submitReport), "/");
+    await flushDialogEffects();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+    expect(
+      await screen.findByText(
+        "Add a sentence, a screenshot, or pick where it happened - we need at least one to act on the report.",
+      ),
+    ).not.toBeNull();
+    const intent = screen.getByRole("textbox", {
+      name: "What were you trying to do, and what went wrong?",
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(intent);
+    });
+    expect(submitReport).not.toHaveBeenCalled();
+  });
+
+  it("shows the confirmation screen with a copyable report id after a satisfied manual submit", async () => {
+    useDesktopDialogStore.getState().openReportIssue();
+    renderDesktopDialogHost(
+      createRunnerHostWithSubmit([], () =>
+        Promise.resolve({ status: "delivered", reportId: "rpt_confirmed" }),
+      ),
+      "/",
+    );
+    await flushDialogEffects();
+
+    fireEvent.change(
+      screen.getByRole("textbox", {
+        name: "What were you trying to do, and what went wrong?",
+      }),
+      { target: { value: "Sending a message hangs forever" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Report sent" }),
+    ).not.toBeNull();
+    expect(screen.getByText(/rpt_confirmed/)).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Also post publicly on GitHub" }),
+    ).not.toBeNull();
+  });
+
+  it("keeps a failed submission's alert visible and preserves the typed intent", async () => {
+    useDesktopDialogStore.getState().openReportIssue();
     renderDesktopDialogHost(
       createRunnerHostWithSubmit([], () =>
         Promise.reject(new Error("submit unavailable")),
@@ -839,15 +806,13 @@ describe("<DesktopDialogHost />", () => {
     );
     await flushDialogEffects();
 
-    const title = screen.getByPlaceholderText("Short summary of the issue");
-    const whatHappened = screen.getByPlaceholderText(
-      "A clear description of the bug. Include any error messages you saw.",
-    );
-    fireEvent.change(title, { target: { value: "Edited title" } });
-    fireEvent.change(whatHappened, {
+    const intent = screen.getByRole("textbox", {
+      name: "What were you trying to do, and what went wrong?",
+    });
+    fireEvent.change(intent, {
       target: { value: "Edited private-safe details" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Submit Report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
@@ -856,186 +821,18 @@ describe("<DesktopDialogHost />", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(alert);
     });
-    expect(screen.getByDisplayValue("Edited title")).not.toBeNull();
     expect(
       screen.getByDisplayValue("Edited private-safe details"),
     ).not.toBeNull();
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
   });
 
-  it("opens an older successful submission without closing a newer draft", async () => {
-    const deferred = createDeferred<DesktopSubmitReportResult>();
-    const openedLinks: string[] = [];
-    useDesktopDialogStore.getState().openReportIssueWithContext(
-      createReportIssueContext({
-        title: "Draft A",
-        message: null,
-        code: null,
-        source: "Test A",
-      }),
-    );
-    renderDesktopDialogHost(
-      createRunnerHostWithSubmit(openedLinks, () => deferred.promise),
-      "/",
-    );
-    await flushDialogEffects();
-    fireEvent.click(screen.getByRole("button", { name: "Submit Report" }));
-
-    const draftBContext = createReportIssueContext({
-      title: "Draft B",
-      message: "Newer details",
-      code: null,
-      source: "Test B",
-    });
-    act(() => {
-      useDesktopDialogStore
-        .getState()
-        .openReportIssueWithContext(draftBContext);
-    });
-    const draftBTitle = await screen.findByDisplayValue("Draft B");
-    fireEvent.change(draftBTitle, { target: { value: "Edited Draft B" } });
-
-    await act(async () => {
-      deferred.resolve({ status: "delivered", reportId: "rpt_a" });
-      await deferred.promise;
-    });
-    await waitFor(() => {
-      expect(openedLinks).toHaveLength(1);
-    });
-
-    expect(
-      new URL(openedLinks[0], "https://github.com").searchParams.get("title"),
-    ).toBe("Draft A");
-    expect(useDesktopDialogStore.getState()).toMatchObject({
-      activeDialog: "report-issue",
-      reportIssueContext: draftBContext,
-    });
-    expect(screen.getByDisplayValue("Edited Draft B")).not.toBeNull();
-  });
-
-  it("keeps the confirmed-delivery state and offers a retry when the public draft fails to open (code review, finding #4)", async () => {
-    const openedLinks: string[] = [];
-    let buildPublicDraftCalls = 0;
-    const buildPublicDraft = vi.fn(
-      (): Promise<DesktopSupportBuildPublicDraftResult> => {
-        buildPublicDraftCalls += 1;
-        if (buildPublicDraftCalls === 1) {
-          return Promise.reject(new Error("public draft unavailable"));
-        }
-        return Promise.resolve({
-          title: "Retried",
-          fields: {
-            "what-happened": "",
-            version: "",
-            os: "",
-            component: "Desktop app",
-            repro: "",
-          },
-          truncated: false,
-        });
-      },
-    );
-    useDesktopDialogStore.getState().openReportIssueWithContext(
-      createReportIssueContext({
-        title: "Draft with failing public draft",
-        message: null,
-        code: null,
-        source: "Test",
-      }),
-    );
-    renderDesktopDialogHost(
-      createRunnerHostWithFailingPublicDraft(openedLinks, buildPublicDraft),
-      "/",
-    );
-    await flushDialogEffects();
-
-    fireEvent.click(screen.getByRole("button", { name: "Submit Report" }));
-    await waitFor(() => {
-      expect(buildPublicDraft).toHaveBeenCalledTimes(1);
-    });
-
-    // The private submit itself was delivered, but opening the public draft
-    // failed - this must never close the dialog having done nothing, and
-    // nothing should have opened in the browser yet.
-    expect(
-      screen.getByRole("heading", { name: "Report an Issue" }),
-    ).not.toBeNull();
-    expect(openedLinks).toHaveLength(0);
-    expect(toast.error).toHaveBeenCalledWith(
-      "Could not open the GitHub draft",
-      expect.anything(),
-    );
-    const [, toastOptions] = vi.mocked(toast.error).mock.calls[0] as [
-      string,
-      { action?: { label?: string } },
-    ];
-    expect(toastOptions.action?.label).toBe("Try again");
-
-    // Retryable: clicking Submit Report again reuses the same (idempotent)
-    // report id and re-attempts opening the public draft, which succeeds
-    // this time.
-    fireEvent.click(screen.getByRole("button", { name: "Submit Report" }));
-    await waitFor(() => {
-      expect(openedLinks).toHaveLength(1);
-    });
-  });
-
-  it("does not surface an older failed submission in a newer draft", async () => {
-    const deferred = createDeferred<DesktopSubmitReportResult>();
-    useDesktopDialogStore.getState().openReportIssueWithContext(
-      createReportIssueContext({
-        title: "Draft A",
-        message: null,
-        code: null,
-        source: "Test A",
-      }),
-    );
-    renderDesktopDialogHost(
-      createRunnerHostWithSubmit([], () => deferred.promise),
-      "/",
-    );
-    await flushDialogEffects();
-    fireEvent.click(screen.getByRole("button", { name: "Submit Report" }));
-
-    const draftBContext = createReportIssueContext({
-      title: "Draft B",
-      message: "Newer details",
-      code: null,
-      source: "Test B",
-    });
-    act(() => {
-      useDesktopDialogStore
-        .getState()
-        .openReportIssueWithContext(draftBContext);
-    });
-    await screen.findByDisplayValue("Draft B");
-
-    await act(async () => {
-      deferred.reject(new Error("Draft A failed"));
-      await deferred.promise.catch(() => undefined);
-    });
-
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByDisplayValue("Draft B")).not.toBeNull();
-    expect(useDesktopDialogStore.getState()).toMatchObject({
-      activeDialog: "report-issue",
-      reportIssueContext: draftBContext,
-    });
-  });
-
-  it("states the no-private-channel case up front, with no Submit round-trip, when privateDeliveryAvailable is false", async () => {
+  it("states the no-private-channel case up front, with no Send round-trip, when privateDeliveryAvailable is false", async () => {
     const openedLinks: string[] = [];
     const saveDiagnosticBundle = vi.fn(() =>
       Promise.resolve({ path: "/tmp/bundle.json" }),
     );
-    useDesktopDialogStore.getState().openReportIssueWithContext(
-      createReportIssueContext({
-        title: "No private channel",
-        message: null,
-        code: null,
-        source: "Test",
-      }),
-    );
+    useDesktopDialogStore.getState().openReportIssue();
     renderDesktopDialogHost(
       createRunnerHostWithoutPrivateDelivery(openedLinks, saveDiagnosticBundle),
       "/",
@@ -1047,7 +844,7 @@ describe("<DesktopDialogHost />", () => {
         "Private reporting is not available in this build. You can save a diagnostic bundle and open a GitHub issue instead.",
       ),
     ).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Submit Report" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send report" })).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
 
     fireEvent.click(
@@ -1060,6 +857,13 @@ describe("<DesktopDialogHost />", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open a GitHub issue" }),
     );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Preview the public issue" }),
+      ).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open GitHub draft" }));
     await waitFor(() => {
       expect(openedLinks).toHaveLength(1);
     });

@@ -25,6 +25,19 @@ export interface DesktopDialogState {
    */
   readonly reportIssueDraftContext: ReportIssueDraftContext | null;
   readonly reportIssueDraftId: number;
+  /**
+   * G2: the most recent CONFIRMED (delivered) report id for the draft
+   * currently showing its confirmation screen - cleared on any intentional
+   * close (`close`/`closeReportIssueDraft`), so it only survives to be read
+   * by `ReportIssueDialogHost` when a new report trigger fires WHILE that
+   * confirmation is still on screen (never after the user already dismissed
+   * it). A replacement then toasts this id before the draft below is
+   * overwritten, since the confirmation holds the only copy of it.
+   */
+  readonly lastConfirmedReport: {
+    readonly draftId: number;
+    readonly reportId: string;
+  } | null;
   readonly openAboutDetails: () => void;
   readonly openLogs: () => void;
   readonly openEpicInNewWindow: () => void;
@@ -34,6 +47,9 @@ export interface DesktopDialogState {
   readonly openReportIssueDraft: (draft: ReportIssueDraftContext) => void;
   readonly closeReportIssueDraft: (draftId: number) => void;
   readonly setReportIssueAvailable: (available: boolean) => void;
+  readonly setLastConfirmedReport: (
+    report: { readonly draftId: number; readonly reportId: string } | null,
+  ) => void;
   readonly openInstallGuidance: () => void;
   readonly close: () => void;
 }
@@ -44,6 +60,7 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   reportIssueContext: null,
   reportIssueDraftContext: null,
   reportIssueDraftId: 0,
+  lastConfirmedReport: null,
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });
   },
@@ -85,12 +102,16 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
             activeDialog: null,
             reportIssueContext: null,
             reportIssueDraftContext: null,
+            lastConfirmedReport: null,
           }
         : state,
     );
   },
   setReportIssueAvailable: (available) => {
     set({ reportIssueAvailable: available });
+  },
+  setLastConfirmedReport: (report) => {
+    set({ lastConfirmedReport: report });
   },
   openInstallGuidance: () => {
     set({ activeDialog: "install-guidance" });
@@ -100,6 +121,7 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
       activeDialog: null,
       reportIssueContext: null,
       reportIssueDraftContext: null,
+      lastConfirmedReport: null,
     });
   },
 }));

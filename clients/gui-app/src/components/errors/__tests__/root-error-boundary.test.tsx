@@ -114,16 +114,14 @@ describe("<RootErrorBoundary />", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Report issue" }),
     );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Submit Report" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Send report" }));
 
     expect(
       await screen.findByText("Failed to submit report. Please try again."),
     ).not.toBeNull();
     expect(screen.getByTestId("app-error-screen")).not.toBeNull();
     expect(
-      screen.getByRole("heading", { name: "Report an Issue" }),
+      screen.getByRole("heading", { name: "Report an issue" }),
     ).not.toBeNull();
   });
 });

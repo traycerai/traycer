@@ -27,6 +27,16 @@ const BUG_REPORT_CLIENT_FIELD_IDS = [
   "repro",
 ] as const;
 
+/** Field ids `buildPublicDraftFields` prefills on feature_request.yml (ticket 07's "idea" route). */
+const FEATURE_REQUEST_CLIENT_FIELD_IDS = [
+  "problem",
+  "proposal",
+  "component",
+] as const;
+
+/** Field ids `buildPublicDraftFields` prefills on general.yml (ticket 07's "other" route). */
+const GENERAL_CLIENT_FIELD_IDS = ["details"] as const;
+
 /** Literal hardcoded in issue-reporter.ts as the component prefill value. */
 const DESKTOP_APP_COMPONENT = "Desktop app";
 
@@ -188,36 +198,84 @@ describe("GitHub issue template contract", () => {
     });
   });
 
-  describe("feature_request.yml (future routing target)", () => {
+  describe("feature_request.yml ('idea' route, ticket 07)", () => {
+    const template = parseIssueFormTemplate("feature_request.yml");
+
     it("parses and carries the triage label", () => {
-      const template = parseIssueFormTemplate("feature_request.yml");
       expect(template.name).toBeTruthy();
       expect(
         template.labels,
         "feature_request.yml labels must include 'triage'.",
       ).toEqual(expect.arrayContaining(["triage"]));
-      expect(template.fields.some((f) => f.id === "problem")).toBe(true);
-      expect(template.fields.some((f) => f.id === "proposal")).toBe(true);
+    });
+
+    for (const fieldId of FEATURE_REQUEST_CLIENT_FIELD_IDS) {
+      it(`keeps field id "${fieldId}" present and required`, () => {
+        const field = findField(template, fieldId);
+        expect(
+          field,
+          `Issue template contract broken: feature_request.yml is missing field id "${fieldId}". ` +
+            `buildPublicDraftFields ("idea" reports) prefills this id via GitHub's issue-form query params. ` +
+            `Present ids: [${template.fields
+              .map((f) => f.id)
+              .filter((id): id is string => id !== undefined)
+              .join(", ")}]`,
+        ).toBeDefined();
+        if (field === undefined) {
+          return;
+        }
+        expect(
+          field.required,
+          `Issue template contract broken: feature_request.yml field "${fieldId}" must have ` +
+            `validations.required === true (got ${String(field.required)}).`,
+        ).toBe(true);
+      });
+    }
+
+    it(`keeps "${DESKTOP_APP_COMPONENT}" as a component dropdown option`, () => {
+      const component = findField(template, "component");
+      expect(component).toBeDefined();
+      if (component === undefined) {
+        return;
+      }
+      expect(component.type).toBe("dropdown");
+      expect(component.options).toBeDefined();
+      if (component.options === undefined) {
+        return;
+      }
+      expect(
+        component.options,
+        `Issue template contract broken: feature_request.yml component dropdown must include ` +
+          `${JSON.stringify(DESKTOP_APP_COMPONENT)} (hardcoded in support-public-draft.ts). ` +
+          `Current options: ${JSON.stringify(component.options)}`,
+      ).toContain(DESKTOP_APP_COMPONENT);
     });
   });
 
-  describe("general.yml (future routing target)", () => {
-    it("parses and carries the triage label with a required details field", () => {
-      const template = parseIssueFormTemplate("general.yml");
+  describe("general.yml ('other' / \"something else\" route, ticket 07)", () => {
+    const template = parseIssueFormTemplate("general.yml");
+
+    it("parses and carries the triage label", () => {
       expect(template.name).toBeTruthy();
       expect(
         template.labels,
         "general.yml labels must include 'triage'.",
       ).toEqual(expect.arrayContaining(["triage"]));
-      const details = findField(template, "details");
-      expect(
-        details,
-        "general.yml must keep field id 'details' for future type-chip routing.",
-      ).toBeDefined();
-      if (details === undefined) {
-        return;
-      }
-      expect(details.required).toBe(true);
     });
+
+    for (const fieldId of GENERAL_CLIENT_FIELD_IDS) {
+      it(`keeps field id "${fieldId}" present and required`, () => {
+        const field = findField(template, fieldId);
+        expect(
+          field,
+          `Issue template contract broken: general.yml is missing field id "${fieldId}". ` +
+            `buildPublicDraftFields ("other" reports) prefills this id via GitHub's issue-form query params.`,
+        ).toBeDefined();
+        if (field === undefined) {
+          return;
+        }
+        expect(field.required).toBe(true);
+      });
+    }
   });
 });

@@ -7,11 +7,13 @@ import {
 
 const VALID_FORM = {
   draftId: 1,
-  title: "Something broke",
-  whatHappened: "It broke",
-  stepsToReproduce: "1. Do the thing",
-  expectedBehavior: "It should work",
-  actualBehavior: "It did not",
+  type: "bug",
+  intent: "It broke",
+  frequency: "sometimes",
+  location: null,
+  allowContact: false,
+  includeDesktopLog: true,
+  includeHostLog: true,
 };
 
 const VALID_CAUSE = {
@@ -75,10 +77,112 @@ describe("parseSupportSubmitReportRequest", () => {
     ).toThrow();
   });
 
-  it("rejects a non-string required text field", () => {
+  it("rejects a non-string intent", () => {
     expect(() =>
-      parseSupportSubmitReportRequest({ ...VALID_FORM, title: 42 }),
+      parseSupportSubmitReportRequest({ ...VALID_FORM, intent: 42 }),
     ).toThrow();
+  });
+
+  it("rejects a type outside bug/idea/other", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({ ...VALID_FORM, type: "wish" }),
+    ).toThrow();
+  });
+
+  it.each(["bug", "idea", "other"])("accepts type %s", (type) => {
+    const result = parseSupportSubmitReportRequest({ ...VALID_FORM, type });
+    expect(result.type).toBe(type);
+  });
+
+  it.each(["once", "sometimes", "every_time", "not_sure"])(
+    "accepts frequency %s",
+    (frequency) => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        frequency,
+      });
+      expect(result.frequency).toBe(frequency);
+    },
+  );
+
+  it("accepts a null frequency - the unselected/hidden default", () => {
+    const result = parseSupportSubmitReportRequest({
+      ...VALID_FORM,
+      frequency: null,
+    });
+    expect(result.frequency).toBeNull();
+  });
+
+  it("rejects a frequency outside the known set", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({ ...VALID_FORM, frequency: "daily" }),
+    ).toThrow();
+  });
+
+  it("rejects a missing frequency key - the wire always carries it", () => {
+    const { frequency: _frequency, ...withoutFrequency } = VALID_FORM;
+    expect(() => parseSupportSubmitReportRequest(withoutFrequency)).toThrow();
+  });
+
+  it("accepts a non-null location - the actively-changed selector value (D7)", () => {
+    const result = parseSupportSubmitReportRequest({
+      ...VALID_FORM,
+      location: "Terminal",
+    });
+    expect(result.location).toBe("Terminal");
+  });
+
+  it("rejects a missing location key - the wire always carries it", () => {
+    const { location: _location, ...withoutLocation } = VALID_FORM;
+    expect(() => parseSupportSubmitReportRequest(withoutLocation)).toThrow();
+  });
+
+  it("rejects a non-string non-null location", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({ ...VALID_FORM, location: 42 }),
+    ).toThrow();
+  });
+
+  it.each([true, false])("accepts allowContact %s", (allowContact) => {
+    const result = parseSupportSubmitReportRequest({
+      ...VALID_FORM,
+      allowContact,
+    });
+    expect(result.allowContact).toBe(allowContact);
+  });
+
+  it("rejects a non-boolean allowContact", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({ ...VALID_FORM, allowContact: "yes" }),
+    ).toThrow();
+  });
+
+  it.each(["includeDesktopLog", "includeHostLog"] as const)(
+    "rejects a missing %s key",
+    (key) => {
+      const withoutKey = { ...VALID_FORM };
+      delete (withoutKey as Record<string, unknown>)[key];
+      expect(() => parseSupportSubmitReportRequest(withoutKey)).toThrow();
+    },
+  );
+
+  it.each(["includeDesktopLog", "includeHostLog"] as const)(
+    "rejects a non-boolean %s",
+    (key) => {
+      expect(() =>
+        parseSupportSubmitReportRequest({ ...VALID_FORM, [key]: "on" }),
+      ).toThrow();
+    },
+  );
+
+  it("accepts independently toggled log flags", () => {
+    const result = parseSupportSubmitReportRequest({
+      ...VALID_FORM,
+      includeDesktopLog: false,
+      includeHostLog: true,
+    });
+    expect(result.includeDesktopLog).toBe(false);
+    expect(result.includeHostLog).toBe(true);
   });
 
   it("rejects an unlisted top-level field - the allowlist is not caller-discipline", () => {

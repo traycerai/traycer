@@ -39,11 +39,13 @@ import { DesktopSupportService } from "../support";
 
 const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
   draftId: 1,
-  title: "Something broke",
-  whatHappened: "",
-  stepsToReproduce: "",
-  expectedBehavior: "",
-  actualBehavior: "",
+  type: "bug",
+  intent: "",
+  frequency: null,
+  location: null,
+  allowContact: false,
+  includeDesktopLog: true,
+  includeHostLog: true,
 };
 
 // Frozen-evidence key is composed in the IPC layer (sender id + draftId);

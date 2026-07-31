@@ -328,15 +328,42 @@ export interface SupportPrivateDiagnostics {
   readonly correlationId: string;
 }
 
+// Ticket 07 (T4): "bug" routes to bug_report.yml, "idea" to
+// feature_request.yml, "other" (Flow 2's "Something else") to general.yml -
+// see `SupportBuildPublicDraftResult` and `issue-reporter.ts`.
+export type SupportReportType = "bug" | "idea" | "other";
+
+export type SupportReportFrequency =
+  "once" | "sometimes" | "every_time" | "not_sure";
+
 export interface SupportSubmitReportRequest {
   // Keys the frozen evidence (both log tails + the report id minted at
   // report-open) that `submitReport` and every retry must reuse.
   readonly draftId: number;
-  readonly title: string;
-  readonly whatHappened: string;
-  readonly stepsToReproduce: string;
-  readonly expectedBehavior: string;
-  readonly actualBehavior: string;
+  readonly type: SupportReportType;
+  // The single required question ("What were you trying to do?"). Replaces
+  // the killed title/whatHappened/stepsToReproduce/expected/actual fields.
+  readonly intent: string;
+  // D9: null when left unselected (default) or hidden because the ledger
+  // already knows the repeat count - never a synthesized default.
+  readonly frequency: SupportReportFrequency | null;
+  // D7: the "Where did this happen?" selector (manual bug opens only). Only
+  // ever non-null when the user actively changed it away from its pre-filled
+  // default - the untouched pre-filled value must never reach the wire, so
+  // there is no separate "changed" flag to get out of sync with this.
+  readonly location: string | null;
+  // G1: identity (email/name) is attached to the private report only when
+  // this is true. The checkbox itself only renders when a signed-in email
+  // exists, but the flag is always sent explicitly rather than inferred from
+  // email presence on the main-process side.
+  readonly allowContact: boolean;
+  // Consent panel's two log toggles (default on): whether each frozen tail
+  // is attached to the private submission / included in the diagnostic
+  // bundle. A toggle that visually turns "off" but keeps shipping the log
+  // regardless would be exactly the dishonest-consent pattern this redesign
+  // exists to remove.
+  readonly includeDesktopLog: boolean;
+  readonly includeHostLog: boolean;
   readonly privateDiagnostics?: SupportPrivateDiagnostics;
 }
 
@@ -401,7 +428,7 @@ export interface SupportSaveDiagnosticBundleResult {
  * verbatim so `issue-reporter.ts` can assemble `URLSearchParams` straight
  * from this object with zero composition of its own.
  */
-export interface SupportBuildPublicDraftFields {
+export interface SupportBugReportDraftFields {
   readonly "what-happened": string;
   readonly version: string;
   readonly os: string;
@@ -410,17 +437,54 @@ export interface SupportBuildPublicDraftFields {
 }
 
 /**
- * Response of `support:buildPublicDraft` (ticket 09 / T6): the single
- * main-process producer of all public text, always behind the deep scrubber,
- * callable regardless of delivery outcome (delivered/unconfirmed/unavailable/
- * failed) since it resolves its own frozen evidence rather than depending on
- * a prior `submitReport` result.
+ * Per-field values for `.github/ISSUE_TEMPLATE/feature_request.yml`
+ * ("idea" reports, ticket 07's type-chip routing). Field ids verbatim.
  */
-export interface SupportBuildPublicDraftResult {
-  readonly title: string;
-  readonly fields: SupportBuildPublicDraftFields;
-  // True if any field was shortened to fit the GitHub issue form URL's 8 KiB
-  // budget (see `support-public-draft.ts`) - surfaced so the preview can say
-  // so, alongside the inline truncation marker the shortened field carries.
-  readonly truncated: boolean;
+export interface SupportFeatureRequestDraftFields {
+  readonly problem: string;
+  readonly proposal: string;
+  readonly alternatives: string;
+  readonly component: string;
 }
+
+/**
+ * Per-field values for `.github/ISSUE_TEMPLATE/general.yml` ("something
+ * else" reports, ticket 07's type-chip routing). Field id verbatim.
+ */
+export interface SupportGeneralDraftFields {
+  readonly details: string;
+}
+
+/**
+ * Response of `support:buildPublicDraft` (ticket 09 / T6, extended by
+ * ticket 07's type-to-template routing): the single main-process producer of
+ * all public text, always behind the deep scrubber, callable regardless of
+ * delivery outcome (delivered/unconfirmed/unavailable/failed) since it
+ * resolves its own frozen evidence rather than depending on a prior
+ * `submitReport` result. `template` names the GitHub issue-form file the
+ * fields target - a discriminated union rather than one fixed field shape,
+ * since bug/idea/other route to forms with different field ids entirely.
+ */
+export type SupportBuildPublicDraftResult =
+  | {
+      readonly template: "bug_report.yml";
+      readonly title: string;
+      readonly fields: SupportBugReportDraftFields;
+      // True if any field was shortened to fit the GitHub issue form URL's
+      // 8 KiB budget (see `support-public-draft.ts`) - surfaced so the
+      // preview can say so, alongside the inline truncation marker the
+      // shortened field carries.
+      readonly truncated: boolean;
+    }
+  | {
+      readonly template: "feature_request.yml";
+      readonly title: string;
+      readonly fields: SupportFeatureRequestDraftFields;
+      readonly truncated: boolean;
+    }
+  | {
+      readonly template: "general.yml";
+      readonly title: string;
+      readonly fields: SupportGeneralDraftFields;
+      readonly truncated: boolean;
+    };

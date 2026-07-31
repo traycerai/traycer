@@ -60,11 +60,13 @@ const KEY = "sender-1:1";
 
 const FORM: SupportSubmitReportRequest = {
   draftId: 1,
-  title: "Host will not start",
-  whatHappened: "It hangs on launch",
-  stepsToReproduce: "1. Open the app",
-  expectedBehavior: "It starts",
-  actualBehavior: "It hangs",
+  type: "bug",
+  intent: "It hangs on launch",
+  frequency: null,
+  location: null,
+  allowContact: false,
+  includeDesktopLog: true,
+  includeHostLog: true,
 };
 
 const LOG_ATTACHMENT_MAX_BYTES = 512_000;
@@ -72,7 +74,7 @@ const LOG_ATTACHMENT_MAX_BYTES = 512_000;
 let tempDir = "";
 let hostLogPath = "";
 
-function buildService(): DesktopSupportService {
+function buildService(signedInEmail: string | null): DesktopSupportService {
   const hostLayout: HostFsLayout = {
     rootDir: tempDir,
     pidMetadataFile: join(tempDir, "pid.json"),
@@ -88,7 +90,18 @@ function buildService(): DesktopSupportService {
     appName: "Traycer",
     host: { getSnapshot: () => null },
     authSession: {
-      get: () => ({ status: "signed-out", token: null, profile: null }),
+      get: () =>
+        signedInEmail === null
+          ? { status: "signed-out", token: null, profile: null }
+          : {
+              status: "signed-in",
+              token: "token",
+              profile: {
+                userId: "user-1",
+                userName: "Test User",
+                email: signedInEmail,
+              },
+            },
     },
     hostLayout,
   });
@@ -126,7 +139,7 @@ afterEach(async () => {
 
 describe("DesktopSupportService.submitReport - delivered", () => {
   it("returns delivered with the report id once the upload is confirmed flushed", async () => {
-    const result = await freezeAndSubmit(buildService());
+    const result = await freezeAndSubmit(buildService(null));
 
     expect(result.status).toBe("delivered");
     expect(result.status === "delivered" && result.reportId).toMatch(
@@ -136,7 +149,7 @@ describe("DesktopSupportService.submitReport - delivered", () => {
   });
 
   it("records a filed report on delivered only when a fingerprint is present", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
     const result = await service.submitReport(
       {
@@ -172,12 +185,12 @@ describe("DesktopSupportService.submitReport - delivered", () => {
   });
 
   it("does not record a filed report when the submit has no fingerprint", async () => {
-    await freezeAndSubmit(buildService());
+    await freezeAndSubmit(buildService(null));
     expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
   });
 
   it("tags the feedback event with the id it hands back", async () => {
-    const result = await freezeAndSubmit(buildService());
+    const result = await freezeAndSubmit(buildService(null));
 
     // The id is a `reportId` tag, not a Sentry event id - it is the only handle
     // triage has, so an id that is not on the event would be unfindable.
@@ -187,14 +200,14 @@ describe("DesktopSupportService.submitReport - delivered", () => {
   });
 
   it("uses the reportId's suffix (dashes stripped) as the Sentry event_id", async () => {
-    const result = await freezeAndSubmit(buildService());
+    const result = await freezeAndSubmit(buildService(null));
 
     const reportId = result.status === "delivered" ? result.reportId : "";
     expect(lastHint().event_id).toBe(reportId.slice("rpt_".length));
   });
 
   it("attaches both log tails, the host one labeled local-host (D10)", async () => {
-    await freezeAndSubmit(buildService());
+    await freezeAndSubmit(buildService(null));
 
     expect(lastHint().attachments.map((a) => a.filename)).toEqual([
       "desktop.log",
@@ -203,9 +216,89 @@ describe("DesktopSupportService.submitReport - delivered", () => {
   });
 
   it("waits longer than the old 2s budget before giving up", async () => {
-    await freezeAndSubmit(buildService());
+    await freezeAndSubmit(buildService(null));
 
     expect(sentryMock.flush).toHaveBeenCalledWith(10_000);
+  });
+});
+
+describe("DesktopSupportService.submitReport - consent panel log toggles", () => {
+  it("withholds the desktop log attachment when its toggle is off", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeDesktopLog: false, includeHostLog: true },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "local-host.log",
+    ]);
+  });
+
+  it("withholds the host log attachment when its toggle is off", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeDesktopLog: true, includeHostLog: false },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+    ]);
+  });
+
+  it("withholds both attachments when both toggles are off", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeDesktopLog: false, includeHostLog: false },
+      KEY,
+    );
+    expect(lastHint().attachments).toEqual([]);
+  });
+});
+
+describe("DesktopSupportService.submitReport - identity gating (G1)", () => {
+  it("attaches no identity when allowContact is false, even with a signed-in email", async () => {
+    const service = buildService("anurag@traycer.ai");
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport({ ...FORM, allowContact: false }, KEY);
+
+    const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.name,
+    ).toBe("anonymous");
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.email,
+    ).toBeUndefined();
+  });
+
+  it("attaches identity when allowContact is true and a signed-in email exists", async () => {
+    const service = buildService("anurag@traycer.ai");
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport({ ...FORM, allowContact: true }, KEY);
+
+    const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.name,
+    ).toBe("anurag@traycer.ai");
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.email,
+    ).toBe("anurag@traycer.ai");
+  });
+
+  it("stays anonymous when allowContact is true but there is no signed-in email", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport({ ...FORM, allowContact: true }, KEY);
+
+    const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.name,
+    ).toBe("anonymous");
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.email,
+    ).toBeUndefined();
   });
 });
 
@@ -213,7 +306,7 @@ describe("DesktopSupportService.submitReport - unavailable", () => {
   it("returns unavailable and uploads nothing when Sentry has no DSN", async () => {
     sentryMock.isInitialized.mockReturnValue(false);
 
-    const result = await freezeAndSubmit(buildService());
+    const result = await freezeAndSubmit(buildService(null));
 
     expect(result).toEqual({ status: "unavailable" });
     expect(sentryMock.captureFeedback).not.toHaveBeenCalled();
@@ -223,11 +316,11 @@ describe("DesktopSupportService.submitReport - unavailable", () => {
 
   it("reflects DSN presence on the support snapshot as privateDeliveryAvailable", async () => {
     sentryMock.isInitialized.mockReturnValue(false);
-    const withoutDsn = await buildService().getSnapshot();
+    const withoutDsn = await buildService(null).getSnapshot();
     expect(withoutDsn.privateDeliveryAvailable).toBe(false);
 
     sentryMock.isInitialized.mockReturnValue(true);
-    const withDsn = await buildService().getSnapshot();
+    const withDsn = await buildService(null).getSnapshot();
     expect(withDsn.privateDeliveryAvailable).toBe(true);
   });
 });
@@ -236,7 +329,7 @@ describe("DesktopSupportService.submitReport - unconfirmed", () => {
   it("returns unconfirmed with the reportId when the flush times out - never failed", async () => {
     sentryMock.flush.mockResolvedValue(false);
 
-    const result = await freezeAndSubmit(buildService());
+    const result = await freezeAndSubmit(buildService(null));
 
     // The pre-fix code discarded the flush result and returned null, which
     // was indistinguishable from a definite failure - a false "failed" tells
@@ -250,7 +343,7 @@ describe("DesktopSupportService.submitReport - unconfirmed", () => {
   it("returns unconfirmed, not failed, when the flush call rejects", async () => {
     sentryMock.flush.mockRejectedValue(new Error("transport closed"));
 
-    const result = await freezeAndSubmit(buildService());
+    const result = await freezeAndSubmit(buildService(null));
 
     expect(result.status).toBe("unconfirmed");
   });
@@ -262,14 +355,14 @@ describe("DesktopSupportService.submitReport - failed", () => {
       throw new Error("DSN rejected");
     });
 
-    const result = await freezeAndSubmit(buildService());
+    const result = await freezeAndSubmit(buildService(null));
 
     expect(result).toEqual({ status: "failed", reason: "error" });
     expect(sentryMock.flush).not.toHaveBeenCalled();
   });
 
   it("returns failed when submit is called with no frozen evidence for the key", async () => {
-    const service = buildService();
+    const service = buildService(null);
 
     // No freezeEvidence call first - the dialog always freezes at report-open,
     // so reaching this means that call was skipped or the draft already
@@ -283,14 +376,14 @@ describe("DesktopSupportService.submitReport - failed", () => {
 
 describe("DesktopSupportService - fingerprint sightings on freeze", () => {
   it("records a sighting on first freeze admission when fingerprint is present", async () => {
-    await buildService().freezeEvidence(KEY, "fp:v1:sight");
+    await buildService(null).freezeEvidence(KEY, "fp:v1:sight");
     expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledWith(
       "fp:v1:sight",
     );
   });
 
   it("does not re-record a sighting on the idempotent second freeze of a live key", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, "fp:v1:sight");
     await service.freezeEvidence(KEY, "fp:v1:sight");
     expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
@@ -302,7 +395,7 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     // draftId/key. The live freeze-map alone is not enough - discard clears
     // it between the two setups. A short-TTL recentSightingKeys set must
     // suppress the second claim so first open never reads as "2nd time".
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, "fp:v1:sight");
     service.discardFrozenEvidence(KEY);
     await service.freezeEvidence(KEY, "fp:v1:sight");
@@ -310,7 +403,7 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
   });
 
   it("still records a second sighting for a different frozen-evidence key (real re-open)", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, "fp:v1:sight");
     service.discardFrozenEvidence(KEY);
     // A genuine second dialog open mints a new draftId → new key.
@@ -319,14 +412,14 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
   });
 
   it("skips the sighting when fingerprint is null", async () => {
-    await buildService().freezeEvidence(KEY, null);
+    await buildService(null).freezeEvidence(KEY, null);
     expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
   });
 });
 
 describe("DesktopSupportService - evidence freeze semantics", () => {
   it("ships the tails captured at freeze time even after further log writes", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 
     // The crash-looping host that keeps writing while the dialog is open is
@@ -344,7 +437,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
   });
 
   it("drops the frozen evidence on discard, so a later submit fails honestly", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
 
@@ -355,7 +448,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
   });
 
   it("never lands evidence discarded while its file reads are still in flight", async () => {
-    const service = buildService();
+    const service = buildService(null);
 
     // Not awaited: the synchronous prefix of `freezeEvidence` (up through
     // inserting the pending map entry) runs before this call returns, so the
@@ -371,7 +464,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
   });
 
   it("serves readFrozenLogTail from the frozen copy, not a live read", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
     await writeFile(hostLogPath, "line written after freeze\n", "utf8");
 
@@ -381,7 +474,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
   });
 
   it("returns an empty tail from readFrozenLogTail once discarded", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
 
@@ -405,7 +498,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
     ).join("\n");
     await writeFile(hostLogPath, fatLog, "utf8");
 
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
     const tail = await service.readFrozenLogTail(KEY, "host");
     // Fewer than 500 lines were written, so the line-count cap never fires -
@@ -429,7 +522,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 
 describe("DesktopSupportService - freeze idempotency per key", () => {
   it("mints one reportId per draft and reuses it across every submit call", async () => {
-    const service = buildService();
+    const service = buildService(null);
     const { reportId } = await service.freezeEvidence(KEY, null);
 
     const first = await service.submitReport(FORM, KEY);
@@ -447,7 +540,7 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
   });
 
   it("returns the existing reportId when freezeEvidence is called again for an already-frozen live draft", async () => {
-    const service = buildService();
+    const service = buildService(null);
     const { reportId: first } = await service.freezeEvidence(KEY, null);
     const { reportId: second } = await service.freezeEvidence(KEY, null);
 
@@ -458,7 +551,7 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
   });
 
   it("resolves concurrent in-flight freezes of the same key to one shared reportId", async () => {
-    const service = buildService();
+    const service = buildService(null);
 
     const [a, b] = await Promise.all([
       service.freezeEvidence(KEY, null),
@@ -469,7 +562,7 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
   });
 
   it("mints a fresh reportId when freezing again after a discard - a genuinely new draft", async () => {
-    const service = buildService();
+    const service = buildService(null);
     const { reportId: first } = await service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
     const { reportId: second } = await service.freezeEvidence(KEY, null);
@@ -480,46 +573,75 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
 
 describe("DesktopSupportService.buildPublicDraft", () => {
   it("returns a reportId-aware draft after freeze, independent of Sentry", async () => {
-    const service = buildService();
+    const service = buildService(null);
     const { reportId } = await service.freezeEvidence(KEY, null);
     expect(reportId).toMatch(/^rpt_[0-9a-f]{32}$/);
 
     const draft = await service.buildPublicDraft(FORM, KEY);
 
+    expect(draft.template).toBe("bug_report.yml");
+    if (draft.template !== "bug_report.yml") return;
     expect(draft.truncated).toBe(false);
-    expect(draft.title).toBe(FORM.title);
-    expect(draft.fields["what-happened"]).toContain(FORM.whatHappened);
+    expect(draft.title).toBe(FORM.intent);
+    expect(draft.fields["what-happened"]).toContain(FORM.intent);
+    expect(draft.fields["what-happened"]).toContain(
+      `Support report: ${reportId}`,
+    );
     expect(draft.fields.version).toBe("1.1.9");
     expect(draft.fields.component).toBe("Desktop app");
-    // Non-empty stepsToReproduce pass through (scrubbed), not the placeholder.
-    expect(draft.fields.repro).toBe(FORM.stepsToReproduce);
-    expect(draft.fields.repro).not.toContain(reportId);
-  });
-
-  it("uses the reportId-aware placeholder when steps are empty", async () => {
-    const service = buildService();
-    const { reportId } = await service.freezeEvidence(KEY, null);
-    const draft = await service.buildPublicDraft(
-      { ...FORM, stepsToReproduce: "" },
-      KEY,
-    );
+    // No steps-to-reproduce field exists anymore - repro is always the
+    // reportId-pointing placeholder, never user-typed text.
     expect(draft.fields.repro).toBe(
       `Not captured step-by-step - see the private support report ${reportId}.`,
     );
-    expect(reportId).toMatch(/^rpt_[0-9a-f]{32}$/);
+  });
+
+  it("routes idea reports to feature_request.yml with a problem field and a proposal placeholder", async () => {
+    const service = buildService(null);
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    const draft = await service.buildPublicDraft(
+      { ...FORM, type: "idea" },
+      KEY,
+    );
+    expect(draft.template).toBe("feature_request.yml");
+    if (draft.template !== "feature_request.yml") return;
+    expect(draft.fields.problem).toContain(FORM.intent);
+    expect(draft.fields.proposal).toBe(
+      `Not captured separately - see the private support report ${reportId}.`,
+    );
+    expect(draft.fields.component).toBe("Desktop app");
+  });
+
+  it("routes 'other' reports to general.yml with a details field", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const draft = await service.buildPublicDraft(
+      { ...FORM, type: "other" },
+      KEY,
+    );
+    expect(draft.template).toBe("general.yml");
+    if (draft.template !== "general.yml") return;
+    expect(draft.fields.details).toContain(FORM.intent);
+  });
+
+  it("uses the report-id-free repro placeholder when frozen evidence never resolved", async () => {
+    const service = buildService(null);
+    // No freezeEvidence call: `buildPublicDraft` resolves its own frozen
+    // evidence and must still be callable (Flow 4 Case B's no-DSN route).
+    const draft = await service.buildPublicDraft(FORM, KEY);
+    if (draft.template !== "bug_report.yml") return;
+    expect(draft.fields.repro).toBe("Filed from the in-app reporter.");
   });
 
   it("is callable and correct when Sentry has no DSN", async () => {
     sentryMock.isInitialized.mockReturnValue(false);
-    const service = buildService();
+    const service = buildService(null);
     const { reportId } = await service.freezeEvidence(KEY, null);
 
-    const draft = await service.buildPublicDraft(
-      { ...FORM, stepsToReproduce: "" },
-      KEY,
-    );
+    const draft = await service.buildPublicDraft(FORM, KEY);
 
-    expect(draft.title).toBe(FORM.title);
+    expect(draft.title).toBe(FORM.intent);
+    if (draft.template !== "bug_report.yml") return;
     expect(draft.fields.repro).toBe(
       `Not captured step-by-step - see the private support report ${reportId}.`,
     );
@@ -531,18 +653,16 @@ describe("DesktopSupportService.buildPublicDraft", () => {
     sentryMock.captureFeedback.mockImplementation(() => {
       throw new Error("DSN rejected");
     });
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 
     const submitResult = await service.submitReport(FORM, KEY);
     expect(submitResult).toEqual({ status: "failed", reason: "error" });
 
-    const draft = await service.buildPublicDraft(
-      { ...FORM, stepsToReproduce: "" },
-      KEY,
-    );
+    const draft = await service.buildPublicDraft(FORM, KEY);
 
-    expect(draft.title).toBe(FORM.title);
+    expect(draft.title).toBe(FORM.intent);
+    if (draft.template !== "bug_report.yml") return;
     expect(draft.fields.repro).toMatch(
       /^Not captured step-by-step - see the private support report rpt_[0-9a-f]{32}\.$/,
     );
@@ -550,24 +670,21 @@ describe("DesktopSupportService.buildPublicDraft", () => {
   });
 
   it("scrubs every emitted field (paths and tokens never leave raw)", async () => {
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 
     const sensitiveForm: SupportSubmitReportRequest = {
       ...FORM,
-      whatHappened:
+      intent:
         "It broke, see /Users/anurag/project/log.txt for the Bearer abc123token",
-      stepsToReproduce: "Check password: secretvalue",
-      title: "Crash at /Users/anurag/project/x.ts",
     };
 
     const draft = await service.buildPublicDraft(sensitiveForm, KEY);
 
+    if (draft.template !== "bug_report.yml") return;
     expect(draft.fields["what-happened"]).not.toContain("/Users/anurag");
     expect(draft.fields["what-happened"]).not.toContain("abc123token");
     expect(draft.fields["what-happened"]).toContain("Bearer <redacted>");
-    expect(draft.fields.repro).not.toContain("secretvalue");
-    expect(draft.fields.repro).toContain("password: <redacted>");
     expect(draft.title).not.toContain("/Users/anurag");
   });
 });
@@ -586,14 +703,13 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
       "utf8",
     );
 
-    const service = buildService();
+    const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 
     const sensitiveForm: SupportSubmitReportRequest = {
       ...FORM,
-      title: "Bundle title /Users/anurag/title-leak.ts",
-      whatHappened: "Bundle body Bearer formtoken",
-      stepsToReproduce: "path /Users/anurag/steps.ts",
+      intent: "Bundle body Bearer formtoken near /Users/anurag/title-leak.ts",
+      location: "Epic canvas /Users/anurag/steps.ts",
     };
 
     const { path } = await service.saveDiagnosticBundle(sensitiveForm, KEY);
@@ -609,9 +725,8 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     );
 
     const typed = bundle as {
-      title: string;
-      whatHappened: string;
-      stepsToReproduce: string;
+      intent: string;
+      location: string | null;
       logs: { desktop: string; host: string };
     };
 
@@ -626,13 +741,28 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     expect(typed.logs.host).not.toContain("/Users/anurag");
 
     // Form fields written into the bundle are scrubbed.
-    expect(typed.title).not.toContain("/Users/anurag");
-    expect(typed.whatHappened).not.toContain("formtoken");
-    expect(typed.whatHappened).toContain("Bearer <redacted>");
-    expect(typed.stepsToReproduce).not.toContain("/Users/anurag");
+    expect(typed.intent).not.toContain("formtoken");
+    expect(typed.intent).toContain("Bearer <redacted>");
+    expect(typed.intent).not.toContain("/Users/anurag");
+    expect(typed.location).not.toContain("/Users/anurag");
     expect(raw).not.toContain("/Users/anurag");
     expect(raw).not.toContain("formtoken");
     expect(raw).not.toContain("desktopsecret");
     expect(raw).not.toContain("hostsecret");
+  });
+
+  it("withholds a log from the bundle when its consent toggle is off", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    const { path } = await service.saveDiagnosticBundle(
+      { ...FORM, includeDesktopLog: false, includeHostLog: true },
+      KEY,
+    );
+    const bundle = JSON.parse(await readFile(path, "utf8")) as {
+      logs: { desktop: string; host: string };
+    };
+    expect(bundle.logs.desktop).toBe("");
+    expect(bundle.logs.host).not.toBe("");
   });
 });

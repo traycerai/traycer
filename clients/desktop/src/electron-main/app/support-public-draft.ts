@@ -1,29 +1,36 @@
 import type {
+  SupportBugReportDraftFields,
   SupportBuildPublicDraftResult,
+  SupportCapturedField,
+  SupportContextRegistrySnapshot,
+  SupportFeatureRequestDraftFields,
+  SupportGeneralDraftFields,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
+  SupportReportFrequency,
+  SupportReportType,
 } from "../../ipc-contracts/window-types";
 import { scrubSupportText } from "./support-scrubber";
 
 /**
  * Pure field composition + title derivation behind `support:buildPublicDraft`
- * (ticket 09 / T6). Kept separate from `support.ts` so this - the actual
- * public-text mechanism - is testable without mocking Electron/Sentry: the
- * service class only resolves frozen evidence and hands this module plain
- * data.
+ * (ticket 09 / T6, extended by ticket 07's type-to-template routing). Kept
+ * separate from `support.ts` so this - the actual public-text mechanism - is
+ * testable without mocking Electron/Sentry: the service class only resolves
+ * frozen evidence and hands this module plain data.
  */
 
 const COMPONENT_DESKTOP_APP = "Desktop app";
 const GENERIC_FALLBACK_TITLE = "Traycer desktop issue";
-// Titles are meant to stay short; a raw error message can run to a full
-// sentence or more, so the symptom token is capped independently of the
-// overall URL budget below.
-const TITLE_SYMPTOM_MAX_CHARS = 80;
-const REPRO_PLACEHOLDER_NO_REPORT = "Filed from the in-app reporter.";
+// Titles are meant to stay short; a raw error message or intent sentence can
+// run to a full paragraph, so both are capped independently of the overall
+// URL budget below.
+const TITLE_MAX_CHARS = 80;
+const PLACEHOLDER_NO_REPORT = "Filed from the in-app reporter.";
 
 const ISSUE_FORM_MAX_URL_LENGTH = 8 * 1024;
 // `issue-reporter.ts` (clients/shared, Vite-bundled renderer code) assembles
-// the real URL as `${TRAYCER_OSS_REPO}/issues/new?template=bug_report.yml&
+// the real URL as `${TRAYCER_OSS_REPO}/issues/new?template=<name>.yml&
 // title=...&...`. This module runs in Electron main, which has no access to
 // `VITE_TRAYCER_OSS_REPO` (a Vite-only `import.meta.env` binding) and so
 // cannot build or measure the real, final URL - only `issue-reporter.ts` can.
@@ -40,17 +47,25 @@ const ISSUE_FORM_FIELD_BUDGET =
   ISSUE_FORM_MAX_URL_LENGTH - ISSUE_FORM_RESERVED_OVERHEAD_BYTES;
 const TRUNCATION_MARKER = " (truncated, see support report)";
 
+const FREQUENCY_LABELS: Readonly<Record<SupportReportFrequency, string>> = {
+  once: "Once",
+  sometimes: "Sometimes",
+  every_time: "Every time",
+  not_sure: "Not sure",
+};
+
 export interface BuildPublicDraftInput {
-  readonly title: string;
-  readonly whatHappened: string;
-  readonly stepsToReproduce: string;
-  readonly expectedBehavior: string;
-  readonly actualBehavior: string;
+  readonly type: SupportReportType;
+  // The single "What were you trying to do?" question - the only user
+  // narrative captured (title/steps/expected/actual were killed in ticket 07).
+  readonly intent: string;
+  readonly frequency: SupportReportFrequency | null;
   readonly appVersion: string;
   readonly platform: string;
   readonly arch: string;
+  readonly hostVersion: string | null;
   // Null when frozen evidence was never resolved (e.g. a discarded draft) -
-  // `composeRepro` falls back to the report-id-free placeholder.
+  // every placeholder field falls back to the report-id-free copy.
   readonly reportId: string | null;
   readonly privateDiagnostics: SupportPrivateDiagnostics | undefined;
 }
@@ -58,93 +73,198 @@ export interface BuildPublicDraftInput {
 export function buildPublicDraftFields(
   input: BuildPublicDraftInput,
 ): SupportBuildPublicDraftResult {
-  const title = deriveTitle(input.title, input.privateDiagnostics?.cause);
-  const whatHappened = composeWhatHappened(input);
-  const repro = composeRepro(input.stepsToReproduce, input.reportId);
-  const version = scrubSupportText(input.appVersion);
-  const os = scrubSupportText(`${input.platform} (${input.arch})`);
-
-  const { fields, truncated } = fitToUrlBudget({
-    title,
-    whatHappened,
-    version,
-    os,
-    component: COMPONENT_DESKTOP_APP,
-    repro,
+  const cause = input.privateDiagnostics?.cause;
+  const title = deriveTitle(input.intent, cause);
+  const body = composeReportBody({
+    narrative: scrubSupportText(input.intent),
+    environmentSummary: composeEnvironmentSummary({
+      appVersion: input.appVersion,
+      platform: input.platform,
+      arch: input.arch,
+      hostVersion: input.hostVersion,
+      registry: input.privateDiagnostics?.registry,
+    }),
+    frequency: input.frequency,
+    reportId: input.reportId,
   });
-  return {
-    title: fields.title,
-    fields: {
-      "what-happened": fields.whatHappened,
-      version: fields.version,
-      os: fields.os,
-      component: fields.component,
-      repro: fields.repro,
-    },
-    truncated,
-  };
+
+  switch (input.type) {
+    case "bug": {
+      const fitted = fitFieldsToUrlBudget(
+        {
+          title,
+          "what-happened": body,
+          version: scrubSupportText(input.appVersion),
+          os: scrubSupportText(`${input.platform} (${input.arch})`),
+          component: COMPONENT_DESKTOP_APP,
+          repro: composePlaceholderField(
+            "Not captured step-by-step",
+            input.reportId,
+          ),
+        },
+        ["what-happened", "repro", "title"],
+      );
+      const fields: SupportBugReportDraftFields = {
+        "what-happened": fitted.fields["what-happened"],
+        version: fitted.fields.version,
+        os: fitted.fields.os,
+        component: fitted.fields.component,
+        repro: fitted.fields.repro,
+      };
+      return {
+        template: "bug_report.yml",
+        title: fitted.fields.title,
+        fields,
+        truncated: fitted.truncated,
+      };
+    }
+    case "idea": {
+      const fitted = fitFieldsToUrlBudget(
+        {
+          title,
+          problem: body,
+          proposal: composePlaceholderField(
+            "Not captured separately",
+            input.reportId,
+          ),
+          alternatives: "",
+          component: COMPONENT_DESKTOP_APP,
+        },
+        ["problem", "proposal", "title"],
+      );
+      const fields: SupportFeatureRequestDraftFields = {
+        problem: fitted.fields.problem,
+        proposal: fitted.fields.proposal,
+        alternatives: fitted.fields.alternatives,
+        component: fitted.fields.component,
+      };
+      return {
+        template: "feature_request.yml",
+        title: fitted.fields.title,
+        fields,
+        truncated: fitted.truncated,
+      };
+    }
+    case "other": {
+      const fitted = fitFieldsToUrlBudget({ title, details: body }, [
+        "details",
+        "title",
+      ]);
+      const fields: SupportGeneralDraftFields = {
+        details: fitted.fields.details,
+      };
+      return {
+        template: "general.yml",
+        title: fitted.fields.title,
+        fields,
+        truncated: fitted.truncated,
+      };
+    }
+  }
 }
 
-// The user's own words for what happened, with non-empty expected/actual
-// behavior folded in under clear labels rather than silently dropped -
-// migrated as-is from the old renderer-side `composeWhatHappened` (ticket 09
-// moves this behind the scrub boundary; it does not redesign it).
-function composeWhatHappened(input: {
-  readonly whatHappened: string;
-  readonly expectedBehavior: string;
-  readonly actualBehavior: string;
+function capturedFieldValue<T>(
+  field: SupportCapturedField<T> | undefined,
+): T | null {
+  if (field === undefined || field.status === "unavailable") return null;
+  return field.value;
+}
+
+// "Traycer 1.1.9 · macOS arm64 · host 1.1.9 · Claude / Opus" - every value
+// traces back to main's own snapshot/registry (never renderer-composed), so
+// this is the single place that line is assembled.
+function composeEnvironmentSummary(input: {
+  readonly appVersion: string;
+  readonly platform: string;
+  readonly arch: string;
+  readonly hostVersion: string | null;
+  readonly registry: SupportContextRegistrySnapshot | undefined;
 }): string {
-  const whatHappened = scrubSupportText(input.whatHappened);
-  const expected = scrubSupportText(input.expectedBehavior).trim();
-  const actual = scrubSupportText(input.actualBehavior).trim();
+  const harness = capturedFieldValue(input.registry?.harnessId);
+  const model = capturedFieldValue(input.registry?.model);
+  const harnessModel =
+    harness !== null && model !== null
+      ? `${harness} / ${model}`
+      : (harness ?? model);
+  const parts = [
+    `Traycer ${input.appVersion}`,
+    `${input.platform} ${input.arch}`,
+    input.hostVersion !== null ? `host ${input.hostVersion}` : null,
+    harnessModel,
+  ].filter((part): part is string => part !== null);
+  return scrubSupportText(parts.join(" · "));
+}
+
+// The richer publish body (tech-plan T4): the user's narrative, a sanitized
+// environment summary, frequency (if given), and the support report id -
+// folded into whichever template field carries the narrative (what-happened
+// for bug, problem for idea, details for other), since GitHub issue forms
+// take one text box per field, not a separate box per line here.
+//
+// Deferred to ticket 08: a "Screenshot attached to the private report." line
+// once image ingest exists to attach one - there is nothing to condition it
+// on yet.
+function composeReportBody(input: {
+  readonly narrative: string;
+  readonly environmentSummary: string;
+  readonly frequency: SupportReportFrequency | null;
+  readonly reportId: string | null;
+}): string {
+  const frequencyLine =
+    input.frequency !== null
+      ? `Frequency: ${FREQUENCY_LABELS[input.frequency]}`
+      : null;
+  const reportLine =
+    input.reportId !== null ? `Support report: ${input.reportId}` : null;
+  const metaLine = [frequencyLine, reportLine]
+    .filter((line): line is string => line !== null)
+    .join(" · ");
   return [
-    whatHappened,
-    expected === "" ? "" : `Expected: ${expected}`,
-    actual === "" ? "" : `Actual: ${actual}`,
+    input.narrative.trim(),
+    `Environment: ${input.environmentSummary}`,
+    metaLine,
   ]
     .filter((section) => section.trim() !== "")
     .join("\n\n");
 }
 
-// The form's `repro` field stays required for organic filers. A report id
-// now always exists once evidence has been frozen (T2), so an empty draft
-// points at it by name instead of the report-id-less placeholder ticket 01
-// shipped before report ids existed.
-function composeRepro(
-  stepsToReproduce: string,
+// Shared shape for a required template field this ticket has no direct UI
+// capture for (bug's `repro`, idea's `proposal`): points at the private
+// report rather than silently leaving the field's own required validation to
+// block the organic-filer flow it also serves.
+function composePlaceholderField(
+  whatWasNotCaptured: string,
   reportId: string | null,
 ): string {
-  const scrubbedSteps = scrubSupportText(stepsToReproduce).trim();
-  if (scrubbedSteps !== "") return scrubbedSteps;
   if (reportId !== null) {
-    return `Not captured step-by-step - see the private support report ${reportId}.`;
+    return `${whatWasNotCaptured} - see the private support report ${reportId}.`;
   }
-  return REPRO_PLACEHOLDER_NO_REPORT;
+  return PLACEHOLDER_NO_REPORT;
 }
 
 /**
  * "Chat error"-style bare category titles must be impossible (tech-plan T6):
  * whenever an error envelope exists, the result always leads with the
  * failing operation and/or a stable symptom (an error code, or a short
- * scrubbed slice of the message) ahead of the user's own title - never the
- * user's title alone, which is the one field a caller could hand in as a
- * bare category label (`createReportIssueContext`'s own "Traycer error"
- * default is exactly this shape). With no cause at all (manual reports have
- * no error envelope to derive from), the user's own words are the title;
+ * scrubbed slice of the message) ahead of the user's own intent text - never
+ * category-only. With no cause at all (manual reports have no error envelope
+ * to derive from), the user's own words (the intent question) are the title;
  * that is the honest signal there, not a defect this guardrail covers.
  */
 function deriveTitle(
-  userTitle: string,
+  intent: string,
   cause: SupportPrivateDiagnosticsCause | null | undefined,
 ): string {
-  const scrubbedUserTitle = scrubSupportText(userTitle).trim();
-  const fallback =
-    scrubbedUserTitle !== "" ? scrubbedUserTitle : GENERIC_FALLBACK_TITLE;
-  if (cause === null || cause === undefined) return fallback;
+  const intentTitle = truncatedTitleText(intent);
+  if (cause === null || cause === undefined) {
+    return intentTitle !== "" ? intentTitle : GENERIC_FALLBACK_TITLE;
+  }
   const distinctiveToken = distinctiveTitleToken(cause);
-  if (distinctiveToken === null) return fallback;
-  return scrubbedUserTitle !== ""
-    ? `${distinctiveToken}: ${scrubbedUserTitle}`
+  if (distinctiveToken === null) {
+    return intentTitle !== "" ? intentTitle : GENERIC_FALLBACK_TITLE;
+  }
+  return intentTitle !== ""
+    ? `${distinctiveToken}: ${intentTitle}`
     : distinctiveToken;
 }
 
@@ -160,17 +280,13 @@ function distinctiveTitleToken(
 }
 
 // Error codes are stable/short by contract (app-defined, never raw text) and
-// preferred over the message; a message's first line is the fallback,
-// scrubbed and capped since a raw message can run well past title length.
+// preferred over the message; a message's first line is the fallback.
 function symptomToken(cause: SupportPrivateDiagnosticsCause): string | null {
   const errorCode = nonEmptyScrubbed(cause.errorCode);
   if (errorCode !== null) return errorCode;
   const firstLine = cause.message.split("\n")[0] ?? "";
-  const scrubbed = scrubSupportText(firstLine).trim();
-  if (scrubbed === "") return null;
-  return scrubbed.length > TITLE_SYMPTOM_MAX_CHARS
-    ? `${scrubbed.slice(0, TITLE_SYMPTOM_MAX_CHARS)}…`
-    : scrubbed;
+  const truncated = truncatedTitleText(firstLine);
+  return truncated === "" ? null : truncated;
 }
 
 function nonEmptyScrubbed(value: string | null): string | null {
@@ -179,56 +295,43 @@ function nonEmptyScrubbed(value: string | null): string | null {
   return scrubbed === "" ? null : scrubbed;
 }
 
-interface DraftFields {
-  readonly title: string;
-  readonly whatHappened: string;
-  readonly version: string;
-  readonly os: string;
-  readonly component: string;
-  readonly repro: string;
+function truncatedTitleText(value: string): string {
+  const scrubbed = scrubSupportText(value).trim();
+  if (scrubbed === "") return "";
+  return scrubbed.length > TITLE_MAX_CHARS
+    ? `${scrubbed.slice(0, TITLE_MAX_CHARS)}…`
+    : scrubbed;
 }
 
-type ShrinkableField = "whatHappened" | "repro" | "title";
-
-function fitToUrlBudget(initial: DraftFields): {
-  readonly fields: DraftFields;
-  readonly truncated: boolean;
-} {
-  let fields = initial;
+// Binary-searches each shrinkable field (in the given, largest/most-likely-
+// oversized-first order, "title" included as just another key) down to the
+// longest prefix whose truncated-plus-marker form keeps the whole encoded
+// param set within budget, measuring the actual percent-encoded length each
+// step rather than assuming an encoding-expansion ratio. Operates on a plain
+// string-keyed bag - not a template's concrete field interface - so
+// bug/idea/other's differently-shaped field records share one implementation;
+// each call site reconstructs its own typed result from the returned bag.
+function fitFieldsToUrlBudget(
+  fields: Readonly<Record<string, string>>,
+  shrinkOrder: ReadonlyArray<string>,
+): { readonly fields: Record<string, string>; readonly truncated: boolean } {
+  let current = { ...fields };
   let truncated = false;
-  // Largest/most-likely-oversized field first: the narrative, then repro
-  // (also user-typed and unbounded), then title (short in practice) -
-  // ported unchanged from the pre-ticket-09 `issue-reporter.ts` ordering.
-  for (const field of ["whatHappened", "repro", "title"] as const) {
-    if (encodedFieldsLength(fields) <= ISSUE_FORM_FIELD_BUDGET) break;
-    fields = shrinkField(fields, field);
+  const encodedLength = (): number =>
+    new URLSearchParams(current).toString().length;
+  for (const key of shrinkOrder) {
+    if (encodedLength() <= ISSUE_FORM_FIELD_BUDGET) break;
+    const shrunk = truncateToFit(
+      current[key] ?? "",
+      (candidate) =>
+        new URLSearchParams({ ...current, [key]: candidate }).toString().length,
+    );
+    current = { ...current, [key]: shrunk };
     truncated = true;
   }
-  return { fields, truncated };
+  return { fields: current, truncated };
 }
 
-function encodedFieldsLength(fields: DraftFields): number {
-  return new URLSearchParams({
-    title: fields.title,
-    "what-happened": fields.whatHappened,
-    version: fields.version,
-    os: fields.os,
-    component: fields.component,
-    repro: fields.repro,
-  }).toString().length;
-}
-
-function shrinkField(fields: DraftFields, field: ShrinkableField): DraftFields {
-  const truncatedValue = truncateToFit(fields[field], (candidate) =>
-    encodedFieldsLength({ ...fields, [field]: candidate }),
-  );
-  return { ...fields, [field]: truncatedValue };
-}
-
-// Binary-searches the longest prefix of `value` whose truncated-plus-marker
-// form keeps the encoded field length within budget, measuring the actual
-// percent-encoded length each step rather than assuming an encoding-expansion
-// ratio - ported unchanged from the pre-ticket-09 `issue-reporter.ts`.
 function truncateToFit(
   value: string,
   lengthFor: (candidate: string) => number,

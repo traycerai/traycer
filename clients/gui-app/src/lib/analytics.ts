@@ -357,6 +357,7 @@ export enum AnalyticsEvent {
   UpdateInstallGuidanceOpened = "update_install_guidance_opened",
   UpdateFailed = "update_failed",
   ReportIssueOpened = "report_issue_opened",
+  ReportIssueBlocked = "report_issue_blocked",
   ReportIssuePrivateSubmit = "report_issue_private_submit",
   ReportIssuePublicOpenAttempted = "report_issue_public_open_attempted",
   AppQuitRequested = "app_quit_requested",
@@ -731,6 +732,12 @@ export interface AnalyticsEventProperties {
     readonly blocker: AnalyticsBlocker;
   };
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties;
+  // Which report type's gate blocked the attempt (ticket 07's evidence gate,
+  // Flow 2 manual opens only) - downstream funnels join this against a later
+  // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
+  readonly [AnalyticsEvent.ReportIssueBlocked]: {
+    readonly report_type: "bug" | "idea" | "other";
+  };
   readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
     | { readonly outcome: "confirmed"; readonly blocker: null }
     | { readonly outcome: "unconfirmed"; readonly blocker: null }
@@ -1253,6 +1260,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.SettingChanged],
     ["source", "section", "setting"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.ReportIssueBlocked], ["report_type"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ReportIssuePrivateSubmit],
     ["outcome", "blocker"],
@@ -1509,6 +1517,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     [AnalyticsEvent.ReportIssuePrivateSubmit],
     "outcome",
     new Set(["confirmed", "unconfirmed", "failed", "unavailable"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssueBlocked],
+    "report_type",
+    new Set(["bug", "idea", "other"]),
   ),
 ]);
 

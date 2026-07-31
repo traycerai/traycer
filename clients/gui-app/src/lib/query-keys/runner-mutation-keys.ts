@@ -35,8 +35,12 @@ export const runnerMutationKeys = {
   supportSubmitReport: () => ["runner.support.submitReport"] as const,
   supportSaveDiagnosticBundle: () =>
     ["runner.support.saveDiagnosticBundle"] as const,
-  // Builds the scrubbed public draft and opens it in the browser (ticket 09).
+  // Builds the scrubbed public draft for the publish preview (ticket 09/07).
   supportBuildPublicDraft: () => ["runner.support.buildPublicDraft"] as const,
+  // Opens the previewed draft's GitHub issue-form URL in the browser
+  // (ticket 07's publish preview - Flow 3b), separate from the fetch above so
+  // the preview can render before the user opts to leave the app.
+  supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
@@ -141,4 +145,18 @@ export const runnerQueryKeys = {
     ["runner.support.logList", support] as const,
   supportLogTail: (support: object | null, target: string) =>
     ["runner.support.logTail", support, target] as const,
+  // Report-issue consent panel's log "view" affordance (ticket 07/04): reads
+  // the tail FROZEN at report-open, not a live tail, so what the user reviews
+  // is exactly what a submit would send. Scoped by draftId (frozen evidence
+  // is per-draft) as well as support identity.
+  supportFrozenLogTail: (
+    support: object | null,
+    draftId: number,
+    target: string,
+  ) => ["runner.support.frozenLogTail", support, draftId, target] as const,
+  // Report-issue evidence strip's "Nth time on this install" line (ticket 06
+  // ledger read). Scoped by fingerprint - each distinct defect caches
+  // independently.
+  supportFingerprintOccurrence: (support: object | null, fingerprint: string) =>
+    ["runner.support.fingerprintOccurrence", support, fingerprint] as const,
 };

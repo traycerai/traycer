@@ -1430,6 +1430,7 @@ class NullSupportService implements IpcSupportService {
     _frozenEvidenceKey: string,
   ): Promise<SupportBuildPublicDraftResult> {
     return Promise.resolve({
+      template: "bug_report.yml",
       title: "",
       fields: {
         "what-happened": "",

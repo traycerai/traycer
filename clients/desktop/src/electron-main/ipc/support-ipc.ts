@@ -20,6 +20,8 @@ import type {
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
   SupportReadFrozenLogTailInput,
+  SupportReportFrequency,
+  SupportReportType,
   SupportSubmitReportRequest,
 } from "../../ipc-contracts/window-types";
 
@@ -252,13 +254,50 @@ function parseSupportTailLogInput(input: unknown): {
 
 const SUPPORT_SUBMIT_REPORT_KEYS = new Set([
   "draftId",
-  "title",
-  "whatHappened",
-  "stepsToReproduce",
-  "expectedBehavior",
-  "actualBehavior",
+  "type",
+  "intent",
+  "frequency",
+  "location",
+  "allowContact",
+  "includeDesktopLog",
+  "includeHostLog",
   "privateDiagnostics",
 ]);
+
+function parseSupportReportType(
+  value: unknown,
+  context: string,
+): SupportReportType {
+  if (value === "bug" || value === "idea" || value === "other") return value;
+  throw new Error(`${context} must be "bug", "idea", or "other"`);
+}
+
+function parseSupportReportFrequency(
+  value: unknown,
+  context: string,
+): SupportReportFrequency | null {
+  if (value === null) return null;
+  if (
+    value === "once" ||
+    value === "sometimes" ||
+    value === "every_time" ||
+    value === "not_sure"
+  ) {
+    return value;
+  }
+  throw new Error(
+    `${context} must be "once", "sometimes", "every_time", "not_sure", or null`,
+  );
+}
+
+function assertBoolean(
+  value: unknown,
+  context: string,
+): asserts value is boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${context} must be a boolean`);
+  }
+}
 
 // Exactly ticket 05's five `SerializedReportIssuePrivateDiagnostics` keys,
 // all required whenever `privateDiagnostics` is sent at all - the serializer
@@ -518,19 +557,36 @@ export function parseSupportSubmitReportRequest(
     "supportSubmitReport",
   );
   assertInteger(form.draftId, "supportSubmitReport.draftId");
-  assertString(form.title, "supportSubmitReport.title");
-  assertString(form.whatHappened, "supportSubmitReport.whatHappened");
-  assertString(form.stepsToReproduce, "supportSubmitReport.stepsToReproduce");
-  assertString(form.expectedBehavior, "supportSubmitReport.expectedBehavior");
-  assertString(form.actualBehavior, "supportSubmitReport.actualBehavior");
+  const type = parseSupportReportType(form.type, "supportSubmitReport.type");
+  assertString(form.intent, "supportSubmitReport.intent");
+  // frequency/location are always present on the wire (null when unset) - a
+  // missing key is a contract violation, matching `freezeEvidence.fingerprint`.
+  assertHasKey(form, "frequency", "supportSubmitReport");
+  assertHasKey(form, "location", "supportSubmitReport");
+  const frequency = parseSupportReportFrequency(
+    form.frequency,
+    "supportSubmitReport.frequency",
+  );
+  const location = parseNullableString(
+    form.location,
+    "supportSubmitReport.location",
+  );
+  assertBoolean(form.allowContact, "supportSubmitReport.allowContact");
+  assertBoolean(
+    form.includeDesktopLog,
+    "supportSubmitReport.includeDesktopLog",
+  );
+  assertBoolean(form.includeHostLog, "supportSubmitReport.includeHostLog");
   const privateDiagnostics = parsePrivateDiagnostics(form.privateDiagnostics);
   return {
     draftId: form.draftId,
-    title: form.title,
-    whatHappened: form.whatHappened,
-    stepsToReproduce: form.stepsToReproduce,
-    expectedBehavior: form.expectedBehavior,
-    actualBehavior: form.actualBehavior,
+    type,
+    intent: form.intent,
+    frequency,
+    location,
+    allowContact: form.allowContact,
+    includeDesktopLog: form.includeDesktopLog,
+    includeHostLog: form.includeHostLog,
     ...(privateDiagnostics === undefined ? {} : { privateDiagnostics }),
   };
 }

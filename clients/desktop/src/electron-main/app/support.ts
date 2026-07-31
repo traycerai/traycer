@@ -321,26 +321,27 @@ export class DesktopSupportService {
     });
 
     // Scrubbed as one composed string, not field-by-field: every piece
-    // (title, narrative, steps, expected/actual) is user- or error-derived
-    // free text, and `scrubSupportText` operates line-wise with no length
-    // cap either way, so there is no correctness difference - just one call
-    // instead of five.
+    // (intent, location) is user- or error-derived free text, and
+    // `scrubSupportText` operates line-wise with no length cap either way, so
+    // there is no correctness difference - just one call instead of several.
     const message = scrubSupportText(
       [
-        `Title: ${form.title}`,
+        `Type: ${form.type}`,
         layer0MessageLine(snapshot.host.layer0),
-        form.whatHappened && `What happened:\n${form.whatHappened}`,
-        form.stepsToReproduce &&
-          `Steps to reproduce:\n${form.stepsToReproduce}`,
-        form.expectedBehavior && `Expected:\n${form.expectedBehavior}`,
-        form.actualBehavior && `Actual:\n${form.actualBehavior}`,
+        form.intent && `What they were trying to do:\n${form.intent}`,
+        form.location && `Where: ${form.location}`,
+        form.frequency && `Frequency: ${form.frequency}`,
         `Report ID: ${frozen.reportId}`,
       ]
         .filter(Boolean)
         .join("\n\n"),
     );
 
-    const userEmail = snapshot.user.email;
+    // G1: identity is attached to the private report only when the user
+    // opted in via the contact checkbox - the checkbox itself only renders
+    // when a signed-in email exists, but the gate lives here too so a stale
+    // client can never smuggle identity past an unchecked box.
+    const userEmail = form.allowContact ? snapshot.user.email : null;
     const privateDiagnostics = form.privateDiagnostics;
     // Deep-scrubbed as a whole right before it rides in the Sentry event:
     // `layer0.evidence`/`raw` are free text off a filesystem error and can
@@ -407,14 +408,17 @@ export class DesktopSupportService {
             },
             ...(Object.keys(contexts).length === 0 ? {} : { contexts }),
           },
+          // Consent panel's two log toggles gate this directly: an "off"
+          // toggle must actually withhold the tail, not just stop rendering
+          // it, or the toggle is a dishonest no-op.
           attachments: [
-            ...(frozen.desktop.content
+            ...(form.includeDesktopLog && frozen.desktop.content
               ? [{ filename: "desktop.log", data: frozen.desktop.content }]
               : []),
             // Named for the local traycer-host this Electron process
             // supervises (D10) - a tab can be bound to a different host, so
             // this must never be read as "the log for that host".
-            ...(frozen.host.content
+            ...(form.includeHostLog && frozen.host.content
               ? [{ filename: "local-host.log", data: frozen.host.content }]
               : []),
           ],
@@ -478,19 +482,20 @@ export class DesktopSupportService {
     const bundle = {
       reportId: frozen?.reportId ?? null,
       generatedAt: new Date().toISOString(),
-      title: scrubSupportText(form.title),
-      whatHappened: scrubSupportText(form.whatHappened),
-      stepsToReproduce: scrubSupportText(form.stepsToReproduce),
-      expectedBehavior: scrubSupportText(form.expectedBehavior),
-      actualBehavior: scrubSupportText(form.actualBehavior),
+      type: form.type,
+      intent: scrubSupportText(form.intent),
+      frequency: form.frequency,
+      location: form.location === null ? null : scrubSupportText(form.location),
       appVersion: snapshot.appVersion,
       platform: snapshot.platform,
       arch: snapshot.arch,
       versions: snapshot.versions,
       host: { status: snapshot.host.status, version: snapshot.host.version },
+      // Same consent-panel toggles submitReport honors - an "off" log toggle
+      // must withhold the tail from the bundle too, not just the upload.
       logs: {
-        desktop: frozen?.desktop.content ?? "",
-        host: frozen?.host.content ?? "",
+        desktop: form.includeDesktopLog ? (frozen?.desktop.content ?? "") : "",
+        host: form.includeHostLog ? (frozen?.host.content ?? "") : "",
       },
     };
     const dir = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
@@ -518,14 +523,13 @@ export class DesktopSupportService {
     const frozen = await this.resolveFrozenEvidence(frozenEvidenceKey);
     const snapshot = await this.getSnapshot();
     return buildPublicDraftFields({
-      title: form.title,
-      whatHappened: form.whatHappened,
-      stepsToReproduce: form.stepsToReproduce,
-      expectedBehavior: form.expectedBehavior,
-      actualBehavior: form.actualBehavior,
+      type: form.type,
+      intent: form.intent,
+      frequency: form.frequency,
       appVersion: snapshot.appVersion,
       platform: snapshot.platform,
       arch: snapshot.arch,
+      hostVersion: snapshot.host.version,
       reportId: frozen?.reportId ?? null,
       privateDiagnostics: form.privateDiagnostics,
     });

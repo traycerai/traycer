@@ -229,6 +229,7 @@ function makeSupportBridge(overrides: {
     getFingerprintOccurrence: () => Promise.resolve(null),
     buildPublicDraft: () =>
       Promise.resolve({
+        template: "bug_report.yml",
         title: "",
         fields: {
           "what-happened": "",
