@@ -53,9 +53,9 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import {
   cloudNotificationFeedId,
-  selectCloudEntityReadTargets,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
+import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
@@ -1081,32 +1081,23 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
       markEntityAsRead: (entity) => {
         if (feedMode !== "cloud") return;
-        const state = useCloudNotificationsStore.getState();
-        const entryIds = selectCloudEntityReadTargets(
-          state.rows,
-          state.entityReadAttempts,
-          entity,
-        );
-        // No targets means nothing to do AND nothing to write - important,
-        // because this runs on every accepted snapshot while an entity is in
-        // view. A no-op that still touched the store would re-trigger itself.
-        if (entryIds.length === 0) return;
-        // One atomic optimistic step: the attempt guard lands with the
-        // markers, so the store write this causes cannot re-arm the fan-out.
-        state.beginEntityRead(entryIds, Date.now());
-        // Same serialization as `markAllAsRead`: there is no cloud
-        // mark-many RPC, and a large cross-device feed must not burst
-        // hundreds of unary requests through one host connection.
-        void (async (): Promise<void> => {
-          for (const entryId of entryIds) {
-            try {
-              await cloudMarkRead.mutateAsync({ entryId });
-            } catch {
-              // The mutation's onError owns availability state. Continue so
-              // one failed entry does not prevent later entries being sent.
+        // Selection, single-flight, backoff and the retry timer all live in
+        // the driver: they have to outlive this render and stay single-flight
+        // across every caller. There is no cloud mark-many RPC, so the driver
+        // serializes per entry the way `markAllAsRead` does.
+        requestCloudEntityRead(entity, {
+          markRead: async (entryId) => {
+            const result = await cloudMarkRead.mutateAsync({ entryId });
+            // `unavailable` is a refusal, not a transport failure - the
+            // mutation resolves, so the driver has to be told explicitly or it
+            // would record a success the server never performed.
+            if (result.status === "unavailable") {
+              throw new Error("cloud feed unavailable");
             }
-          }
-        })();
+          },
+          now: () => Date.now(),
+          random: () => Math.random(),
+        });
       },
       clear: (row) => {
         if (row.source !== "cloud" || feedMode !== "cloud") return;

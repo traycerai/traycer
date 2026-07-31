@@ -24,6 +24,7 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
+import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
   readFocusedHostNotificationPresenceEntity,
   subscribeHostNotificationPresence,
@@ -267,6 +268,15 @@ export function NotificationsSessionProvider(
     }
   }, []);
 
+  // The relay session's rows and its view-consumption bookkeeping are one
+  // unit of ownership: the driver holds an in-flight claim and a retry timer
+  // that would otherwise outlive the snapshot they were derived from and fire
+  // against the next session's feed.
+  const resetCloudRelaySession = useCallback((): void => {
+    useCloudNotificationsStore.getState().reset();
+    resetCloudEntityReadDriver();
+  }, []);
+
   // Identity/sign-out owns the full reset: every user-owned replica (host,
   // collaboration) is cleared so the incoming user never sees the prior
   // user's entries.
@@ -274,25 +284,25 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
     useNotificationsStore.getState().reset();
     useHostNotificationsStore.getState().reset();
-    useCloudNotificationsStore.getState().reset();
+    resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
-  }, [queryClient]);
+  }, [queryClient, resetCloudRelaySession]);
 
   // A host switch only invalidates host-owned truth. Collaboration/system
   // rows are not scoped to a host and must survive the swap untouched.
   const resetHostReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().reset();
-    useCloudNotificationsStore.getState().reset();
+    resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
-  }, [queryClient]);
+  }, [queryClient, resetCloudRelaySession]);
 
   // Cloud rows are a relay-session snapshot, not a durable replica. A lost
   // binding or replacement stream client starts a new ownership epoch and
   // must remain unavailable until that new relay delivers its own snapshot.
   const resetCloudRelayOwnership = useCallback((): void => {
-    useCloudNotificationsStore.getState().reset();
-  }, []);
+    resetCloudRelaySession();
+  }, [resetCloudRelaySession]);
 
   // A disconnect (IPC drop / host restart) is not a truth reset: rendered
   // host rows and cursors stay put, and only the exact summary degrades to
@@ -532,7 +542,7 @@ export function NotificationsSessionProvider(
       tearDown();
       // A cloud-to-local capability change must never leave cloud rows on
       // screen, and the reverse must begin with no local fallback rows.
-      useCloudNotificationsStore.getState().reset();
+      resetCloudRelaySession();
       // Entering either cloud-only state must also discard the retained v1
       // cursor and rows. Selectors are gated, but this prevents a later mode
       // transition from treating stale local pagination as current truth.
@@ -571,6 +581,7 @@ export function NotificationsSessionProvider(
     tearDown,
     resetHostReplica,
     resetCloudRelayOwnership,
+    resetCloudRelaySession,
     markHostReplicaDisconnected,
     openForCurrentUser,
     notificationFeedMode,

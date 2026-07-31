@@ -93,6 +93,10 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { __resetHostNotificationsStoreForTests } from "@/stores/notifications/host-notifications-store";
 import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
+import {
+  CLOUD_ENTITY_READ_RETRY_BASE_MS,
+  resetCloudEntityReadDriver,
+} from "@/lib/notifications/cloud-entity-read-driver";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
@@ -107,9 +111,45 @@ interface Calls {
 }
 
 const calls: Calls = { cloudMarkRead: [], hostMarkRead: [] };
-const cloudMarkReadMode: { value: "applied" | "never-settles" } = {
-  value: "applied",
+const cloudMarkReadMode: {
+  value: "applied" | "never-settles" | "always-fails" | "fails-then-applies";
+} = { value: "applied" };
+/** Remaining rejections for `fails-then-applies`. */
+const cloudMarkReadFailures = { remaining: 0 };
+/** Live/peak concurrency observed inside the handler - a direct reading of
+ * single-flight, not an inference from call ordering. */
+const cloudMarkReadConcurrency = { live: 0, peak: 0 };
+/** Manual gate: when armed, each request parks until the test releases it. */
+const cloudMarkReadGate: { armed: boolean; waiting: Array<() => void> } = {
+  armed: false,
+  waiting: [],
 };
+
+function releaseOneGatedRequest(): void {
+  const next = cloudMarkReadGate.waiting.shift();
+  next?.();
+}
+
+async function cloudMarkReadHandler(): Promise<void> {
+  if (cloudMarkReadMode.value === "never-settles") {
+    await new Promise<never>(() => undefined);
+  }
+  if (cloudMarkReadGate.armed) {
+    await new Promise<void>((resolve) => {
+      cloudMarkReadGate.waiting.push(resolve);
+    });
+  }
+  if (cloudMarkReadMode.value === "always-fails") {
+    throw new Error("cloud mark-read failed");
+  }
+  if (
+    cloudMarkReadMode.value === "fails-then-applies" &&
+    cloudMarkReadFailures.remaining > 0
+  ) {
+    cloudMarkReadFailures.remaining -= 1;
+    throw new Error("cloud mark-read failed");
+  }
+}
 
 function createHostClient(): HostClient<HostRpcRegistry> {
   let requestId = 0;
@@ -123,12 +163,19 @@ function createHostClient(): HostClient<HostRpcRegistry> {
         return `request-${String(requestId)}`;
       },
       handlers: {
-        "host.notifications.cloudFeed.markRead": (params) => {
+        "host.notifications.cloudFeed.markRead": async (params) => {
           calls.cloudMarkRead.push(params.entryId);
-          if (cloudMarkReadMode.value === "never-settles") {
-            return new Promise<never>(() => undefined);
+          cloudMarkReadConcurrency.live += 1;
+          cloudMarkReadConcurrency.peak = Math.max(
+            cloudMarkReadConcurrency.peak,
+            cloudMarkReadConcurrency.live,
+          );
+          try {
+            await cloudMarkReadHandler();
+            return { status: "applied", version: 2 };
+          } finally {
+            cloudMarkReadConcurrency.live -= 1;
           }
-          return { status: "applied", version: 2 };
         },
         "host.notifications.markRead": (params) => {
           calls.hostMarkRead.push(params);
@@ -294,6 +341,12 @@ beforeEach(() => {
   calls.cloudMarkRead.length = 0;
   calls.hostMarkRead.length = 0;
   cloudMarkReadMode.value = "applied";
+  cloudMarkReadFailures.remaining = 0;
+  cloudMarkReadConcurrency.live = 0;
+  cloudMarkReadConcurrency.peak = 0;
+  cloudMarkReadGate.armed = false;
+  cloudMarkReadGate.waiting.length = 0;
+  resetCloudEntityReadDriver();
   feedSupport.value = "supported";
   hostState.client = createHostClient();
   useCloudNotificationsStore.getState().reset();
@@ -308,6 +361,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  resetCloudEntityReadDriver();
   hostState.client = null;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
@@ -565,6 +620,194 @@ describe("cloud-mode view consumption", () => {
         useAppLocalNotificationsStore.getState().byId["terminal-1"].readAt,
       ).not.toBeNull();
     });
+  });
+});
+
+/**
+ * Retrying is safe by construction (set-once, min-merged markers), so these
+ * pin the PACING rather than any suppression: one request in flight, growing
+ * gaps between failures, and a clean stop once the server accepts.
+ *
+ * `Math.random` is stubbed so the jitter window is deterministic; the clock is
+ * faked so a five-minute cap does not mean a five-minute test.
+ */
+describe("cloud-mode view-consumption retries", () => {
+  function useDeterministicBackoff(fraction: number): void {
+    vi.useFakeTimers();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(Math, "random").mockReturnValue(fraction);
+  }
+
+  /** Jitter is over [50%, 100%] of the exponential, so a stubbed `random`
+   * of `f` yields exactly this. */
+  function expectedBackoffMs(attempts: number, fraction: number): number {
+    return Math.round(
+      CLOUD_ENTITY_READ_RETRY_BASE_MS *
+        2 ** (attempts - 1) *
+        (0.5 + fraction * 0.5),
+    );
+  }
+
+  async function settle(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  async function visitWithOneUnreadRow(): Promise<void> {
+    renderProvider();
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-done",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: CHAT_ID,
+        }),
+      ],
+      1,
+    );
+    focusChat(EPIC_ID, CHAT_ID);
+    await settle(0);
+  }
+
+  it("retries a failed mark-read once its backoff elapses", async () => {
+    useDeterministicBackoff(1);
+    cloudMarkReadMode.value = "always-fails";
+    await visitWithOneUnreadRow();
+    expect(calls.cloudMarkRead).toHaveLength(1);
+
+    // One tick short of the first backoff: still parked.
+    await settle(expectedBackoffMs(1, 1) - 1);
+    expect(calls.cloudMarkRead).toHaveLength(1);
+
+    await settle(1);
+    expect(calls.cloudMarkRead).toHaveLength(2);
+  });
+
+  it("grows the interval between successive failures", async () => {
+    useDeterministicBackoff(1);
+    cloudMarkReadMode.value = "always-fails";
+    await visitWithOneUnreadRow();
+
+    // Each attempt must wait strictly longer than the previous one: advancing
+    // by only the PREVIOUS interval is not enough to trigger the next attempt.
+    for (const attempt of [1, 2, 3]) {
+      const before = calls.cloudMarkRead.length;
+      await settle(expectedBackoffMs(attempt, 1));
+      expect(calls.cloudMarkRead).toHaveLength(before + 1);
+      await settle(expectedBackoffMs(attempt, 1));
+      expect(calls.cloudMarkRead).toHaveLength(before + 1);
+    }
+  });
+
+  it("stops retrying once the server accepts, and stays stopped", async () => {
+    useDeterministicBackoff(1);
+    cloudMarkReadMode.value = "fails-then-applies";
+    cloudMarkReadFailures.remaining = 1;
+    await visitWithOneUnreadRow();
+    expect(calls.cloudMarkRead).toHaveLength(1);
+    expect(
+      useCloudNotificationsStore.getState().entityReadRetries["entry-done"],
+    ).not.toBeUndefined();
+
+    await settle(expectedBackoffMs(1, 1));
+    expect(calls.cloudMarkRead).toHaveLength(2);
+
+    // Accepted: retry state cleared, entry recorded as done.
+    expect(
+      useCloudNotificationsStore.getState().entityReadRetries["entry-done"],
+    ).toBeUndefined();
+    expect(
+      useCloudNotificationsStore
+        .getState()
+        .entityReadSucceeded.has("entry-done"),
+    ).toBe(true);
+
+    // Well past the cap, and with the feed still replaying the row unread.
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-done",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: CHAT_ID,
+        }),
+      ],
+      2,
+    );
+    await settle(600_000);
+    expect(calls.cloudMarkRead).toHaveLength(2);
+  });
+
+  it("decays rather than storms while the server keeps refusing", async () => {
+    useDeterministicBackoff(1);
+    cloudMarkReadMode.value = "always-fails";
+    await visitWithOneUnreadRow();
+
+    // Ten minutes of a broken server, with a snapshot replaying the unread row
+    // every second. Unpaced this is ~600 requests; paced it is the handful the
+    // doubling allows before the five-minute cap.
+    for (let tick = 0; tick < 600; tick += 1) {
+      applyCloudSnapshot(
+        [
+          cloudRow({
+            entryId: "entry-done",
+            originHostId: OTHER_HOST_ID,
+            severity: "done",
+            chatId: CHAT_ID,
+          }),
+        ],
+        2 + tick,
+      );
+      await settle(1_000);
+    }
+    expect(calls.cloudMarkRead.length).toBeLessThanOrEqual(12);
+    expect(calls.cloudMarkRead.length).toBeGreaterThan(1);
+  });
+
+  it("never runs two mark-reads at once", async () => {
+    useDeterministicBackoff(1);
+    cloudMarkReadGate.armed = true;
+    renderProvider();
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-a",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: CHAT_ID,
+        }),
+        cloudRow({
+          entryId: "entry-b",
+          originHostId: OTHER_HOST_ID,
+          severity: "failure",
+          chatId: CHAT_ID,
+        }),
+        cloudRow({
+          entryId: "entry-c",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: CHAT_ID,
+        }),
+      ],
+      1,
+    );
+    focusChat(EPIC_ID, CHAT_ID);
+    await settle(0);
+
+    // Three rows to consume, but only one request may be parked at the gate.
+    expect(calls.cloudMarkRead).toHaveLength(1);
+    expect(cloudMarkReadGate.waiting).toHaveLength(1);
+
+    for (let released = 0; released < 3; released += 1) {
+      releaseOneGatedRequest();
+      await settle(0);
+      expect(cloudMarkReadGate.waiting.length).toBeLessThanOrEqual(1);
+    }
+
+    expect(calls.cloudMarkRead).toHaveLength(3);
+    expect(cloudMarkReadConcurrency.peak).toBe(1);
   });
 });
 
