@@ -260,25 +260,53 @@ describe("DesktopSupportService.submitReport - delivered", () => {
     ]);
   });
 
-  it("flattens appMetrics into scalar-only per-process entries, never Sentry's '[Object]' placeholder", async () => {
+  it("survives Sentry's real normalize() with no '[Object]' placeholder anywhere in contexts", async () => {
+    // Round 1 of this fix (flattening each appMetrics entry to scalar
+    // fields) passed a unit test asserting the helper's *return value*, but
+    // a live delivered event still showed four "[Object]" placeholders -
+    // Sentry normalizes the whole `contexts` object under one shared depth
+    // budget, and `processMetrics.appMetrics[i]` sat one level too deep for
+    // even a fully-flattened entry to survive it. This test runs the actual
+    // captured `contexts` through Sentry's own `normalize()` (not a mock, not
+    // this file's helper) at its real default depth (3, unset in this app's
+    // Sentry.init) - the only assertion that would have caught round 1's gap.
+    const { normalize } = await import("@sentry/core");
     await freezeAndSubmit(buildService(null));
 
-    const processMetrics = lastHint().captureContext.contexts
-      ?.processMetrics as
+    const contexts = lastHint().captureContext.contexts;
+    const normalized = normalize(contexts, 3);
+    const serialized = JSON.stringify(normalized);
+
+    expect(serialized).not.toContain("[Object]");
+    expect(serialized).not.toContain("[Array]");
+  });
+
+  it("puts appMetrics next to, not nested inside, processMetrics - the depth that actually fixed it", async () => {
+    await freezeAndSubmit(buildService(null));
+
+    const contexts = lastHint().captureContext.contexts as
       | {
-          readonly main: unknown;
-          readonly cpuUsage: unknown;
-          readonly appMetrics: ReadonlyArray<Record<string, unknown>>;
+          readonly processMetrics: {
+            readonly main: unknown;
+            readonly cpuUsage: unknown;
+          };
+          readonly appMetrics: Record<string, Record<string, unknown>>;
         }
       | undefined;
-    expect(processMetrics).toBeDefined();
+    expect(contexts).toBeDefined();
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        contexts?.processMetrics ?? {},
+        "appMetrics",
+      ),
+    ).toBe(false);
 
-    // Real Sentry ingest for a delivered event of this exact shape verified
-    // the previous shape ("processMetrics.appMetrics: ['[Object]', ...]") -
-    // the SDK's normalizeDepth flattens anything past its budget. Every
-    // per-process field here must be a scalar or null, one level inside
-    // `appMetrics`, so nothing is left for the SDK to collapse.
-    expect(processMetrics?.appMetrics).toEqual([
+    // Object.values, not array indexing: the wire shape is a numeric-keyed
+    // record ({"0": {...}, "1": {...}}), not an array - Sentry's `Contexts`
+    // type requires a plain record for every named context, and the two
+    // shapes normalize identically.
+    const entries = Object.values(contexts?.appMetrics ?? {});
+    expect(entries).toEqual([
       {
         type: "Browser",
         pid: 1111,
@@ -298,7 +326,7 @@ describe("DesktopSupportService.submitReport - delivered", () => {
         memoryPeakWorkingSetKb: 12_288,
       },
     ]);
-    for (const entry of processMetrics?.appMetrics ?? []) {
+    for (const entry of entries) {
       for (const value of Object.values(entry)) {
         const isScalarOrNull =
           value === null ||
@@ -310,9 +338,11 @@ describe("DesktopSupportService.submitReport - delivered", () => {
     }
 
     // main/cpuUsage are already flat in Electron's own types - ride through
-    // unchanged.
-    expect(processMetrics?.main).toEqual(FAKE_PROCESS_METRICS.main);
-    expect(processMetrics?.cpuUsage).toEqual(FAKE_PROCESS_METRICS.cpuUsage);
+    // unchanged, still nested under processMetrics.
+    expect(contexts?.processMetrics.main).toEqual(FAKE_PROCESS_METRICS.main);
+    expect(contexts?.processMetrics.cpuUsage).toEqual(
+      FAKE_PROCESS_METRICS.cpuUsage,
+    );
   });
 
   it("waits longer than the old 2s budget before giving up", async () => {

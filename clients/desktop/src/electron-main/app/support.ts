@@ -385,7 +385,23 @@ export class DesktopSupportService {
           ...(processMetrics === null
             ? {}
             : {
-                processMetrics: flattenProcessMetricsForSentry(processMetrics),
+                processMetrics: {
+                  main: { ...processMetrics.main },
+                  cpuUsage: { ...processMetrics.cpuUsage },
+                },
+                // Promoted to its own top-level context, NOT nested under
+                // `processMetrics` - Sentry normalizes the whole `contexts`
+                // object under one shared depth budget (3, its default,
+                // unset here), and `processMetrics.appMetrics[i]` sits one
+                // level too deep for even a fully-flattened per-process
+                // object to survive that budget. Verified against the SDK's
+                // actual `normalize()`, not just this file's return value -
+                // a live delivered event still showed "[Object]" placeholders
+                // after the per-entry flattening alone (round 2 of this fix).
+                // One less level of nesting is what actually closes it.
+                appMetrics: flattenAppMetricsForSentry(
+                  processMetrics.appMetrics,
+                ),
               }),
           ...(privateDiagnostics?.cause == null
             ? {}
@@ -739,26 +755,32 @@ function sentryEventIdFromReportId(reportId: string): string {
 }
 
 /**
- * `app.getAppMetrics()` entries carry `cpu`/`memory` as nested sub-objects,
- * two levels deep inside `contexts.processMetrics`; Sentry's SDK
- * normalizeDepth flattens anything past its budget to the literal string
- * "[Object]" - verified on a live delivered event, where the whole array
- * arrived as four unusable placeholder strings. Flattening every entry to
- * scalar fields here keeps the per-process detail inside that budget without
- * raising the SDK's global normalizeDepth, which would affect every event
- * the app sends, not just this one. `main`/`cpuUsage` are already flat
- * (Electron's `ProcessMemoryInfo`/`CpuUsage` have no nested fields), so they
- * ride through unchanged.
+ * `app.getAppMetrics()` entries carry `cpu`/`memory` as nested sub-objects.
+ * Round 1 of this fix flattened each entry to scalar fields, which is
+ * necessary but not sufficient: Sentry's SDK normalizes the WHOLE `contexts`
+ * object under one shared depth budget (`normalizeDepth`, default 3, unset
+ * here), and `contexts.processMetrics.appMetrics[i]` sits one level too deep
+ * for even a fully-flattened per-process object to survive it - verified
+ * against the SDK's own `normalize()` (not just this function's return
+ * value): a live delivered event still showed `appMetrics` as four
+ * unusable "[Object]" placeholders after round 1 landed. `appMetrics` is
+ * therefore promoted to its own top-level context (a sibling of
+ * `processMetrics`, not nested inside it) - one less level of nesting is
+ * what actually keeps it inside the budget. This does not raise the SDK's
+ * global `normalizeDepth`, which would affect every event the app sends,
+ * not just this one.
  */
-function flattenProcessMetricsForSentry(metrics: {
-  readonly main: Electron.ProcessMemoryInfo;
-  readonly appMetrics: ReadonlyArray<Electron.ProcessMetric>;
-  readonly cpuUsage: NodeJS.CpuUsage;
-}): Record<string, unknown> {
+function flattenAppMetricsForSentry(
+  appMetrics: ReadonlyArray<Electron.ProcessMetric>,
+): Record<string, unknown> {
+  // Spread into a fresh object literal (numeric-string keys: "0", "1", ...)
+  // rather than returning the mapped array directly - Sentry's `Contexts`
+  // type requires every named context to be a plain record, and the two
+  // shapes normalize identically (verified against the SDK's own
+  // `normalize()`): depth-counting treats an array and an object the same
+  // way, so this is a typing accommodation, not a behavior change.
   return {
-    main: { ...metrics.main },
-    cpuUsage: { ...metrics.cpuUsage },
-    appMetrics: metrics.appMetrics.map((metric) => ({
+    ...appMetrics.map((metric) => ({
       type: metric.type,
       pid: metric.pid,
       name: metric.name ?? metric.serviceName ?? null,
