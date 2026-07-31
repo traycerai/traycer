@@ -125,6 +125,7 @@ export function useProvidersAwaitLoginForClient(args: {
                     { ...p, ...next }
                   : p,
               ),
+              native: prev.native,
             };
           },
         });

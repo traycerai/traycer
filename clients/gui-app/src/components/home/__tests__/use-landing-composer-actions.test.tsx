@@ -405,6 +405,7 @@ describe("useLandingComposerActions", () => {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: null,
         },
       },
     });
@@ -444,6 +445,7 @@ describe("useLandingComposerActions", () => {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: null,
         },
       },
     });
@@ -732,6 +734,7 @@ describe("useLandingComposerActions", () => {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: null,
         },
       },
     });
@@ -788,11 +791,13 @@ describe("useLandingComposerActions", () => {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: null,
         },
         [SECOND_PATH]: {
           path: SECOND_PATH,
           name: "second",
           repoIdentifier: null,
+          hostId: null,
         },
       },
       // The user explicitly switched primary to the SECOND folder.
@@ -973,11 +978,13 @@ describe("useLandingComposerActions", () => {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: null,
         },
         [NON_GIT_PATH]: {
           path: NON_GIT_PATH,
           name: "non-git",
           repoIdentifier: null,
+          hostId: null,
         },
       },
       // The user clicked the pin on the NON-GIT folder.
@@ -1079,6 +1086,7 @@ describe("useLandingComposerActions", () => {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: null,
         },
       },
     });
@@ -1231,6 +1239,7 @@ describe("useLandingComposerActions", () => {
           path: DRAFT_WORKSPACE_PATH,
           name: "draft-workspace",
           repoIdentifier: { owner: "traycerai", repo: "draft-workspace" },
+          hostId: null,
         },
       },
     });
@@ -1242,6 +1251,7 @@ describe("useLandingComposerActions", () => {
           path: GLOBAL_WORKSPACE_PATH,
           name: "global-workspace",
           repoIdentifier: { owner: "traycerai", repo: "global-workspace" },
+          hostId: null,
         },
       },
     });
@@ -2001,6 +2011,7 @@ function setWorkspace(path: string, name: string): void {
         path,
         name,
         repoIdentifier: { owner: "traycerai", repo: name },
+        hostId: null,
       },
     },
   });

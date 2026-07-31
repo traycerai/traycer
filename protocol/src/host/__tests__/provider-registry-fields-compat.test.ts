@@ -553,7 +553,10 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
       hostRpcRegistry["providers.list"],
       7,
       6,
-      { providers: [stateWithRegistryFields] },
+      // `native` is required here and absent from the major-6 cases above
+      // because v7.0 is the live response shape, which carries it - v6.0 froze
+      // before it existed. Same reason the registry fields only ride v7.0.
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

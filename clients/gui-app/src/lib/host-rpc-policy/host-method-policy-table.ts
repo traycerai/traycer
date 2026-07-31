@@ -754,6 +754,13 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("providers.list", {
       classify: (data) => {
         if (data === undefined) return false;
+        // `providers.list` is also the carrier for the native (MCP/plugins/
+        // skills) queries, which cache a MAPPED shape under their own
+        // `cacheKeyIdentity` rather than the raw response. Those entries have
+        // no `providers` array; they opt out of table-owned polling
+        // (`poll: false`) and must never drive the classic lanes. This guard
+        // has to precede every `data.providers` read below.
+        if (!Array.isArray(data.providers)) return false;
         // Ahead of the probe lane deliberately. Both can be true at once on a
         // first boot, and `providers.pending` decays to 30s while an install
         // needs a bounded 5s - taking the faster, tighter-capped lane while
@@ -875,6 +882,33 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Enabling a provider changes persisted provider configuration.
   "providers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Native MCP/plugins/skills mutations write provider config files, so they
+  // are `fifo` for the same reason as the classic provider mutations above:
+  // two rapid toggles must both land, in order, not be coalesced into one.
+  "providers.nativeMutate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // MCP auth actions (login/submitCode/logout/clearAuth/forceReauth) mutate
+  // stored credentials and must not be coalesced.
+  "providers.mcpAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Bounded status poll for an in-flight MCP auth - a pure read, so `latest`
+  // (a superseded poll carries no information the newer one lacks).
+  "providers.awaitMcpAuth": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Cancelling an in-flight MCP auth tears down host-side pending state.
+  "providers.cancelMcpAuth": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

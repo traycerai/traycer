@@ -32,6 +32,7 @@ function numberedFolder(index: number): WorkspaceFolderInfo {
     path: `/tmp/cap-workspace-${index}`,
     name: `cap-workspace-${index}`,
     repoIdentifier: null,
+    hostId: null,
   };
 }
 
