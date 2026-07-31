@@ -105,6 +105,35 @@ describe("useProviderTerminalLogin", () => {
     cleanup();
   });
 
+  // The surfaces that mount this hook (the composer banner, the ended-tile
+  // restart button) can render before an epic/view tab is resolved. `start`
+  // refuses there rather than firing. A regression would send `epicId: null`
+  // to the host, or make it spawn a real PTY with no surface to open it into -
+  // a live sign-in terminal reachable only through the Terminals sidebar.
+  it.each([
+    ["no epic", null, "tab-1"],
+    ["no view tab", EPIC_ID, null],
+  ])("start() is a no-op with %s", async (_label, epicId, viewTabId) => {
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProviderTerminalLogin({
+          launchedFromTile: null,
+          providerId: "copilot",
+          epicId,
+          viewTabId,
+        }),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.start();
+    });
+
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(mocks.startTerminalLoginRequest).not.toHaveBeenCalled();
+  });
+
   // Row 4: close-then-focus is one synchronous store sequence, and the final
   // focus lands on the NEW tile's instance, not a reused/dead one.
   it("closes the replaced tile and focuses the new one, in one sequence", async () => {

@@ -1980,7 +1980,12 @@ export type ProvidersStartTerminalLoginRequest = z.infer<
  * come back to life.
  */
 export const providersStartTerminalLoginResponseSchema = z.object({
-  sessionId: z.string(),
+  // Bounded like the request's `epicId`: an empty id decodes fine and then
+  // vanishes downstream - `useFocusEpicTerminalSession` returns early on a
+  // zero-length session id - leaving the host holding a live sign-in PTY with
+  // no tile and no error. The host mints a uuid so this is a contract floor,
+  // not a live defect.
+  sessionId: z.string().min(1),
   replacedSessionId: z.string().nullable(),
 });
 export type ProvidersStartTerminalLoginResponse = z.infer<

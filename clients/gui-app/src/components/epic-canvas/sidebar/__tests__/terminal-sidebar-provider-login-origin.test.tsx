@@ -77,7 +77,10 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 import { TerminalsPanelBody } from "../epic-terminal-sidebar";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
-import { recordProviderLoginTerminal } from "@/stores/providers/provider-login-terminals";
+import {
+  recordProviderLoginTerminal,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
 
 function openedTerminalTile(tabId: string, sessionId: string) {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
@@ -138,6 +141,15 @@ function seedTab(): void {
 describe("terminal sidebar reopen carries provider-login origin", () => {
   beforeEach(() => {
     seedTab();
+    // The registry is a module-level singleton that persists, so a recorded
+    // entry outlives the test that wrote it. Today's two tests use distinct
+    // session ids and cannot collide, but the next test added here would
+    // silently inherit whatever `recordProviderLoginTerminal` left behind.
+    // Same reset `open-subpages.test.tsx` does.
+    useProviderLoginTerminalsStore.setState(
+      useProviderLoginTerminalsStore.getInitialState(),
+      true,
+    );
   });
 
   afterEach(() => {

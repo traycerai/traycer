@@ -533,6 +533,31 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeDefined();
   });
 
+  // The other half of the `showTerminalLogin` gate. Every other terminal-login
+  // case here passes a real epic + view tab; this one pins the home-composer
+  // fallback, where there is no canvas to open a terminal into. Dropping the
+  // `epicId !== null && viewTabId !== null` conjunct would draw a button that
+  // fires an RPC the host honours - a live sign-in PTY with no tile.
+  it("falls through to the paste form for a terminal-login provider outside a canvas", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
   it("offers only the token paste form (no Authenticate) for a CLI with no headless login (Droid)", () => {
     render(
       <ProviderReauthBanner

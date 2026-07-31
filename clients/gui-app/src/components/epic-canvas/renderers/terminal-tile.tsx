@@ -31,6 +31,7 @@ import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
 import { Button } from "@/components/ui/button";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   emitTerminalClosedNotification,
   emitTerminalCrashedNotification,
@@ -354,7 +355,16 @@ function TerminalTileLive(
       isActive={props.isActive}
       recovery={props.recovery}
       onCrashExit={props.onCrashExit}
-      isSignInTerminal={isSignInTerminal}
+      signInTile={
+        isSignInTerminal
+          ? {
+              providerId: signInProviderId,
+              epicId,
+              sessionId,
+              closeSelf: closeExitedTile,
+            }
+          : null
+      }
     />
   );
 }
@@ -367,9 +377,25 @@ interface TerminalLiveProps {
   readonly isActive: boolean;
   readonly recovery: TerminalSessionRecovery;
   readonly onCrashExit: () => void;
-  /** Keeps the tile on screen when the login shell exits - see the exit effect
-   *  below. */
-  readonly isSignInTerminal: boolean;
+  /**
+   * Non-null only for a `provider-login` tile. Carries the ended-panel props
+   * rather than a bare boolean, because this component owns the ONLY prompt
+   * read of the login shell's death.
+   *
+   * `signInSessionGone` in the parent cannot cover the attached case: it is
+   * derived from `terminal.list`, which has a 60s `staleTime` and never polls,
+   * so between the shell exiting and the next invalidation the parent still
+   * believes the session is live. The store status below is stream-driven and
+   * immediate. Without this the tile would sit on a dead, torn-down xterm with
+   * no explanation and no way to restart - exactly what the exit-effect
+   * exemption was written to prevent.
+   */
+  readonly signInTile: {
+    readonly providerId: ProviderId | null;
+    readonly epicId: string;
+    readonly sessionId: string;
+    readonly closeSelf: () => void;
+  } | null;
 }
 
 function TerminalLive(props: TerminalLiveProps) {
@@ -414,7 +440,7 @@ function TerminalLive(props: TerminalLiveProps) {
   // the user still needs it, and would take the CLI's last words off screen
   // with no explanation. The tile shows the ended panel instead; the user
   // closes the tab themselves.
-  const isSignInTerminal = props.isSignInTerminal;
+  const isSignInTerminal = props.signInTile !== null;
   useEffect(() => {
     if (status !== "exited") return;
     if (isSignInTerminal) return;
@@ -459,6 +485,24 @@ function TerminalLive(props: TerminalLiveProps) {
     },
     [handle],
   );
+
+  // The attached login shell has ended. Swap the (now torn-down) xterm for the
+  // same panel the never-attached path renders, so "Start again" is reachable
+  // however the shell died - the user typing `exit` after a successful sign-in,
+  // or the CLI giving up. Placed after every hook so the hook order is stable.
+  const signInTile = props.signInTile;
+  if (signInTile !== null && status === "exited") {
+    return (
+      <SignInTerminalEndedPanel
+        tileId={props.tileId}
+        providerId={signInTile.providerId}
+        epicId={signInTile.epicId}
+        viewTabId={props.viewTabId}
+        sessionId={signInTile.sessionId}
+        closeSelf={signInTile.closeSelf}
+      />
+    );
+  }
 
   return (
     <div
@@ -587,6 +631,11 @@ function SignInRestartButton(props: {
       onClick={terminalLogin.start}
     >
       Start again
+      {/* Same pending treatment as the banner's "Sign in from a terminal":
+          unchanged label, disabled, inline spinner. Starting a sign-in kills
+          and respawns a PTY host-side, so a press with no feedback reads as a
+          dead button and invites a second one. */}
+      {terminalLogin.isPending ? <MutedAgentSpinner /> : null}
     </Button>
   );
 }
