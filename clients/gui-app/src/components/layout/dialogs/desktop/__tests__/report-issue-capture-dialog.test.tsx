@@ -2076,6 +2076,41 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(form.images[0]?.bytes.byteLength).toBeGreaterThan(0);
     });
 
+    it("sends an image-only report end to end with no typed text (G15)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      // The gate is satisfied by the image alone (tech-plan T4/T5's "text or
+      // image, either satisfies") - Send must complete without ever typing
+      // into the intent field.
+      await attachPngAndWaitForThumbnail("image-only.png");
+      await screen.findByRole("img", { name: "image-only.png" });
+      const intentField = bugIntentField();
+      if (!(intentField instanceof HTMLTextAreaElement)) {
+        throw new Error("Expected the intent textarea.");
+      }
+      expect(intentField.value).toBe("");
+
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+      expect(
+        await screen.findByRole("heading", { name: "Report sent" }),
+      ).not.toBeNull();
+
+      const form = lastSubmittedForm(harness);
+      expect(form.intent).toBe("");
+      expect(form.images).toHaveLength(1);
+      expect(form.images[0]?.fileName).toBe("image-only.png");
+    });
+
     it("disables Send while an image is mid-ingest so a just-pasted screenshot cannot be silently omitted", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,

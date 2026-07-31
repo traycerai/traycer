@@ -761,6 +761,99 @@ describe("parseSupportSubmitReportRequest", () => {
       ).toThrow(/limit/);
     });
   });
+
+  // G15: mirrors the dialog's own evidence gate at the wire boundary - a
+  // sentence, a screenshot, a location, or a captured error each
+  // independently satisfy it; only genuinely nothing at all is rejected.
+  describe("submittable-evidence gate (G15)", () => {
+    it("accepts an empty intent when at least one image is attached", () => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        intent: "",
+        images: [defaultImageAttachment()],
+      });
+      expect(result.intent).toBe("");
+      expect(result.images).toHaveLength(1);
+    });
+
+    it("rejects an empty intent with no images, location, or captured error", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          intent: "",
+          location: null,
+          images: [],
+        }),
+      ).toThrow(
+        /requires a sentence, a screenshot, a location, or a captured error/,
+      );
+    });
+
+    it("rejects an intent of only whitespace with no other evidence", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          intent: "   \n\t",
+          location: null,
+          images: [],
+        }),
+      ).toThrow();
+    });
+
+    it("accepts an empty intent when a bug location was actively changed", () => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        intent: "",
+        location: "Chat",
+        images: [],
+      });
+      expect(result.intent).toBe("");
+      expect(result.location).toBe("Chat");
+    });
+
+    it("accepts an empty intent for an error-triggered report (a captured cause is its own evidence)", () => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        intent: "",
+        location: null,
+        images: [],
+        privateDiagnostics: VALID_PRIVATE_DIAGNOSTICS,
+      });
+      expect(result.intent).toBe("");
+    });
+
+    it("accepts an empty intent when privateDiagnostics carries only a fingerprint (no structured cause)", () => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        intent: "",
+        location: null,
+        images: [],
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          cause: null,
+        },
+      });
+      expect(result.intent).toBe("");
+    });
+
+    it("still rejects an empty intent when privateDiagnostics has neither a cause nor a fingerprint (KB2's legacy-context shape)", () => {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          intent: "",
+          location: null,
+          images: [],
+          privateDiagnostics: {
+            ...VALID_PRIVATE_DIAGNOSTICS,
+            cause: null,
+            fingerprint: null,
+          },
+        }),
+      ).toThrow(
+        /requires a sentence, a screenshot, a location, or a captured error/,
+      );
+    });
+  });
 });
 
 describe("parseSupportReadFrozenLogTailInput", () => {

@@ -704,6 +704,12 @@ export function parseSupportSubmitReportRequest(
     "supportSubmitReport.privateOutcome",
   );
   const privateDiagnostics = parsePrivateDiagnostics(form.privateDiagnostics);
+  assertHasSubmittableEvidence({
+    intent: form.intent,
+    location,
+    images,
+    privateDiagnostics,
+  });
   return {
     draftId: form.draftId,
     type,
@@ -719,6 +725,39 @@ export function parseSupportSubmitReportRequest(
     privateOutcome,
     ...(privateDiagnostics === undefined ? {} : { privateDiagnostics }),
   };
+}
+
+// G15: mirrors the dialog's own evidence gate (tech-plan T4/T5 - a sentence,
+// a screenshot, or (bug-only) an actively-changed location satisfies it;
+// an error envelope always does) at the wire boundary, so a stale or buggy
+// client can never smuggle a genuinely-empty report past a UI gate that was
+// supposed to be the only thing blocking it. `location` is non-null on the
+// wire ONLY when the client's own gate already treated an actively-changed
+// bug location as satisfying evidence (see `buildRequest` in the dialog),
+// so checking it here is an exact mirror, not a re-derivation. Every
+// non-empty case the client's own gate accepts must still be accepted here:
+// this must never regress into rejecting an error-triggered report with no
+// typed text, or a bug report satisfied by location alone.
+function assertHasSubmittableEvidence(input: {
+  readonly intent: string;
+  readonly location: string | null;
+  readonly images: readonly SupportImageAttachmentInput[];
+  readonly privateDiagnostics: SupportPrivateDiagnostics | undefined;
+}): void {
+  const hasErrorEnvelope =
+    input.privateDiagnostics !== undefined &&
+    (input.privateDiagnostics.cause !== null ||
+      input.privateDiagnostics.fingerprint !== null);
+  const hasEvidence =
+    hasErrorEnvelope ||
+    input.intent.trim().length > 0 ||
+    input.images.length > 0 ||
+    input.location !== null;
+  if (!hasEvidence) {
+    throw new Error(
+      "supportSubmitReport requires a sentence, a screenshot, a location, or a captured error - none were present",
+    );
+  }
 }
 
 const READ_FROZEN_LOG_TAIL_KEYS = new Set(["draftId", "target"]);
