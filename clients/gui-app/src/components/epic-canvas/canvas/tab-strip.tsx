@@ -68,7 +68,7 @@ import {
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
@@ -232,14 +232,14 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds,
     enabled: chatIds.length > 0,
   });
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <div
         ref={stripRef}
         data-testid="tab-strip"

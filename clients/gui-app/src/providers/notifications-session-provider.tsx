@@ -28,7 +28,12 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
-import type { HostNotificationPresenceFrame } from "@/lib/notifications/notification-presence";
+import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
+import {
+  readFocusedHostNotificationPresenceEntity,
+  subscribeHostNotificationPresence,
+  type HostNotificationPresenceFrame,
+} from "@/lib/notifications/notification-presence";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService, useHostClient } from "@/lib/host";
@@ -58,7 +63,10 @@ import {
   type NotificationNavigate,
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationsEntityRef,
+  HostNotificationsPresenceEntity,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   useMergedNotificationsActions,
   type MergedNotificationRow,
@@ -137,14 +145,38 @@ export function NotificationsSessionProvider(
   useEffect(() => {
     onToastClickRef.current = onToastClick;
   }, [onToastClick]);
+  // The merged actions are rebuilt whenever any cloud mutation's state
+  // changes. Reading the fan-out through a ref keeps the two cloud effects
+  // below subscribed for the life of the mode instead of tearing down and
+  // resubscribing on every in-flight mark-read - which would leave a window
+  // where an arriving snapshot has no listener.
+  const markCloudEntityReadRef = useRef(mergedActions.markEntityAsRead);
+  useEffect(() => {
+    markCloudEntityReadRef.current = mergedActions.markEntityAsRead;
+  }, [mergedActions]);
+  const markCloudEntityRead = useCallback(
+    (entity: HostNotificationsEntityRef): void => {
+      markCloudEntityReadRef.current(entity);
+    },
+    [],
+  );
   const consumeEntity = useCallback(
     (entity: HostNotificationsEntityRef): void => {
+      // App-local rows are client-side state owned by neither feed, so this
+      // half runs identically in both modes.
       useAppLocalNotificationsStore
         .getState()
         .markEntityAsRead(entity, Date.now());
+      if (notificationFeedMode === "cloud") {
+        // The v1 entity RPC consumes ONE host's SQLite; in cloud mode the
+        // rows in view can belong to any host, so consumption has to address
+        // the entries themselves.
+        markCloudEntityRead(entity);
+        return;
+      }
       markEntityRead(entity);
     },
-    [markEntityRead],
+    [markEntityRead, markCloudEntityRead, notificationFeedMode],
   );
   const onPresenceChanged = useCallback(
     (frame: HostNotificationPresenceFrame, hostId: string): void => {
@@ -240,6 +272,15 @@ export function NotificationsSessionProvider(
     }
   }, []);
 
+  // The relay session's rows and its view-consumption bookkeeping are one
+  // unit of ownership: the driver holds an in-flight claim and a retry timer
+  // that would otherwise outlive the snapshot they were derived from and fire
+  // against the next session's feed.
+  const resetCloudRelaySession = useCallback((): void => {
+    useCloudNotificationsStore.getState().reset();
+    resetCloudEntityReadDriver();
+  }, []);
+
   // Identity/sign-out owns the full reset: every user-owned replica (host,
   // collaboration) is cleared so the incoming user never sees the prior
   // user's entries.
@@ -247,25 +288,25 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
     useNotificationsStore.getState().reset();
     useHostNotificationsStore.getState().reset();
-    useCloudNotificationsStore.getState().reset();
+    resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
-  }, [queryClient]);
+  }, [queryClient, resetCloudRelaySession]);
 
   // A host switch only invalidates host-owned truth. Collaboration/system
   // rows are not scoped to a host and must survive the swap untouched.
   const resetHostReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().reset();
-    useCloudNotificationsStore.getState().reset();
+    resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
-  }, [queryClient]);
+  }, [queryClient, resetCloudRelaySession]);
 
   // Cloud rows are a relay-session snapshot, not a durable replica. A lost
   // binding or replacement stream client starts a new ownership epoch and
   // must remain unavailable until that new relay delivers its own snapshot.
   const resetCloudRelayOwnership = useCallback((): void => {
-    useCloudNotificationsStore.getState().reset();
-  }, []);
+    resetCloudRelaySession();
+  }, [resetCloudRelaySession]);
 
   // A disconnect (IPC drop / host restart) is not a truth reset: rendered
   // host rows and cursors stay put, and only the exact summary degrades to
@@ -294,6 +335,56 @@ export function NotificationsSessionProvider(
       }
     });
   }, [consumeEntity]);
+
+  // TRIGGER 1 (cloud) - presence change.
+  //
+  // Local mode learns "the user is looking at X" from host presence frames,
+  // and neither local stream is opened in cloud mode. But those frames are
+  // built from state this renderer already owns: the canvas store plus
+  // document focus. `readFocusedHostNotificationPresenceEntity` is literally
+  // the function the outgoing frame is composed from, and
+  // `subscribeHostNotificationPresence` already watches exactly the inputs
+  // that can change it. Reading it directly is the same signal one hop
+  // earlier - no stream reopened to be told what this window already knows.
+  useEffect(() => {
+    if (notificationFeedMode !== "cloud") return;
+    const evaluate = (): void => {
+      const nextEntity = entityFromFocusedPresenceEntity(
+        readFocusedHostNotificationPresenceEntity(),
+      );
+      const previousEntity = activeEntityRef.current;
+      if (
+        (nextEntity === null && previousEntity === null) ||
+        (nextEntity !== null &&
+          previousEntity !== null &&
+          notificationEntitiesMatch(nextEntity, previousEntity))
+      )
+        return;
+      activeEntityRef.current = nextEntity;
+      if (nextEntity !== null) consumeEntity(nextEntity);
+    };
+    evaluate();
+    return subscribeHostNotificationPresence(evaluate);
+  }, [notificationFeedMode, consumeEntity]);
+
+  // TRIGGER 2 (cloud) - a row arriving for the entity already in view.
+  //
+  // The local counterpart is the terminal-severity branch of `onFeedFrame`.
+  // Cloud rows arrive only as whole snapshots, so the equivalent is to
+  // re-evaluate consumption whenever the row set changes. The severity filter
+  // and the convergence guard both live in the fan-out itself, which writes
+  // nothing when it has no targets - so this cannot drive a mark -> snapshot
+  // -> mark loop, and a server that never takes the marker still gets at most
+  // one request per entry per session.
+  useEffect(() => {
+    if (notificationFeedMode !== "cloud") return;
+    return useCloudNotificationsStore.subscribe((state, previous) => {
+      if (state.rows === previous.rows) return;
+      const activeEntity = activeEntityRef.current;
+      if (activeEntity === null) return;
+      markCloudEntityRead(activeEntity);
+    });
+  }, [notificationFeedMode, markCloudEntityRead]);
 
   const openForCurrentUser = useCallback((): void => {
     if (
@@ -465,7 +556,7 @@ export function NotificationsSessionProvider(
       tearDown();
       // A cloud-to-local capability change must never leave cloud rows on
       // screen, and the reverse must begin with no local fallback rows.
-      useCloudNotificationsStore.getState().reset();
+      resetCloudRelaySession();
       // Entering either cloud-only state must also discard the retained v1
       // cursor and rows. Selectors are gated, but this prevents a later mode
       // transition from treating stale local pagination as current truth.
@@ -504,6 +595,7 @@ export function NotificationsSessionProvider(
     tearDown,
     resetHostReplica,
     resetCloudRelayOwnership,
+    resetCloudRelaySession,
     markHostReplicaDisconnected,
     openForCurrentUser,
     notificationFeedMode,
@@ -512,6 +604,11 @@ export function NotificationsSessionProvider(
   useEffect(() => {
     return () => {
       tearDown();
+      // `tearDown` only closes streams. The view-consumption driver keeps its
+      // own re-arming retry timer, and unmount is the one teardown edge that
+      // reaches none of the `resetCloudRelaySession` call sites - so without
+      // this, a failing server's retry chain outlives the provider.
+      resetCloudEntityReadDriver();
     };
   }, [tearDown]);
 
@@ -521,16 +618,20 @@ export function NotificationsSessionProvider(
 function entityFromFocusedPresence(
   frame: HostNotificationPresenceFrame,
 ): HostNotificationsEntityRef | null {
-  if (
-    !frame.focused ||
-    frame.entity === null ||
-    frame.entity.epicId === undefined
-  ) {
-    return null;
-  }
-  return frame.entity.chatId === undefined
-    ? { epicId: frame.entity.epicId }
-    : { epicId: frame.entity.epicId, chatId: frame.entity.chatId };
+  if (!frame.focused) return null;
+  return entityFromFocusedPresenceEntity(frame.entity);
+}
+
+/** The presence entity normalized to an addressable entity ref. Shared so the
+ * cloud path, which reads the focused entity locally, and the local path,
+ * which receives it back as a host frame, cannot drift apart. */
+function entityFromFocusedPresenceEntity(
+  entity: HostNotificationsPresenceEntity | null,
+): HostNotificationsEntityRef | null {
+  if (entity === null || entity.epicId === undefined) return null;
+  return entity.chatId === undefined
+    ? { epicId: entity.epicId }
+    : { epicId: entity.epicId, chatId: entity.chatId };
 }
 
 function createFallbackNotificationsWindowId(): string {
