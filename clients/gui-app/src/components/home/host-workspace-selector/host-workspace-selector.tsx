@@ -577,8 +577,12 @@ function HomeWorkspaceRows(props: {
   // swap: a memo keyed on the client would keep returning the previous host's
   // key, and this surface - which unmounts on close and has no Refresh button
   // of its own - would spend its one intent edge on the host the user just left.
+  // `JSON.stringify`, not a space-joined string: folder paths routinely contain
+  // spaces, and joining on one loses the boundaries - `["/a b", "/c"]` and
+  // `["/a", "/b c"]` collapse to the same key, so moving between those two
+  // scopes would read as "same target" and skip the re-derive.
   const rowsIntentKey = useMemo(
-    () => `${props.activeHostId ?? ""} ${queryableFolderPaths.join(" ")}`,
+    () => JSON.stringify([props.activeHostId, queryableFolderPaths]),
     [props.activeHostId, queryableFolderPaths],
   );
   useEffect(() => {

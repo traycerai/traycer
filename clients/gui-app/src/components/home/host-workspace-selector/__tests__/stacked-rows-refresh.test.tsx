@@ -60,6 +60,10 @@ const RESOLVED_FOLDER: ResolvedFolder = {
   repoIdentifier: { owner: "acme", repo: "app" },
 };
 
+function folderAt(path: string): ResolvedFolder {
+  return { ...RESOLVED_FOLDER, path, name: path };
+}
+
 const SUMMARY: WorktreeWorkspaceSummaryV13 = {
   workspacePath: WORKSPACE_PATH,
   isGitRepo: true,
@@ -203,6 +207,28 @@ describe("stacked rows refresh-on-mount", () => {
     expect(forcedRefreshCalls()[0]).toMatchObject({
       workspacePaths: [WORKSPACE_PATH],
       forceRefresh: true,
+    });
+  });
+
+  it("tells two folder scopes apart even when a space-join would not", async () => {
+    // These two scopes are DIFFERENT - one folder versus two - but a
+    // space-joined key flattens both to "/repos/a /b". A trailing space is a
+    // legal path component on Unix, so this is a real collision rather than a
+    // theoretical one, and under it the second scope reads as "same target" and
+    // never gets its re-derive.
+    mocks.resolvedWorkspace.current = { folders: [folderAt("/repos/a /b")] };
+    const { rerenderFresh } = renderControls("stacked");
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(1);
+    });
+
+    mocks.resolvedWorkspace.current = {
+      folders: [folderAt("/repos/a"), folderAt("/b")],
+    };
+    rerenderFresh();
+
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(2);
     });
   });
 
