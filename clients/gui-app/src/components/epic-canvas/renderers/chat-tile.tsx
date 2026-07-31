@@ -159,7 +159,6 @@ import {
   makeSnapshotSegmentDiffTile,
 } from "@/lib/chat/snapshot-diff-tile";
 import {
-  useActivePaneEffect,
   usePaneFocused,
   usePaneVisible,
 } from "@/components/epic-tabs/pane-visibility-context";
@@ -169,6 +168,7 @@ import {
   useLocalSnapshotClearStore,
 } from "@/stores/settings/local-snapshot-clear-store";
 import { ChatTileErrorNoticeToasts } from "./chat-tile-error-notice-toasts";
+import { ChatTileRestoreResultToasts } from "./chat-tile-restore-result-toasts";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
@@ -180,7 +180,6 @@ import {
   normalizeInlineEditForSession,
   canModifyChatMessages,
   shouldGenerateChatTitleForSubmittedMessage,
-  showRestoreResultToast,
   userMessageSenderForProfile,
   plainTextPromptContent,
   composerTurnStatus,
@@ -931,6 +930,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
             ) : null}
           </div>
           <ChatTileErrorNoticeToasts handle={view.handle} />
+          <ChatTileRestoreResultToasts handle={view.handle} />
           <RevertOnEditDialog
             open={view.revertOnEdit.open}
             onOpenChange={view.revertOnEdit.onOpenChange}
@@ -1498,11 +1498,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const unanswerableInterviewsBusy = unanswerableInterviews.some((interview) =>
     interviewActionBlockIds.has(interview.blockId),
   );
-  const showCompletedRestoreToast = useCallback(() => {
-    if (state.restore === null || state.restore.kind !== "completed") return;
-    showRestoreResultToast(state.restore.results);
-  }, [state.restore]);
-  useActivePaneEffect(showCompletedRestoreToast);
   // All pending approvals route to the composer slot - single or many
   // share one canonical surface. Inline rendering for pending approvals
   // is suppressed; resolved approvals stay inline as turn history.

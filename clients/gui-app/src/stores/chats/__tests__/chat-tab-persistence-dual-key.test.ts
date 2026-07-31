@@ -338,14 +338,15 @@ describe("ticket 15 dual-key scroll cache", () => {
     evictChatTabState([id.tileInstanceId]);
     expect(hasSavedChatTabState(id)).toBe(true);
 
-    evictChatTabPersistenceForChat({ epicId: EPIC, chatId: DELETE_SINGLE_CHAT });
+    evictChatTabPersistenceForChat({
+      epicId: EPIC,
+      chatId: DELETE_SINGLE_CHAT,
+    });
     expect(hasSavedChatTabState(id)).toBe(false);
     expect(isChatKeyTombstoned(chatTabPersistenceChatKey(id))).toBe(true);
 
     const reopened = identity("reopen-new", EPIC, DELETE_SINGLE_CHAT);
-    expect(
-      restoreChatTabState(reopened, messages).mode,
-    ).toBe("following-end");
+    expect(restoreChatTabState(reopened, messages).mode).toBe("following-end");
     expect(hasSavedChatTabState(reopened)).toBe(false);
 
     // Terminal regardless of who writes DURABLE state after the delete -
@@ -482,7 +483,9 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
 
   it("tool open: reopen-after-close restores segment ids via the sweep's promotion", () => {
     const closed = chatIdIdentity("reg-tool");
-    useToolOpenStore.getState().setOpen(closed.tileInstanceId, "tool-seg", true);
+    useToolOpenStore
+      .getState()
+      .setOpen(closed.tileInstanceId, "tool-seg", true);
     toolOpenInitializedScopes.add(closed.tileInstanceId);
     promoteToolOpenToDurable(closed);
     useToolOpenStore.getState().reset(closed.tileInstanceId);
@@ -703,9 +706,8 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
       adapter: createNoopAdapter("reopen-post-delete-find"),
     });
     expect(
-      useTileFindStore.getState().uiByTileInstanceId[
-        "reopen-post-delete-find"
-      ]?.query,
+      useTileFindStore.getState().uiByTileInstanceId["reopen-post-delete-find"]
+        ?.query,
     ).toBe("");
   });
 });

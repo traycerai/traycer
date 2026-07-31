@@ -59,7 +59,10 @@ describe("chat-tab-persistence-tombstone", () => {
   });
 
   it("a batch larger than the cap keeps EVERY member fenced through the whole tombstone-then-sweep ordering (round 5 item 2 - fence must survive its own transaction)", () => {
-    const epicIds = Array.from({ length: 501 }, (_unused, i) => `epic-batch-${i}`);
+    const epicIds = Array.from(
+      { length: 501 },
+      (_unused, i) => `epic-batch-${i}`,
+    );
 
     // Production order (`handleEpicAccessLoss`): tombstone the WHOLE batch
     // first, in one call - matches `evictChatTabPersistenceForEpics`.

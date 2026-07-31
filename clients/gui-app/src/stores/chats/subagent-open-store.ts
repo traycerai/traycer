@@ -52,10 +52,7 @@ export function promoteSubagentOpenToDurable(
 ): void {
   if (!subagentOpenInitializedScopes.has(identity.tileInstanceId)) return;
   const prefix = `${identity.tileInstanceId}\0`;
-  const scoped = readScopedIds(
-    useSubagentOpenStore.getState().openIds,
-    prefix,
-  );
+  const scoped = readScopedIds(useSubagentOpenStore.getState().openIds, prefix);
   subagentOpenDurableCache.set(identity, scoped);
 }
 

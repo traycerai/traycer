@@ -201,9 +201,7 @@ export function commitChatTabStateToDurable(
 export function promoteChatTabStateToDurable(
   identity: ChatTabPersistenceIdentity,
 ): void {
-  const tabValue = chatTabStateCache.get(
-    chatTabPersistenceTabKey(identity),
-  );
+  const tabValue = chatTabStateCache.get(chatTabPersistenceTabKey(identity));
   if (tabValue === undefined) return;
   durableChatTabStateCache.set(identity, tabValue);
 }

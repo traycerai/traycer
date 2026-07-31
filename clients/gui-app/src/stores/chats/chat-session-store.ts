@@ -622,6 +622,12 @@ export interface ChatSessionStoreHandle {
   readonly store: UseBoundStore<StoreApi<ChatSessionState>>;
   readonly deliveredNotices: DeliveredNoticeTracker;
   /**
+   * Completed restores already surfaced as toasts. Completion state remains in
+   * the store for the dialog, so delivery lives on the handle to survive task-
+   * tab focus changes and component remounts without replaying the result.
+   */
+  readonly deliveredRestoreCompletionKeys: Set<string>;
+  /**
    * Per-surface visibility report feeding the stream-flush coordinator's
    * tiered flush rate. The same chat can render in several surfaces (split
    * panes, keep-alive tabs); the chat counts as visible when ANY reporting
@@ -710,6 +716,8 @@ export const MAX_ERROR_NOTICE_RECORDS = 32;
  * memory bounded.
  */
 export const MAX_DELIVERED_CLIENT_ACTION_IDS = MAX_ERROR_NOTICE_RECORDS * 4;
+/** Bounds string-key retention while comfortably covering recent restores. */
+export const MAX_DELIVERED_RESTORE_COMPLETIONS = 32;
 
 function appendErrorNotice(
   notices: ReadonlyArray<ChatErrorNotice>,
@@ -2625,6 +2633,7 @@ export function createChatSessionStore(
       notices: new WeakSet<ChatErrorNotice>(),
       clientActionIds: new Set<string>(),
     },
+    deliveredRestoreCompletionKeys: new Set<string>(),
     setSurfaceVisibility: (surfaceId, visible) => {
       if (surfaceVisibility.get(surfaceId) === visible) return;
       surfaceVisibility.set(surfaceId, visible);

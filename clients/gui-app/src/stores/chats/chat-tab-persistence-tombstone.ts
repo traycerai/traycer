@@ -76,7 +76,9 @@ function pruneTombstonedChatKeys(): void {
   }
 }
 
-function pruneTombstonedEpicPrefixes(protectedPrefixes: ReadonlySet<string>): void {
+function pruneTombstonedEpicPrefixes(
+  protectedPrefixes: ReadonlySet<string>,
+): void {
   if (tombstonedEpicPrefixes.size <= TOMBSTONE_LIMIT) return;
   for (const prefix of tombstonedEpicPrefixes) {
     if (tombstonedEpicPrefixes.size <= TOMBSTONE_LIMIT) return;

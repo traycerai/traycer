@@ -2573,9 +2573,8 @@ let previousTileInstanceIds: ReadonlySet<string> = new Set<string>();
 let previousCanvasByTabId: Readonly<
   Record<string, EpicCanvasState | undefined>
 > | null = null;
-let previousTabsById: Readonly<
-  Record<string, EpicViewTab | undefined>
-> | null = null;
+let previousTabsById: Readonly<Record<string, EpicViewTab | undefined>> | null =
+  null;
 useEpicCanvasStore.subscribe((state) => {
   // Ticket 15 review round 3: `tabsById` (epicId) and `canvasByTabId` (the
   // tile tree) can update in SEPARATE `set()` calls (e.g. `openEpicTab`

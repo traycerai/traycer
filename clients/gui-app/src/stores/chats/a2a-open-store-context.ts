@@ -94,9 +94,7 @@ export function evictA2AOpenStores(
 export function promoteA2AOpenStoreToDurable(
   identity: ChatTabPersistenceIdentity,
 ): void {
-  const store = a2aOpenStoreRegistry.get(
-    chatTabPersistenceTabKey(identity),
-  );
+  const store = a2aOpenStoreRegistry.get(chatTabPersistenceTabKey(identity));
   if (store === undefined) return;
   const state = store.getState();
   durableA2AOpenCache.set(identity, {

@@ -9,9 +9,7 @@ import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height
  * which could not fail for a real production lifecycle defect). This is the
  * SAME hook `chat-tile.tsx` consumes - not a duplicate re-implementation.
  */
-function MeasuredHeightProbe(props: {
-  readonly mounted: boolean;
-}): ReactNode {
+function MeasuredHeightProbe(props: { readonly mounted: boolean }): ReactNode {
   const { setElement, element, height } = useMeasuredElementHeight();
   return (
     <div>

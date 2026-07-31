@@ -57,9 +57,7 @@ type ChatIdentity = Pick<ChatTabPersistenceIdentity, "epicId" | "chatId">;
  * happens to run last), so eviction alone is not terminal; every durable
  * write checks this fence (see chat-durable-cache.ts).
  */
-export function evictChatTabPersistenceForChat(
-  identity: ChatIdentity,
-): void {
+export function evictChatTabPersistenceForChat(identity: ChatIdentity): void {
   tombstoneChatKey(chatTabPersistenceChatKey(identity));
   evictChatTabStateForChat(identity);
   evictA2AOpenStoreForChat(identity);

@@ -61,7 +61,10 @@ export function promoteChatTurnMinimapActiveEntryToDurable(
 ): void {
   const tabKey = chatTabPersistenceTabKey(identity);
   if (!tabActiveEntryCache.has(tabKey)) return;
-  durableActiveEntryCache.set(identity, tabActiveEntryCache.get(tabKey) ?? null);
+  durableActiveEntryCache.set(
+    identity,
+    tabActiveEntryCache.get(tabKey) ?? null,
+  );
 }
 
 /** Drops entries outright for tabs that closed for good - called from the
