@@ -93,8 +93,8 @@ import {
 } from "@/stores/epics/left-panel-store";
 import {
   selectPrScopeHasItems,
-  usePrSeenFactsStore,
-} from "@/stores/epics/pr-seen-facts-store";
+  usePrPresenceStore,
+} from "@/stores/epics/pr-presence-store";
 import {
   useFileTreeStore,
   useSelectedFileTreeWorkspace,
@@ -493,7 +493,7 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
   const hostId = useReactiveActiveHostId();
-  const hasPullRequests = usePrSeenFactsStore(
+  const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
@@ -548,7 +548,7 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   // The persisted PR baseline is readable before the epic's Y.doc resolves, so
   // the loading rail already shows the same set of panels the live one will -
   // no icon appears or disappears as the epic finishes opening.
-  const hasPullRequests = usePrSeenFactsStore(
+  const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();

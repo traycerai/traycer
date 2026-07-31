@@ -1,4 +1,10 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AlertCircle,
   ChevronRight,
@@ -17,6 +23,7 @@ import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
+import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
 import { makePrDetailTile, prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import {
   formatPrRowTitle,
@@ -66,6 +73,20 @@ export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
     mode: "foreground",
     enabled,
   });
+
+  // The rail's presence gate is fed from HERE - the open panel's own stream -
+  // and nowhere else. Opening an epic performs no PR work at all, so this is
+  // the only writer, and it is why an epic's PR icon appears from the second
+  // open onward rather than the first (see `pr-presence-store`).
+  const recordPrPresence = usePrPresenceStore((s) => s.recordPrPresence);
+  const items = subscription.data?.items ?? null;
+  useEffect(() => {
+    // `null` is "no frame yet", which is NOT the same as "no PRs": writing
+    // `false` there would blank the icon on every panel open before the first
+    // frame lands, exactly the flicker the persisted store exists to prevent.
+    if (hostId === null || items === null) return;
+    recordPrPresence(hostId, props.epicId, items.length > 0);
+  }, [hostId, items, props.epicId, recordPrPresence]);
 
   if (!methodSupported) {
     return <PrHostUpdateRequired />;

@@ -20,9 +20,9 @@ import {
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
 import {
-  prSeenFactsScopeKey,
-  usePrSeenFactsStore,
-} from "@/stores/epics/pr-seen-facts-store";
+  prPresenceScopeKey,
+  usePrPresenceStore,
+} from "@/stores/epics/pr-presence-store";
 
 interface CapturedDroppableInput {
   readonly id: string;
@@ -109,21 +109,9 @@ function resetLeftPanelStore(): void {
  * separately below.
  */
 function setPullRequestPresence(hasPullRequests: boolean): void {
-  usePrSeenFactsStore.setState({
-    stateByScopeKey: hasPullRequests
-      ? {
-          [prSeenFactsScopeKey(HOST_ID, EPIC_ID)]: {
-            seeded: true,
-            hasChanged: false,
-            factsByPrKey: {
-              "id|github.com|acme|app|1": {
-                state: "open",
-                checks: null,
-                commentCount: null,
-              },
-            },
-          },
-        }
+  usePrPresenceStore.setState({
+    hasItemsByScopeKey: hasPullRequests
+      ? { [prPresenceScopeKey(HOST_ID, EPIC_ID)]: true }
       : {},
   });
 }
@@ -420,19 +408,9 @@ describe("<EpicLeftPanelRail />", () => {
     it("scopes presence to the active host", () => {
       // A baseline recorded under a different host must not reveal the panel
       // here - PR discovery is per (hostId, epicId).
-      usePrSeenFactsStore.setState({
-        stateByScopeKey: {
-          [prSeenFactsScopeKey("some-other-host", EPIC_ID)]: {
-            seeded: true,
-            hasChanged: false,
-            factsByPrKey: {
-              "id|github.com|acme|app|1": {
-                state: "open",
-                checks: null,
-                commentCount: null,
-              },
-            },
-          },
+      usePrPresenceStore.setState({
+        hasItemsByScopeKey: {
+          [prPresenceScopeKey("some-other-host", EPIC_ID)]: true,
         },
       });
       renderRail();
@@ -512,43 +490,6 @@ describe("<EpicLeftPanelRail />", () => {
       });
 
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
-    });
-  });
-
-  describe("changed-dot accessibility", () => {
-    function renderRail() {
-      return render(
-        <EpicLeftPanelRail
-          epicId={EPIC_ID}
-          tabId={TAB_ID}
-          orientation="vertical"
-        />,
-      );
-    }
-
-    // The visible dot is `aria-hidden` (`pr-changed-dot`), so a screen-reader
-    // user's only way to learn "there's new PR activity" is the button's own
-    // accessible name.
-    it("names the new-updates state in the rail button's accessible name", () => {
-      usePrSeenFactsStore.getState().markChanged(HOST_ID, EPIC_ID);
-      renderRail();
-
-      // Queried BY the accessible name rather than reading the attribute:
-      // that asserts the computed name a screen reader actually announces,
-      // which is the thing this test exists to protect.
-      expect(
-        screen.getByRole("button", {
-          name: "Pull Requests, new pull request updates",
-        }),
-      ).toBeTruthy();
-    });
-
-    it("keeps the plain label once there is nothing new", () => {
-      renderRail();
-
-      expect(
-        screen.getByRole("button", { name: "Pull Requests" }),
-      ).toBeTruthy();
     });
   });
 
