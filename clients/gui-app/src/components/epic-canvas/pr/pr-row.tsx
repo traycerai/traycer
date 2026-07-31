@@ -151,6 +151,13 @@ export function PrRow(props: {
   readonly tabId: string;
 }): ReactNode {
   const item = props.entry.item;
+  // A never-swept row has no title, and `prRowIdentity` already carries the
+  // whole label in the number badge above. Rendering the element anyway left
+  // an empty line, so the row read as "number badge, blank, branch" - the
+  // missing-summary report. Dropping the element is what the projection's own
+  // contract asks for: a null title means the identity IS the label, not that
+  // the PR is untitled.
+  const titleText = prRowTitleText(item);
   const identified = fullyIdentifiedPrBase(item);
   const clickable = props.entry.onOpen !== null;
   const onOpen = props.entry.onOpen;
@@ -226,19 +233,21 @@ export function PrRow(props: {
           />
         ) : null}
         <PrRowBadges item={item} />
-        <TooltipWrapper
-          label={prRowTitleText(item)}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <p
-            className="min-w-0 truncate text-ui-sm font-medium text-foreground"
-            data-testid="pr-row-title"
+        {titleText !== null ? (
+          <TooltipWrapper
+            label={titleText}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            {prRowTitleText(item)}
-          </p>
-        </TooltipWrapper>
+            <p
+              className="min-w-0 truncate text-ui-sm font-medium text-foreground"
+              data-testid="pr-row-title"
+            >
+              {titleText}
+            </p>
+          </TooltipWrapper>
+        ) : null}
         <p className="flex min-w-0 items-center gap-1 font-mono text-ui-xs text-muted-foreground/80">
           <GitBranch className="size-3 shrink-0" aria-hidden />
           <span className="min-w-0 truncate">{formatPrBaseFromHead(item)}</span>

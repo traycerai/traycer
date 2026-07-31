@@ -184,6 +184,37 @@ describe("PrRow band 2-4: title, branches, owners", () => {
       screen.getByLabelText("Open #4226 · Remote Host Support"),
     ).toBeTruthy();
   });
+
+  // A never-swept row has `title: null`. The element used to render anyway, so
+  // the card read as "number badge, blank line, branch" - reported as the PR
+  // summary going missing. The identity already lives in the number badge, so
+  // the row drops the element rather than leaving a gap where a title was.
+  it("renders no title element at all when the PR has no observed title", () => {
+    renderRow({ title: null });
+
+    expect(screen.queryByTestId("pr-row-title")).toBeNull();
+  });
+
+  it("keeps the identity and branch readable on a row with no title", () => {
+    renderRow({ title: null });
+
+    // The row still says WHICH PR it is - dropping the title must not drop the
+    // row's identity with it.
+    expect(screen.getByTestId("pr-row").textContent).toContain("#4226");
+    expect(screen.getByTestId("pr-row").textContent).toContain(
+      "development ← traycer/remote-host-support",
+    );
+  });
+
+  it("renders the title element whenever a title was observed", () => {
+    renderRow({});
+
+    // The guard is conditional on the title, not on something incidental that
+    // happens to be set on this fixture.
+    expect(screen.getByTestId("pr-row-title").textContent).toBe(
+      "Remote Host Support",
+    );
+  });
 });
 
 describe("PrRow status badges", () => {
