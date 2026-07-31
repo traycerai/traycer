@@ -384,7 +384,9 @@ export class DesktopSupportService {
             : { layer0: { ...snapshot.host.layer0 } }),
           ...(processMetrics === null
             ? {}
-            : { processMetrics: { ...processMetrics } }),
+            : {
+                processMetrics: flattenProcessMetricsForSentry(processMetrics),
+              }),
           ...(privateDiagnostics?.cause == null
             ? {}
             : { errorCause: { ...privateDiagnostics.cause } }),
@@ -734,6 +736,38 @@ function generateReportId(): string {
 // this is just re-deriving it, not generating anything new.
 function sentryEventIdFromReportId(reportId: string): string {
   return reportId.slice(REPORT_ID_PREFIX.length);
+}
+
+/**
+ * `app.getAppMetrics()` entries carry `cpu`/`memory` as nested sub-objects,
+ * two levels deep inside `contexts.processMetrics`; Sentry's SDK
+ * normalizeDepth flattens anything past its budget to the literal string
+ * "[Object]" - verified on a live delivered event, where the whole array
+ * arrived as four unusable placeholder strings. Flattening every entry to
+ * scalar fields here keeps the per-process detail inside that budget without
+ * raising the SDK's global normalizeDepth, which would affect every event
+ * the app sends, not just this one. `main`/`cpuUsage` are already flat
+ * (Electron's `ProcessMemoryInfo`/`CpuUsage` have no nested fields), so they
+ * ride through unchanged.
+ */
+function flattenProcessMetricsForSentry(metrics: {
+  readonly main: Electron.ProcessMemoryInfo;
+  readonly appMetrics: ReadonlyArray<Electron.ProcessMetric>;
+  readonly cpuUsage: NodeJS.CpuUsage;
+}): Record<string, unknown> {
+  return {
+    main: { ...metrics.main },
+    cpuUsage: { ...metrics.cpuUsage },
+    appMetrics: metrics.appMetrics.map((metric) => ({
+      type: metric.type,
+      pid: metric.pid,
+      name: metric.name ?? metric.serviceName ?? null,
+      cpuPercent: metric.cpu.percentCPUUsage,
+      cpuIdleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
+      memoryWorkingSetKb: metric.memory.workingSetSize,
+      memoryPeakWorkingSetKb: metric.memory.peakWorkingSetSize,
+    })),
+  };
 }
 
 /**

@@ -54,6 +54,38 @@ const reportLedgerMock = vi.hoisted(() => ({
 
 vi.mock("../report-ledger", () => reportLedgerMock);
 
+// Real-shaped `app.getAppMetrics()` output: `cpu`/`memory` nest two levels
+// deep, which is exactly what Sentry's normalizeDepth flattens to "[Object]"
+// placeholders past its budget - the bug this fixture exercises.
+const FAKE_PROCESS_METRICS = {
+  main: { private: 102_400, residentSet: 204_800, shared: 51_200 },
+  cpuUsage: { user: 123_456, system: 7_890 },
+  appMetrics: [
+    {
+      type: "Browser" as const,
+      pid: 1111,
+      name: undefined,
+      serviceName: undefined,
+      cpu: { percentCPUUsage: 1.5, idleWakeupsPerSecond: 2 },
+      memory: { workingSetSize: 51_200, peakWorkingSetSize: 61_440 },
+    },
+    {
+      type: "Utility" as const,
+      pid: 2222,
+      name: "Network Service",
+      serviceName: undefined,
+      cpu: { percentCPUUsage: 0.2, idleWakeupsPerSecond: 0 },
+      memory: { workingSetSize: 10_240, peakWorkingSetSize: 12_288 },
+    },
+  ],
+};
+
+const diagnosticsMock = vi.hoisted(() => ({
+  handleGetMetrics: vi.fn<() => Promise<typeof FAKE_PROCESS_METRICS>>(),
+}));
+
+vi.mock("../diagnostics", () => diagnosticsMock);
+
 import { DesktopSupportService } from "../support";
 import type { HostFsLayout } from "../../host/host-paths";
 import type { SupportSubmitReportRequest } from "../../../ipc-contracts/window-types";
@@ -138,6 +170,7 @@ beforeEach(async () => {
   await writeFile(hostLogPath, "host log line\n", "utf8");
   sentryMock.isInitialized.mockReturnValue(true);
   sentryMock.flush.mockResolvedValue(true);
+  diagnosticsMock.handleGetMetrics.mockResolvedValue(FAKE_PROCESS_METRICS);
 });
 
 afterEach(async () => {
@@ -225,6 +258,61 @@ describe("DesktopSupportService.submitReport - delivered", () => {
       "desktop.log",
       "local-host.log",
     ]);
+  });
+
+  it("flattens appMetrics into scalar-only per-process entries, never Sentry's '[Object]' placeholder", async () => {
+    await freezeAndSubmit(buildService(null));
+
+    const processMetrics = lastHint().captureContext.contexts
+      ?.processMetrics as
+      | {
+          readonly main: unknown;
+          readonly cpuUsage: unknown;
+          readonly appMetrics: ReadonlyArray<Record<string, unknown>>;
+        }
+      | undefined;
+    expect(processMetrics).toBeDefined();
+
+    // Real Sentry ingest for a delivered event of this exact shape verified
+    // the previous shape ("processMetrics.appMetrics: ['[Object]', ...]") -
+    // the SDK's normalizeDepth flattens anything past its budget. Every
+    // per-process field here must be a scalar or null, one level inside
+    // `appMetrics`, so nothing is left for the SDK to collapse.
+    expect(processMetrics?.appMetrics).toEqual([
+      {
+        type: "Browser",
+        pid: 1111,
+        name: null,
+        cpuPercent: 1.5,
+        cpuIdleWakeupsPerSecond: 2,
+        memoryWorkingSetKb: 51_200,
+        memoryPeakWorkingSetKb: 61_440,
+      },
+      {
+        type: "Utility",
+        pid: 2222,
+        name: "Network Service",
+        cpuPercent: 0.2,
+        cpuIdleWakeupsPerSecond: 0,
+        memoryWorkingSetKb: 10_240,
+        memoryPeakWorkingSetKb: 12_288,
+      },
+    ]);
+    for (const entry of processMetrics?.appMetrics ?? []) {
+      for (const value of Object.values(entry)) {
+        const isScalarOrNull =
+          value === null ||
+          typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean";
+        expect(isScalarOrNull).toBe(true);
+      }
+    }
+
+    // main/cpuUsage are already flat in Electron's own types - ride through
+    // unchanged.
+    expect(processMetrics?.main).toEqual(FAKE_PROCESS_METRICS.main);
+    expect(processMetrics?.cpuUsage).toEqual(FAKE_PROCESS_METRICS.cpuUsage);
   });
 
   it("waits longer than the old 2s budget before giving up", async () => {
