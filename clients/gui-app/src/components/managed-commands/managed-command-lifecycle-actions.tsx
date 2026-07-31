@@ -89,6 +89,42 @@ export function ManagedCommandLifecycleActions(
   );
 }
 
+/**
+ * Stop alone, for a surface where a managed command is transient "work running
+ * right now" rather than a durable object - today the chat's background strip.
+ * Delete destroys the command's entire output history, which is not something
+ * to put in a row that exists only while the process does; it belongs to the
+ * sidebar and the output window, where the command is the subject rather than a
+ * passing status. Nothing else is offered either: Start would be dead code in a
+ * list that only ever holds running commands.
+ */
+export function ManagedCommandStopAction(props: {
+  readonly command: ManagedCommand;
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly className: string | undefined;
+}) {
+  const stop = useManagedCommandStop();
+  if (props.command.status.state !== "running") return null;
+  return (
+    <span className={cn("flex shrink-0 items-center", props.className)}>
+      <ActionButton
+        label="Stop"
+        icon={<Square aria-hidden className="size-3.5" />}
+        isPending={stop.isPending}
+        testId={`managed-command-stop-${props.command.id}`}
+        onClick={() => {
+          stop.mutate({
+            hostId: props.hostId,
+            epicId: props.epicId,
+            commandId: props.command.id,
+          });
+        }}
+      />
+    </span>
+  );
+}
+
 function ActionButton(props: {
   readonly label: string;
   readonly icon: ReactNode;

@@ -49,6 +49,18 @@ const mocks = vi.hoisted(() => ({
   methodSupport: { value: "supported" },
 }));
 
+// The strip's rows carry the same lifecycle actions the sidebar rows do, so
+// this suite fakes the same boundary the sidebar suite fakes: the RPCs behind
+// them. What the rows render and where they lead is still real.
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  () => ({
+    useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+  }),
+);
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
   useStreamMethodSupport: () => mocks.methodSupport.value,
@@ -362,7 +374,10 @@ describe("S7 · doors", () => {
         ]}
       />,
     );
-    expect(screen.getByText("Command still running")).toBeTruthy();
+    // Kind-explicit, like every other state: the trigger names a monitor, so
+    // the divider says Monitor. Only a legacy trigger with no `managedCommand`
+    // at all falls back to the generic "Command still running".
+    expect(screen.getByText("Monitor still running")).toBeTruthy();
     expect(screen.queryByText(/completed|failed|stopped/)).toBeNull();
   });
 

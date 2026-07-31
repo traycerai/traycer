@@ -23,6 +23,23 @@ export function managedCommandTitle(
   return `${managedCommandKindLabel(command.kind)} · ${command.description}`;
 }
 
+/**
+ * The queued chip's tooltip. Says monitor or shell rather than "background
+ * command": "command" is the one word this surface never uses (it collides
+ * with the command palette and with terminal commands), and a viewer who has
+ * to ask "which background command?" is being told less than the host knows.
+ * Only a host too old to report the kind gets the both-kinds wording.
+ */
+export function managedCommandQueuedChipTooltip(
+  kind: ManagedCommandKind | null,
+): string {
+  const subject =
+    kind === null
+      ? "a monitor or shell"
+      : `this ${managedCommandKindLabel(kind).toLowerCase()}`;
+  return `Output from ${subject}, delivered to the agent when this runs. Click to watch it live.`;
+}
+
 /** The output window's own name: "Monitor output". */
 export function managedCommandOutputWindowTitle(
   kind: ManagedCommandKind,

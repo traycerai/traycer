@@ -39,6 +39,7 @@ import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -1447,8 +1448,25 @@ function ownerRowClickHandler(
  * Provider icon for an owner row's subtitle, or a neutral glyph for a
  * harness-less owner. Subscript-scale (`size-3`) so it reads as part of the
  * secondary text line, not a second row element.
+ *
+ * A managed command has no provider at all, and the generic `Server` glyph told
+ * a viewer nothing that the row did not already say. It gets its own kind glyph
+ * instead - the same one the sidebar, the strip and the chip use - so the row
+ * is recognisable as the monitor or shell it is. The kind is still in the row's
+ * title in words, so the glyph stays decorative.
  */
-function OwnerProviderIcon(props: { readonly harnessId: string | null }) {
+function OwnerProviderIcon(props: {
+  readonly harnessId: string | null;
+  readonly managedCommand: ManagedCommandOwnerWire | null;
+}) {
+  if (props.managedCommand !== null) {
+    return (
+      <ManagedCommandKindIcon
+        kind={props.managedCommand.kind}
+        className={undefined}
+      />
+    );
+  }
   const providerId =
     props.harnessId === null ? null : normalizeProviderId(props.harnessId);
   if (providerId === null) {
@@ -1540,7 +1558,10 @@ function OwnerTreeRow(props: {
           <div className="min-w-0">
             <div className="truncate text-ui-sm">{label}</div>
             <div className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground">
-              <OwnerProviderIcon harnessId={harnessId} />
+              <OwnerProviderIcon
+                harnessId={harnessId}
+                managedCommand={props.row.snapshot.managedCommand}
+              />
               <span className="min-w-0 truncate">
                 {harnessProviderSubtitle(
                   harnessId,

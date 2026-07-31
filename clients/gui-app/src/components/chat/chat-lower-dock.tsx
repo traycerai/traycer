@@ -97,7 +97,6 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
             dock={props}
           />
           <BackgroundSection
-            managedCommandCount={runningManagedCommandCount}
             visible={backgroundVisible}
             separated={queueVisible || pinnedVisible || agentsVisible}
             dock={props}
@@ -176,7 +175,6 @@ function AgentsSection(props: {
 function BackgroundSection(props: {
   readonly visible: boolean;
   readonly separated: boolean;
-  readonly managedCommandCount: number;
   readonly dock: ChatLowerDockProps;
 }) {
   const { dock } = props;
@@ -189,7 +187,6 @@ function BackgroundSection(props: {
       items={items}
       epicId={dock.epicId}
       chatId={dock.chatId}
-      managedCommandCount={props.managedCommandCount}
       canAct={dock.canAct}
       readOnly={dock.readOnly}
       pendingStopTaskIds={dock.backgroundStopPendingTaskIds}

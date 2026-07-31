@@ -173,17 +173,20 @@ function ResumeManagedCommandDoor(props: {
 
 function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   if (trigger.kind === "wakeup") return wakeupStatusTitle(trigger.status);
-  // A producer that is still running has no terminal outcome: `status` is
-  // carrying its least-wrong placeholder for readers that predate `live`, and
-  // showing it here would tell the user the command finished when it has not.
-  // Deliberately not "Monitor …" - the same trigger kind carries a backgrounded
-  // shell's mid-run output, which is not a monitor.
-  if (trigger.live) return "Command still running";
-
   // Prefer the real managed-command kind when the host reported one: the
   // persisted `kind` enum is frozen at "monitor" for a Shell too, so without
   // this a completed shell reads "Monitor completed".
   const noun = resumeNoun(trigger);
+  // A producer that is still running has no terminal outcome: `status` is
+  // carrying its least-wrong placeholder for readers that predate `live`, and
+  // showing it here would tell the user the command finished when it has not.
+  // The NOUN is still accurate though - the generic "Command" is only for a
+  // legacy trigger that names no kind at all, not for every live one.
+  if (trigger.live) {
+    return trigger.managedCommand === null
+      ? "Command still running"
+      : `${noun} still running`;
+  }
   switch (trigger.status) {
     case "completed":
       return `${noun} completed`;

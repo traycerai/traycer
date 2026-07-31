@@ -65,7 +65,11 @@ import {
 } from "@/components/chat/queued-message-utils";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { ManagedCommandKind } from "@traycer/protocol/host/managed-command/unary-schemas";
-import { managedCommandOutputWindowTitle } from "@/lib/managed-commands/managed-command-copy";
+import {
+  managedCommandOutputWindowTitle,
+  managedCommandQueuedChipTooltip,
+} from "@/lib/managed-commands/managed-command-copy";
+import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import { mergeRefs } from "@/lib/merge-refs";
@@ -670,7 +674,7 @@ export function ManagedCommandBadge(props: {
 
   return (
     <TooltipWrapper
-      label="Output from a background command, delivered to the agent when this runs. Click to watch it live."
+      label={managedCommandQueuedChipTooltip(props.commandKind)}
       side="top"
       sideOffset={6}
       align={undefined}
@@ -684,7 +688,14 @@ export function ManagedCommandBadge(props: {
           openOutput?.(props.commandId);
         }}
       >
-        <Terminal className="size-3" aria-hidden />
+        {props.commandKind === null ? (
+          <Terminal className="size-3" aria-hidden />
+        ) : (
+          <ManagedCommandKindIcon
+            kind={props.commandKind}
+            className={undefined}
+          />
+        )}
         <span>{label}</span>
       </button>
     </TooltipWrapper>

@@ -22,6 +22,7 @@ import {
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
+import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
@@ -167,6 +168,7 @@ function ManagedCommandRow(props: {
         )}
       >
         <div className="flex w-full min-w-0 items-center gap-2">
+          <ManagedCommandKindIcon kind={command.kind} className={undefined} />
           <ManagedCommandStatusDot
             status={command.status}
             className={undefined}
