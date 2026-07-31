@@ -16,7 +16,10 @@ import type {
 } from "@traycer-clients/shared/host-client/host-client";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
-import { WsRpcClient } from "@traycer-clients/shared/host-transport/ws-rpc-client";
+import {
+  HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+  WsRpcClient,
+} from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
 import {
@@ -194,6 +197,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
               webSocketFactory: createWhatwgWebSocketFactory(),
               dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
               frameTimeoutMs: DEFAULT_WS_FRAME_TIMEOUT_MS,
+              // The GUI's response deadline matches the host's post-`openAck`
+              // deadline, so which overdue timer runs first is up to scheduling
+              // (or a sleep/resume - and a stalled host fires its timer late,
+              // well past 30s). This window keeps the socket open long enough
+              // for the host's no-dispatch attestation when the client's timer
+              // wins that race.
+              hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
             });
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
       // the Traycer cloud backend is surfaced by the host as
@@ -202,11 +212,14 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // the existing context's credential lease in place (refresh
       // succeeded) or signs the user out (refresh rejected) instead of
       // leaving them staring at a generic failure toast.
-      // Retry is the outermost layer: a pre-send transient dial/handshake
-      // failure (`RetryableTransportError`) re-dials on a short backoff before
-      // the auth-aware wrapper or the query layer ever see it. The auth wrapper
-      // only acts on `UNAUTHORIZED`, never a retryable transport error, so the
-      // two never contend. When auth revalidation really rotates the bearer,
+      // Retry is the outermost layer: a transport failure the host provably
+      // never dispatched (`RetryableTransportError` - a pre-send dial/handshake
+      // failure, or a host-attested post-`openAck` request timeout) re-dials on
+      // a short backoff before the auth-aware wrapper or the query layer ever
+      // see it. That includes the legacy `UNAUTHORIZED` spelling of the
+      // post-open timeout, which is why the auth wrapper never sees it as a
+      // credential rejection. The auth wrapper only acts on `UNAUTHORIZED`,
+      // never a retryable transport error, so the two never contend. When auth revalidation really rotates the bearer,
       // retry the same RPC once against the fresh lease; some usage-limit
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.

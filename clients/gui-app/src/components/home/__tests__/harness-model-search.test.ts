@@ -136,6 +136,28 @@ describe("harness model search", () => {
     );
   });
 
+  it("highlights a row when the persisted slug only matches resolvedModel", () => {
+    const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
+      model({
+        harnessId: "claude",
+        slug: "claude-fable-5[1m]",
+        label: "Fable 5 (1M)",
+        metadata: { resolvedModel: "claude-fable-5" },
+      }),
+    ]);
+
+    expect(
+      selectedModelRowId(
+        {
+          harnessId: "claude",
+          modelSlug: "claude-fable-5",
+          profileId: null,
+        },
+        rows,
+      ),
+    ).toBe("claude:claude-fable-5[1m]");
+  });
+
   it("preserves provider and model order for empty queries", () => {
     const rows = buildAllHarnessModelRows([
       {

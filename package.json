@@ -38,6 +38,7 @@
     "@pierre/trees": "^1.0.0-beta.6",
     "@rolldown/plugin-babel": "^0.2.3",
     "@sentry/browser": "10.67.0",
+    "@sentry/core": "10.67.0",
     "@sentry/electron": "^7.16.0",
     "@sentry/esbuild-plugin": "^5.4.0",
     "@sentry/node": "^10.69.0",
@@ -154,6 +155,7 @@
     "vite": "^8.2.0",
     "vitest": "^4.1.10",
     "y-protocols": "^1.0.7",
+    "yaml": "^2.9.0",
     "yjs": "^13.6.31",
     "zod": "^4.4.3",
     "zustand": "^5.0.14"

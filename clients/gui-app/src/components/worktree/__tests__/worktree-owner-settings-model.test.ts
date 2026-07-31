@@ -127,6 +127,35 @@ describe("deriveOwnerSettingsHeader", () => {
     });
   });
 
+  it("resolves a read-only model label through resolvedModel alias drift", () => {
+    const entry = claudeHarnessEntry();
+    const decoratedModel = entry.models[0];
+
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        chatSettings: {
+          ...BASE_CHAT_SETTINGS,
+          model: "claude-fable-5",
+        },
+        harnesses: [
+          {
+            ...entry,
+            models: [
+              {
+                ...decoratedModel,
+                slug: "claude-fable-5[1m]",
+                label: "Fable 5 (1M)",
+                metadata: { resolvedModel: "claude-fable-5" },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(view?.modelLabel).toBe("Fable 5 (1M)");
+  });
+
   it.each([
     { permissionMode: "supervised" as const },
     { permissionMode: "auto_accept_edits" as const },

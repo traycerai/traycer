@@ -1,5 +1,25 @@
 import type { GlobalShortcutId } from "@traycer-clients/shared/keybindings/global-shortcuts";
 
+const supportBridgeQueryScopeIds = new WeakMap<object, number>();
+let nextSupportBridgeQueryScopeId = 1;
+
+/**
+ * TanStack Query hashes keys through JSON serialization, so a bridge object
+ * whose public surface is methods would serialize as `{}`. Give each bridge
+ * instance a stable, serializable scope instead.
+ */
+export function supportBridgeQueryScopeId(
+  support: object | null,
+): number | null {
+  if (support === null) return null;
+  const existing = supportBridgeQueryScopeIds.get(support);
+  if (existing !== undefined) return existing;
+  const scopeId = nextSupportBridgeQueryScopeId;
+  nextSupportBridgeQueryScopeId += 1;
+  supportBridgeQueryScopeIds.set(support, scopeId);
+  return scopeId;
+}
+
 export const runnerMutationKeys = {
   requestHostRespawn: () => ["runner.requestHostRespawn"] as const,
   serviceInstall: () => ["runner.serviceInstall"] as const,
@@ -33,6 +53,15 @@ export const runnerMutationKeys = {
   uninstallTraycer: () => ["runner.host.uninstallTraycer"] as const,
   reinstallTraycer: () => ["runner.host.reinstallTraycer"] as const,
   supportSubmitReport: () => ["runner.support.submitReport"] as const,
+  supportFreezeEvidence: () => ["runner.support.freezeEvidence"] as const,
+  supportSaveDiagnosticBundle: () =>
+    ["runner.support.saveDiagnosticBundle"] as const,
+  // Builds the scrubbed public draft for the publish preview (ticket 09/07).
+  supportBuildPublicDraft: () => ["runner.support.buildPublicDraft"] as const,
+  // Opens the previewed draft's GitHub issue-form URL in the browser
+  // (ticket 07's publish preview - Flow 3b), separate from the fetch above so
+  // the preview can render before the user opts to leave the app.
+  supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
@@ -131,10 +160,36 @@ export const runnerQueryKeys = {
   zoomPercent: (scope: string | null) =>
     ["runner.zoom.percent", scope] as const,
   // Desktop support log viewer (Diagnostics → Logs). Scoped by the support
-  // bridge object identity so a host/shell swap invalidates cleanly, matching
+  // bridge scope so a host/shell swap invalidates cleanly, matching
   // the other runner-host queries.
-  supportLogList: (support: object | null) =>
-    ["runner.support.logList", support] as const,
-  supportLogTail: (support: object | null, target: string) =>
-    ["runner.support.logTail", support, target] as const,
+  supportLogList: (supportScopeId: number | null) =>
+    ["runner.support.logList", supportScopeId] as const,
+  supportLogTail: (supportScopeId: number | null, target: string) =>
+    ["runner.support.logTail", supportScopeId, target] as const,
+  // Report-issue dialog's machine/user/delivery snapshot. Scoped by bridge
+  // identity so shell swaps never reuse another bridge's cached state.
+  supportSnapshot: (supportScopeId: number | null) =>
+    ["runner.support.snapshot", supportScopeId] as const,
+  // Report-issue consent panel's log "view" affordance (ticket 07/04): reads
+  // the tail FROZEN at report-open, not a live tail, so what the user reviews
+  // is exactly what a submit would send. Scoped by draftId (frozen evidence
+  // is per-draft) as well as support identity.
+  supportFrozenLogTail: (
+    supportScopeId: number | null,
+    draftId: number,
+    target: string,
+  ) =>
+    ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
+  // Report-issue evidence strip's "Nth time on this install" line (ticket 06
+  // ledger read). Scoped by fingerprint - each distinct defect caches
+  // independently.
+  supportFingerprintOccurrence: (
+    supportScopeId: number | null,
+    fingerprint: string,
+  ) =>
+    [
+      "runner.support.fingerprintOccurrence",
+      supportScopeId,
+      fingerprint,
+    ] as const,
 };

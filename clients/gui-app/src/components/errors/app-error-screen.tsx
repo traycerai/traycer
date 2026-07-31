@@ -3,11 +3,22 @@ import { AlertTriangle, House, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { createReportIssueContext } from "@/lib/report-issue-context";
+import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import type { ReportIssueErrorCapture } from "@/lib/report-issue-error-capture";
 
 export interface AppErrorScreenProps {
   /** The thrown value, surfaced as a short technical detail for support. */
   readonly error: unknown;
+  /**
+   * Captured ONCE by the caller at catch time (a class boundary's
+   * `componentDidCatch`, or an idempotent function-component adapter) via
+   * `captureReportIssueError` - never derived here, since
+   * that call mints an id and reports to Sentry, both of which must not
+   * repeat on every re-render. `null` only when nothing was ever caught (this
+   * component is never rendered in that state by either real caller, but the
+   * type allows a synthetic/test render).
+   */
+  readonly capture: ReportIssueErrorCapture | null;
   /** Reload the renderer window (`window.location.reload()`). */
   readonly onRefresh: () => void;
   /** Navigate back to the home route and clear the error. */
@@ -70,11 +81,14 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
               Return to Home
             </Button>
             <ReportIssueAction
-              context={createReportIssueContext({
+              context={createReportIssueDraftContext({
                 title: "Something went wrong",
+                // Real error text goes ONLY into `capture.cause`, never here -
+                // this is the public GitHub-issue prefill.
                 message: "The app hit an unexpected error.",
                 code: null,
                 source: "Traycer app",
+                capture: props.capture,
               })}
               presentation="text"
               className="w-full"
