@@ -1139,6 +1139,16 @@ export const createTuiAgentRequestSchema = z.object({
   // predate profiles keep today's exact behavior. See the multi-profile
   // decision log.
   profileId: z.string().nullable().default(null),
+  // The upstream harness session id this record was forked FROM, when the
+  // client's `agent.tui.prepareLaunch` call that minted `harnessSessionId`
+  // above was itself a fork. `null` for a normal (non-fork) create, and for
+  // older clients that predate this field. The resolver persists this
+  // verbatim as the record's `pendingForkSourceHarnessSessionId` so a
+  // provider failure between PTY spawn and destination-transcript
+  // establishment still has durable provenance to retry the fork from -
+  // the renderer's own prepared-launch stash is cleared on PTY creation,
+  // well before that establishment point.
+  forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
 
