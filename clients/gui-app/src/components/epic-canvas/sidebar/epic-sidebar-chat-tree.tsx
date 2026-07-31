@@ -187,7 +187,6 @@ import {
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -1339,13 +1338,13 @@ function ChatNodeShellBody(
   // "New child agent" opens the shared New Conversation modal seeded with this
   // row as the parent - the same action the standalone hover "+" used to
   // trigger, now consolidated into the row menu (right-click + ⋯) so there is a
-  // single hover affordance. Forcing chat mode mirrors `NewConversationModalAction`.
+  // single hover affordance. It preserves the modal's remembered interface,
+  // matching the top-level new-agent trigger.
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
-    useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
     openNewConversationModal({
       epicId,
       tabId,
