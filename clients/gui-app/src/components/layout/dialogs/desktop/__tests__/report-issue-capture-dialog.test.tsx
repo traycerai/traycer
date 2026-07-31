@@ -1056,6 +1056,57 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(screen.getByText("Where")).not.toBeNull();
       expect(screen.getByText("Start page")).not.toBeNull();
     });
+
+    it("shows the typed label for the current route on a plain manual open, never 'Current location' (ADV-L6)", async () => {
+      // The plain manual open never assembles a `draftContext` at all
+      // (`openReportIssue()` sets it to null) - this is the actual repro:
+      // the current-location option must still read the live registry.
+      setSupportContextSnapshot({ routeTemplate: knownField("/") });
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("combobox"));
+      expect(
+        await screen.findByRole("option", { name: "Start page (current)" }),
+      ).not.toBeNull();
+      expect(
+        screen.queryByRole("option", { name: "Current location (current)" }),
+      ).toBeNull();
+      expect(screen.queryByRole("option", { name: "/ (current)" })).toBeNull();
+    });
+
+    it("falls back to the shared generic label, never 'Current location', when the registry never observed a route", async () => {
+      // `setSupportContextSnapshot` untouched this test - the registry stays
+      // at its all-`unavailable` reset state.
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("combobox"));
+      expect(
+        await screen.findByRole("option", { name: "This screen (current)" }),
+      ).not.toBeNull();
+      expect(
+        screen.queryByRole("option", { name: "Current location (current)" }),
+      ).toBeNull();
+    });
   });
 
   describe("delivery states", () => {

@@ -42,6 +42,10 @@ import {
   type ReportIssueDraftContext,
 } from "@/lib/report-issue-draft-context";
 import {
+  getSupportContextSnapshot,
+  type CapturedField,
+} from "@/lib/support-context-registry";
+import {
   useReportIssueAttachments,
   type ReportIssueAttachmentImage,
   type UseReportIssueAttachmentsResult,
@@ -122,8 +126,14 @@ const ROUTE_TEMPLATE_LABEL_LOOKUP: Readonly<
   Record<string, string | undefined>
 > = ROUTE_TEMPLATE_LABELS;
 
+// Shared between an unmapped-but-known template (`humanRouteLabel`'s own
+// fallback) and a template that was never captured at all
+// (`currentLocationLabel`'s "unavailable" case, ADV-L6) - one constant so the
+// two paths can never drift into two different-sounding generic strings.
+const ROUTE_TEMPLATE_FALLBACK_LABEL = "This screen";
+
 function humanRouteLabel(template: string): string {
-  return ROUTE_TEMPLATE_LABEL_LOOKUP[template] ?? "This screen";
+  return ROUTE_TEMPLATE_LABEL_LOOKUP[template] ?? ROUTE_TEMPLATE_FALLBACK_LABEL;
 }
 
 const CURRENT_LOCATION_VALUE = "__current__";
@@ -380,6 +390,21 @@ export function ReportIssueDialog(
   // gate (D7/tech-plan T4) and the type-chip row are both keyed off this.
   const { cause, fingerprint, hasErrorEnvelope } =
     errorEnvelopeFromContext(draftContext);
+
+  // ADV-L6: a plain manual open (Flow 2) never assembles a `draftContext` at
+  // all (`openReportIssue()` sets it to null - there is no error to capture),
+  // so the location selector's current-location option had nothing to read
+  // and fell back to a hardcoded "Current location" string instead of the
+  // real route. Reuse the draft's own captured registry when one exists
+  // (error-triggered/legacy-context opens); otherwise read the live registry
+  // once at mount - the "where the user is/was right now" this option means
+  // either way. Lazy `useState` initializer: evaluated once, matching
+  // `draftContext`'s own "immutable for the draft's life" invariant above.
+  const [routeTemplateField] = useState<CapturedField<string>>(
+    () =>
+      draftContext?.privateDiagnostics.registry.routeTemplate ??
+      getSupportContextSnapshot().routeTemplate,
+  );
 
   const [snapshot, setSnapshot] = useState<DesktopSupportSnapshot | null>(null);
   // Minted once at report-open (T2/T3) and reused by every retry as the
@@ -769,6 +794,7 @@ export function ReportIssueDialog(
             onSelectType={selectType}
             attachments={attachments}
             legacyContext={legacyContext}
+            routeTemplateField={routeTemplateField}
           />
         ) : null}
 
@@ -903,6 +929,7 @@ function CaptureScreenBody({
   onSelectType,
   attachments,
   legacyContext,
+  routeTemplateField,
 }: {
   readonly hasErrorEnvelope: boolean;
   readonly cause: ReportIssueDraftContext["privateDiagnostics"]["cause"];
@@ -935,6 +962,10 @@ function CaptureScreenBody({
   // captured-context row instead, so it never buries the actual question or
   // trivially satisfies the evidence gate with zero human signal.
   readonly legacyContext: string;
+  // ADV-L6: resolved once at report-open regardless of whether a
+  // `draftContext` exists (a plain manual open never assembles one) - the
+  // single source for the location selector's current-location option.
+  readonly routeTemplateField: CapturedField<string>;
 }): ReactNode {
   // Paste is bound at this wrapper, not on the attachment target below: a
   // `paste` DOM event only bubbles through the FOCUSED element's ancestors,
@@ -1019,7 +1050,7 @@ function CaptureScreenBody({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={CURRENT_LOCATION_VALUE}>
-                  {currentLocationLabel(draftContext)} (current)
+                  {currentLocationLabel(routeTemplateField)} (current)
                 </SelectItem>
                 {LOCATION_OPTIONS.map((option) => (
                   <SelectItem key={option} value={option}>
@@ -1339,13 +1370,13 @@ function legacyContextSummaryLine(legacyContext: string): string {
   return legacyContext.split("\n\n").join(" · ");
 }
 
-function currentLocationLabel(
-  draftContext: ReportIssueDraftContext | null,
-): string {
-  const field = draftContext?.privateDiagnostics.registry.routeTemplate;
-  if (field === undefined || field.status === "unavailable") {
-    return "Current location";
-  }
+// ADV-L6: routes through the exact same `humanRouteLabel` path as the
+// evidence review's "Where" row - a genuinely unavailable field (the
+// registry never observed a route this session) gets the same generic
+// fallback an unmapped-but-known template gets, never a third,
+// differently-worded "Current location" string.
+function currentLocationLabel(field: CapturedField<string>): string {
+  if (field.status === "unavailable") return ROUTE_TEMPLATE_FALLBACK_LABEL;
   return humanRouteLabel(field.value);
 }
 
