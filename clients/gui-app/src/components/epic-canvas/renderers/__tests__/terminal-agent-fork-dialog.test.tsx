@@ -603,7 +603,7 @@ describe("<TerminalAgentForkDialog />", () => {
     });
   });
 
-  it("renders continue-mode title, harness label, helper, and CTA copy", () => {
+  it("renders continue-mode title, compact field layout, and CTA copy", () => {
     render(
       <TerminalAgentForkDialog
         open
@@ -625,8 +625,15 @@ describe("<TerminalAgentForkDialog />", () => {
     ).toBeDefined();
     expect(screen.getByText("Continue under")).toBeDefined();
     expect(
-      screen.getByText("Choose which profile to continue this session under."),
-    ).toBeDefined();
+      screen
+        .getByTestId("terminal-fork-dialog-fields")
+        .classList.contains("md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"),
+    ).toBe(true);
+    expect(
+      screen.queryByText(
+        "Choose which profile to continue this session under.",
+      ),
+    ).toBeNull();
     expect(screen.getByRole("button", { name: "Continue" })).toBeDefined();
     expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
   });
@@ -689,7 +696,9 @@ describe("<TerminalAgentForkDialog />", () => {
       fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
       await waitFor(() => {
-        expect(screen.getByRole("alert").textContent).toContain(expected);
+        const alert = screen.getByRole("alert");
+        expect(alert.textContent).toContain(expected);
+        expect(alert.classList.contains("grid")).toBe(true);
       });
       expect(onOpenChange).not.toHaveBeenCalledWith(false);
       // Dialog stays interactive: Cancel and title input remain available.

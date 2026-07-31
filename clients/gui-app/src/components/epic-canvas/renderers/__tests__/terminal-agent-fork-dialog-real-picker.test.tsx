@@ -385,6 +385,20 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
     cleanup();
   });
 
+  it("autofocuses the real picker control without emphasizing the whole section", async () => {
+    seedClaudeProviders([ambientProfile("Terminal account")]);
+
+    renderDialog({ intent: "continue", sourceAgent: sourceAgent() });
+
+    const picker = screen.getByRole("button", { name: /Claude Opus/ });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(picker);
+    });
+    expect(document.activeElement).not.toBe(
+      screen.getByTestId("terminal-fork-profile-section"),
+    );
+  });
+
   it("disables real ProfileDropdown rows from bulk fork-admission verdicts (continue, capable host)", async () => {
     seedClaudeProviders([
       ambientProfile("Terminal account"),

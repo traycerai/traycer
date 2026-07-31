@@ -55,6 +55,7 @@ import {
   emitTerminalCrashedNotification,
 } from "@/stores/notifications/app-local-notifications-store";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import { cn } from "@/lib/utils";
 import {
   Popover,
@@ -894,83 +895,92 @@ function TerminalAgentPreLaunchToolbar(
         }}
       />
       <AgentModeReadonlyLabel value={props.agentMode} />
-      <div className="inline-flex shrink-0 items-stretch">
-        <TooltipWrapper
-          label={
-            forkDisabled
-              ? "Fork is available after the terminal agent session and workspace binding are ready."
-              : "Fork terminal agent"
-          }
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <span className="inline-flex">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1 rounded-r-none px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-              disabled={forkDisabled}
-              onClick={() => openForkDialog("fork")}
-            >
-              <GitFork aria-hidden className="size-3.5" />
-              Fork
-            </Button>
-          </span>
-        </TooltipWrapper>
-        <DropdownMenu>
+      <DropdownMenu>
+        <ButtonGroup aria-label="Fork actions" className="shrink-0">
+          <TooltipWrapper
+            label={
+              forkDisabled
+                ? "Fork is available after the terminal agent session and workspace binding are ready."
+                : "Fork terminal agent"
+            }
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            {/* The span keeps the disabled button hoverable for its readiness
+                tooltip. Its button still owns the visible first segment. */}
+            <span className="inline-flex">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 rounded-r-none! px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+                disabled={forkDisabled}
+                onClick={() => openForkDialog("fork")}
+              >
+                <GitFork aria-hidden className="size-3.5" />
+                Fork
+              </Button>
+            </span>
+          </TooltipWrapper>
           <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 w-5 shrink-0 rounded-l-none border-l border-canvas-border/70 px-0 text-muted-foreground hover:text-foreground"
-              disabled={forkDisabled}
-              aria-label="More fork options"
-            >
-              <ChevronDown aria-hidden className="size-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
             <TooltipWrapper
-              label={continueUnderProfileDisabledReason}
-              side="right"
-              sideOffset={undefined}
-              align={undefined}
+              label="More fork options"
+              side="top"
+              sideOffset={6}
+              align="end"
             >
-              <span className="flex w-full">
-                <DropdownMenuItem
-                  disabled={forkDisabled || !continueUnderProfileSupported}
-                  aria-label={
-                    continueUnderProfileDisabledReason === undefined
-                      ? undefined
-                      : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
-                  }
-                  className={cn(
-                    continueUnderProfileDisabledReason !== undefined &&
-                      "flex-col items-start gap-0.5",
-                  )}
-                  onSelect={() => openForkDialog("continue")}
-                >
-                  <span className="w-full">
-                    Continue under another profile…
-                  </span>
-                  {/* Radix's roving-tabindex skips this item entirely while
-                      disabled, so its aria-label (and the hover-only tooltip
-                      above) never reach keyboard/AT users - a static second
-                      line needs no focus/hover to be perceivable. */}
-                  {continueUnderProfileDisabledReason !== undefined ? (
-                    <span className="text-left text-[11px] leading-tight text-muted-foreground">
-                      {continueUnderProfileDisabledReason}
-                    </span>
-                  ) : null}
-                </DropdownMenuItem>
-              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                className="text-muted-foreground hover:text-foreground"
+                disabled={forkDisabled}
+                aria-label="More fork options"
+              >
+                <ChevronDown aria-hidden className="size-3" />
+              </Button>
             </TooltipWrapper>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+          </DropdownMenuTrigger>
+        </ButtonGroup>
+        <DropdownMenuContent align="start" className="w-max max-w-[90vw]">
+          <TooltipWrapper
+            label={continueUnderProfileDisabledReason}
+            side="right"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <span className="flex w-full">
+              <DropdownMenuItem
+                disabled={forkDisabled || !continueUnderProfileSupported}
+                aria-label={
+                  continueUnderProfileDisabledReason === undefined
+                    ? undefined
+                    : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
+                }
+                className={cn(
+                  continueUnderProfileDisabledReason !== undefined &&
+                    "flex-col items-start gap-0.5",
+                )}
+                onSelect={() => openForkDialog("continue")}
+              >
+                <span className="w-full whitespace-nowrap">
+                  Continue under another profile…
+                </span>
+                {/* Radix's roving-tabindex skips this item entirely while
+                    disabled, so its aria-label (and the hover-only tooltip
+                    above) never reach keyboard/AT users - a static second
+                    line needs no focus/hover to be perceivable. */}
+                {continueUnderProfileDisabledReason !== undefined ? (
+                  <span className="text-left text-[11px] leading-tight text-muted-foreground">
+                    {continueUnderProfileDisabledReason}
+                  </span>
+                ) : null}
+              </DropdownMenuItem>
+            </span>
+          </TooltipWrapper>
+        </DropdownMenuContent>
+      </DropdownMenu>
       {/* Right-aligned status-bar group: the worktree-creation notice sits
           beside the agent controls. The notice's expanded detail opens as a
           downward Popover overlay, so it never reflows the terminal below. */}
@@ -1134,7 +1144,7 @@ function TerminalAgentHeaderControls(props: {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
             data-testid="tui-agent-subagents-trigger"

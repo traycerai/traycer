@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useStore } from "zustand";
 import { toast } from "sonner";
+import { CircleAlert } from "lucide-react";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -61,7 +62,6 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { cn } from "@/lib/utils";
 
 // `pendingForkTerminalAgentStagingKey` is per-EPIC, so every terminal-agent
 // tile in an epic shares one staging slot. Two dialog bodies can therefore be
@@ -624,18 +624,20 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]"
+        className="max-h-[92vh] w-[min(94vw,48rem)] gap-3 sm:max-w-[min(94vw,48rem)]"
         onOpenAutoFocus={(event) => {
-          // Continue mode's promised focus destination is the profile
-          // choice, not the title field the Radix default (first tabbable)
-          // would land on - a visual ring alone (below) isn't perceivable to
-          // keyboard/AT users (amend-01 Fix 5). Handing off to the section
-          // itself (rather than reaching into the picker's own internal
-          // trigger) is the documented "at minimum" fallback.
+          // Continue mode starts on the real picker control, using that
+          // control's normal focus treatment instead of drawing a ring around
+          // the whole profile section. The section remains a safe fallback
+          // while the picker is still resolving.
           if (intent !== "continue") return;
           if (profileSectionRef.current === null) return;
           event.preventDefault();
-          profileSectionRef.current.focus();
+          const pickerTrigger =
+            profileSectionRef.current.querySelector<HTMLButtonElement>(
+              "button:not(:disabled)",
+            );
+          (pickerTrigger ?? profileSectionRef.current).focus();
         }}
       >
         <DialogHeader>
@@ -645,119 +647,134 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
               : "Fork terminal agent"}
           </DialogTitle>
         </DialogHeader>
-        <div className="flex min-w-0 flex-col gap-2">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto pr-1">
           {rejection !== null ? (
             <div
               role="alert"
-              className="flex flex-col gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive"
+              data-testid="terminal-fork-rejection"
+              className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-ui-xs text-destructive"
             >
-              <p>{rejection.message}</p>
-              {rejection.residueNote !== null ? (
-                <p className="text-muted-foreground">{rejection.residueNote}</p>
-              ) : null}
-            </div>
-          ) : null}
-          <label htmlFor={titleInputId} className="flex min-w-0 flex-col gap-2">
-            <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
-              Title
-            </span>
-            <Input
-              id={titleInputId}
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") submit();
-              }}
-              disabled={busy}
-              aria-label={
-                intent === "continue"
-                  ? "Continue under another profile title"
-                  : "Fork terminal agent title"
-              }
-            />
-          </label>
-          <section
-            ref={profileSectionRef}
-            tabIndex={-1}
-            aria-labelledby={profileSectionHeadingId}
-            className="flex min-w-0 flex-col gap-2 rounded-md focus:outline-none focus:ring-2 focus:ring-ring/50"
-          >
-            <div
-              id={profileSectionHeadingId}
-              className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70"
-            >
-              {intent === "continue" ? "Continue under" : "Harness"}
-            </div>
-            {intent === "continue" ? (
-              <p className="text-ui-xs text-muted-foreground">
-                Choose which profile to continue this session under.
-              </p>
-            ) : null}
-            <div
-              className={cn(
-                "flex min-w-0 items-center gap-2 rounded-md",
-                intent === "continue" && "ring-1 ring-ring/40",
-              )}
-            >
-              <HarnessModelPicker
-                key={terminalForkModelPickerKey(target)}
-                store={toolbarStore}
-                withServiceTier={false}
-                tuiOnly
-                lockedHarnessId={target?.sourceAgent.harnessId ?? null}
-                disabled={busy}
-                registerActivation={false}
-                createProfileHostId={hostId}
-                runTargetHostId={hostId}
-                profileAdmission={admissionByProfileId}
-              />
-              <div className="shrink-0">
-                <AgentModeToggle
-                  value={agentMode}
-                  disabled={busy}
-                  showTooltip={false}
-                  onChange={setAgentMode}
-                />
+              <CircleAlert aria-hidden className="mt-0.5 size-3.5" />
+              <div className="min-w-0">
+                <p>{rejection.message}</p>
+                {rejection.residueNote !== null ? (
+                  <p className="mt-0.5 text-muted-foreground">
+                    {rejection.residueNote}
+                  </p>
+                ) : null}
               </div>
             </div>
-            {crossProfileClaudeHint ? (
-              <p className="text-ui-xs text-muted-foreground">
-                Heads up: TodoWrite history and rewind state from this session
-                won't carry over to the new profile.
-              </p>
-            ) : null}
-          </section>
-          <label htmlFor={argsInputId} className="flex min-w-0 flex-col gap-2">
-            <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
-              Additional args
-            </span>
-            <Input
-              id={argsInputId}
-              value={argsDraft}
-              onChange={(event) =>
-                setArgsState({
-                  sourceAgentId,
-                  draft: event.target.value,
-                  touched: true,
-                })
-              }
-              onKeyDown={(event) => {
-                if (event.key === "Enter") submit();
-              }}
-              disabled={busy}
-              aria-label="Terminal interface CLI arguments"
-              className="font-mono text-ui-xs"
-            />
-          </label>
-          <ActiveHostWorkspaceControls
-            disabled={false}
-            stagingKey={stagingKey}
-            layout="stacked"
-            workspaceSeed={target?.workspaceSeed.workspace ?? null}
-            seedIntent={target?.workspaceSeed.intent ?? null}
-            seedIntentOverride={null}
-            hostScope={{ kind: "fixed", hostId, hostClient }}
-          />
+          ) : null}
+          <div
+            data-testid="terminal-fork-dialog-fields"
+            className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+          >
+            <div className="flex min-w-0 flex-col gap-3">
+              <label
+                htmlFor={titleInputId}
+                className="flex min-w-0 flex-col gap-1.5"
+              >
+                <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
+                  Title
+                </span>
+                <Input
+                  id={titleInputId}
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") submit();
+                  }}
+                  disabled={busy}
+                  aria-label={
+                    intent === "continue"
+                      ? "Continue under another profile title"
+                      : "Fork terminal agent title"
+                  }
+                />
+              </label>
+              <section
+                ref={profileSectionRef}
+                tabIndex={-1}
+                aria-labelledby={profileSectionHeadingId}
+                data-testid="terminal-fork-profile-section"
+                className="flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+              >
+                <div
+                  id={profileSectionHeadingId}
+                  className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70"
+                >
+                  {intent === "continue" ? "Continue under" : "Harness"}
+                </div>
+                <div className="flex min-w-0 items-center gap-2 rounded-md">
+                  <HarnessModelPicker
+                    key={terminalForkModelPickerKey(target)}
+                    store={toolbarStore}
+                    withServiceTier={false}
+                    tuiOnly
+                    lockedHarnessId={target?.sourceAgent.harnessId ?? null}
+                    disabled={busy}
+                    registerActivation={false}
+                    createProfileHostId={hostId}
+                    runTargetHostId={hostId}
+                    profileAdmission={admissionByProfileId}
+                  />
+                  <div className="shrink-0">
+                    <AgentModeToggle
+                      value={agentMode}
+                      disabled={busy}
+                      showTooltip={false}
+                      onChange={setAgentMode}
+                    />
+                  </div>
+                </div>
+                {crossProfileClaudeHint ? (
+                  <p className="text-ui-xs text-muted-foreground">
+                    Heads up: TodoWrite history and rewind state from this
+                    session won't carry over to the new profile.
+                  </p>
+                ) : null}
+              </section>
+              <label
+                htmlFor={argsInputId}
+                className="flex min-w-0 flex-col gap-1.5"
+              >
+                <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
+                  Additional args
+                </span>
+                <Input
+                  id={argsInputId}
+                  value={argsDraft}
+                  onChange={(event) =>
+                    setArgsState({
+                      sourceAgentId,
+                      draft: event.target.value,
+                      touched: true,
+                    })
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") submit();
+                  }}
+                  disabled={busy}
+                  aria-label="Terminal interface CLI arguments"
+                  className="font-mono text-ui-xs"
+                />
+              </label>
+            </div>
+            <section
+              aria-label="Run location"
+              className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-3"
+            >
+              <ActiveHostWorkspaceControls
+                disabled={false}
+                stagingKey={stagingKey}
+                layout="stacked"
+                workspaceSeed={target?.workspaceSeed.workspace ?? null}
+                seedIntent={target?.workspaceSeed.intent ?? null}
+                seedIntentOverride={null}
+                hostScope={{ kind: "fixed", hostId, hostClient }}
+              />
+            </section>
+          </div>
           {status !== "idle" ? (
             <div
               role="status"
@@ -768,7 +785,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             </div>
           ) : null}
         </div>
-        <DialogFooter>
+        <DialogFooter className="py-3">
           <Button
             type="button"
             variant="outline"

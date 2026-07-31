@@ -12,7 +12,10 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  tooltipTextFor,
+  tooltipTextNear,
+} from "@/components/ui/__tests__/tooltip-probe";
 
 let mockBinding: WorktreeBinding | null = null;
 let mockBindingResolved = true;
@@ -28,6 +31,7 @@ interface CapturedForkDialogProps {
 const tileMocks = vi.hoisted(() => ({
   openProps: [] as CapturedForkDialogProps[],
   forkProfileSupported: true,
+  showAgentsAction: false,
 }));
 
 vi.mock("@/lib/host", () => {
@@ -78,7 +82,27 @@ vi.mock(
 );
 
 vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
-  useAgentStopControls: () => ({ self: null, descendants: [] }),
+  useAgentStopControls: () =>
+    tileMocks.showAgentsAction
+      ? {
+          self: {
+            id: "agent-1",
+            title: "Claude agent",
+            surface: "tui",
+            active: true,
+            hostId: "host-test",
+          },
+          descendants: [
+            {
+              id: "agent-child",
+              title: "Child agent",
+              surface: "gui",
+              active: true,
+              hostId: "host-test",
+            },
+          ],
+        }
+      : { self: null, descendants: [] },
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -248,11 +272,41 @@ describe("<TuiAgentTile /> fork split button", () => {
     mockBindingResolved = true;
     tileMocks.openProps.length = 0;
     tileMocks.forkProfileSupported = true;
+    tileMocks.showAgentsAction = false;
     useWorktreeIntentStagingStore.getState().resetForTests();
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("renders the Fork actions as one joined outline button group", () => {
+    renderTile();
+
+    const group = screen.getByRole("group", { name: "Fork actions" });
+    const fork = within(group).getByRole("button", { name: "Fork" });
+    const more = within(group).getByRole("button", {
+      name: "More fork options",
+    });
+
+    expect(group.getAttribute("data-slot")).toBe("button-group");
+    expect(group.children).toHaveLength(2);
+    expect(group.children[0].contains(fork)).toBe(true);
+    expect(group.children[1]).toBe(more);
+    expect(fork.getAttribute("data-variant")).toBe("outline");
+    expect(more.getAttribute("data-variant")).toBe("outline");
+    expect(tooltipTextFor(more)).toBe("More fork options");
+  });
+
+  it("renders the conditional Agents toolbar action as outline", () => {
+    tileMocks.showAgentsAction = true;
+    renderTile();
+
+    expect(
+      screen
+        .getByTestId("tui-agent-subagents-trigger")
+        .getAttribute("data-variant"),
+    ).toBe("outline");
   });
 
   it("opens the fork dialog with intent fork from the main Fork button", () => {
@@ -267,6 +321,11 @@ describe("<TuiAgentTile /> fork split button", () => {
     renderTile();
 
     const item = await openContinueMenuItem();
+    const label = within(item).getByText("Continue under another profile…");
+    const menu = item.closest('[data-slot="dropdown-menu-content"]');
+    expect(label.classList.contains("whitespace-nowrap")).toBe(true);
+    expect(item.classList.contains("flex-col")).toBe(false);
+    expect(menu?.classList.contains("w-max")).toBe(true);
     fireEvent.click(item);
 
     await waitFor(() => {
