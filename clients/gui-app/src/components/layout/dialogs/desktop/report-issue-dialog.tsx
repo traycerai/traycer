@@ -36,7 +36,11 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { CopyTextButton } from "@/components/copy-text-button";
 import { cn } from "@/lib/utils";
 import { buildGitHubIssueUrl } from "@traycer-clients/shared/support/issue-reporter";
-import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
+import {
+  runnerMutationKeys,
+  runnerQueryKeys,
+  supportBridgeQueryScopeId,
+} from "@/lib/query-keys";
 import {
   serializeReportIssuePrivateDiagnostics,
   type ReportIssueDraftContext,
@@ -367,7 +371,7 @@ function fingerprintOccurrenceQueryOptions(
 ) {
   return queryOptions({
     queryKey: runnerQueryKeys.supportFingerprintOccurrence(
-      support,
+      supportBridgeQueryScopeId(support),
       fingerprint ?? "",
     ),
     queryFn: (): Promise<DesktopFingerprintOccurrence | null> => {
@@ -385,7 +389,9 @@ function supportSnapshotQueryOptions(
   open: boolean,
 ) {
   return queryOptions({
-    queryKey: runnerQueryKeys.supportSnapshot(support),
+    queryKey: runnerQueryKeys.supportSnapshot(
+      supportBridgeQueryScopeId(support),
+    ),
     queryFn: (): Promise<DesktopSupportSnapshot> => {
       if (support === null) {
         return Promise.reject(new Error("Support bridge unavailable"));
@@ -1922,7 +1928,11 @@ function frozenLogTailQueryOptions(
   target: DesktopSupportLogTarget,
 ) {
   return queryOptions({
-    queryKey: runnerQueryKeys.supportFrozenLogTail(support, draftId, target),
+    queryKey: runnerQueryKeys.supportFrozenLogTail(
+      supportBridgeQueryScopeId(support),
+      draftId,
+      target,
+    ),
     queryFn: () => {
       if (support === null) {
         return Promise.reject(new Error("Support bridge unavailable"));
