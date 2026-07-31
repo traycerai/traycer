@@ -418,6 +418,8 @@ import {
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
+  providersStartTerminalLoginRequestSchema,
+  providersStartTerminalLoginResponseSchema,
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
   providersListRequestSchema,
@@ -475,6 +477,7 @@ import {
   type ProviderMutationCliStateV20,
   type ProviderLoginCapability,
   type ProviderLoginCapabilityV10,
+  type ProviderLoginCapabilityV40,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -957,12 +960,35 @@ const PROVIDER_LIVE_FIELDS_PRE_REGISTRY = {
 // these callbacks by cast, with no re-parse step to apply `.catch(null)`).
 function upgradeLoginCapabilityFromV10(
   loginCapability: ProviderLoginCapabilityV10 | null,
-): ProviderLoginCapability | null {
+): ProviderLoginCapabilityV40 | null {
   return loginCapability === null
     ? null
     : { ...loginCapability, codePaste: null };
 }
 
+// Fills the terminal-login capability slot a frozen V40-shaped state (the
+// v4.0/v5.0/v6.0 list lines and every @2.1 mutation echo) never carries -
+// same "old host never had this feature" semantics as the `codePaste` fill
+// above, one line later. `terminalLogin` ships with the v7.0 line, so a v6.0
+// host either predates it or never reported it, and "sign in from a terminal
+// is not offered" is the honest projection.
+//
+// Filling this MATTERS on the client, not just for type completeness: a
+// client decodes an old host's payload through the negotiated FROZEN schema,
+// so the live `.catch(null)` never runs and the key comes out of the DECODE
+// absent. This bridge is what turns that into `null` before any GUI code sees
+// it, on the only hop that lands on the live shape. GUI gates still spell
+// their check `!== null && !== undefined`, but for their own reason - a
+// provider whose whole `loginCapability` is null makes the optional chain
+// yield `undefined` - not because an old host's payload reaches them with the
+// key missing. It does not.
+function upgradeLoginCapabilityFromV40(
+  loginCapability: ProviderLoginCapabilityV40 | null,
+): ProviderLoginCapability | null {
+  return loginCapability === null
+    ? null
+    : { ...loginCapability, terminalLogin: null };
+}
 function downgradeProviderRequestForV10<T>(
   schema: {
     safeParse: (
@@ -1223,12 +1249,22 @@ export const providersListUpgradeV6ToV7 = defineUpgradePath<
   // this line, so "no managed packs / served no native result" is the honest
   // projection - same "old host never had this feature" semantics as the
   // `profiles: []` fill on the v3->v4 hop.
+  //
+  // `terminalLogin` is filled here for the same reason and on the same hop:
+  // this is the first bridge whose target models it. Stated explicitly rather
+  // than left to `upgradeProviderCliStateListToLatest`'s live re-parse, whose
+  // job is `nativeCapabilities` - the fill must not silently depend on a
+  // re-parse that exists for another field. See
+  // `upgradeLoginCapabilityFromV40`.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     providers: upgradeProviderCliStateListToLatest(
       response.providers.map((provider) => ({
         ...provider,
         ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+        loginCapability: upgradeLoginCapabilityFromV40(
+          provider.loginCapability,
+        ),
       })),
     ),
     native: null,
@@ -2050,6 +2086,25 @@ export const providersTouchLoginV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersTouchLoginRequestSchema,
   responseSchema: providersTouchLoginResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 method, registered the same way as
+ * `providers.submitLoginCode`/`touchLogin` above: outside
+ * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`,
+ * because a new method NAME is handshake-fatal against a released peer.
+ *
+ * Missing-peer behavior is safe by construction: a host that predates this
+ * method also predates the `terminalLogin` capability, so it reports that
+ * capability absent and the client never draws the affordance that would call
+ * this. The degrade arm covers the remaining sliver (a client that somehow
+ * calls anyway) with per-call upgrade guidance rather than a dead handshake.
+ */
+export const providersStartTerminalLoginV10 = defineRpcContract({
+  method: "providers.startTerminalLogin",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersStartTerminalLoginRequestSchema,
+  responseSchema: providersStartTerminalLoginResponseSchema,
 });
 
 /**
@@ -5014,6 +5069,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersTouchLoginV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.startTerminalLogin": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersStartTerminalLoginV10,
           upgradeFromPreviousVersion: null,
         },
       },

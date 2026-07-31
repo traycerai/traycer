@@ -90,6 +90,42 @@ describe("parseTileRef / serializeTileRef", () => {
     expect(parseTileRef(serializeTileRef(withCwd))).toEqual(withCwd);
   });
 
+  it("round-trips a provider-login terminal ref's origin and originProviderId", () => {
+    const signInTerminal: EpicTerminalRef = {
+      id: "term-signin",
+      instanceId: "inst-term-signin",
+      type: "terminal",
+      name: "Copilot sign-in",
+      titleSource: "manual",
+      hostId: HOST,
+      cwd: "~",
+      origin: "provider-login",
+      originProviderId: "copilot",
+    };
+    expect(parseTileRef(serializeTileRef(signInTerminal))).toEqual(
+      signInTerminal,
+    );
+  });
+
+  it("drops origin and originProviderId for an ordinary shell ref (undefined, not omitted)", () => {
+    const shellTerminal: EpicTerminalRef = {
+      id: "term-shell",
+      instanceId: "inst-term-shell",
+      type: "terminal",
+      name: "shell",
+      titleSource: "manual",
+      hostId: HOST,
+      cwd: "/repo",
+    };
+    const roundTripped = parseTileRef(serializeTileRef(shellTerminal));
+    expect(roundTripped).toEqual(shellTerminal);
+    if (roundTripped === null || roundTripped.type !== "terminal") {
+      throw new Error("expected a terminal ref");
+    }
+    expect(roundTripped.origin).toBeUndefined();
+    expect(roundTripped.originProviderId).toBeUndefined();
+  });
+
   it("derives terminal title source for legacy refs", () => {
     expect(
       parseTileRef({

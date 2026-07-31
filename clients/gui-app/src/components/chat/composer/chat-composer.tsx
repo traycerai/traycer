@@ -101,6 +101,15 @@ interface ChatComposerProps {
   readonly mentionRoots: ReadonlyArray<string> | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
+  /**
+   * The view tab this composer is rendered in. Used only by the provider
+   * re-auth banner's terminal sign-in, which must open the host-created
+   * terminal as a tile in ITS OWN view - in a split view each pane renders
+   * its own banner, and the app-wide active view is the wrong answer for at
+   * least one of them. `null` where the composer is not inside an epic view
+   * (the home composer), which is also where terminal sign-in is not offered.
+   */
+  readonly viewTabId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly onSubmitMessage:
@@ -169,6 +178,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
+    viewTabId,
     settingsSeed,
     fallbackSettingsSeed,
     onSubmitMessage,
@@ -486,6 +496,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
               reason={reauthBanner.reason}
               profileId={reauthGate.profileId}
               profileLabel={reauthGate.profileLabel}
+              epicId={currentEpicId}
+              viewTabId={viewTabId}
               onContinueOnAmbient={
                 reauthBanner.reason === "provider_unauthenticated"
                   ? null

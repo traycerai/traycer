@@ -165,6 +165,14 @@ export interface ChatLowerComposerState {
 }
 
 interface ComposerSurfaceModel {
+  /**
+   * The view tab this composer is rendered in. Reaches the composer only for
+   * the provider re-auth banner's terminal sign-in: the host creates the PTY
+   * and the banner has to open THAT session as a tile in ITS OWN view. In a
+   * split view each pane renders its own banner, so a banner that used the
+   * app-wide active view would open the terminal in the other pane.
+   */
+  readonly viewTabId: string;
   readonly runtime: ChatLowerRuntimeState;
   readonly access: ChatLowerAccessState;
   readonly turn: ChatLowerTurnState;
@@ -302,6 +310,7 @@ export function ChatLowerInteractionSurfaces(
 
   const composerModel = useMemo(
     () => ({
+      viewTabId: props.viewTabId,
       runtime: props.runtime,
       access: props.access,
       turn: turnWithCascade,
@@ -316,6 +325,7 @@ export function ChatLowerInteractionSurfaces(
       hasPendingApprovals,
     }),
     [
+      props.viewTabId,
       props.runtime,
       props.access,
       turnWithCascade,
@@ -520,6 +530,7 @@ function LiveChatComposer(props: {
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
+      viewTabId={model.viewTabId}
       settingsSeed={
         model.queue.editingItem?.settings ?? model.composer.sessionSettingsSeed
       }

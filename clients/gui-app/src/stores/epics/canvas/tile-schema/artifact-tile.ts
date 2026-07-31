@@ -6,6 +6,7 @@
  * terminal / workspace-file are not.
  */
 import type { DesktopJsonValue } from "@/lib/windows/types";
+import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import {
   WORKSPACE_FILE_TAB_KIND,
@@ -20,6 +21,25 @@ import { readTileInstanceId } from "./instance-id";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// `undefined` for every ref written before this field existed, and for every
+// ordinary shell tile - both read as "the tile owns this session". Only the
+// exact `"provider-login"` marker suppresses the tile's own `terminal.create`,
+// so an unrecognized future value degrades to the safe, existing behaviour.
+function parseTerminalOrigin(value: unknown): EpicTerminalRef["origin"] {
+  if (value === "shell" || value === "provider-login") return value;
+  return undefined;
+}
+
+// Only meaningful alongside `origin: "provider-login"`; an id the current
+// build does not recognize reads as absent, which degrades to "cannot offer a
+// retry" rather than calling the RPC with a provider that does not exist.
+function parseTerminalOriginProviderId(
+  value: unknown,
+): EpicTerminalRef["originProviderId"] {
+  const parsed = providerIdSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function parseTerminalTitleSource(
@@ -70,6 +90,8 @@ export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
       titleSource: parseTerminalTitleSource(value.titleSource, value.name),
       hostId: value.hostId,
       cwd: value.cwd,
+      origin: parseTerminalOrigin(value.origin),
+      originProviderId: parseTerminalOriginProviderId(value.originProviderId),
     };
   }
   if (!isRecordBackedEpicNodeKind(value.type)) {
@@ -105,6 +127,12 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
       titleSource: node.titleSource,
       hostId: node.hostId,
       cwd: node.cwd,
+      // Persistence reconstructs a ref field by field and drops anything the
+      // serializer does not name, so omitting this here would silently turn
+      // every sign-in tile back into a plain shell tile across a reload - the
+      // exact failure the marker exists to prevent.
+      origin: node.origin ?? null,
+      originProviderId: node.originProviderId ?? null,
     };
   }
   return {

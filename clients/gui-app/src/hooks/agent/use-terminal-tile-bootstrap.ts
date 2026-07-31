@@ -104,8 +104,25 @@ export interface UseTerminalTileBootstrapInput {
   /**
    * Gate the create effect (defaults to true). Tui-agent tiles set
    * this to false until the agent record is in projection.
+   *
+   * "NOT YET", never "not ever" - it is expected to flip true. For a tile that
+   * will never create, use {@link adoptOnly}: this flag also arms the
+   * measure-grid wait below, so a permanently-false `enabled` silently removes
+   * the bounded fallback that lets a tile attach when no probe ever reports.
    */
   readonly enabled?: boolean | undefined;
+  /**
+   * This tile never dispatches `terminal.create` - something else created the
+   * session (a host-owned provider sign-in terminal) and the tile only
+   * attaches to it.
+   *
+   * Separate from `enabled` because the two gates have opposite needs: the
+   * create effect must stay shut forever, while the measure-grid wait must
+   * still arm - an adopt-only tile needs a grid to SUBSCRIBE at, and with no
+   * bounded wait a probe that never reports leaves it on "Starting terminal
+   * session…" with no timeout and no error.
+   */
+  readonly adoptOnly?: boolean | undefined;
   /**
    * Optional reset hook for the upstream prepare step. `retry` calls
    * it before re-dispatching create.
@@ -151,7 +168,11 @@ export function useTerminalTileBootstrap(
   // subscribe); `measureTimedOut` unblocks the bootstrap when no probe ever
   // reports. `gridReady` is the gate the create effect and the session-handle
   // enable both honor.
-  const enabled = input.enabled ?? true;
+  // `!== false` / `=== true` rather than `??`: same defaults (absent means
+  // enabled, absent means not adopt-only) with no extra branch, and this hook
+  // sits right at the complexity ceiling.
+  const enabled = input.enabled !== false;
+  const adoptOnly = input.adoptOnly === true;
   const [measuredGrid, setMeasuredGrid] = useState<{
     readonly cols: number;
     readonly rows: number;
@@ -266,6 +287,7 @@ export function useTerminalTileBootstrap(
     if (hostHasSession === true) return; // session already live
     if (hostSessionExited) return; // PTY exited - close, do not respawn
     if (!enabled) return;
+    if (adoptOnly) return; // the session is someone else's to create
     if (hostHasSession === null) return; // list still loading
     // Measure-before-subscribe: hold the create until the probe reported the
     // container's natural grid (or the bounded wait expired), so the PTY
@@ -314,6 +336,7 @@ export function useTerminalTileBootstrap(
       });
   }, [
     enabled,
+    adoptOnly,
     hostHasSession,
     hostSessionExited,
     hostClient,
