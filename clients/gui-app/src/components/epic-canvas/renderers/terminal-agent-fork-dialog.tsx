@@ -113,7 +113,10 @@ function lockNonSourceProfiles(
 /**
  * The dialog's single source of truth for `profileAdmission`, composing three
  * independent gates in priority order:
- *   1. Old-host capability lock (Fix 1) - wins regardless of intent.
+ *   1. Old-host capability lock (Fix 1) - wins regardless of intent. Exempts
+ *      `capabilityLockExemptProfileId`, not the raw `sourceProfileId`: an old
+ *      host has no guard, so ambient must stay reachable when the raw source
+ *      is a no-longer-live profile (amend-02).
  *   2. Bulk admission unsettled/failed (Fix 3) - locks non-source profiles
  *      rather than failing open while pending or after an RPC failure.
  *   3. Bulk admission resolved - the server's per-profile verdicts.
@@ -127,11 +130,12 @@ function resolveDialogAdmission(input: {
   readonly admissionSettled: AdmissionOutcome | null;
   readonly sourceHarnessProfiles: ReadonlyArray<ProviderProfile>;
   readonly sourceProfileId: string | null;
+  readonly capabilityLockExemptProfileId: string | null;
 }): ReadonlyMap<string | null, ProfileRowAdmission> {
   if (input.capabilityLockActive) {
     return lockNonSourceProfiles(
       input.sourceHarnessProfiles,
-      input.sourceProfileId,
+      input.capabilityLockExemptProfileId,
       CAPABILITY_LOCK_REASON,
     );
   }
@@ -268,22 +272,17 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   }, [providersQuery.data, target]);
 
   const sourceTuiAgentId = target?.sourceAgent.id ?? null;
-  // The EFFECTIVE source profile for cross-profile comparison/locking below -
-  // resolved the SAME way `useComposerToolbarStore`'s seed validation
-  // resolves `currentProfileId` (a tombstoned/never-supported raw source
-  // profile corrects to ambient there too). Comparing against the RAW
-  // `target.sourceAgent.profileId` instead would misread that correction as
-  // a user-initiated cross-profile pick and wrongly lock/block a plain
-  // forking-without-touching-the-picker submit.
+  // The SOURCE profile identity, RAW and persisted - the SAME identity the
+  // host's authoritative continuation-scope guard compares against (amend-02:
+  // the host now mirrors on-disk storage truth for a tombstoned managed
+  // profile whose layout used to share ambient storage, so raw is correct
+  // here rather than a UI-local normalization that could disagree with what
+  // the host actually admits). Used consistently everywhere this dialog
+  // needs "the source's own profile": admission composition, the CTA's
+  // locked-selection check, the default-title comparison, the cross-profile
+  // Claude disclosure, and `create.sourceProfileId`.
   const providersSettled = providersQuery.data !== undefined;
-  const sourceProfileId =
-    target === null
-      ? null
-      : resolveSeededProfileId(
-          target.sourceAgent.profileId,
-          sourceHarnessProfiles,
-          providersSettled,
-        );
+  const sourceProfileId = target?.sourceAgent.profileId ?? null;
   // Old-host bypass fix (amend-01 Fix 1, blocker): negotiated capability
   // absence is no evidence the host has the new authoritative `prepareLaunch`
   // guard - it just means the host predates this package. The picker must be
@@ -292,6 +291,20 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   // Fork button, not just the (already capability-gated) Continue menu item.
   const capabilityLockActive =
     dialogActive && !forkProfileSupported && sourceHarnessProfiles.length > 0;
+  // The capability lock's exemption specifically (amend-02): an old host has
+  // NO continuation-scope guard at all, so a plain fork/continue that lands
+  // on ambient - `useComposerToolbarStore`'s own seed correction for a
+  // tombstoned/no-longer-live raw source profile - must stay submittable
+  // there exactly as it did before this feature existed. Resolved the SAME
+  // way that seed correction is: live membership against this harness's
+  // `providers.list`. For a still-live source profile this equals
+  // `sourceProfileId` verbatim (no behavior change); it only diverges - to
+  // ambient - when the raw source profile is no longer a live row.
+  const capabilityLockExemptProfileId = resolveSeededProfileId(
+    sourceProfileId,
+    sourceHarnessProfiles,
+    providersSettled,
+  );
   // Only continue mode proactively disables unshared rows (tech plan UX
   // package scopes bulk-admission picker behavior to continue mode); a
   // manual cross-profile pick in plain fork mode still gets caught by
@@ -375,6 +388,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     admissionSettled,
     sourceHarnessProfiles,
     sourceProfileId,
+    capabilityLockExemptProfileId,
   });
 
   // Live default title (tech plan UX package: "profile-changed default
@@ -387,7 +401,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       : terminalForkDefaultTitle({
           sourceAgent: target.sourceAgent,
           profileLabel:
-            currentProfileId === target.sourceAgent.profileId
+            currentProfileId === sourceProfileId
               ? null
               : resolveForkProfileLabel(
                   sourceHarnessProfiles,
@@ -519,7 +533,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     // does not follow a profile switch. Gated to Claude - the only harness
     // this feature admits cross-profile forks for at all.
     const crossProfileClaudeFork =
-      submittedProfileId !== target.sourceAgent.profileId &&
+      submittedProfileId !== sourceProfileId &&
       target.sourceAgent.harnessId === "claude";
     const targetLabel = resolveForkProfileLabel(
       sourceHarnessProfiles,
@@ -543,7 +557,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         profileId: submittedProfileId,
         forkSourceHarnessSessionId: sourceSessionId,
         sourceTuiAgentId: target.sourceAgent.id,
-        sourceProfileId: target.sourceAgent.profileId,
+        sourceProfileId,
         onStatusChange: setStatus,
         worktreeIntent,
         workspaceMode: deriveWorkspaceMode(
@@ -575,7 +589,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       .catch((caught: unknown) => {
         const sourceLabel = resolveForkProfileLabel(
           sourceHarnessProfiles,
-          target.sourceAgent.profileId,
+          sourceProfileId,
         );
         const view = resolveTuiForkRejectionView(caught, {
           targetLabel,
@@ -592,6 +606,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     epicId,
     onOpenChange,
     sourceHarnessProfiles,
+    sourceProfileId,
     sourceSessionId,
     stagingKey,
     tabId,
@@ -654,7 +669,11 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 if (event.key === "Enter") submit();
               }}
               disabled={busy}
-              aria-label="Fork terminal agent title"
+              aria-label={
+                intent === "continue"
+                  ? "Continue under another profile title"
+                  : "Fork terminal agent title"
+              }
             />
           </label>
           <section

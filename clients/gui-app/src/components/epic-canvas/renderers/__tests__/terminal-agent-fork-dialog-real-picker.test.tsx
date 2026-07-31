@@ -513,7 +513,7 @@ async function openPicker(): Promise<void> {
 
 function titleInputValue(): string {
   const input = screen.getByRole("textbox", {
-    name: "Fork terminal agent title",
+    name: /^(Fork terminal agent title|Continue under another profile title)$/,
   });
   if (!(input instanceof HTMLInputElement)) {
     throw new Error("expected title input");

@@ -690,7 +690,7 @@ describe("<TerminalAgentForkDialog />", () => {
       // Dialog stays interactive: Cancel and title input remain available.
       expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
       const titleInput = screen.getByRole("textbox", {
-        name: "Fork terminal agent title",
+        name: "Continue under another profile title",
       });
       if (!(titleInput instanceof HTMLInputElement)) {
         throw new Error("expected title input");

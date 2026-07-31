@@ -743,6 +743,81 @@ describe("useCreateTuiAgent", () => {
     queryClient.clear();
   });
 
+  it("amend-02: a tombstoned-source fork to ambient is ADMITTED by the real preflight and proceeds through the full create sequence", async () => {
+    // Host-verdict-driven, not a mocked-create-only assertion (T5 amend-02
+    // requirement #4): `sourceProfileId` is a raw, no-longer-live managed
+    // profile and `profileId` (the target) is ambient (`null`) - genuinely
+    // different, so `resolveForkProfilePreflightTarget` must NOT skip the
+    // preflight (unlike the same-profile case below). The mocked verdict
+    // mirrors exactly what `tui-fork-scope-guard-tombstoned-source-
+    // exemption.test.ts` proves the REAL host now returns for
+    // source=tombstoned-partial-overlay, target=ambient: `admitted: true`.
+    const calls: CapturedCall[] = [];
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "agent.tui.validateForkProfile") {
+        return Promise.resolve({
+          verdicts: [
+            {
+              targetProfileId: null,
+              admitted: true,
+              subcode: null,
+              message: null,
+            },
+          ],
+        });
+      }
+      if (method === "agent.tui.prepareLaunch") {
+        return Promise.resolve(startSessionResponse);
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({
+          tuiAgentId:
+            (payload as { tuiAgentId?: string | null }).tuiAgentId ??
+            "server-id",
+        });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Continue - ambient",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "tombstoned-uuid",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        profileId: null,
+      });
+    });
+
+    const methodOrder = calls.map((c) => c.method);
+    // Preflight was genuinely engaged (proves the source identity is not
+    // mistaken for a trivial same-profile skip)...
+    expect(methodOrder).toContain("agent.tui.validateForkProfile");
+    // ...and, admitted, the full sequence actually completes.
+    expect(methodOrder).toContain("agent.tui.prepareLaunch");
+    expect(methodOrder).toContain("epic.createTuiAgent");
+
+    queryClient.clear();
+  });
+
   it("same-profile fork skips the preflight round trip entirely (no agent.tui.validateForkProfile call)", async () => {
     const { calls } = setupSequencedMock();
 
