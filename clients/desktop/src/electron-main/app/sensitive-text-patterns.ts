@@ -38,7 +38,11 @@ export const QUOTED_SENSITIVE_INLINE_VALUE_PATTERN =
  * would otherwise redact only the word "Basic" and leave the actual
  * credential intact right after it.
  */
-export const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9+/=]+/gi;
+// Require a plausibly encoded payload rather than any word after "Basic".
+// Support reports scrub user prose too, so a broad match would corrupt text
+// such as "Basic setup fails" even though it is not an auth header.
+export const BASIC_AUTH_PATTERN =
+  /\bBasic\s+(?=[A-Za-z0-9+/=]{16,}(?![A-Za-z0-9+/=]))(?![A-Za-z]+(?![A-Za-z0-9+/=]))[A-Za-z0-9+/=]+/gi;
 
 /**
  * Scrubber-only, redacts the TOKEN ITSELF wherever it appears in free text -

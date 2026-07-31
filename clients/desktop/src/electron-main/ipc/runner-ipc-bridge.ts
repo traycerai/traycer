@@ -1395,7 +1395,7 @@ class NullSupportService implements IpcSupportService {
     _frozenEvidenceKey: string,
     _fingerprint: string | null,
   ): Promise<SupportFreezeEvidenceResult> {
-    return Promise.resolve({ reportId: "" });
+    return Promise.reject(new Error("Support evidence is unavailable"));
   }
 
   discardFrozenEvidence(_frozenEvidenceKey: string): void {}

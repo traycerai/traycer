@@ -5,6 +5,10 @@ import {
 } from "@/lib/query-keys/runner-mutation-keys";
 
 describe("support bridge query scopes", () => {
+  it("returns null for an absent bridge", () => {
+    expect(supportBridgeQueryScopeId(null)).toBeNull();
+  });
+
   it("keeps one serializable scope per bridge instance", () => {
     const first = { getSnapshot: () => Promise.resolve("first") };
     const second = { getSnapshot: () => Promise.resolve("second") };

@@ -197,8 +197,16 @@ describe("scrubSupportText", () => {
       // whitespace, so without a dedicated Basic-auth pattern only the word
       // "Basic" was redacted and the base64 credential right after it
       // survived untouched.
-      const result = scrubSupportText("Authorization: Basic dXNlcjpwYXNz");
-      expect(result).not.toContain("dXNlcjpwYXNz");
+      const result = scrubSupportText(
+        "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+      );
+      expect(result).not.toContain("dXNlcjpwYXNzd29yZA==");
+    });
+
+    it("preserves ordinary prose that starts with Basic", () => {
+      expect(scrubSupportText("Basic setup fails on launch")).toBe(
+        "Basic setup fails on launch",
+      );
     });
   });
 

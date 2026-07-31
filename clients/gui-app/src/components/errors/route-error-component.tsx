@@ -6,25 +6,31 @@ import {
   type ReportIssueErrorCapture,
 } from "@/lib/report-issue-error-capture";
 
-// StrictMode invokes lazy state initializers twice in development. Cache by
-// the thrown Error instance so only the first initializer mints a correlation
-// id and reports to Sentry; the discarded probe render reuses that capture.
-const captureByError = new WeakMap<Error, ReportIssueErrorCapture>();
+type RouteErrorComponentProps = Omit<ErrorComponentProps, "error"> & {
+  readonly error: unknown;
+};
+
+// StrictMode invokes lazy state initializers twice in development. The props
+// object identifies this mounted error occurrence even when a route throws a
+// primitive or redirect-like value; keying by the value itself would conflate
+// separate failures that happen to throw the same string or number.
+const captureByOccurrence = new WeakMap<
+  RouteErrorComponentProps,
+  ReportIssueErrorCapture
+>();
 
 function captureRouteError(
-  props: ErrorComponentProps,
+  props: RouteErrorComponentProps,
 ): ReportIssueErrorCapture {
-  if (props.error instanceof Error) {
-    const existing = captureByError.get(props.error);
-    if (existing !== undefined) return existing;
-  }
+  const existing = captureByOccurrence.get(props);
+  if (existing !== undefined) return existing;
   const capture = captureReportIssueError({
     error: props.error,
     componentStack: props.info?.componentStack ?? null,
     errorCode: null,
     sourceAction: "Route error",
   });
-  if (props.error instanceof Error) captureByError.set(props.error, capture);
+  captureByOccurrence.set(props, capture);
   return capture;
 }
 
@@ -35,7 +41,9 @@ function captureRouteError(
  * route's error boundary and resets that boundary automatically on the next
  * successful navigation, so navigating home clears the error.
  */
-export function RouteErrorComponent(props: ErrorComponentProps): ReactNode {
+export function RouteErrorComponent(
+  props: RouteErrorComponentProps,
+): ReactNode {
   const router = useRouter();
   const [capture] = useState(() => captureRouteError(props));
   return (

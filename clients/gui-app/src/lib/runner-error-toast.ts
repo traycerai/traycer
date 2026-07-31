@@ -1,3 +1,4 @@
+import { createElement, Fragment } from "react";
 import type { ExternalToast } from "sonner";
 import { readErrorMessage } from "@/lib/read-error-message";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -23,10 +24,23 @@ function showRunnerErrorToast(
   const message = readErrorMessage(error);
   let description: ExternalToast["description"] = options?.description;
   if (message !== null) {
-    description =
-      typeof options?.description === "string"
-        ? `${options.description} ${message}`
-        : message;
+    if (options?.description === undefined) {
+      description = message;
+    } else if (typeof options.description === "string") {
+      description = `${options.description} ${message}`;
+    } else if (typeof options.description === "function") {
+      const originalDescription = options.description;
+      description = () =>
+        createElement(Fragment, null, originalDescription(), " ", message);
+    } else {
+      description = createElement(
+        Fragment,
+        null,
+        options.description,
+        " ",
+        message,
+      );
+    }
   }
   reportableErrorToast(
     fallback,

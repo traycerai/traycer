@@ -331,6 +331,7 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
     if (target !== undefined) URL.revokeObjectURL(target.previewUrl);
     imagesRef.current = imagesRef.current.filter((image) => image.id !== id);
     setImages(imagesRef.current);
+    setRejection(null);
   }, []);
 
   return {

@@ -209,6 +209,28 @@ describe("useReportIssueAttachments", () => {
     expect(revokeObjectURLMock).toHaveBeenCalledWith(previewUrl);
   });
 
+  it("revokes every preview URL on unmount", async () => {
+    const { result, unmount } = renderHook(() => useReportIssueAttachments());
+
+    act(() => {
+      result.current.addFiles([
+        makeDefaultPngFile("a.png"),
+        makeJpegFile("b.jpg"),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.images).toHaveLength(2);
+    });
+    const previewUrls = result.current.images.map((image) => image.previewUrl);
+
+    unmount();
+
+    for (const previewUrl of previewUrls) {
+      expect(revokeObjectURLMock).toHaveBeenCalledWith(previewUrl);
+    }
+  });
+
   it("rejects a 4th image with reason count without adding it", async () => {
     const { result } = renderHook(() => useReportIssueAttachments());
 
@@ -234,6 +256,12 @@ describe("useReportIssueAttachments", () => {
     expect(result.current.rejection?.message).toContain(
       `up to ${MAX_REPORT_IMAGES} screenshots`,
     );
+
+    const firstImageId = result.current.images[0].id;
+    act(() => {
+      result.current.removeImage(firstImageId);
+    });
+    expect(result.current.rejection).toBeNull();
   });
 
   it("reports a type rejection when every dropped file is a non-image", () => {

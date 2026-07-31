@@ -145,7 +145,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.supportSubmitReport,
     (event, form: unknown) => {
-      const parsed = parseSupportSubmitReportRequest(form);
+      const parsed = parseSupportReportRequest(form, "supportSubmitReport");
       return bridge.support.submitReport(
         parsed,
         frozenEvidenceKey(event, parsed.draftId),
@@ -206,7 +206,10 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.supportSaveDiagnosticBundle,
     (event, form: unknown) => {
-      const parsed = parseSupportSubmitReportRequest(form);
+      const parsed = parseSupportReportRequest(
+        form,
+        "supportSaveDiagnosticBundle",
+      );
       return bridge.support.saveDiagnosticBundle(
         parsed,
         frozenEvidenceKey(event, parsed.draftId),
@@ -220,7 +223,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.supportBuildPublicDraft,
     (event, form: unknown) => {
-      const parsed = parseSupportSubmitReportRequest(form);
+      const parsed = parseSupportReportRequest(form, "supportBuildPublicDraft");
       return bridge.support.buildPublicDraft(
         parsed,
         frozenEvidenceKey(event, parsed.draftId),
@@ -242,13 +245,11 @@ function frozenEvidenceKey(event: IpcMainInvokeEvent, draftId: number): string {
   return `${readSenderWebContentsId(event) ?? UNKNOWN_SENDER_ID}:${draftId}`;
 }
 
-function parseSupportTailLogInput(input: unknown): {
+export function parseSupportTailLogInput(input: unknown): {
   readonly target: SupportLogTarget;
   readonly tailLines: number;
 } {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    return { target: "desktop", tailLines: 100 };
-  }
+  assertPlainObject(input, "supportTailLog");
   const payload = input as Record<string, unknown>;
   const requestedLines = payload.tailLines;
   const tailLines =
@@ -531,9 +532,9 @@ function parseContextRegistrySnapshot(
 
 function parsePrivateDiagnosticsCause(
   value: unknown,
+  context: string,
 ): SupportPrivateDiagnosticsCause | null {
   if (value === null || value === undefined) return null;
-  const context = "supportSubmitReport.privateDiagnostics.cause";
   assertPlainObject(value, context);
   assertOnlyAllowedKeys(value, PRIVATE_DIAGNOSTICS_CAUSE_KEYS, context);
   assertString(value.type, `${context}.type`);
@@ -558,9 +559,9 @@ function parsePrivateDiagnosticsCause(
 
 function parsePrivateDiagnostics(
   value: unknown,
+  context: string,
 ): SupportPrivateDiagnostics | undefined {
   if (value === undefined) return undefined;
-  const context = "supportSubmitReport.privateDiagnostics";
   assertPlainObject(value, context);
   assertOnlyAllowedKeys(value, PRIVATE_DIAGNOSTICS_KEYS, context);
   for (const key of PRIVATE_DIAGNOSTICS_KEYS) {
@@ -568,7 +569,7 @@ function parsePrivateDiagnostics(
   }
   assertString(value.correlationId, `${context}.correlationId`);
   return {
-    cause: parsePrivateDiagnosticsCause(value.cause),
+    cause: parsePrivateDiagnosticsCause(value.cause, `${context}.cause`),
     registry: parseContextRegistrySnapshot(
       value.registry,
       `${context}.registry`,
@@ -665,60 +666,57 @@ function parseSupportImageAttachments(
 export function parseSupportSubmitReportRequest(
   form: unknown,
 ): SupportSubmitReportRequest {
-  assertPlainObject(form, "supportSubmitReport");
-  assertOnlyAllowedKeys(
-    form,
-    SUPPORT_SUBMIT_REPORT_KEYS,
-    "supportSubmitReport",
-  );
-  assertInteger(form.draftId, "supportSubmitReport.draftId");
-  const type = parseSupportReportType(form.type, "supportSubmitReport.type");
-  assertString(form.intent, "supportSubmitReport.intent");
+  return parseSupportReportRequest(form, "supportSubmitReport");
+}
+
+function parseSupportReportRequest(
+  form: unknown,
+  context: string,
+): SupportSubmitReportRequest {
+  assertPlainObject(form, context);
+  assertOnlyAllowedKeys(form, SUPPORT_SUBMIT_REPORT_KEYS, context);
+  assertInteger(form.draftId, `${context}.draftId`);
+  const type = parseSupportReportType(form.type, `${context}.type`);
+  assertString(form.intent, `${context}.intent`);
   // frequency/location are always present on the wire (null when unset) - a
   // missing key is a contract violation, matching `freezeEvidence.fingerprint`.
-  assertHasKey(form, "frequency", "supportSubmitReport");
-  assertHasKey(form, "location", "supportSubmitReport");
+  assertHasKey(form, "frequency", context);
+  assertHasKey(form, "location", context);
   const frequency = parseSupportReportFrequency(
     form.frequency,
-    "supportSubmitReport.frequency",
+    `${context}.frequency`,
   );
-  const location = parseNullableString(
-    form.location,
-    "supportSubmitReport.location",
-  );
-  assertBoolean(form.allowContact, "supportSubmitReport.allowContact");
-  assertBoolean(
-    form.includeDesktopLog,
-    "supportSubmitReport.includeDesktopLog",
-  );
-  assertBoolean(form.includeHostLog, "supportSubmitReport.includeHostLog");
-  assertBoolean(
-    form.includeDiagnostics,
-    "supportSubmitReport.includeDiagnostics",
-  );
+  const location = parseNullableString(form.location, `${context}.location`);
+  assertBoolean(form.allowContact, `${context}.allowContact`);
+  assertBoolean(form.includeDesktopLog, `${context}.includeDesktopLog`);
+  assertBoolean(form.includeHostLog, `${context}.includeHostLog`);
+  assertBoolean(form.includeDiagnostics, `${context}.includeDiagnostics`);
   // Always present on the wire (empty array when nothing attached), matching
   // frequency/location's "no missing key" contract.
-  assertHasKey(form, "images", "supportSubmitReport");
-  const images = parseSupportImageAttachments(
-    form.images,
-    "supportSubmitReport.images",
-  );
-  assertHasKey(form, "overrideTitle", "supportSubmitReport");
+  assertHasKey(form, "images", context);
+  const images = parseSupportImageAttachments(form.images, `${context}.images`);
+  assertHasKey(form, "overrideTitle", context);
   const overrideTitle = parseNullableString(
     form.overrideTitle,
-    "supportSubmitReport.overrideTitle",
+    `${context}.overrideTitle`,
   );
   const privateOutcome = parseSupportPrivateOutcome(
     form.privateOutcome,
-    "supportSubmitReport.privateOutcome",
+    `${context}.privateOutcome`,
   );
-  const privateDiagnostics = parsePrivateDiagnostics(form.privateDiagnostics);
-  assertHasSubmittableEvidence({
-    intent: form.intent,
-    location,
-    images,
-    privateDiagnostics,
-  });
+  const privateDiagnostics = parsePrivateDiagnostics(
+    form.privateDiagnostics,
+    `${context}.privateDiagnostics`,
+  );
+  assertHasSubmittableEvidence(
+    {
+      intent: form.intent,
+      location,
+      images,
+      privateDiagnostics,
+    },
+    context,
+  );
   return {
     draftId: form.draftId,
     type,
@@ -747,12 +745,15 @@ export function parseSupportSubmitReportRequest(
 // non-empty case the client's own gate accepts must still be accepted here:
 // this must never regress into rejecting an error-triggered report with no
 // typed text, or a bug report satisfied by location alone.
-function assertHasSubmittableEvidence(input: {
-  readonly intent: string;
-  readonly location: string | null;
-  readonly images: readonly SupportImageAttachmentInput[];
-  readonly privateDiagnostics: SupportPrivateDiagnostics | undefined;
-}): void {
+function assertHasSubmittableEvidence(
+  input: {
+    readonly intent: string;
+    readonly location: string | null;
+    readonly images: readonly SupportImageAttachmentInput[];
+    readonly privateDiagnostics: SupportPrivateDiagnostics | undefined;
+  },
+  context: string,
+): void {
   const hasErrorEnvelope =
     input.privateDiagnostics !== undefined &&
     (input.privateDiagnostics.cause !== null ||
@@ -764,12 +765,17 @@ function assertHasSubmittableEvidence(input: {
     (input.location !== null && input.location.trim().length > 0);
   if (!hasEvidence) {
     throw new Error(
-      "supportSubmitReport requires a sentence, a screenshot, a location, or a captured error - none were present",
+      `${context} requires a sentence, a screenshot, a location, or a captured error - none were present`,
     );
   }
 }
 
-const READ_FROZEN_LOG_TAIL_KEYS = new Set(["draftId", "target"]);
+const READ_FROZEN_LOG_TAIL_KEYS = contractKeySet<SupportReadFrozenLogTailInput>(
+  {
+    draftId: true,
+    target: true,
+  },
+);
 
 export function parseSupportReadFrozenLogTailInput(
   input: unknown,
@@ -784,7 +790,10 @@ export function parseSupportReadFrozenLogTailInput(
   };
 }
 
-const FREEZE_EVIDENCE_KEYS = new Set(["draftId", "fingerprint"]);
+const FREEZE_EVIDENCE_KEYS = contractKeySet<SupportFreezeEvidenceInput>({
+  draftId: true,
+  fingerprint: true,
+});
 
 export function parseSupportFreezeEvidenceInput(
   input: unknown,

@@ -345,7 +345,7 @@ function deriveTitle(
     return intentTitle !== "" ? intentTitle : GENERIC_FALLBACK_TITLE;
   }
   return intentTitle !== ""
-    ? `${distinctiveToken}: ${intentTitle}`
+    ? truncatedTitleText(`${distinctiveToken}: ${intentTitle}`)
     : distinctiveToken;
 }
 

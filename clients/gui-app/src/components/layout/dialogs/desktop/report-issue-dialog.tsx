@@ -248,22 +248,6 @@ function previewOriginFor(screen: ReportIssueScreen): "capture" | "confirmed" {
   return screen === "confirmed" ? "confirmed" : "capture";
 }
 
-interface ReportIssueDerivedFlags {
-  readonly deliveryResult: DesktopSubmitReportResult | null;
-  readonly effectiveDeliveryResult: DesktopSubmitReportResult | null;
-  readonly showsHonestBanner: boolean;
-  readonly gateSatisfied: boolean;
-  readonly showGateError: boolean;
-  readonly showFrequencyChips: boolean;
-  readonly showLocationSelector: boolean;
-  readonly contactCheckboxVisible: boolean;
-  readonly isDeliveryUnavailable: boolean;
-}
-
-// Consolidates every UI-gating boolean derived from render state into one
-// call so `ReportIssueDialog` itself stays a thin orchestrator - splitting
-// these into a dozen separate `&&`/`||`/`?:` consts inline pushed its own
-// cyclomatic complexity well past the repo's lint budget.
 interface ReportIssueDeliveryFlags {
   readonly deliveryResult: DesktopSubmitReportResult | null;
   readonly effectiveDeliveryResult: DesktopSubmitReportResult | null;
@@ -317,6 +301,13 @@ interface ReportIssueGateFlags {
   readonly showFrequencyChips: boolean;
   readonly showLocationSelector: boolean;
 }
+
+// Consolidates every UI-gating boolean derived from render state into one
+// call so `ReportIssueDialog` itself stays a thin orchestrator - splitting
+// these into a dozen separate `&&`/`||`/`?:` consts inline pushed its own
+// cyclomatic complexity well past the repo's lint budget.
+type ReportIssueDerivedFlags = ReportIssueDeliveryFlags &
+  ReportIssueGateFlags & { readonly contactCheckboxVisible: boolean };
 
 function deriveGateFlags(input: {
   readonly hasErrorEnvelope: boolean;

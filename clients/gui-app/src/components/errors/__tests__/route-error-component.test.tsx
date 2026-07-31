@@ -56,4 +56,21 @@ describe("<RouteErrorComponent />", () => {
       sourceAction: "Route error",
     });
   });
+
+  it("captures one primitive route failure under StrictMode", () => {
+    const error = "route failed";
+    render(
+      <StrictMode>
+        <RouteErrorComponent error={error} reset={() => undefined} />
+      </StrictMode>,
+    );
+
+    expect(captureReportIssueError).toHaveBeenCalledTimes(1);
+    expect(captureReportIssueError).toHaveBeenCalledWith({
+      error,
+      componentStack: null,
+      errorCode: null,
+      sourceAction: "Route error",
+    });
+  });
 });

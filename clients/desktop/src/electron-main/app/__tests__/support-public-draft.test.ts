@@ -182,6 +182,21 @@ describe("buildPublicDraftFields", () => {
       expect(result.title).toBe("boom happened at <path-1>: The app crashed");
     });
 
+    it("caps the final title after composing the symptom and intent", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        intent: "i".repeat(200),
+        privateDiagnostics: makeDiagnostics({
+          cause: makeCause({
+            sourceAction: "chat.subscribe",
+            errorCode: "RPC_ERROR",
+          }),
+        }),
+      });
+      expect(result.title.endsWith("…")).toBe(true);
+      expect(result.title.length).toBeLessThan(100);
+    });
+
     it("falls back to the generic title when intent is empty and there is no cause", () => {
       const result = buildPublicDraftFields({ ...baseInput, intent: "" });
       expect(result.title).toBe("Traycer desktop issue");

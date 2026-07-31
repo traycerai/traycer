@@ -9,6 +9,7 @@ import {
   parseSupportFreezeEvidenceInput,
   parseSupportReadFrozenLogTailInput,
   parseSupportSubmitReportRequest,
+  parseSupportTailLogInput,
 } from "../support-ipc";
 
 const VALID_FORM = {
@@ -25,6 +26,21 @@ const VALID_FORM = {
   overrideTitle: null,
   privateOutcome: "delivered",
 };
+
+describe("parseSupportTailLogInput", () => {
+  it("accepts and clamps a valid request", () => {
+    expect(
+      parseSupportTailLogInput({ target: "host", tailLines: 1_000 }),
+    ).toEqual({ target: "host", tailLines: 500 });
+  });
+
+  it.each([null, "desktop", [], 42])(
+    "rejects a malformed request payload",
+    (input) => {
+      expect(() => parseSupportTailLogInput(input)).toThrow();
+    },
+  );
+});
 
 /** Small valid PNG magic + padding. */
 function pngArrayBuffer(length: number): ArrayBuffer {

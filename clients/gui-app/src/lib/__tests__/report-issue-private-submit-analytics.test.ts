@@ -1,19 +1,18 @@
 import { describe, expect, it } from "vitest";
+import {
+  AnalyticsEvent,
+  reportIssuePrivateSubmitPropertiesFromResult,
+  sanitizeAnalyticsProperties,
+} from "@/lib/analytics";
 
 describe("reportIssuePrivateSubmitPropertiesFromResult", () => {
-  it("maps delivered to confirmed", async () => {
-    const { reportIssuePrivateSubmitPropertiesFromResult } =
-      await import("@/lib/analytics");
-
+  it("maps delivered to confirmed", () => {
     expect(
       reportIssuePrivateSubmitPropertiesFromResult({ status: "delivered" }, 0),
     ).toEqual({ outcome: "confirmed", blocker: null, attachment_count: 0 });
   });
 
-  it("maps unconfirmed to its own outcome, never confirmed or failed", async () => {
-    const { reportIssuePrivateSubmitPropertiesFromResult } =
-      await import("@/lib/analytics");
-
+  it("maps unconfirmed to its own outcome, never confirmed or failed", () => {
     expect(
       reportIssuePrivateSubmitPropertiesFromResult(
         { status: "unconfirmed" },
@@ -22,10 +21,7 @@ describe("reportIssuePrivateSubmitPropertiesFromResult", () => {
     ).toEqual({ outcome: "unconfirmed", blocker: null, attachment_count: 0 });
   });
 
-  it("maps unavailable to unavailable", async () => {
-    const { reportIssuePrivateSubmitPropertiesFromResult } =
-      await import("@/lib/analytics");
-
+  it("maps unavailable to unavailable", () => {
     expect(
       reportIssuePrivateSubmitPropertiesFromResult(
         { status: "unavailable" },
@@ -34,31 +30,19 @@ describe("reportIssuePrivateSubmitPropertiesFromResult", () => {
     ).toEqual({ outcome: "unavailable", blocker: null, attachment_count: 0 });
   });
 
-  it("maps a structured failed result to failed with an unknown blocker", async () => {
-    const { reportIssuePrivateSubmitPropertiesFromResult } =
-      await import("@/lib/analytics");
-
+  it("maps a structured failed result to failed with an unknown blocker", () => {
     expect(
       reportIssuePrivateSubmitPropertiesFromResult({ status: "failed" }, 0),
     ).toEqual({ outcome: "failed", blocker: "unknown", attachment_count: 0 });
   });
 
-  it("carries the attachment count through on every outcome", async () => {
-    const { reportIssuePrivateSubmitPropertiesFromResult } =
-      await import("@/lib/analytics");
-
+  it("carries the attachment count through on every outcome", () => {
     expect(
       reportIssuePrivateSubmitPropertiesFromResult({ status: "delivered" }, 2),
     ).toEqual({ outcome: "confirmed", blocker: null, attachment_count: 2 });
   });
 
-  it("accepts every mapped outcome for private submit sanitization", async () => {
-    const {
-      AnalyticsEvent,
-      reportIssuePrivateSubmitPropertiesFromResult,
-      sanitizeAnalyticsProperties,
-    } = await import("@/lib/analytics");
-
+  it("accepts every mapped outcome for private submit sanitization", () => {
     for (const status of [
       "delivered",
       "unconfirmed",
@@ -78,10 +62,7 @@ describe("reportIssuePrivateSubmitPropertiesFromResult", () => {
     }
   });
 
-  it("rejects the old hard-coded succeeded outcome for private submit", async () => {
-    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
-      await import("@/lib/analytics");
-
+  it("rejects the old hard-coded succeeded outcome for private submit", () => {
     expect(
       sanitizeAnalyticsProperties(AnalyticsEvent.ReportIssuePrivateSubmit, {
         outcome: "succeeded",
@@ -91,10 +72,7 @@ describe("reportIssuePrivateSubmitPropertiesFromResult", () => {
     ).toBeNull();
   });
 
-  it("rejects unconfirmed paired with a non-null blocker", async () => {
-    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
-      await import("@/lib/analytics");
-
+  it("rejects unconfirmed paired with a non-null blocker", () => {
     expect(
       sanitizeAnalyticsProperties(AnalyticsEvent.ReportIssuePrivateSubmit, {
         outcome: "unconfirmed",
@@ -104,10 +82,17 @@ describe("reportIssuePrivateSubmitPropertiesFromResult", () => {
     ).toBeNull();
   });
 
-  it("accepts a property-less public open attempted event", async () => {
-    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
-      await import("@/lib/analytics");
+  it("rejects failed paired with a null blocker", () => {
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ReportIssuePrivateSubmit, {
+        outcome: "failed",
+        blocker: null,
+        attachment_count: 0,
+      }),
+    ).toBeNull();
+  });
 
+  it("accepts a property-less public open attempted event", () => {
     expect(
       sanitizeAnalyticsProperties(
         AnalyticsEvent.ReportIssuePublicOpenAttempted,
