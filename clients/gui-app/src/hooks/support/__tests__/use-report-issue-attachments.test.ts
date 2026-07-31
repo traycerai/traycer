@@ -236,7 +236,7 @@ describe("useReportIssueAttachments", () => {
     );
   });
 
-  it("ignores non-image files entirely (no rejection, no add)", () => {
+  it("reports a type rejection when every dropped file is a non-image", () => {
     const { result } = renderHook(() => useReportIssueAttachments());
 
     act(() => {
@@ -245,9 +245,11 @@ describe("useReportIssueAttachments", () => {
       ]);
     });
 
-    // addFiles returns immediately when no image/* candidates remain.
     expect(result.current.images).toHaveLength(0);
-    expect(result.current.rejection).toBeNull();
+    expect(result.current.rejection?.reason).toBe("type");
+    expect(result.current.rejection?.message).toContain(
+      "PNG, JPEG, GIF, or WebP",
+    );
     expect(result.current.isIngesting).toBe(false);
   });
 

@@ -41,8 +41,8 @@ function errorStack(error: unknown): string | null {
 
 /**
  * Captures a renderer error AT THE MOMENT it is caught (boundary
- * `componentDidCatch`, or a function component's lazy `useState` initializer -
- * NEVER a render body, since this mints ids and calls Sentry): mints the
+ * `componentDidCatch`, or a function component's idempotent capture adapter -
+ * NEVER an unguarded render body, since this mints ids and calls Sentry): mints the
  * correlation id and computes the `fp:v1` fingerprint once, then reports the
  * exception to renderer Sentry tagged with both, so the private report a user
  * files later can be joined back to the actual Sentry event. Call this

@@ -350,7 +350,7 @@ describe("deepScrubSupportValue", () => {
         stack: "at run (<path-1>)",
         nested: {
           layer0: {
-            note: "path <path-1> seen",
+            note: "path <path-2> seen",
           },
         },
       },
@@ -358,6 +358,20 @@ describe("deepScrubSupportValue", () => {
         cpu: 12.5,
         mem: 1024,
       },
+    });
+  });
+
+  it("shares path pseudonyms across every string leaf in one value", () => {
+    expect(
+      deepScrubSupportValue({
+        first: "/Users/anurag/one.ts",
+        repeated: "again /Users/anurag/one.ts",
+        second: "/Users/anurag/two.ts",
+      }),
+    ).toEqual({
+      first: "<path-1>",
+      repeated: "again <path-1>",
+      second: "<path-2>",
     });
   });
 

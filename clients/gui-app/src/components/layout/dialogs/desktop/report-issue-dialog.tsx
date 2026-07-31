@@ -77,6 +77,10 @@ import {
   analyticsBlockerFromError,
   reportIssuePrivateSubmitPropertiesFromResult,
 } from "@/lib/analytics";
+import {
+  toastFromRunnerError,
+  toastFromRunnerErrorWithOptions,
+} from "@/lib/runner-error-toast";
 
 // "opened" is the honest terminal state for a public-draft open when nothing
 // was ever privately delivered (no-DSN Case B, or a definite failure) - never
@@ -425,10 +429,6 @@ export function ReportIssueDialog(
       getSupportContextSnapshot().routeTemplate,
   );
 
-  // Minted once at report-open (T2/T3) and reused by every retry as the
-  // Sentry idempotency key. Null until the freeze IPC resolves; submit stays
-  // disabled until then so it can never race ahead of the frozen evidence.
-  const [reportId, setReportId] = useState<string | null>(null);
   const submitErrorRef = useRef<HTMLDivElement | null>(null);
   const intentRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -467,23 +467,6 @@ export function ReportIssueDialog(
     "capture",
   );
 
-  useEffect(() => {
-    if (support === null) return;
-    // Fingerprint (when present) records an install-local sighting on first
-    // freeze admission - powers "Nth time on this install".
-    void support.freezeEvidence({ draftId, fingerprint }).then(
-      (result) => setReportId(result.reportId),
-      () => null,
-    );
-    return () => {
-      void support.discardFrozenEvidence(draftId).catch(() => null);
-    };
-    // draftId is this component's identity for its whole mounted lifetime -
-    // the host remounts it under a fresh `key` per draft, so this effect
-    // only ever re-runs here if `support` itself changes identity.
-    // draftContext is captured at open and is immutable for the draft's life.
-  }, [draftId, support, draftContext, fingerprint]);
-
   const snapshotQuery = useQuery(supportSnapshotQueryOptions(support, open));
   const snapshot = snapshotQuery.data ?? null;
   const occurrenceQuery = useQuery(
@@ -492,6 +475,35 @@ export function ReportIssueDialog(
   const occurrence = occurrenceQuery.data ?? null;
 
   const attachments = useReportIssueAttachments();
+
+  const {
+    data: freezeEvidenceData,
+    isError: freezeEvidenceIsError,
+    mutate: freezeEvidence,
+  } = useMutation({
+    mutationKey: runnerMutationKeys.supportFreezeEvidence(),
+    mutationFn: async () => {
+      if (support === null) throw new Error("Support bridge unavailable");
+      return support.freezeEvidence({ draftId, fingerprint });
+    },
+  });
+  const reportId = freezeEvidenceData?.reportId ?? null;
+
+  useEffect(() => {
+    if (support === null) return;
+    // Fingerprint (when present) records an install-local sighting on first
+    // freeze admission - powers "Nth time on this install". The mutation
+    // state keeps a rejected host call visible so the dialog can fail closed
+    // to its bundle/GitHub fallbacks instead of silently disabling Send.
+    freezeEvidence();
+    return () => {
+      void support.discardFrozenEvidence(draftId).catch(() => null);
+    };
+    // draftId is this component's identity for its whole mounted lifetime -
+    // the host remounts it under a fresh `key` per draft, so this effect
+    // only ever re-runs here if `support` itself changes identity.
+    // draftContext is captured at open and is immutable for the draft's life.
+  }, [draftId, support, draftContext, fingerprint, freezeEvidence]);
 
   // `includeDiagnostics` no longer decides whether `privateDiagnostics` rides
   // the wire at all - main is the sole authority on what it honors from it
@@ -572,9 +584,8 @@ export function ReportIssueDialog(
           "It's been revealed in your file browser. It contains scrubbed logs - review it before sharing publicly.",
       });
     },
-    onError: () => {
-      toast.error("Could not save the diagnostic bundle");
-    },
+    onError: (error) =>
+      toastFromRunnerError(error, "Could not save the diagnostic bundle"),
   });
 
   // Single source of truth for what the private channel actually did with
@@ -601,7 +612,7 @@ export function ReportIssueDialog(
     gateErrorVisible,
     occurrence,
     snapshot,
-    snapshotIsError: snapshotQuery.isError,
+    snapshotIsError: snapshotQuery.isError || freezeEvidenceIsError,
     submitIsSuccess: submitMutation.isSuccess,
     submitData: submitMutation.data,
     submitIsError: submitMutation.isError,
@@ -631,14 +642,18 @@ export function ReportIssueDialog(
       setPreviewTitle(draft.title);
       setScreen("preview");
     },
-    onError: () => {
-      toast.error("Could not load the GitHub preview", {
-        description: "Your report is safe - you can try again.",
-        action: {
-          label: "Try again",
-          onClick: () => buildDraftMutation.mutate(),
+    onError: (error) => {
+      toastFromRunnerErrorWithOptions(
+        error,
+        "Could not load the GitHub preview",
+        {
+          description: "Your report is safe - you can try again.",
+          action: {
+            label: "Try again",
+            onClick: () => buildDraftMutation.mutate(),
+          },
         },
-      });
+      );
     },
   });
 
@@ -683,14 +698,18 @@ export function ReportIssueDialog(
       // terminal state instead, never the green confirmation.
       setScreen(privateOutcome === "none" ? "opened" : "confirmed");
     },
-    onError: () => {
-      toast.error("Could not open the GitHub draft", {
-        description: "Your report is safe - you can try opening it again.",
-        action: {
-          label: "Try again",
-          onClick: () => openPublicDraftMutation.mutate(),
+    onError: (error) => {
+      toastFromRunnerErrorWithOptions(
+        error,
+        "Could not open the GitHub draft",
+        {
+          description: "Your report is safe - you can try opening it again.",
+          action: {
+            label: "Try again",
+            onClick: () => openPublicDraftMutation.mutate(),
+          },
         },
-      });
+      );
     },
   });
 
@@ -781,6 +800,7 @@ export function ReportIssueDialog(
           screen={screen}
           hasErrorEnvelope={hasErrorEnvelope}
           isDeliveryUnavailable={isDeliveryUnavailable}
+          preparationIsError={freezeEvidenceIsError}
         />
 
         {screen === "capture" ? (
@@ -870,10 +890,12 @@ function ReportIssueDialogHeader({
   screen,
   hasErrorEnvelope,
   isDeliveryUnavailable,
+  preparationIsError,
 }: {
   readonly screen: ReportIssueScreen;
   readonly hasErrorEnvelope: boolean;
   readonly isDeliveryUnavailable: boolean;
+  readonly preparationIsError: boolean;
 }): ReactNode {
   if (screen === "confirmed") {
     return (
@@ -913,7 +935,11 @@ function ReportIssueDialogHeader({
         Report an issue
       </DialogTitle>
       <DialogDescription>
-        {captureDescriptionCopy(isDeliveryUnavailable, hasErrorEnvelope)}
+        {captureDescriptionCopy(
+          isDeliveryUnavailable,
+          hasErrorEnvelope,
+          preparationIsError,
+        )}
       </DialogDescription>
     </DialogHeader>
   );
@@ -1303,7 +1329,11 @@ function ReportIssueDialogFooter(props: {
 function captureDescriptionCopy(
   isDeliveryUnavailable: boolean,
   hasErrorEnvelope: boolean,
+  preparationIsError: boolean,
 ): string {
+  if (preparationIsError) {
+    return "We couldn't prepare private evidence for this report. Nothing was sent; you can still save a diagnostic bundle or open a GitHub issue.";
+  }
   if (isDeliveryUnavailable) {
     return "Private reporting is not available in this build. You can save a diagnostic bundle and open a GitHub issue instead.";
   }
@@ -1415,7 +1445,7 @@ function capturedFieldDisplay(
   field: DesktopCapturedField<string> | undefined,
 ): string | null {
   if (field === undefined || field.status === "unavailable") return null;
-  return field.value;
+  return field.status === "stale" ? `${field.value} (last known)` : field.value;
 }
 
 // KB3: the "Where" row in the evidence review details is the same raw route
@@ -1670,7 +1700,7 @@ function AttachmentSection({
           inputRef.current?.click();
         }}
         className={cn(
-          "rounded-md border border-dashed border-border px-3 py-2.5 text-center text-ui-xs text-muted-foreground outline-none transition-colors",
+          "rounded-md border border-dashed border-border px-3 py-2.5 text-center text-ui-xs text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
           !disabled && canAddMore && "cursor-pointer",
           isDragOver && "border-primary bg-primary/5",
           (disabled || !canAddMore) && "cursor-not-allowed opacity-60",

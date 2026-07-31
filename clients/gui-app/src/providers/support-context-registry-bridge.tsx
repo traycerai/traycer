@@ -22,7 +22,10 @@ import {
   useActiveTabId,
 } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
-import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import type {
+  OpenEpicState,
+  OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 
 function toKnown<T>(value: T | null): CapturedField<T> {
   return value === null ? unavailableField() : knownField(value);
@@ -108,10 +111,9 @@ function harnessContextsEqual(
  * globally, above any specific epic's provider tree.
  */
 function resolveActiveHarnessContext(
-  epicId: string,
+  handle: OpenEpicStoreHandle | null,
   artifactRef: EpicCanvasTileRef,
 ): ActiveHarnessContext {
-  const handle = getOpenEpicRegistry().get(epicId);
   if (handle === null) return EMPTY_ACTIVE_HARNESS_CONTEXT;
   const state: OpenEpicState = handle.store.getState();
   if (artifactRef.type === "chat") {
@@ -198,16 +200,38 @@ export function SupportContextRegistryBridge(
 
   useEffect(() => {
     if (epicId === null || artifactRef === null) return undefined;
-    const apply = () => {
-      const next = resolveActiveHarnessContext(epicId, artifactRef);
+    const registry = getOpenEpicRegistry();
+    let subscribedHandle: OpenEpicStoreHandle | null = null;
+    let unsubscribeStore: (() => void) | null = null;
+
+    const apply = (handle: OpenEpicStoreHandle | null) => {
+      const next = resolveActiveHarnessContext(handle, artifactRef);
       setSubscribedHarnessContext((current) =>
         harnessContextsEqual(current, next) ? current : next,
       );
     };
-    apply();
-    const handle = getOpenEpicRegistry().get(epicId);
-    if (handle === null) return undefined;
-    return handle.store.subscribe(apply);
+
+    const attachCurrentHandle = () => {
+      const nextHandle = registry.peek(epicId);
+      if (nextHandle === subscribedHandle) {
+        apply(nextHandle);
+        return;
+      }
+      if (unsubscribeStore !== null) unsubscribeStore();
+      subscribedHandle = nextHandle;
+      apply(nextHandle);
+      unsubscribeStore =
+        nextHandle === null
+          ? null
+          : nextHandle.store.subscribe(() => apply(nextHandle));
+    };
+
+    attachCurrentHandle();
+    const unsubscribeRegistry = registry.subscribe(attachCurrentHandle);
+    return () => {
+      unsubscribeRegistry();
+      if (unsubscribeStore !== null) unsubscribeStore();
+    };
   }, [epicId, artifactRef]);
 
   useEffect(() => {

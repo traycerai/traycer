@@ -11,8 +11,8 @@ export interface AppErrorScreenProps {
   readonly error: unknown;
   /**
    * Captured ONCE by the caller at catch time (a class boundary's
-   * `componentDidCatch`, or a function component's lazy `useState`
-   * initializer) via `captureReportIssueError` - never derived here, since
+   * `componentDidCatch`, or an idempotent function-component adapter) via
+   * `captureReportIssueError` - never derived here, since
    * that call mints an id and reports to Sentry, both of which must not
    * repeat on every re-render. `null` only when nothing was ever caught (this
    * component is never rendered in that state by either real caller, but the

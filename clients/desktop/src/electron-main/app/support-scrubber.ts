@@ -139,6 +139,13 @@ const UNC_PATH_PATTERN = new RegExp(
  */
 export function scrubSupportText(text: string): string {
   const pathPseudonyms = new Map<string, string>();
+  return scrubSupportTextWithPseudonyms(text, pathPseudonyms);
+}
+
+function scrubSupportTextWithPseudonyms(
+  text: string,
+  pathPseudonyms: Map<string, string>,
+): string {
   // Split-map-join per line rather than one global replace over the whole
   // blob: the ticket calls this out explicitly ("applied line-wise") because
   // a multi-hundred-KB log tail is exactly the input `redactLogText`'s
@@ -224,12 +231,18 @@ const MAX_DEEP_SCRUB_OBJECT_KEYS = 100;
  * trace) and stays whole.
  */
 export function deepScrubSupportValue<T>(value: T): T {
-  return scrubValueAtDepth(value, 0) as T;
+  return scrubValueAtDepth(value, 0, new Map<string, string>()) as T;
 }
 
-function scrubValueAtDepth(value: unknown, depth: number): unknown {
+function scrubValueAtDepth(
+  value: unknown,
+  depth: number,
+  pathPseudonyms: Map<string, string>,
+): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === "string") return scrubSupportText(value);
+  if (typeof value === "string") {
+    return scrubSupportTextWithPseudonyms(value, pathPseudonyms);
+  }
   if (typeof value === "number" || typeof value === "boolean") return value;
   // Fail closed at the structural bound. Returning a container here would
   // expose every unsanitized string nested below it.
@@ -237,7 +250,7 @@ function scrubValueAtDepth(value: unknown, depth: number): unknown {
   if (Array.isArray(value)) {
     return value
       .slice(0, MAX_DEEP_SCRUB_ARRAY_ITEMS)
-      .map((entry) => scrubValueAtDepth(entry, depth + 1));
+      .map((entry) => scrubValueAtDepth(entry, depth + 1, pathPseudonyms));
   }
   if (isPlainRecord(value)) {
     const scrubbed: Record<string, unknown> = {};
@@ -247,7 +260,7 @@ function scrubValueAtDepth(value: unknown, depth: number): unknown {
     )) {
       scrubbed[key] = SENSITIVE_KEY_PATTERN.test(key)
         ? "<redacted>"
-        : scrubValueAtDepth(entry, depth + 1);
+        : scrubValueAtDepth(entry, depth + 1, pathPseudonyms);
     }
     return scrubbed;
   }

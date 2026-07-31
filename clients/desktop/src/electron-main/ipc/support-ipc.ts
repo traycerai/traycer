@@ -261,27 +261,34 @@ function parseSupportTailLogInput(input: unknown): {
   };
 }
 
-const SUPPORT_SUBMIT_REPORT_KEYS = new Set([
-  "draftId",
-  "type",
-  "intent",
-  "frequency",
-  "location",
-  "allowContact",
-  "includeDesktopLog",
-  "includeHostLog",
-  "includeDiagnostics",
-  "images",
-  "overrideTitle",
-  "privateOutcome",
-  "privateDiagnostics",
-]);
+function contractKeySet<T extends object>(
+  keys: Record<keyof T, true>,
+): ReadonlySet<string> {
+  return new Set(Object.keys(keys));
+}
 
-const SUPPORT_IMAGE_ATTACHMENT_KEYS = new Set([
-  "fileName",
-  "mimeType",
-  "bytes",
-]);
+const SUPPORT_SUBMIT_REPORT_KEYS = contractKeySet<SupportSubmitReportRequest>({
+  draftId: true,
+  type: true,
+  intent: true,
+  frequency: true,
+  location: true,
+  allowContact: true,
+  includeDesktopLog: true,
+  includeHostLog: true,
+  includeDiagnostics: true,
+  images: true,
+  overrideTitle: true,
+  privateOutcome: true,
+  privateDiagnostics: true,
+});
+
+const SUPPORT_IMAGE_ATTACHMENT_KEYS =
+  contractKeySet<SupportImageAttachmentInput>({
+    fileName: true,
+    mimeType: true,
+    bytes: true,
+  });
 
 function parseSupportReportType(
   value: unknown,
@@ -333,38 +340,39 @@ function parseSupportPrivateOutcome(
 // never omits one (an "empty" cause/registry is `null`/all-`unavailable`,
 // not a missing key), so a missing key here is a real contract violation,
 // not an optional field left out.
-const PRIVATE_DIAGNOSTICS_KEYS = new Set([
-  "cause",
-  "registry",
-  "fingerprint",
-  "stackFamily",
-  "correlationId",
-]);
+const PRIVATE_DIAGNOSTICS_KEYS = contractKeySet<SupportPrivateDiagnostics>({
+  cause: true,
+  registry: true,
+  fingerprint: true,
+  stackFamily: true,
+  correlationId: true,
+});
 
-const PRIVATE_DIAGNOSTICS_CAUSE_KEYS = new Set([
-  "type",
-  "message",
-  "stack",
-  "componentStack",
-  "errorCode",
-  "sourceAction",
-  "timestamp",
-]);
+const PRIVATE_DIAGNOSTICS_CAUSE_KEYS =
+  contractKeySet<SupportPrivateDiagnosticsCause>({
+    type: true,
+    message: true,
+    stack: true,
+    componentStack: true,
+    errorCode: true,
+    sourceAction: true,
+    timestamp: true,
+  });
 
-const CONTEXT_REGISTRY_KEYS = new Set([
-  "routeTemplate",
-  "hostId",
-  "epicId",
-  "tabId",
-  "artifactId",
-  "chatId",
-  "agentId",
-  "harnessId",
-  "model",
-  "profileId",
-  "providerSelectionClass",
-  "providerVersion",
-]);
+const CONTEXT_REGISTRY_KEYS = contractKeySet<SupportContextRegistrySnapshot>({
+  routeTemplate: true,
+  hostId: true,
+  epicId: true,
+  tabId: true,
+  artifactId: true,
+  chatId: true,
+  agentId: true,
+  harnessId: true,
+  model: true,
+  profileId: true,
+  providerSelectionClass: true,
+  providerVersion: true,
+});
 
 const CAPTURED_FIELD_KNOWN_KEYS = new Set(["status", "value"]);
 const CAPTURED_FIELD_UNAVAILABLE_KEYS = new Set(["status"]);
@@ -443,6 +451,7 @@ function parseCapturedField<T>(
   }
   if (status === "known" || status === "stale") {
     assertOnlyAllowedKeys(value, CAPTURED_FIELD_KNOWN_KEYS, context);
+    assertHasKey(value, "value", context);
     return { status, value: parseValue(value.value, `${context}.value`) };
   }
   throw new Error(
@@ -605,7 +614,7 @@ function parseSupportImageAttachment(
   const mediaType = reportImageMediaTypeForMimeType(value.mimeType);
   if (mediaType === null) {
     throw new Error(
-      `${context}.mimeType must be one of image/png, image/jpeg, image/gif, image/webp`,
+      `${context}.mimeType must be one of image/png, image/jpeg, image/jpg, image/gif, image/webp`,
     );
   }
   if (value.bytes.byteLength === 0) {

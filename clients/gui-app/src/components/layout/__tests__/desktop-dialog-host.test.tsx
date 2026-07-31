@@ -580,6 +580,9 @@ async function flushDialogEffects(): Promise<void> {
     for (let i = 0; i < 5; i += 1) {
       await Promise.resolve();
     }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 }
 
@@ -928,6 +931,24 @@ describe("<DesktopDialogHost />", () => {
 
     // N1: the evidence gate guards every report-producing action, not just
     // Send - Case B's own primary actions need the same signal first.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save diagnostic bundle" }),
+    );
+    expect(
+      await screen.findByText(
+        "Add a sentence, a screenshot, or pick where it happened - we need at least one to act on the report.",
+      ),
+    ).not.toBeNull();
+    expect(saveDiagnosticBundle).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open a GitHub issue" }),
+    );
+    expect(openedLinks).toEqual([]);
+    expect(
+      screen.queryByRole("heading", { name: "Preview the public issue" }),
+    ).toBeNull();
+
     fireEvent.change(
       screen.getByRole("textbox", {
         name: "What were you trying to do, and what went wrong?",

@@ -79,10 +79,11 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
     }));
   },
   openReportIssueWithContext: (context) => {
+    const draftContext = buildReportIssueDraftContext(context, null);
     set((state) => ({
       activeDialog: "report-issue",
       reportIssueContext: context,
-      reportIssueDraftContext: buildReportIssueDraftContext(context, null),
+      reportIssueDraftContext: draftContext,
       reportIssueDraftId: state.reportIssueDraftId + 1,
     }));
   },

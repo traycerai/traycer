@@ -365,6 +365,9 @@ async function flushDialogEffects(): Promise<void> {
     for (let i = 0; i < 5; i += 1) {
       await Promise.resolve();
     }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 }
 
@@ -1363,6 +1366,45 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(harness.submittedForms).toEqual([]);
     });
 
+    it("fails closed to public and bundle fallbacks when evidence freezing fails", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () => {
+          throw new Error("submitReport must not run without frozen evidence");
+        },
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      const runnerHost = createRunnerHost(harness);
+      const support = runnerHost.support;
+      openManualReport();
+      renderReportIssueDialog(
+        Object.assign(runnerHost, {
+          support: {
+            ...support,
+            freezeEvidence: () =>
+              Promise.reject(new Error("could not freeze evidence")),
+          },
+        }),
+      );
+
+      expect(
+        await screen.findByText(
+          "We couldn't prepare private evidence for this report. Nothing was sent; you can still save a diagnostic bundle or open a GitHub issue.",
+        ),
+      ).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Send report" })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Save diagnostic bundle" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Open a GitHub issue" }),
+      ).not.toBeNull();
+      expect(harness.submittedForms).toEqual([]);
+    });
+
     it("renders unavailable after a submit that returns status unavailable", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
@@ -1717,7 +1759,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       });
       const previewError = lastToastErrorOptions();
       expect(previewError.description).toBe(
-        "Your report is safe - you can try again.",
+        "Your report is safe - you can try again. draft build failed",
       );
       expect(previewError.actionLabel).toBe("Try again");
       expect(buildCalls).toBe(1);
@@ -1839,7 +1881,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       });
       const openError = lastToastErrorOptions();
       expect(openError.description).toBe(
-        "Your report is safe - you can try opening it again.",
+        "Your report is safe - you can try opening it again. no browser",
       );
       expect(openError.actionLabel).toBe("Try again");
       expect(

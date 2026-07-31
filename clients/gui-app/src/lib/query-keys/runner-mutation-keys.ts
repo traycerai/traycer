@@ -33,6 +33,7 @@ export const runnerMutationKeys = {
   uninstallTraycer: () => ["runner.host.uninstallTraycer"] as const,
   reinstallTraycer: () => ["runner.host.reinstallTraycer"] as const,
   supportSubmitReport: () => ["runner.support.submitReport"] as const,
+  supportFreezeEvidence: () => ["runner.support.freezeEvidence"] as const,
   supportSaveDiagnosticBundle: () =>
     ["runner.support.saveDiagnosticBundle"] as const,
   // Builds the scrubbed public draft for the publish preview (ticket 09/07).

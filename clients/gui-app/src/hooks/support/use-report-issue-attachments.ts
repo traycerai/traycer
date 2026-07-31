@@ -281,7 +281,12 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
   const addFiles = useCallback(
     (files: ReadonlyArray<File>) => {
       const candidates = files.filter((file) => file.type.startsWith("image/"));
-      if (candidates.length === 0) return;
+      if (candidates.length === 0) {
+        if (files.length > 0) {
+          setRejection(rejectionFor("type", files[0]?.name ?? ""));
+        }
+        return;
+      }
       setRejection(null);
 
       // Read through a function call rather than `activeRef.current` directly

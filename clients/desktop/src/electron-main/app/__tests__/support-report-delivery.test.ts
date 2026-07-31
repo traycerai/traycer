@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
 
 interface CapturedAttachment {
   readonly filename: string;
@@ -133,7 +134,7 @@ const FORM: SupportSubmitReportRequest = {
   privateOutcome: "delivered",
 };
 
-const LOG_ATTACHMENT_MAX_BYTES = 512_000;
+const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
 
 let tempDir = "";
 let hostLogPath = "";

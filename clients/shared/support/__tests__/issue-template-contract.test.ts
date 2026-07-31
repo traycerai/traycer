@@ -232,6 +232,13 @@ describe("GitHub issue template contract", () => {
       });
     }
 
+    it('keeps optional field id "alternatives" present', () => {
+      expect(
+        findField(template, "alternatives"),
+        'Issue template contract broken: feature_request.yml is missing optional field id "alternatives", which the client prefills.',
+      ).toBeDefined();
+    });
+
     it(`keeps "${DESKTOP_APP_COMPONENT}" as a component dropdown option`, () => {
       const component = findField(template, "component");
       expect(component).toBeDefined();

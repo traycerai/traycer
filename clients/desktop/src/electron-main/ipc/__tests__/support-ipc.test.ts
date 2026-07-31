@@ -493,6 +493,23 @@ describe("parseSupportSubmitReportRequest", () => {
     ).toThrow();
   });
 
+  it("rejects nullable known or stale fields missing their value", () => {
+    for (const field of ["profileId", "providerVersion"] as const) {
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          privateDiagnostics: {
+            ...VALID_PRIVATE_DIAGNOSTICS,
+            registry: {
+              ...VALID_REGISTRY,
+              [field]: { status: "known" },
+            },
+          },
+        }),
+      ).toThrow(/missing required field: value/);
+    }
+  });
+
   it("rejects an unavailable registry field carrying a stray value", () => {
     expect(() =>
       parseSupportSubmitReportRequest({
@@ -661,7 +678,7 @@ describe("parseSupportSubmitReportRequest", () => {
             }),
           ],
         }),
-      ).toThrow(/mimeType/);
+      ).toThrow(/image\/png, image\/jpeg, image\/jpg, image\/gif, image\/webp/);
     });
 
     it("rejects empty bytes", () => {
