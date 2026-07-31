@@ -181,11 +181,21 @@ export type ValidateTuiForkProfileRequest = z.infer<
 // setup-pending/unsupported-provider) that is NOT a `TuiForkScopeGuardError` -
 // the bulk resolver reshapes that error family into its own verdict row
 // (amend-01, T3 review) rather than aborting the whole batch.
+//
+// `SOURCE_NOT_READY` (follow-up fix): a Claude source's `harnessSessionId` is
+// minted synchronously at launch, before any turn writes its transcript to
+// disk - `--resume <source> --fork-session` needs that transcript to exist,
+// so forking a source with zero turns hard-fails the spawned CLI. Fires
+// regardless of whether the target profile matches the source's own (a
+// same-profile plain Fork is exactly the reachable repro), so it is asserted
+// ahead of the scope-equality check rather than folded into a "profiles
+// differ" branch.
 export const tuiForkProfileAdmissionSubcodeSchema = z.enum([
   "SCOPE_MISMATCH",
   "FORK_SOURCE_NOT_FOUND",
   "FORK_SOURCE_AMBIGUOUS",
   "TARGET_PROFILE_UNAVAILABLE",
+  "SOURCE_NOT_READY",
 ]);
 export type TuiForkProfileAdmissionSubcode = z.infer<
   typeof tuiForkProfileAdmissionSubcodeSchema

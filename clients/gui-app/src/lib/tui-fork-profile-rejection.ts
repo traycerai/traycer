@@ -22,6 +22,7 @@ const LATE_GUARD_SUBCODES: ReadonlyArray<TuiForkProfileAdmissionSubcode> = [
   "SCOPE_MISMATCH",
   "FORK_SOURCE_NOT_FOUND",
   "FORK_SOURCE_AMBIGUOUS",
+  "SOURCE_NOT_READY",
 ];
 
 /**
@@ -130,6 +131,12 @@ function buildRejectionView(
       return {
         message:
           "Can't continue this session - the source terminal agent couldn't be identified. Close and reopen this tab, then try again.",
+        residueNote,
+      };
+    case "SOURCE_NOT_READY":
+      return {
+        message:
+          "This session has no conversation yet - send a message before forking.",
         residueNote,
       };
   }

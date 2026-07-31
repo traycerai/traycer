@@ -67,6 +67,29 @@ describe("resolveTuiForkRejectionView", () => {
         "Can't continue this session - the source terminal agent couldn't be identified. Close and reopen this tab, then try again.",
       residueNote: null,
     });
+
+    expect(
+      resolveTuiForkRejectionView(preflightError("SOURCE_NOT_READY"), LABELS),
+    ).toEqual({
+      message:
+        "This session has no conversation yet - send a message before forking.",
+      residueNote: null,
+    });
+  });
+
+  it("parses a late agent.tui.prepareLaunch SOURCE_NOT_READY prefix into subcode + residueNote (fork-before-first-turn)", () => {
+    const view = resolveTuiForkRejectionView(
+      prepareLaunchError(
+        "SOURCE_NOT_READY: terminal agent session 'src-1' has no conversation yet - send it a message before forking. If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.",
+      ),
+      LABELS,
+    );
+    expect(view).toEqual({
+      message:
+        "This session has no conversation yet - send a message before forking.",
+      residueNote:
+        "terminal agent session 'src-1' has no conversation yet - send it a message before forking. If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.",
+    });
   });
 
   it("parses a late agent.tui.prepareLaunch HostRpcError prefix into subcode + residueNote", () => {
