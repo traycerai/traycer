@@ -56,8 +56,8 @@ import {
 } from "@/stores/notifications/notification-indicator-state";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
-import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
+import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -181,6 +181,8 @@ import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
+import { resolveProfileAccentDot } from "@/components/worktree/worktree-owner-settings-model";
+import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -195,6 +197,9 @@ import {
   NotificationIndicatorIcon,
   type IndicatorRunningKind,
 } from "@/components/notifications/notification-indicator-icon";
+import { useEpicStore } from "@/hooks/use-epic-store";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -1782,6 +1787,25 @@ function SidebarAgentHarnessIcon(props: {
   readonly harnessId: ProviderId;
 }) {
   const TerminalIcon = EPIC_NODE_ICONS.terminal;
+  const tuiAgent = useEpicStore((state) =>
+    Object.hasOwn(state.tuiAgents.byId, props.nodeId)
+      ? state.tuiAgents.byId[props.nodeId]
+      : null,
+  );
+  const managedProfileId = tuiAgent?.profileId ?? null;
+  const hostClient = useHostClientForHostId(tuiAgent?.hostId ?? null);
+  const providersList = useProvidersListForClient(hostClient, {
+    enabled: managedProfileId !== null,
+    subscribed: managedProfileId !== null,
+  });
+  const profiles = harnessProfiles(
+    providersList.data?.providers ?? null,
+    props.harnessId,
+  );
+  const profileAccentDot =
+    managedProfileId === null
+      ? null
+      : resolveProfileAccentDot(managedProfileId, profiles);
   return (
     <TooltipWrapper
       label="TUI terminal agent"
@@ -1794,12 +1818,19 @@ function SidebarAgentHarnessIcon(props: {
         data-agent-surface="tui"
         className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
       >
-        <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
+        <ProfileBadgedHarnessIcon
+          harnessId={props.harnessId}
+          harnessName={props.harnessId}
+          profileAccentDot={profileAccentDot}
+          iconClassName="size-3.5"
+          className={undefined}
+          testId={`sidebar-agent-profile-mark-${props.nodeId}`}
+        />
         <TerminalIcon
           aria-hidden="true"
           data-testid={`sidebar-agent-surface-${props.nodeId}`}
           data-agent-surface="tui"
-          className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
+          className="pointer-events-none absolute -top-1.5 -right-1 size-2 text-muted-foreground"
           strokeWidth={3}
         />
       </span>
