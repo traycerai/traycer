@@ -46,6 +46,7 @@
       },
       "devDependencies": {
         "@rolldown/plugin-babel": "catalog:",
+        "@sentry/core": "catalog:",
         "@sentry/esbuild-plugin": "catalog:",
         "@sentry/vite-plugin": "catalog:",
         "@tailwindcss/vite": "catalog:",
@@ -290,6 +291,7 @@
     "@pierre/trees": "^1.0.0-beta.6",
     "@rolldown/plugin-babel": "^0.2.3",
     "@sentry/browser": "10.67.0",
+    "@sentry/core": "10.67.0",
     "@sentry/electron": "^7.16.0",
     "@sentry/esbuild-plugin": "^5.4.0",
     "@sentry/node": "^10.69.0",
