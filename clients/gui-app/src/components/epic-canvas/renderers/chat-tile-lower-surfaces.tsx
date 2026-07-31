@@ -26,6 +26,7 @@ import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
@@ -33,7 +34,10 @@ import { lowerScrollRegionMaxHeightClass } from "@/lib/chat/chat-lower-scroll-bu
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { cn } from "@/lib/utils";
-import type { PendingInterviewView } from "./chat-tile-types";
+import type {
+  PendingInterviewView,
+  UnanswerableInterviewView,
+} from "./chat-tile-types";
 import {
   composerHasBlockingApprovals,
   visibleComposerApprovals,
@@ -103,6 +107,12 @@ export interface ChatLowerInterviewState {
   // but unresolved (derived from the chat session's pending/accepted actions).
   // Gates the card so the same action cannot be double-sent.
   readonly isBusy: boolean;
+  // Host-pending interviews with no answerable card in this transcript. Non-
+  // empty means the chat is send-locked with nothing to answer, so the escape-
+  // hatch notice renders above whatever else occupies the composer slot.
+  readonly unanswerable: ReadonlyArray<UnanswerableInterviewView>;
+  // True while a dismissal for any `unanswerable` block is in flight.
+  readonly unanswerableBusy: boolean;
   readonly onAnswer: (
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
@@ -441,32 +451,56 @@ function ComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  if (model.interview.pending !== null) {
-    return (
+  // The escape hatch stacks ABOVE the card/composer rather than replacing
+  // either: a stuck block can coexist with an answerable one, and the composer
+  // must stay reachable in case the host would in fact accept a send (only
+  // `detached` waits gate it host-side, which the renderer cannot observe).
+  const escapeHatch =
+    model.interview.unanswerable.length > 0 ? (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
-        <PendingInterviewCard
-          key={`${model.composer.nodeId}:${model.interview.pending.blockId}`}
-          chatId={model.composer.nodeId}
-          blockId={model.interview.pending.blockId}
-          toolName={model.interview.pending.toolName}
-          title={model.interview.pending.title}
-          description={model.interview.pending.description}
-          questions={model.interview.pending.questions}
-          isActive={model.composer.isActive}
-          isBusy={model.interview.isBusy}
-          onSubmit={model.access.canAct ? model.interview.onAnswer : null}
-          onSkip={model.access.canAct ? model.interview.onError : null}
-          onFork={model.access.canAct ? model.interview.onFork : null}
+        <UnanswerableInterviewNotice
+          interviews={model.interview.unanswerable}
+          isBusy={model.interview.unanswerableBusy}
+          onDismiss={model.access.canAct ? model.interview.onError : null}
         />
       </ComposerSlotShell>
+    ) : null;
+  // The notice already paid the surface's top spacing, so whatever follows it
+  // connects flush underneath.
+  const belowSpacing: ChatLowerSurfaceTopSpacing =
+    escapeHatch === null ? layout.topSpacing : "connected";
+  if (model.interview.pending !== null) {
+    return (
+      <>
+        {escapeHatch}
+        <ComposerSlotShell topSpacing={belowSpacing} bottomSpacing="normal">
+          <PendingInterviewCard
+            key={`${model.composer.nodeId}:${model.interview.pending.blockId}`}
+            chatId={model.composer.nodeId}
+            blockId={model.interview.pending.blockId}
+            toolName={model.interview.pending.toolName}
+            title={model.interview.pending.title}
+            description={model.interview.pending.description}
+            questions={model.interview.pending.questions}
+            isActive={model.composer.isActive}
+            isBusy={model.interview.isBusy}
+            onSubmit={model.access.canAct ? model.interview.onAnswer : null}
+            onSkip={model.access.canAct ? model.interview.onError : null}
+            onFork={model.access.canAct ? model.interview.onFork : null}
+          />
+        </ComposerSlotShell>
+      </>
     );
   }
   return (
-    <LiveChatComposer
-      model={model}
-      topSpacing={layout.topSpacing}
-      hasPendingApprovals={model.hasPendingApprovals}
-    />
+    <>
+      {escapeHatch}
+      <LiveChatComposer
+        model={model}
+        topSpacing={belowSpacing}
+        hasPendingApprovals={model.hasPendingApprovals}
+      />
+    </>
   );
 }
 

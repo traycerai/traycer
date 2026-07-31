@@ -189,6 +189,7 @@ import {
   resolvedTurnStatus,
   chatTileCanAct,
   findPendingInterview,
+  findUnanswerableInterviews,
 } from "./chat-tile-session-state";
 import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -1455,6 +1456,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const interviewBusy =
     pendingInterview !== null &&
     interviewActionBlockIds.has(pendingInterview.blockId);
+  // Host-pending blocks this transcript renders no card for. Yields a stable
+  // empty array whenever nothing is stuck, so the composer memo chain below
+  // does not churn per streaming token.
+  const unanswerableInterviews = useMemo(
+    () => findUnanswerableInterviews(renderedMessages, state.pendingInterviews),
+    [renderedMessages, state.pendingInterviews],
+  );
+  const unanswerableInterviewsBusy = unanswerableInterviews.some((interview) =>
+    interviewActionBlockIds.has(interview.blockId),
+  );
   const showCompletedRestoreToast = useCallback(() => {
     if (state.restore === null || state.restore.kind !== "completed") return;
     showRestoreResultToast(state.restore.results);
@@ -1911,6 +1922,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => ({
       pending: pendingInterview,
       isBusy: interviewBusy,
+      unanswerable: unanswerableInterviews,
+      unanswerableBusy: unanswerableInterviewsBusy,
       onAnswer: handleInterviewAnswer,
       onError: handleInterviewError,
       onFork: forkFromPendingInterview,
@@ -1918,6 +1931,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [
       pendingInterview,
       interviewBusy,
+      unanswerableInterviews,
+      unanswerableInterviewsBusy,
       handleInterviewAnswer,
       handleInterviewError,
       forkFromPendingInterview,
