@@ -200,15 +200,26 @@ describe("composer toolbar model slug drift", () => {
   });
 
   it("keeps a remembered slug while the catalog is loading", () => {
-    const store = createStore("remembered-slug", null);
+    // The catalog deliberately does NOT carry the remembered slug. With it
+    // present, coverage returns first and the `catalogLoadedForHarness` guard
+    // this test is named for never executes - it would pass with the guard
+    // deleted. An unresolvable slug is held ONLY because the catalog is still
+    // loading; "heals a genuinely delisted slug" below feeds an equally
+    // unresolvable slug to a loaded catalog and gets Default, so the two pin
+    // opposite directions of the same guard.
+    const emitted: string[] = [];
+    const store = createStore("remembered-slug", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
 
     store.getState().setCatalog({
-      ...catalog([model("remembered-slug", null, "remembered-slug")]),
+      ...catalog([model("default", null, "Default")]),
       modelsLoaded: false,
     });
 
     expect(store.getState().selection.modelSlug).toBe("remembered-slug");
     expect(store.getState().values.selection.modelSlug).toBe("remembered-slug");
+    expect(emitted).toEqual([]);
   });
 
   it("resolves an empty slug to the preferred first model", () => {
