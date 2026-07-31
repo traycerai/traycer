@@ -451,6 +451,68 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     }
   });
 
+  // traycer#862: a fresh install downloaded ~800MB and extracted a 2.2GB
+  // runtime tree - 3m17s on that machine - and the flat wall-clock budget
+  // reported "Could not start Traycer Host" at the 60s mark, over an install
+  // that was still visibly running. The budget is quiet-time, not wall-clock:
+  // installer progress re-arms it, and only silence spends it.
+  it("holds the startup budget open while host provisioning reports progress", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      environment: "production" as const,
+    };
+    const readyTimeoutMs = 300;
+    const progressWindowMs = 900;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs,
+      reachabilityProbe: undefined,
+    });
+    const errors: { code: string; message: string }[] = [];
+    lifecycle.on("error", (err) =>
+      errors.push({ code: err.code, message: err.message }),
+    );
+    // Stand in for the CLI's NDJSON progress stream: events well inside the
+    // quiet budget, for three times as long as that budget.
+    const ticker = setInterval(() => {
+      lifecycle.notifyProvisioningActivity();
+    }, 50);
+    const startedAt = Date.now();
+    try {
+      setTimeout(() => clearInterval(ticker), progressWindowMs);
+      await Promise.race([
+        lifecycle.bootstrap(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 10_000),
+        ),
+      ]);
+      const elapsedMs = Date.now() - startedAt;
+      // No host ever appeared, so it still ends in HOST_NOT_READY - but only
+      // after the installer went quiet. Under a flat budget this fired at
+      // ~`readyTimeoutMs`, long before the progress stream stopped.
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HOST_NOT_READY");
+      expect(elapsedMs).toBeGreaterThanOrEqual(progressWindowMs);
+    } finally {
+      clearInterval(ticker);
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // The build-stamp gate was removed: a reachable host is surfaced regardless
   // of its version stamp, and the renderer negotiates protocol compatibility
   // over the WS handshake. This is what prevents the permanent "Starting Local
