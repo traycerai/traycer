@@ -17,7 +17,7 @@ paths = [
   '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
 ]
 regexes = [
-  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup)$''',
+  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|s4b-reachability-key|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup|t18-pin-c-exhaust)$''',
 ]
 
 [[allowlists]]
