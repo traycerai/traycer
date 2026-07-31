@@ -226,6 +226,14 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
             usagePresentation,
             admissionByProfileId,
           });
+          // Radix's roving-tabindex skips a disabled item entirely, so its
+          // accessible label (which carries the admission reason) is never
+          // read for keyboard/AT users - the hover-only tooltip below has
+          // the same gap. A disabled row with a reason renders that reason
+          // as a static second line instead, which needs no focus/hover to
+          // be perceivable.
+          const visibleDisabledReason =
+            rowDisabled && admission !== null ? admission.reason : null;
           const row = (
             <DropdownMenuItem
               key={profile.profileId}
@@ -241,45 +249,54 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               className={cn(
                 "pr-1.5",
                 (statusSuffix !== null || rowDisabled) && "opacity-60",
+                visibleDisabledReason !== null &&
+                  "flex-col items-start gap-0.5",
               )}
               onFocus={(event) => preview(commitId, event.currentTarget)}
               onPointerMove={(event) => preview(commitId, event.currentTarget)}
               onSelect={() => onSelectProfile(commitId)}
             >
-              <AccentDot
-                profileId={profile.profileId}
-                accentColor={profile.accentColor}
-                label={null}
-                variant="inline"
-                size="default"
-                className={undefined}
-              />
-              <span className="flex min-w-0 flex-1 items-center gap-2">
-                <span className="min-w-0 truncate">{label}</span>
-                {profile.kind === "ambient" ? <TerminalProfileBadge /> : null}
+              <span className="flex w-full min-w-0 items-center gap-1.5">
+                <AccentDot
+                  profileId={profile.profileId}
+                  accentColor={profile.accentColor}
+                  label={null}
+                  variant="inline"
+                  size="default"
+                  className={undefined}
+                />
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="min-w-0 truncate">{label}</span>
+                  {profile.kind === "ambient" ? <TerminalProfileBadge /> : null}
+                </span>
+                {statusSuffix !== null ? (
+                  <span className="shrink-0 text-muted-foreground">
+                    {statusSuffix}
+                  </span>
+                ) : null}
+                {usageEntry !== undefined ? (
+                  <ProfileUsageCompactMeter entry={usageEntry} />
+                ) : null}
+                {shortcutHint !== null && !rowDisabled ? (
+                  <DropdownMenuShortcut
+                    data-testid={`model-profile-digit-${shortcutHint.digit}`}
+                  >
+                    <Kbd className="font-mono tabular-nums">
+                      {shortcutHint.label}
+                    </Kbd>
+                  </DropdownMenuShortcut>
+                ) : null}
+                <span className="pointer-events-none flex size-4 shrink-0 items-center justify-center">
+                  {commitId === activeProfileId ? (
+                    <CheckIcon className="size-4" />
+                  ) : null}
+                </span>
               </span>
-              {statusSuffix !== null ? (
-                <span className="shrink-0 text-muted-foreground">
-                  {statusSuffix}
+              {visibleDisabledReason !== null ? (
+                <span className="pl-[22px] text-left text-[11px] leading-tight text-muted-foreground">
+                  {visibleDisabledReason}
                 </span>
               ) : null}
-              {usageEntry !== undefined ? (
-                <ProfileUsageCompactMeter entry={usageEntry} />
-              ) : null}
-              {shortcutHint !== null && !rowDisabled ? (
-                <DropdownMenuShortcut
-                  data-testid={`model-profile-digit-${shortcutHint.digit}`}
-                >
-                  <Kbd className="font-mono tabular-nums">
-                    {shortcutHint.label}
-                  </Kbd>
-                </DropdownMenuShortcut>
-              ) : null}
-              <span className="pointer-events-none flex size-4 shrink-0 items-center justify-center">
-                {commitId === activeProfileId ? (
-                  <CheckIcon className="size-4" />
-                ) : null}
-              </span>
             </DropdownMenuItem>
           );
           return admissionTooltipRow(profile.profileId, admission, row);

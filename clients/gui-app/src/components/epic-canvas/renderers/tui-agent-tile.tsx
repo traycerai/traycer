@@ -55,6 +55,7 @@ import {
   emitTerminalCrashedNotification,
 } from "@/stores/notifications/app-local-notifications-store";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   Popover,
   PopoverContent,
@@ -946,9 +947,24 @@ function TerminalAgentPreLaunchToolbar(
                       ? undefined
                       : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
                   }
+                  className={cn(
+                    continueUnderProfileDisabledReason !== undefined &&
+                      "flex-col items-start gap-0.5",
+                  )}
                   onSelect={() => openForkDialog("continue")}
                 >
-                  Continue under another profile…
+                  <span className="w-full">
+                    Continue under another profile…
+                  </span>
+                  {/* Radix's roving-tabindex skips this item entirely while
+                      disabled, so its aria-label (and the hover-only tooltip
+                      above) never reach keyboard/AT users - a static second
+                      line needs no focus/hover to be perceivable. */}
+                  {continueUnderProfileDisabledReason !== undefined ? (
+                    <span className="text-left text-[11px] leading-tight text-muted-foreground">
+                      {continueUnderProfileDisabledReason}
+                    </span>
+                  ) : null}
                 </DropdownMenuItem>
               </span>
             </TooltipWrapper>

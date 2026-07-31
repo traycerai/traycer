@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -290,6 +291,16 @@ describe("<TuiAgentTile /> fork split button", () => {
     expect(tooltipTextNear(item)).toBe(
       "Update Traycer host to continue this session under another profile.",
     );
+    // amend-02 a11y fix: Radix's roving-tabindex skips this disabled item
+    // entirely, so keyboard/AT users never focus it to hear the aria-label
+    // or trigger the hover-only tooltip above. The reason must also render
+    // as static, always-visible text inside the item - reachable without
+    // focus or hover.
+    expect(
+      within(item).getByText(
+        "Update Traycer host to continue this session under another profile.",
+      ),
+    ).not.toBeNull();
 
     fireEvent.click(item);
     expect(tileMocks.openProps).toHaveLength(0);

@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState, type KeyboardEvent } from "react";
@@ -294,6 +295,13 @@ describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () 
     });
     const personalProfile = screen.getByRole("menuitem", { name: "Personal" });
     expect(workProfile.getAttribute("aria-disabled")).toBe("true");
+    // amend-02 a11y fix: the reason must also be static, always-visible text
+    // inside the row - roving focus never lands on this item, so anything
+    // gated on focus/hover (the aria-label, the tooltip) never reaches
+    // keyboard/AT users.
+    expect(
+      within(workProfile).getByText("Can't continue this session under Work."),
+    ).not.toBeNull();
 
     terminalProfile.focus();
     expect(document.activeElement).toBe(terminalProfile);
