@@ -652,7 +652,12 @@ function providerCliStateWithProfiles(input: {
     // this to exercise the capability gate.
     loginCapability:
       input.loginCapability === undefined
-        ? { oauthArgs: ["auth", "login"], token: null, codePaste: null }
+        ? {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          }
         : input.loginCapability,
     availabilityPending: false,
     nativeCapabilities: {
@@ -2720,6 +2725,7 @@ describe("<HarnessModelPicker />", () => {
           oauthArgs: ["auth", "login"],
           token: null,
           codePaste: null,
+          terminalLogin: null,
         },
         profiles: [],
       }),
@@ -2746,6 +2752,7 @@ describe("<HarnessModelPicker />", () => {
           oauthArgs: ["auth", "login"],
           token: null,
           codePaste: null,
+          terminalLogin: null,
         },
         profiles: claudeProfilesForDropdown(),
       }),

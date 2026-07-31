@@ -1,6 +1,42 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { providerSignInUnavailableHint } from "@/components/providers/provider-signin-availability";
+import {
+  providerSignInUnavailableHint,
+  providerSupportsTerminalLogin,
+} from "@/components/providers/provider-signin-availability";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Narrows a `JSON.parse`d wire payload into `ProviderCliState["loginCapability"]`
+ * without asserting `terminalLogin` is present - deliberately, since the whole
+ * point of `oldHostLoginCapability` below is to model a shape that genuinely
+ * lacks that key. `JSON.parse` alone returns `any`; parsing into `unknown`
+ * first and narrowing through this predicate (rather than `as`) is what keeps
+ * the fixture both honest and lint-clean.
+ */
+function looksLikeLoginCapability(
+  value: unknown,
+): value is ProviderCliState["loginCapability"] {
+  return (
+    isRecord(value) &&
+    "oauthArgs" in value &&
+    "token" in value &&
+    "codePaste" in value
+  );
+}
+
+function oldHostLoginCapability(
+  raw: Record<string, unknown>,
+): ProviderCliState["loginCapability"] {
+  const parsed: unknown = JSON.parse(JSON.stringify(raw));
+  if (!looksLikeLoginCapability(parsed)) {
+    throw new Error("expected the fixture to at least resemble a capability");
+  }
+  return parsed;
+}
 
 function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   return {
@@ -23,7 +59,12 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
     apiKey: { supported: false, configured: false, source: null },
     terminalAgentArgs: "",
     envOverrides: [],
-    loginCapability: { oauthArgs: ["login"], token: null, codePaste: null },
+    loginCapability: {
+      oauthArgs: ["login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    },
     availabilityPending: false,
     profiles: [],
     managedInstallState: null,
@@ -94,5 +135,61 @@ describe("providerSignInUnavailableHint", () => {
         true,
       ),
     ).toBeNull();
+  });
+
+  // Row 1 of the terminal-login contract table (this consumer's half): the
+  // hint must point at the terminal sign-in flow, not the generic
+  // "does not support browser sign-in" message.
+  it("points at the terminal sign-in flow for a terminal-login provider, not 'browser sign-in'", () => {
+    const hint = providerSignInUnavailableHint(
+      providerState({
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+        },
+      }),
+      true,
+    );
+    expect(hint).toContain("signed in from a terminal");
+    expect(hint).not.toContain("browser sign-in");
+  });
+});
+
+const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
+  oauthArgs: ["auth", "login"],
+  token: null,
+  codePaste: null,
+  terminalLogin: {},
+};
+
+const NO_TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
+  oauthArgs: ["auth", "login"],
+  token: null,
+  codePaste: null,
+  terminalLogin: null,
+};
+
+describe("providerSupportsTerminalLogin", () => {
+  it("is true only when terminalLogin is present and non-null", () => {
+    expect(providerSupportsTerminalLogin(TERMINAL_LOGIN_CAP)).toBe(true);
+    expect(providerSupportsTerminalLogin(NO_TERMINAL_LOGIN_CAP)).toBe(false);
+  });
+
+  it("is false for a genuinely absent terminalLogin key (an old host's frozen-schema echo), not just null", () => {
+    // The key is truly absent (`undefined`), not `null` - exactly what a
+    // pre-terminal-login host's negotiated frozen schema decodes to.
+    const preTerminalLogin = oldHostLoginCapability({
+      oauthArgs: null,
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    });
+    expect(providerSupportsTerminalLogin(preTerminalLogin)).toBe(false);
+  });
+
+  it("is false when loginCapability itself is undefined", () => {
+    expect(providerSupportsTerminalLogin(undefined)).toBe(false);
   });
 });

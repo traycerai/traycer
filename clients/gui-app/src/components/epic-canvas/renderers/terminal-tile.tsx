@@ -1,6 +1,8 @@
 import { useStore } from "zustand";
 import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import { useProviderTerminalLogin } from "@/components/chat/composer/use-provider-terminal-login";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import {
@@ -207,6 +209,16 @@ function TerminalTileLive(
       }),
     [cwd],
   );
+  // A sign-in terminal is the HOST's session, not this tile's. Re-creating
+  // the id here would spawn a bare shell with none of the provider's spawn env
+  // - a prompt that looks like the sign-in terminal but cannot sign anyone in,
+  // and no error saying so. The tile attaches when the session is live and
+  // offers a restart when it is not; it never creates.
+  const signInProviderId =
+    props.node.origin === "provider-login"
+      ? (props.node.originProviderId ?? null)
+      : null;
+  const isSignInTerminal = props.node.origin === "provider-login";
   const bootstrap = useTerminalTileBootstrap({
     hostId,
     scope: { kind: "epic", epicId },
@@ -214,6 +226,7 @@ function TerminalTileLive(
     instanceId,
     sessionKind: "terminal",
     preparePayload,
+    enabled: !isSignInTerminal,
   });
   const closeExitedTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
@@ -231,12 +244,27 @@ function TerminalTileLive(
   // Gated on a null handle so this only ever fires for a tile that never
   // attached. A tile that DID attach owns its own exit down in `TerminalLive`,
   // which deliberately keeps a *crashed* terminal on screen.
+  //
+  // A sign-in terminal is exempt: closing it would silently retract the only
+  // surface that can restart the sign-in, leaving the user with a vanished tab
+  // and no explanation. It shows the restart affordance below instead.
   const exitedBeforeAttach =
-    bootstrap.hostSessionExited && bootstrap.handle === null;
+    bootstrap.hostSessionExited &&
+    bootstrap.handle === null &&
+    !isSignInTerminal;
   useEffect(() => {
     if (!exitedBeforeAttach) return;
     closeExitedTile();
   }, [exitedBeforeAttach, closeExitedTile]);
+
+  // The host has settled on "this session is gone" (absent, or exited and
+  // never attached). For an ordinary tile the bootstrap would now spawn a
+  // replacement; for this one there is nothing to attach to and nothing this
+  // tile may create.
+  const signInSessionGone =
+    isSignInTerminal &&
+    bootstrap.handle === null &&
+    (bootstrap.hostHasSession === false || bootstrap.hostSessionExited);
 
   if (bootstrap.createIsError) {
     return (
@@ -269,6 +297,17 @@ function TerminalTileLive(
           />
         </div>
       </div>
+    );
+  }
+
+  if (signInSessionGone) {
+    return (
+      <SignInTerminalEndedPanel
+        tileId={props.tileId}
+        providerId={signInProviderId}
+        epicId={epicId}
+        viewTabId={props.viewTabId}
+      />
     );
   }
 
@@ -447,5 +486,67 @@ function TerminalLive(props: TerminalLiveProps) {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * Shown when a sign-in terminal's session is gone. The interactive shell
+ * outlives the sign-in, so reaching this state means the user (or a host
+ * restart) closed it - there is no session to reattach to and, unlike an
+ * ordinary terminal tile, nothing here may create one.
+ *
+ * The button restarts the sign-in through the same RPC the composer banner
+ * uses, which kills nothing (there is nothing left) and hands back a fresh
+ * terminal. `providerId` can be absent on a ref written before it was
+ * recorded; the copy then points at the composer banner rather than offering a
+ * button that cannot know which provider to restart.
+ */
+function SignInTerminalEndedPanel(props: {
+  readonly tileId: string;
+  readonly providerId: ProviderId | null;
+  readonly epicId: string;
+  readonly viewTabId: string;
+}) {
+  return (
+    <div
+      className="flex h-full w-full flex-col items-center justify-center gap-2 bg-canvas p-4 text-center text-ui-sm text-muted-foreground"
+      data-testid={`terminal-tile-${props.tileId}`}
+    >
+      <span>Sign-in terminal ended.</span>
+      {props.providerId === null ? (
+        // A ref written before the provider was recorded. Point at the banner
+        // rather than draw a button that cannot know what to restart.
+        <span className="text-ui-xs">
+          Start a new one from the sign-in prompt above the composer.
+        </span>
+      ) : (
+        <SignInRestartButton
+          providerId={props.providerId}
+          epicId={props.epicId}
+          viewTabId={props.viewTabId}
+        />
+      )}
+    </div>
+  );
+}
+
+// Split out so the login hook is only instantiated where a provider is
+// actually known - no placeholder id standing in for "we do not know".
+function SignInRestartButton(props: {
+  readonly providerId: ProviderId;
+  readonly epicId: string;
+  readonly viewTabId: string;
+}) {
+  const terminalLogin = useProviderTerminalLogin(props);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={terminalLogin.isPending}
+      onClick={terminalLogin.start}
+    >
+      Start again
+    </Button>
   );
 }
