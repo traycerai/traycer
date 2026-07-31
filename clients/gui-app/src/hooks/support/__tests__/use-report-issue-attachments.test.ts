@@ -63,6 +63,19 @@ function makeJpegFile(name: string): File {
   return new File([bytes], name, { type: "image/jpeg" });
 }
 
+/**
+ * ADV-I4 fixture: a real 8-byte PNG signature with nothing after it - a
+ * screenshot cut off mid-write, or a partial drag payload. The magic-byte
+ * check (and the MIME allowlist) both pass this; only an actual decode
+ * attempt catches it.
+ */
+function makeTruncatedPngFile(name: string): File {
+  const bytes = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]);
+  return new File([bytes], name, { type: "image/png" });
+}
+
 interface DeferredPngFile {
   readonly file: File;
   readonly resolve: () => void;
@@ -96,6 +109,20 @@ let urlCounter = 0;
 const createObjectURLMock = vi.fn((): string => `blob:mock/${++urlCounter}`);
 const revokeObjectURLMock = vi.fn((): void => undefined);
 
+// jsdom implements no image decoder at all, so `createImageBitmap` is absent
+// from its `globalThis` - unlike the read/write DOM APIs above, there is no
+// "real" implementation to spy on here. Installed fresh via
+// `Object.defineProperty` each test (same pattern the shared jsdom-polyfill
+// setup file uses for `ResizeObserver`/`IntersectionObserver`), scoped to
+// this file only: vitest isolates `globalThis` per test file under the
+// default `pool: "forks"` configuration, so this never leaks into a sibling
+// test file that mounts the report-issue dialog. Defaults to a successful
+// decode; individual tests override it to simulate ADV-I4's undecodable case.
+const createImageBitmapMock = vi.fn(
+  (_source: File): Promise<{ close: () => void }> =>
+    Promise.resolve({ close: () => undefined }),
+);
+
 beforeEach(() => {
   urlCounter = 0;
   createObjectURLMock.mockClear();
@@ -103,6 +130,15 @@ beforeEach(() => {
   revokeObjectURLMock.mockClear();
   URL.createObjectURL = createObjectURLMock;
   URL.revokeObjectURL = revokeObjectURLMock;
+  createImageBitmapMock.mockReset();
+  createImageBitmapMock.mockImplementation(() =>
+    Promise.resolve({ close: () => undefined }),
+  );
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: createImageBitmapMock,
+  });
   vi.mocked(reportImagesExceedBudget).mockImplementation(
     (total: number) =>
       total + 2 * REPORT_LOG_TAIL_MAX_BYTES > TOTAL_ATTACHMENT_BUDGET_BYTES,
@@ -458,6 +494,93 @@ describe("useReportIssueAttachments", () => {
       expect(result.current.rejection?.message).toBe(
         `You can attach up to ${MAX_REPORT_IMAGES} screenshots.`,
       );
+    });
+  });
+
+  describe("decodability (ADV-I4)", () => {
+    it("rejects a truncated PNG with a valid magic prefix as corrupt, not silently attached", async () => {
+      const { result } = renderHook(() => useReportIssueAttachments());
+      const truncated = makeTruncatedPngFile("broken.png");
+      createImageBitmapMock.mockRejectedValueOnce(
+        new Error("The source image could not be decoded"),
+      );
+
+      act(() => {
+        result.current.addFiles([truncated]);
+      });
+
+      await waitFor(() => {
+        expect(result.current.rejection?.reason).toBe("corrupt");
+      });
+      expect(result.current.images).toHaveLength(0);
+      expect(result.current.rejection?.message).toBe(
+        "broken.png appears to be corrupted and can't be attached.",
+      );
+      // The rejection must not leave ingestion stuck open.
+      expect(result.current.isIngesting).toBe(false);
+      expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("still accepts a tiny valid PNG that decodes successfully", async () => {
+      const { result } = renderHook(() => useReportIssueAttachments());
+
+      act(() => {
+        result.current.addFiles([makeDefaultPngFile("tiny.png")]);
+      });
+
+      await waitFor(() => {
+        expect(result.current.images).toHaveLength(1);
+      });
+      expect(result.current.images[0]?.fileName).toBe("tiny.png");
+      expect(result.current.rejection).toBeNull();
+      expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a corrupt-image rejection in one concurrent batch still lets isIngesting settle once every batch is done", async () => {
+      const { result } = renderHook(() => useReportIssueAttachments());
+      const slow = makeDefaultPngFile("slow.png");
+      const corrupt = makeTruncatedPngFile("broken.png");
+
+      // Gate each file's DECODE step individually (rather than relying on
+      // the relative speed of a default-successful decode vs. a rejected
+      // one, which is not a reliable ordering signal) so which batch is
+      // still "in flight" when the assertion below runs is explicit and
+      // deterministic, not inferred from microtask-hop counts.
+      let releaseSlowDecode!: () => void;
+      const slowDecodeGate = new Promise<void>((resolve) => {
+        releaseSlowDecode = resolve;
+      });
+      createImageBitmapMock.mockImplementation(async (source: File) => {
+        if (source === slow) await slowDecodeGate;
+        if (source === corrupt) throw new Error("decode failed");
+        return { close: () => undefined };
+      });
+
+      act(() => {
+        result.current.addFiles([slow]);
+        result.current.addFiles([corrupt]);
+      });
+
+      await waitFor(() => {
+        expect(result.current.rejection?.reason).toBe("corrupt");
+      });
+      // The corrupt batch's own loop has already unwound through its
+      // try/finally (the pending-ingest counter went 2 -> 1), but the slow
+      // batch's decode is still gated - isIngesting must still reflect that
+      // outstanding batch, not the corrupt one's own local completion (i.e.
+      // the counter, not a per-loop boolean, survived the throw correctly).
+      expect(result.current.isIngesting).toBe(true);
+      expect(result.current.images).toHaveLength(0);
+
+      act(() => {
+        releaseSlowDecode();
+      });
+
+      await waitFor(() => {
+        expect(result.current.images).toHaveLength(1);
+        expect(result.current.isIngesting).toBe(false);
+      });
+      expect(result.current.images[0]?.fileName).toBe("slow.png");
     });
   });
 });

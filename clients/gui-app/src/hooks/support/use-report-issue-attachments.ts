@@ -31,7 +31,7 @@ export interface ReportIssueAttachmentImage {
 }
 
 export type ReportIssueAttachmentRejectionReason =
-  "count" | "type" | "size" | "budget" | "read_failed";
+  "count" | "type" | "size" | "budget" | "corrupt" | "read_failed";
 
 export interface ReportIssueAttachmentRejection {
   readonly reason: ReportIssueAttachmentRejectionReason;
@@ -47,31 +47,62 @@ export interface UseReportIssueAttachmentsResult {
   readonly removeImage: (id: string) => void;
 }
 
-function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  timeoutMessage: string,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = window.setTimeout(() => {
       if (settled) return;
       settled = true;
-      reject(new Error("Timed out while reading image"));
-    }, REPORT_IMAGE_READ_TIMEOUT_MS);
-    file.arrayBuffer().then(
-      (buffer) => {
+      reject(new Error(timeoutMessage));
+    }, ms);
+    promise.then(
+      (value) => {
         if (settled) return;
         settled = true;
         window.clearTimeout(timer);
-        resolve(buffer);
+        resolve(value);
       },
       (error: unknown) => {
         if (settled) return;
         settled = true;
         window.clearTimeout(timer);
-        reject(
-          error instanceof Error ? error : new Error("Failed to read image"),
-        );
+        reject(error instanceof Error ? error : new Error("Failed"));
       },
     );
   });
+}
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  return withTimeout(
+    file.arrayBuffer(),
+    REPORT_IMAGE_READ_TIMEOUT_MS,
+    "Timed out while reading image",
+  );
+}
+
+/**
+ * ADV-I4: the MIME allowlist and (main-side) magic-byte check only inspect a
+ * file's header, so a truncated file with a valid header - a real screenshot
+ * cut off mid-write, a partial drag payload - sails through both and reaches
+ * triage as a corrupt attachment the user believed was sent whole. Actually
+ * decoding the image is the only check that catches this; `createImageBitmap`
+ * decodes every format the MIME allowlist admits and rejects on a truncated
+ * or otherwise malformed body. The bitmap itself is never used for anything
+ * but this decodability proof - the thumbnail strip renders straight from
+ * the `File` via its own object URL - so it is closed immediately to free
+ * the decoded pixels rather than held onto.
+ */
+async function assertImageDecodes(file: File): Promise<void> {
+  const bitmap = await withTimeout(
+    createImageBitmap(file),
+    REPORT_IMAGE_READ_TIMEOUT_MS,
+    "Timed out while validating image",
+  );
+  bitmap.close();
 }
 
 function rejectionFor(
@@ -100,12 +131,113 @@ function rejectionFor(
         message:
           "Adding that screenshot would put the report over the size limit.",
       };
+    case "corrupt":
+      return {
+        reason,
+        message: `${fileName || "That image"} appears to be corrupted and can't be attached.`,
+      };
     case "read_failed":
       return {
         reason,
         message: `Couldn't read ${fileName || "that image"}. Try again.`,
       };
   }
+}
+
+function totalImageBytes(
+  images: ReadonlyArray<ReportIssueAttachmentImage>,
+): number {
+  return images.reduce((sum, image) => sum + image.size, 0);
+}
+
+interface IngestFileContext {
+  readonly imagesRef: {
+    readonly current: ReadonlyArray<ReportIssueAttachmentImage>;
+  };
+  readonly isActive: () => boolean;
+  readonly commitImage: (image: ReportIssueAttachmentImage) => void;
+  readonly setRejection: (rejection: ReportIssueAttachmentRejection) => void;
+}
+
+/**
+ * Validates and ingests exactly one candidate file, in isolation from the
+ * batch loop that calls it (kept as its own function so the loop itself -
+ * `ingest()` below - stays under the repo's cyclomatic-complexity budget).
+ * Returns `true` when the 3-image cap was hit (pre- or post-decode/read) and
+ * the calling batch should stop trying further files; `false` for every
+ * other outcome (committed, or skipped with its own per-file rejection),
+ * where the batch should still try the next candidate.
+ */
+async function ingestOneFile(
+  file: File,
+  ctx: IngestFileContext,
+): Promise<boolean> {
+  if (!ctx.isActive()) return true;
+  if (ctx.imagesRef.current.length >= MAX_REPORT_IMAGES) {
+    ctx.setRejection(rejectionFor("count", ""));
+    return true;
+  }
+  const mediaType = reportImageMediaTypeForMimeType(file.type);
+  if (mediaType === null) {
+    ctx.setRejection(rejectionFor("type", file.name));
+    return false;
+  }
+  if (file.size === 0 || file.size > MAX_REPORT_IMAGE_BYTES) {
+    ctx.setRejection(rejectionFor("size", file.name));
+    return false;
+  }
+  if (
+    reportImagesExceedBudget(totalImageBytes(ctx.imagesRef.current) + file.size)
+  ) {
+    ctx.setRejection(rejectionFor("budget", file.name));
+    return false;
+  }
+  try {
+    await assertImageDecodes(file);
+  } catch {
+    ctx.setRejection(rejectionFor("corrupt", file.name));
+    return false;
+  }
+  if (!ctx.isActive()) return true;
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await readFileAsArrayBuffer(file);
+  } catch {
+    ctx.setRejection(rejectionFor("read_failed", file.name));
+    return false;
+  }
+  if (!ctx.isActive()) return true;
+  // Re-checked synchronously here, immediately before the commit below with
+  // no `await` in between: a concurrent `addFiles` batch (paste landing
+  // mid-drop) can only have advanced past its own await and mutated
+  // `imagesRef.current` on some EARLIER microtask turn, never during this
+  // synchronous stretch, so this recheck-then-commit pair is atomic with
+  // respect to every other ingest loop. Closes the TOCTOU window the
+  // pre-await checks above leave open: two loops can both pass the
+  // pre-await count check against the same prior count, then both resolve
+  // their reads and race to commit - only the recheck here, not the
+  // pre-await one, can see the OTHER loop's commit and back off.
+  if (ctx.imagesRef.current.length >= MAX_REPORT_IMAGES) {
+    ctx.setRejection(rejectionFor("count", ""));
+    return true;
+  }
+  if (
+    reportImagesExceedBudget(
+      totalImageBytes(ctx.imagesRef.current) + bytes.byteLength,
+    )
+  ) {
+    ctx.setRejection(rejectionFor("budget", file.name));
+    return false;
+  }
+  ctx.commitImage({
+    id: crypto.randomUUID(),
+    fileName: file.name || "screenshot.png",
+    mimeType: mediaType,
+    bytes,
+    size: bytes.byteLength,
+    previewUrl: URL.createObjectURL(file),
+  });
+  return false;
 }
 
 export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
@@ -161,72 +293,20 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
       // one, which is exactly the unmount race this guards against.
       const isActive = (): boolean => activeRef.current;
 
+      const ctx: IngestFileContext = {
+        imagesRef,
+        isActive,
+        commitImage,
+        setRejection,
+      };
+
       async function ingest(): Promise<void> {
         pendingIngestCountRef.current += 1;
         setIsIngesting(true);
         try {
           for (const file of candidates) {
-            if (!isActive()) return;
-            if (imagesRef.current.length >= MAX_REPORT_IMAGES) {
-              setRejection(rejectionFor("count", ""));
-              return;
-            }
-            const mediaType = reportImageMediaTypeForMimeType(file.type);
-            if (mediaType === null) {
-              setRejection(rejectionFor("type", file.name));
-              continue;
-            }
-            if (file.size === 0 || file.size > MAX_REPORT_IMAGE_BYTES) {
-              setRejection(rejectionFor("size", file.name));
-              continue;
-            }
-            const existingTotal = imagesRef.current.reduce(
-              (sum, image) => sum + image.size,
-              0,
-            );
-            if (reportImagesExceedBudget(existingTotal + file.size)) {
-              setRejection(rejectionFor("budget", file.name));
-              continue;
-            }
-            let bytes: ArrayBuffer;
-            try {
-              bytes = await readFileAsArrayBuffer(file);
-            } catch {
-              setRejection(rejectionFor("read_failed", file.name));
-              continue;
-            }
-            if (!isActive()) return;
-            // Re-checked synchronously here, immediately before the commit
-            // below with no `await` in between: a concurrent `addFiles`
-            // batch (paste landing mid-drop) can only have advanced past its
-            // own await and mutated `imagesRef.current` on some EARLIER
-            // microtask turn, never during this synchronous stretch, so this
-            // recheck-then-commit pair is atomic with respect to every other
-            // ingest loop. Closes the TOCTOU window the pre-await checks
-            // above leave open: two loops can both pass the pre-await count
-            // check against the same prior count, then both resolve their
-            // reads and race to commit - only the recheck here, not the
-            // pre-await one, can see the OTHER loop's commit and back off.
-            if (imagesRef.current.length >= MAX_REPORT_IMAGES) {
-              setRejection(rejectionFor("count", ""));
-              return;
-            }
-            const committedTotal = imagesRef.current.reduce(
-              (sum, image) => sum + image.size,
-              0,
-            );
-            if (reportImagesExceedBudget(committedTotal + bytes.byteLength)) {
-              setRejection(rejectionFor("budget", file.name));
-              continue;
-            }
-            commitImage({
-              id: crypto.randomUUID(),
-              fileName: file.name || "screenshot.png",
-              mimeType: mediaType,
-              bytes,
-              size: bytes.byteLength,
-              previewUrl: URL.createObjectURL(file),
-            });
+            const shouldStopBatch = await ingestOneFile(file, ctx);
+            if (shouldStopBatch) return;
           }
         } finally {
           pendingIngestCountRef.current -= 1;
