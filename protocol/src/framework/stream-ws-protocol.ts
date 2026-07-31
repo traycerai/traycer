@@ -76,6 +76,14 @@ export const hostCredentialStateSchema = z.enum([
   "needs-reauth",
 ]);
 
+/**
+ * Fatal code used by the stream host's pre-subscribe deadlines. In particular,
+ * when the host sent `openAck` but did not observe the client's `subscribe`, it
+ * pairs this code with `retryable: true`. Older hosts omit the additive flag, so
+ * clients also use this stable code as the backward-compatible recovery signal.
+ */
+export const STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE = "STREAM_SUBSCRIBE_TIMEOUT";
+
 /** First frame sent by the client: bearer token + per-method canonicals. */
 export type ClientStreamOpenFrame = {
   readonly kind: "open";

@@ -1879,6 +1879,15 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       retryable: true,
     },
   } as const;
+  const LEGACY_SUBSCRIBE_TIMEOUT_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "STREAM_SUBSCRIBE_TIMEOUT",
+      reason: "Timed out waiting for 'subscribe' frame after openAck (30000ms)",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  } as const;
 
   function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -2081,6 +2090,26 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     // Reconnected well past the no-progress bound (3) that a misclassified
     // UNAUTHORIZED would have hit - proof the transient path never gives up.
     expect(sockets.length).toBeGreaterThan(4);
+    session.close();
+  });
+
+  it("recovers an older host's subscribe timeout even when it omits `retryable`", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeAuthRevalidator(["rotated"]);
+    const client = makeAuthClient(factory, revalidator.auth, 5);
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await flush();
+    completeHandshake(sockets[0].socket);
+    sockets[0].socket.fireText(LEGACY_SUBSCRIBE_TIMEOUT_FATAL);
+    await wait(50);
+
+    expect(revalidator.calls.count).toBe(0);
+    expect(statuses).toContain("reconnecting");
+    expect(statuses).not.toContain("closed");
+    expect(sockets).toHaveLength(2);
     session.close();
   });
 
