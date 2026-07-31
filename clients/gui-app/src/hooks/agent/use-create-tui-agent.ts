@@ -13,7 +13,6 @@ import type {
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
-import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { useEpicCreateTuiAgentForClient } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useValidateTuiForkProfile } from "@/hooks/agent/use-validate-tui-fork-profile-mutation";
@@ -24,6 +23,7 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { displayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -92,22 +92,6 @@ type ValidateForkProfileResponse = ResponseOfMethod<
 type ValidateForkProfileMutateAsync = (
   variables: ValidateForkProfileRequest,
 ) => Promise<ValidateForkProfileResponse>;
-
-/**
- * Thrown when the cross-profile fork-admission preflight rejects a launch,
- * BEFORE any worktree/binding work has run. Carries the same subcode a
- * rejection from `agent.tui.prepareLaunch`'s authoritative guard would carry
- * (`TuiForkScopeGuardError`), so a caller can render both outcomes with the
- * same subcode-aware UI.
- */
-export class TuiForkProfileRejectedError extends Error {
-  readonly subcode: TuiForkProfileAdmissionSubcode;
-  constructor(subcode: TuiForkProfileAdmissionSubcode, message: string) {
-    super(message);
-    this.name = "TuiForkProfileRejectedError";
-    this.subcode = subcode;
-  }
-}
 
 /**
  * Composite mutation that:
@@ -522,18 +506,14 @@ async function preflightForkProfileAdmission(
     sourceTuiAgentId: args.sourceTuiAgentId,
     targetProfileIds: [args.targetProfileId],
   });
-  const verdict = result.verdicts[0];
-  if (verdict.admitted) return;
-  const subcode = verdict.subcode ?? "SCOPE_MISMATCH";
+  const verdict = result.verdicts.find(
+    (candidate) => candidate.targetProfileId === args.targetProfileId,
+  );
+  if (verdict?.admitted === true) return;
+  const subcode = verdict?.subcode ?? "SCOPE_MISMATCH";
   const message =
-    verdict.message ??
+    verdict?.message ??
     "This profile doesn't share conversation history with the source terminal agent.";
-  reportableErrorToast(message, undefined, {
-    title: "Can't fork under this profile",
-    message,
-    code: subcode,
-    source: "agent.tui.validateForkProfile",
-  });
   throw new TuiForkProfileRejectedError(subcode, message);
 }
 

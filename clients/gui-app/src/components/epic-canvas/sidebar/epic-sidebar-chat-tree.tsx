@@ -1792,19 +1792,6 @@ function SidebarAgentHarnessIcon(props: {
       : null,
   );
   const managedProfileId = tuiAgent?.profileId ?? null;
-  const hostClient = useHostClientForHostId(tuiAgent?.hostId ?? null);
-  const providersList = useProvidersListForClient(hostClient, {
-    enabled: managedProfileId !== null,
-    subscribed: managedProfileId !== null,
-  });
-  const profiles = harnessProfiles(
-    providersList.data?.providers ?? null,
-    props.harnessId,
-  );
-  const profileAccentDot =
-    managedProfileId === null
-      ? null
-      : resolveProfileAccentDot(managedProfileId, profiles);
   return (
     <TooltipWrapper
       label="TUI terminal agent"
@@ -1817,14 +1804,23 @@ function SidebarAgentHarnessIcon(props: {
         data-agent-surface="tui"
         className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
       >
-        <ProfileBadgedHarnessIcon
-          harnessId={props.harnessId}
-          harnessName={props.harnessId}
-          profileAccentDot={profileAccentDot}
-          iconClassName="size-3.5"
-          className={undefined}
-          testId={`sidebar-agent-profile-mark-${props.nodeId}`}
-        />
+        {managedProfileId === null ? (
+          <ProfileBadgedHarnessIcon
+            harnessId={props.harnessId}
+            harnessName={props.harnessId}
+            profileAccentDot={null}
+            iconClassName="size-3.5"
+            className={undefined}
+            testId={`sidebar-agent-profile-mark-${props.nodeId}`}
+          />
+        ) : (
+          <ManagedProfileSidebarHarnessIcon
+            nodeId={props.nodeId}
+            harnessId={props.harnessId}
+            hostId={tuiAgent?.hostId ?? null}
+            profileId={managedProfileId}
+          />
+        )}
         <TerminalIcon
           aria-hidden="true"
           data-testid={`sidebar-agent-surface-${props.nodeId}`}
@@ -1834,6 +1830,33 @@ function SidebarAgentHarnessIcon(props: {
         />
       </span>
     </TooltipWrapper>
+  );
+}
+
+function ManagedProfileSidebarHarnessIcon(props: {
+  readonly nodeId: string;
+  readonly harnessId: ProviderId;
+  readonly hostId: string | null;
+  readonly profileId: string;
+}) {
+  const hostClient = useHostClientForHostId(props.hostId);
+  const providersList = useProvidersListForClient(hostClient, {
+    enabled: true,
+    subscribed: true,
+  });
+  const profiles = harnessProfiles(
+    providersList.data?.providers ?? null,
+    props.harnessId,
+  );
+  return (
+    <ProfileBadgedHarnessIcon
+      harnessId={props.harnessId}
+      harnessName={props.harnessId}
+      profileAccentDot={resolveProfileAccentDot(props.profileId, profiles)}
+      iconClassName="size-3.5"
+      className={undefined}
+      testId={`sidebar-agent-profile-mark-${props.nodeId}`}
+    />
   );
 }
 

@@ -11,6 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   tooltipTextFor,
@@ -107,19 +108,22 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-test",
-  useEpicTerminalAgent: () => ({
+  useEpicTerminalAgent: (): TuiAgentProjection => ({
     id: "agent-1",
-    harnessType: "claude" as const,
+    harnessId: "claude",
     title: "Claude agent",
     parentId: null,
     createdAt: 0,
     updatedAt: 0,
+    userId: "user-test",
     hostId: "host-test",
     harnessSessionId: "harness-session-1",
     terminalAgentArgs: null,
     terminalShellCommand: "claude",
     terminalShellArgs: ["--continue"],
     workspaceFolders: ["/tmp/workspace"],
+    workspaceMode: undefined,
+    archivedAt: null,
     model: null,
     reasoningEffort: null,
     agentMode: "regular",

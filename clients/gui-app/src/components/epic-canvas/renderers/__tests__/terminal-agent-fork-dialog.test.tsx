@@ -202,7 +202,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
-import { TuiForkProfileRejectedError } from "@/hooks/agent/use-create-tui-agent";
+import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
 
 describe("<TerminalAgentForkDialog />", () => {

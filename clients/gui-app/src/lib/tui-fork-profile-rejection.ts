@@ -1,6 +1,19 @@
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
-import { TuiForkProfileRejectedError } from "@/hooks/agent/use-create-tui-agent";
+
+/**
+ * Thrown when the cross-profile fork-admission preflight rejects a launch,
+ * before any worktree/binding work has run. Carries the same subcode as the
+ * authoritative prepare-launch guard so both outcomes share one UI mapper.
+ */
+export class TuiForkProfileRejectedError extends Error {
+  readonly subcode: TuiForkProfileAdmissionSubcode;
+  constructor(subcode: TuiForkProfileAdmissionSubcode, message: string) {
+    super(message);
+    this.name = "TuiForkProfileRejectedError";
+    this.subcode = subcode;
+  }
+}
 
 /**
  * A cross-profile fork/continue rejection, resolved into copy the dialog can

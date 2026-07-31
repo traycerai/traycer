@@ -71,19 +71,21 @@ vi.mock("sonner", () => ({
 // under jsdom), which would silently skip the preflight in every test here.
 // Stubbed `true` by default so the ordering test below can actually exercise
 // the preflight-before-worktree path. Individual tests can override via
-// `useTuiForkProfileSupportedMock.mockReturnValueOnce(false)` for the
-// capability-unsupported case.
+// `useTuiForkProfileSupportedMock.mockReturnValue(false)` for the
+// capability-unsupported case. The hook is read on every render, so a
+// one-shot override would revert to `true` mid-test.
 const useTuiForkProfileSupportedMock = vi.hoisted(() => vi.fn(() => true));
 vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
+  VALIDATE_TUI_FORK_PROFILE_METHOD: "agent.tui.validateForkProfile",
   useTuiForkProfileSupported: () => useTuiForkProfileSupportedMock(),
 }));
 
 import { toast } from "sonner";
 import {
   type CreateTuiAgentStatus,
-  TuiForkProfileRejectedError,
   useCreateTuiAgent,
 } from "@/hooks/agent/use-create-tui-agent";
+import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { peekPreparedTerminalAgentLaunch } from "@/stores/terminals/prepared-terminal-agent-launch-store";
 
 const EPIC_ID = "epic-1";
@@ -654,6 +656,12 @@ describe("useCreateTuiAgent", () => {
       if (method === "agent.tui.validateForkProfile") {
         return Promise.resolve({
           verdicts: [
+            {
+              targetProfileId: "profile-a",
+              admitted: true,
+              subcode: null,
+              message: null,
+            },
             {
               targetProfileId: "profile-b",
               admitted: false,

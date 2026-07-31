@@ -455,10 +455,13 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   // Fixes 1 and 3): the CTA itself refuses to submit a currently-selected
   // profile the composed admission map has locked, whether that's the
   // old-host capability lock, an unsettled/failed bulk check, or a rejected
-  // server verdict. Same-profile selection is never gated by this check.
+  // server verdict. A resolved server verdict is authoritative for the source
+  // profile too; only local unsettled/failed locks exempt that same-profile
+  // selection.
   const crossProfileSelected = currentProfileId !== sourceProfileId;
+  const hasResolvedAdmission = admissionSettled?.kind === "resolved";
   const selectedProfileLocked =
-    crossProfileSelected &&
+    (crossProfileSelected || hasResolvedAdmission) &&
     admissionByProfileId.get(currentProfileId)?.disabled === true;
   const canSubmit =
     target !== null &&
@@ -802,7 +805,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 variant={undefined}
               />
             ) : null}
-            {terminalForkButtonLabel(status, intent)}
+            {terminalForkButtonLabel(intent)}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -830,20 +833,8 @@ function terminalForkStatusLabel(status: CreateTuiAgentStatus): string {
   }
 }
 
-function terminalForkButtonLabel(
-  status: TerminalAgentForkStatus,
-  intent: TerminalAgentForkIntent,
-): string {
-  switch (status) {
-    case "idle":
-      return intent === "continue" ? "Continue" : "Fork";
-    case "preparing-workspace":
-      return "Preparing";
-    case "forking-session":
-      return intent === "continue" ? "Continuing" : "Forking";
-    case "starting-terminal":
-      return "Starting terminal";
-  }
+function terminalForkButtonLabel(intent: TerminalAgentForkIntent): string {
+  return intent === "continue" ? "Continue" : "Fork";
 }
 
 function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {

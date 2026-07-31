@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
-import { TuiForkProfileRejectedError } from "@/hooks/agent/use-create-tui-agent";
-import { resolveTuiForkRejectionView } from "@/lib/tui-fork-profile-rejection";
+import {
+  resolveTuiForkRejectionView,
+  TuiForkProfileRejectedError,
+} from "@/lib/tui-fork-profile-rejection";
 
 const LABELS = {
   targetLabel: "Work",

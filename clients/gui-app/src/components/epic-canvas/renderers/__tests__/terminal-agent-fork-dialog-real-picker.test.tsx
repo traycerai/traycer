@@ -518,6 +518,11 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
     expect(workRow.getAttribute("aria-label")).toContain(
       SOURCE_NOT_READY_REASON,
     );
+    const continueButton = screen.getByRole("button", { name: "Continue" });
+    if (!(continueButton instanceof HTMLButtonElement)) {
+      throw new Error("expected Continue button");
+    }
+    expect(continueButton.disabled).toBe(true);
 
     // Disabled rows are non-interactive - click must not change the title.
     const titleBefore = titleInputValue();

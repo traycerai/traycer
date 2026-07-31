@@ -1,15 +1,14 @@
-import { useMutation, type UseMutationResult } from "@tanstack/react-query";
+import type { UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { HostRpcError as HostRpcErrorCtor } from "@traycer-clients/shared/host-transport/host-messenger";
-import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
+import { useHostMutation } from "@/hooks/host/use-host-query";
 import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { agentMutationKeys } from "@/lib/query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { VALIDATE_TUI_FORK_PROFILE_METHOD } from "@/hooks/agent/use-tui-fork-profile-support";
 
 /**
  * Read-only cross-profile fork-admission preflight - the optional
@@ -33,29 +32,12 @@ export function useValidateTuiForkProfile(
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "agent.tui.validateForkProfile">
 > {
-  return useMutation<
-    ResponseOfMethod<HostRpcRegistry, "agent.tui.validateForkProfile">,
-    HostRpcError,
-    RequestOfMethod<HostRpcRegistry, "agent.tui.validateForkProfile">
-  >(
-    withHostMutationLifecycleBoundary("agent.tui.validateForkProfile", {
+  return useHostMutation({
+    client,
+    method: VALIDATE_TUI_FORK_PROFILE_METHOD,
+    options: {
       mutationKey: agentMutationKeys.validateForkProfile(),
-      mutationFn: (variables) =>
-        withHostQueryErrorBoundary("agent.tui.validateForkProfile", () => {
-          if (client === null) {
-            return Promise.reject(
-              new HostRpcErrorCtor({
-                code: "RPC_ERROR",
-                message:
-                  "Cannot validate a fork profile without a host client.",
-                requestId: "client-preflight",
-                method: "agent.tui.validateForkProfile",
-                fatalDetails: null,
-              }),
-            );
-          }
-          return client.request("agent.tui.validateForkProfile", variables);
-        }),
-    }),
-  );
+    },
+    mapVariables: (variables) => variables,
+  });
 }
