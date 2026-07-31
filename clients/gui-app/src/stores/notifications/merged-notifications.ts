@@ -53,6 +53,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import {
   cloudNotificationFeedId,
+  selectCloudEntityReadTargets,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
@@ -76,6 +77,7 @@ import {
   type HostNotificationsCloudFeedRow,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedClearAllRequest,
+  type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
@@ -125,6 +127,16 @@ export interface MergedNotificationsActions {
   readonly clear: (row: MergedNotificationRow) => void;
   readonly clearAll: () => void;
   readonly markAllAsRead: () => void;
+  /**
+   * View consumption for one entity - the cloud counterpart of the v1
+   * `host.notifications.markRead {kind:"entity"}` RPC, which in cloud mode
+   * addresses rows the connected host may not even hold.
+   *
+   * Cloud mode only: local mode keeps issuing the host RPC from the session
+   * provider, because there the host's own SQLite is the authority being
+   * consumed. No-op in every other mode.
+   */
+  readonly markEntityAsRead: (entity: HostNotificationsEntityRef) => void;
   readonly loadMoreHost: () => void;
   readonly canLoadMoreHost: boolean;
   readonly isLoadingMoreHost: boolean;
@@ -1066,6 +1078,35 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             resolveHostAll.mutate({ occurrences });
           }
         }
+      },
+      markEntityAsRead: (entity) => {
+        if (feedMode !== "cloud") return;
+        const state = useCloudNotificationsStore.getState();
+        const entryIds = selectCloudEntityReadTargets(
+          state.rows,
+          state.entityReadAttempts,
+          entity,
+        );
+        // No targets means nothing to do AND nothing to write - important,
+        // because this runs on every accepted snapshot while an entity is in
+        // view. A no-op that still touched the store would re-trigger itself.
+        if (entryIds.length === 0) return;
+        // One atomic optimistic step: the attempt guard lands with the
+        // markers, so the store write this causes cannot re-arm the fan-out.
+        state.beginEntityRead(entryIds, Date.now());
+        // Same serialization as `markAllAsRead`: there is no cloud
+        // mark-many RPC, and a large cross-device feed must not burst
+        // hundreds of unary requests through one host connection.
+        void (async (): Promise<void> => {
+          for (const entryId of entryIds) {
+            try {
+              await cloudMarkRead.mutateAsync({ entryId });
+            } catch {
+              // The mutation's onError owns availability state. Continue so
+              // one failed entry does not prevent later entries being sent.
+            }
+          }
+        })();
       },
       clear: (row) => {
         if (row.source !== "cloud" || feedMode !== "cloud") return;

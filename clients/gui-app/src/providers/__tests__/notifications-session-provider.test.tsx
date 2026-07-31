@@ -148,6 +148,12 @@ vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
     useMergedNotificationsActions: () => ({
       markAsRead: markAsReadMock,
       markAllAsRead: vi.fn(),
+      // Cloud view-consumption fan-out. These cases never reach it (jsdom
+      // reports the document blurred, so the locally-read focus signal stays
+      // null), but the provider holds a reference to it - leaving it off the
+      // mock would make any future focus stub here a TypeError, not a
+      // behaviour change.
+      markEntityAsRead: vi.fn(),
       loadMoreHost: vi.fn(),
       canLoadMoreHost: false,
       isLoadingMoreHost: false,

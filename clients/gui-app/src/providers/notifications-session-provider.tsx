@@ -24,7 +24,11 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
-import type { HostNotificationPresenceFrame } from "@/lib/notifications/notification-presence";
+import {
+  readFocusedHostNotificationPresenceEntity,
+  subscribeHostNotificationPresence,
+  type HostNotificationPresenceFrame,
+} from "@/lib/notifications/notification-presence";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService, useHostClient } from "@/lib/host";
@@ -54,7 +58,10 @@ import {
   type NotificationNavigate,
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationsEntityRef,
+  HostNotificationsPresenceEntity,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   useMergedNotificationsActions,
   type MergedNotificationRow,
@@ -133,14 +140,38 @@ export function NotificationsSessionProvider(
   useEffect(() => {
     onToastClickRef.current = onToastClick;
   }, [onToastClick]);
+  // The merged actions are rebuilt whenever any cloud mutation's state
+  // changes. Reading the fan-out through a ref keeps the two cloud effects
+  // below subscribed for the life of the mode instead of tearing down and
+  // resubscribing on every in-flight mark-read - which would leave a window
+  // where an arriving snapshot has no listener.
+  const markCloudEntityReadRef = useRef(mergedActions.markEntityAsRead);
+  useEffect(() => {
+    markCloudEntityReadRef.current = mergedActions.markEntityAsRead;
+  }, [mergedActions]);
+  const markCloudEntityRead = useCallback(
+    (entity: HostNotificationsEntityRef): void => {
+      markCloudEntityReadRef.current(entity);
+    },
+    [],
+  );
   const consumeEntity = useCallback(
     (entity: HostNotificationsEntityRef): void => {
+      // App-local rows are client-side state owned by neither feed, so this
+      // half runs identically in both modes.
       useAppLocalNotificationsStore
         .getState()
         .markEntityAsRead(entity, Date.now());
+      if (notificationFeedMode === "cloud") {
+        // The v1 entity RPC consumes ONE host's SQLite; in cloud mode the
+        // rows in view can belong to any host, so consumption has to address
+        // the entries themselves.
+        markCloudEntityRead(entity);
+        return;
+      }
       markEntityRead(entity);
     },
-    [markEntityRead],
+    [markEntityRead, markCloudEntityRead, notificationFeedMode],
   );
   const onPresenceChanged = useCallback(
     (frame: HostNotificationPresenceFrame, hostId: string): void => {
@@ -290,6 +321,56 @@ export function NotificationsSessionProvider(
       }
     });
   }, [consumeEntity]);
+
+  // TRIGGER 1 (cloud) - presence change.
+  //
+  // Local mode learns "the user is looking at X" from host presence frames,
+  // and neither local stream is opened in cloud mode. But those frames are
+  // built from state this renderer already owns: the canvas store plus
+  // document focus. `readFocusedHostNotificationPresenceEntity` is literally
+  // the function the outgoing frame is composed from, and
+  // `subscribeHostNotificationPresence` already watches exactly the inputs
+  // that can change it. Reading it directly is the same signal one hop
+  // earlier - no stream reopened to be told what this window already knows.
+  useEffect(() => {
+    if (notificationFeedMode !== "cloud") return;
+    const evaluate = (): void => {
+      const nextEntity = entityFromFocusedPresenceEntity(
+        readFocusedHostNotificationPresenceEntity(),
+      );
+      const previousEntity = activeEntityRef.current;
+      if (
+        (nextEntity === null && previousEntity === null) ||
+        (nextEntity !== null &&
+          previousEntity !== null &&
+          notificationEntitiesMatch(nextEntity, previousEntity))
+      )
+        return;
+      activeEntityRef.current = nextEntity;
+      if (nextEntity !== null) consumeEntity(nextEntity);
+    };
+    evaluate();
+    return subscribeHostNotificationPresence(evaluate);
+  }, [notificationFeedMode, consumeEntity]);
+
+  // TRIGGER 2 (cloud) - a row arriving for the entity already in view.
+  //
+  // The local counterpart is the terminal-severity branch of `onFeedFrame`.
+  // Cloud rows arrive only as whole snapshots, so the equivalent is to
+  // re-evaluate consumption whenever the row set changes. The severity filter
+  // and the convergence guard both live in the fan-out itself, which writes
+  // nothing when it has no targets - so this cannot drive a mark -> snapshot
+  // -> mark loop, and a server that never takes the marker still gets at most
+  // one request per entry per session.
+  useEffect(() => {
+    if (notificationFeedMode !== "cloud") return;
+    return useCloudNotificationsStore.subscribe((state, previous) => {
+      if (state.rows === previous.rows) return;
+      const activeEntity = activeEntityRef.current;
+      if (activeEntity === null) return;
+      markCloudEntityRead(activeEntity);
+    });
+  }, [notificationFeedMode, markCloudEntityRead]);
 
   const openForCurrentUser = useCallback((): void => {
     if (
@@ -507,16 +588,20 @@ export function NotificationsSessionProvider(
 function entityFromFocusedPresence(
   frame: HostNotificationPresenceFrame,
 ): HostNotificationsEntityRef | null {
-  if (
-    !frame.focused ||
-    frame.entity === null ||
-    frame.entity.epicId === undefined
-  ) {
-    return null;
-  }
-  return frame.entity.chatId === undefined
-    ? { epicId: frame.entity.epicId }
-    : { epicId: frame.entity.epicId, chatId: frame.entity.chatId };
+  if (!frame.focused) return null;
+  return entityFromFocusedPresenceEntity(frame.entity);
+}
+
+/** The presence entity normalized to an addressable entity ref. Shared so the
+ * cloud path, which reads the focused entity locally, and the local path,
+ * which receives it back as a host frame, cannot drift apart. */
+function entityFromFocusedPresenceEntity(
+  entity: HostNotificationsPresenceEntity | null,
+): HostNotificationsEntityRef | null {
+  if (entity === null || entity.epicId === undefined) return null;
+  return entity.chatId === undefined
+    ? { epicId: entity.epicId }
+    : { epicId: entity.epicId, chatId: entity.chatId };
 }
 
 function createFallbackNotificationsWindowId(): string {
