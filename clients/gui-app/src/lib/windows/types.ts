@@ -484,6 +484,12 @@ export interface DesktopImageAttachmentInput {
   readonly bytes: ArrayBuffer;
 }
 
+// What (if anything) actually reached the private channel for this draft, as
+// known by the renderer at the moment it asks main to build a public draft.
+// "none" covers both "never attempted" (no-DSN) and a definite `failed`
+// result - neither left anything on the Sentry side to reference.
+export type DesktopPrivateOutcome = "delivered" | "unconfirmed" | "none";
+
 export interface DesktopReportIssueForm {
   readonly draftId: number;
   readonly type: DesktopReportType;
@@ -501,9 +507,21 @@ export interface DesktopReportIssueForm {
   // the private submission / diagnostic bundle when false.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  // Consent panel's diagnostics toggle: gates layer-0/process-metrics/
+  // version-platform-host tags+contexts on both the Sentry event and the
+  // bundle's environment block. Never gates the report's own identity
+  // (reportId/fingerprint/correlationId).
+  readonly includeDiagnostics: boolean;
   // Up to 3 screenshots (ticket 08 / T5) - always present, empty when none
   // attached.
   readonly images: readonly DesktopImageAttachmentInput[];
+  // `buildPublicDraft`-only (ignored by submit/bundle). The user's as-typed
+  // preview-title edit, re-scrubbed and re-fit through the same budget
+  // pipeline as a derived title on every "Open GitHub draft" re-invocation;
+  // null on the initial preview fetch.
+  readonly overrideTitle: string | null;
+  // `buildPublicDraft`-only (ignored by submit/bundle).
+  readonly privateOutcome: DesktopPrivateOutcome;
   readonly privateDiagnostics?: DesktopPrivateDiagnostics;
 }
 

@@ -54,6 +54,7 @@ import {
 import type {
   DesktopCapturedField,
   DesktopFingerprintOccurrence,
+  DesktopPrivateOutcome,
   DesktopReportFrequency,
   DesktopReportIssueForm,
   DesktopReportType,
@@ -143,6 +144,20 @@ function errorEnvelopeFromContext(
   };
 }
 
+// What the private channel actually did with this draft, as known by the
+// renderer right now - main has no memory of a prior `submitReport` call, so
+// this travels on every `buildPublicDraft` request. A definite `failed`
+// result and "never attempted" both collapse to "none": neither left
+// anything on the Sentry side for the public draft to honestly reference.
+function privateOutcomeFor(
+  deliveryResult: DesktopSubmitReportResult | null,
+): DesktopPrivateOutcome {
+  if (deliveryResult === null) return "none";
+  if (deliveryResult.status === "delivered") return "delivered";
+  if (deliveryResult.status === "unconfirmed") return "unconfirmed";
+  return "none";
+}
+
 interface ReportIssueDerivedFlags {
   readonly deliveryResult: DesktopSubmitReportResult | null;
   readonly effectiveDeliveryResult: DesktopSubmitReportResult | null;
@@ -177,12 +192,21 @@ function deriveDeliveryFlags(input: {
     : null;
   const deliveryUnavailableUpfront =
     input.snapshot !== null && !input.snapshot.privateDeliveryAvailable;
+  // A rejected submitReport promise (IPC/parser/bridge exception - not a
+  // typed `{status:"failed"}` result) must still land on the same terminal
+  // action set as a definite failure - "Try again" + "Report on GitHub
+  // instead" - never silently fall through to a bare, misleadingly-fresh
+  // "Send report" because `deliveryResult` stayed null.
+  const rejectedResult: DesktopSubmitReportResult | null = input.submitIsError
+    ? { status: "failed", reason: "error" }
+    : null;
   // Known unavailable up front (DSN presence is known at startup) synthesizes
   // the same terminal state a submit attempt would eventually reach, so the
   // dialog can state it and offer the two honest actions before the user
   // invests any effort.
   const effectiveDeliveryResult: DesktopSubmitReportResult | null =
     deliveryResult ??
+    rejectedResult ??
     (deliveryUnavailableUpfront ? { status: "unavailable" } : null);
   const deliveredAlready = deliveryResult?.status === "delivered";
   const showsHonestBanner =
@@ -347,7 +371,13 @@ export function ReportIssueDialog(
 
   const attachments = useReportIssueAttachments();
 
-  function buildRequest(): DesktopReportIssueForm {
+  // `includeDiagnostics` no longer decides whether `privateDiagnostics` rides
+  // the wire at all - main is the sole authority on what it honors from it
+  // (fix: the diagnostics toggle used to only omit this object, while main
+  // independently computed layer-0/process-metrics/version tags regardless).
+  // `privateDiagnostics` is always sent when a draft context exists; the
+  // `includeDiagnostics` flag below is what main actually gates on.
+  function buildRequest(overrideTitle: string | null): DesktopReportIssueForm {
     return {
       draftId,
       type: form.type,
@@ -358,12 +388,19 @@ export function ReportIssueDialog(
       allowContact: form.allowContact,
       includeDesktopLog: form.includeDesktopLog,
       includeHostLog: form.includeHostLog,
+      includeDiagnostics: form.includeDiagnostics,
       images: attachments.images.map((image) => ({
         fileName: image.fileName,
         mimeType: image.mimeType,
         bytes: image.bytes,
       })),
-      ...(draftContext === null || !form.includeDiagnostics
+      // `overrideTitle`/`privateOutcome` are `buildPublicDraft`-only (ignored
+      // by submit/bundle) - shared here per the one-contract rule.
+      overrideTitle,
+      privateOutcome: privateOutcomeFor(
+        submitMutation.isSuccess ? submitMutation.data : null,
+      ),
+      ...(draftContext === null
         ? {}
         : {
             privateDiagnostics: serializeReportIssuePrivateDiagnostics(
@@ -377,7 +414,7 @@ export function ReportIssueDialog(
     mutationKey: runnerMutationKeys.supportSubmitReport(),
     mutationFn: async (): Promise<DesktopSubmitReportResult> => {
       if (support === null) throw new Error("Support bridge unavailable");
-      return support.submitReport(buildRequest());
+      return support.submitReport(buildRequest(null));
     },
     onSuccess: (result) => {
       Analytics.getInstance().track(
@@ -404,7 +441,7 @@ export function ReportIssueDialog(
     mutationKey: runnerMutationKeys.supportSaveDiagnosticBundle(),
     mutationFn: async () => {
       if (support === null) throw new Error("Support bridge unavailable");
-      return support.saveDiagnosticBundle(buildRequest());
+      return support.saveDiagnosticBundle(buildRequest(null));
     },
     onSuccess: () => {
       toast.success("Diagnostic bundle saved", {
@@ -418,7 +455,6 @@ export function ReportIssueDialog(
   });
 
   const {
-    deliveryResult,
     effectiveDeliveryResult,
     showsHonestBanner,
     gateSatisfied,
@@ -454,7 +490,8 @@ export function ReportIssueDialog(
     mutationKey: runnerMutationKeys.supportBuildPublicDraft(),
     mutationFn: async (): Promise<DesktopSupportBuildPublicDraftResult> => {
       if (support === null) throw new Error("Support bridge unavailable");
-      return support.buildPublicDraft(buildRequest());
+      // Initial preview fetch: no override yet, title is derived normally.
+      return support.buildPublicDraft(buildRequest(null));
     },
     onSuccess: (draft) => {
       setPreviewDraft(draft);
@@ -475,8 +512,17 @@ export function ReportIssueDialog(
   const openPublicDraftMutation = useMutation({
     mutationKey: runnerMutationKeys.supportPublicDraftOpen(),
     mutationFn: async (): Promise<void> => {
+      if (support === null) throw new Error("Support bridge unavailable");
       if (previewDraft === null) throw new Error("No draft to open");
-      const url = buildGitHubIssueUrl({ ...previewDraft, title: previewTitle });
+      // Re-invokes the builder with the user's as-typed preview-title edit
+      // as the override: `issue-reporter.ts` is assembly-only and must never
+      // see raw text, so the edited title is re-scrubbed and re-fit through
+      // the same budget pipeline as a derived title before it can reach the
+      // URL - never the raw `previewTitle` state swapped in directly.
+      const finalDraft = await support.buildPublicDraft(
+        buildRequest(previewTitle),
+      );
+      const url = buildGitHubIssueUrl(finalDraft);
       // Track the attempt whether the OS handoff succeeds or not - the
       // analytics event is about the user asking to open, not about the
       // browser actually launching. Re-throw after tracking so onError keeps
@@ -611,9 +657,7 @@ export function ReportIssueDialog(
             tabIndex={-1}
             className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {submitMutation.isError
-              ? "Failed to submit report. Please try again."
-              : deliveryOutcomeMessage(deliveryResult)}
+            {deliveryOutcomeMessage(effectiveDeliveryResult)}
           </div>
         ) : null}
 
@@ -625,6 +669,7 @@ export function ReportIssueDialog(
             isSaveBundlePending={saveDiagnosticBundleMutation.isPending}
             isBuildingDraft={buildDraftMutation.isPending}
             isOpeningPublicDraft={openPublicDraftMutation.isPending}
+            isIngesting={attachments.isIngesting}
             canSubmit={reportId !== null}
             onCancel={() => handleOpenChange(false)}
             onDone={() => handleOpenChange(false)}
@@ -922,6 +967,13 @@ function ReportIssueDialogFooter(props: {
   readonly isSaveBundlePending: boolean;
   readonly isBuildingDraft: boolean;
   readonly isOpeningPublicDraft: boolean;
+  // Screenshot ingest (paste/drop/browse, ticket 08) runs async; `buildRequest`
+  // only ever snapshots already-committed images, so any capture-screen
+  // action that fires while a paste is still being read would silently ship
+  // without it. Gates Send/Try again/Report on GitHub instead/Save
+  // diagnostic bundle - not "confirmed"/"preview" screen actions, which have
+  // no attachment UI and can never race an in-flight ingest.
+  readonly isIngesting: boolean;
   readonly canSubmit: boolean;
   readonly onCancel: () => void;
   readonly onDone: () => void;
@@ -989,6 +1041,7 @@ function ReportIssueDialogFooter(props: {
         isSubmitPending={props.isSubmitPending}
         isSaveBundlePending={props.isSaveBundlePending}
         isBuildingDraft={props.isBuildingDraft}
+        isIngesting={props.isIngesting}
         canSubmit={props.canSubmit}
         onSubmit={props.onSubmit}
         onOpenGithubFallback={props.onOpenGithubFallback}
@@ -1349,8 +1402,12 @@ function AttachmentSection({
         {canAddMore
           ? `Paste or drop screenshots (up to ${MAX_REPORT_IMAGES}, kept private)`
           : `${MAX_REPORT_IMAGES} screenshots attached`}
-        {isIngesting ? "..." : null}
       </div>
+      {isIngesting ? (
+        <p className="text-ui-xs text-muted-foreground">
+          Adding image... Send is disabled until it finishes.
+        </p>
+      ) : null}
       {rejection !== null ? (
         <p className="text-ui-xs text-destructive">{rejection.message}</p>
       ) : null}
@@ -1429,8 +1486,14 @@ function ConsentPanel(props: {
   readonly onToggleDiagnostics: (checked: boolean) => void;
   readonly onToggleAllowContact: (checked: boolean) => void;
 }): ReactNode {
+  // Honest per build: the no-DSN bundle never includes screenshots (a
+  // deliberate ticket 08 choice - see `saveDiagnosticBundle`'s own doc
+  // comment) and log tails only when their toggle is on below, so the
+  // summary must say exactly that rather than implying screenshots are
+  // "in the GitHub draft" (the public draft never carries images either -
+  // only a private-report reference, and only when one exists).
   const summary = props.deliveryUnavailable
-    ? "Included in your diagnostic bundle and GitHub draft"
+    ? "Included in your diagnostic bundle: your words, type/frequency, and any log tails still toggled on below. Screenshots stay on this device - attach them manually if you post a GitHub issue."
     : "Sent privately to the Traycer team: adds your words, screenshots and logs to the crash data we already receive.";
 
   if (!props.expanded) {
@@ -1714,6 +1777,7 @@ function ReportIssueFooterActions({
   isSubmitPending,
   isSaveBundlePending,
   isBuildingDraft,
+  isIngesting,
   canSubmit,
   onSubmit,
   onOpenGithubFallback,
@@ -1723,6 +1787,7 @@ function ReportIssueFooterActions({
   readonly isSubmitPending: boolean;
   readonly isSaveBundlePending: boolean;
   readonly isBuildingDraft: boolean;
+  readonly isIngesting: boolean;
   readonly canSubmit: boolean;
   readonly onSubmit: () => void;
   readonly onOpenGithubFallback: () => void;
@@ -1734,7 +1799,7 @@ function ReportIssueFooterActions({
         <Button
           variant="outline"
           onClick={onSaveDiagnosticBundle}
-          disabled={isSaveBundlePending}
+          disabled={isSaveBundlePending || isIngesting}
         >
           {isSaveBundlePending ? (
             <AgentSpinningDots
@@ -1745,7 +1810,10 @@ function ReportIssueFooterActions({
           ) : null}
           Save diagnostic bundle
         </Button>
-        <Button onClick={onOpenGithubFallback} disabled={isBuildingDraft}>
+        <Button
+          onClick={onOpenGithubFallback}
+          disabled={isBuildingDraft || isIngesting}
+        >
           {isBuildingDraft ? (
             <AgentSpinningDots
               className={undefined}
@@ -1764,7 +1832,7 @@ function ReportIssueFooterActions({
         <Button
           variant="outline"
           onClick={onOpenGithubFallback}
-          disabled={isBuildingDraft}
+          disabled={isBuildingDraft || isIngesting}
         >
           {isBuildingDraft ? (
             <AgentSpinningDots
@@ -1775,7 +1843,7 @@ function ReportIssueFooterActions({
           ) : null}
           Report on GitHub instead
         </Button>
-        <Button onClick={onSubmit} disabled={isSubmitPending}>
+        <Button onClick={onSubmit} disabled={isSubmitPending || isIngesting}>
           {isSubmitPending ? (
             <AgentSpinningDots
               className={undefined}
@@ -1789,7 +1857,10 @@ function ReportIssueFooterActions({
     );
   }
   return (
-    <Button onClick={onSubmit} disabled={isSubmitPending || !canSubmit}>
+    <Button
+      onClick={onSubmit}
+      disabled={isSubmitPending || !canSubmit || isIngesting}
+    >
       {isSubmitPending ? (
         <AgentSpinningDots
           className={undefined}

@@ -349,6 +349,15 @@ export interface SupportImageAttachmentInput {
   readonly bytes: ArrayBuffer;
 }
 
+// What (if anything) actually reached the private channel for this draft, as
+// known by the RENDERER at the moment it asks main to build a public draft -
+// main has no memory of a prior `submitReport` call, so this travels on the
+// wire each time. "none" covers both "never attempted" (no-DSN Case B) and a
+// definite `failed` result: neither left anything on the Sentry side to
+// reference, so both get the same honest "nothing to point at" treatment in
+// `buildPublicDraftFields`.
+export type SupportPrivateOutcome = "delivered" | "unconfirmed" | "none";
+
 export interface SupportSubmitReportRequest {
   // Keys the frozen evidence (both log tails + the report id minted at
   // report-open) that `submitReport` and every retry must reuse.
@@ -377,11 +386,32 @@ export interface SupportSubmitReportRequest {
   // exists to remove.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  // Consent panel's diagnostics toggle: gates layer-0, process metrics,
+  // version/platform/host tags+contexts, and provider info on BOTH the
+  // Sentry event and the diagnostic bundle's environment block - not just
+  // whether `privateDiagnostics` happens to be attached below (main computes
+  // layer0/processMetrics itself from its own snapshot, independent of what
+  // the renderer sends, so gating had to live on this side too). The report's
+  // own identity (reportId, fingerprint, correlationId) is never gated by
+  // this - it is not "diagnostics" in the privacy sense.
+  readonly includeDiagnostics: boolean;
   // Up to 3 screenshots (ticket 08 / T5), already gated by the renderer's
   // attach-time checks - always present (empty array when none attached),
   // matching `frequency`/`location`'s "always on the wire" contract so a
   // missing key is a parser violation, not an omitted optional.
   readonly images: readonly SupportImageAttachmentInput[];
+  // `buildPublicDraft`-only (ignored by `submitReport`/`saveDiagnosticBundle`,
+  // shared here per the one-contract rule). Null on the initial preview
+  // fetch (title is derived normally); the user's as-typed preview-title
+  // edit on every subsequent "Open GitHub draft" - main re-scrubs and
+  // re-fits it through the same budget pipeline as a derived title, since
+  // `issue-reporter.ts` is assembly-only and must never see raw user text.
+  readonly overrideTitle: string | null;
+  // `buildPublicDraft`-only (ignored by `submitReport`/`saveDiagnosticBundle`).
+  // Lets the builder phrase the report-ID reference and the repro/proposal
+  // placeholder honestly per route, and omit the screenshot-count line
+  // entirely when nothing was ever privately uploaded.
+  readonly privateOutcome: SupportPrivateOutcome;
   readonly privateDiagnostics?: SupportPrivateDiagnostics;
 }
 

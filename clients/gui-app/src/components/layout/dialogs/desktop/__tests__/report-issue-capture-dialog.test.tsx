@@ -81,7 +81,7 @@ function bugPublicDraft(
 ): DesktopSupportBuildPublicDraftResult {
   return {
     template: "bug_report.yml",
-    title: form.intent,
+    title: form.overrideTitle ?? form.intent,
     fields: {
       "what-happened": form.intent,
       version: "1.2.3",
@@ -99,7 +99,7 @@ function ideaPublicDraft(
 ): DesktopSupportBuildPublicDraftResult {
   return {
     template: "feature_request.yml",
-    title: form.intent,
+    title: form.overrideTitle ?? form.intent,
     fields: {
       problem: form.intent,
       proposal: "<!-- Describe the solution you'd like. -->",
@@ -115,7 +115,7 @@ function otherPublicDraft(
 ): DesktopSupportBuildPublicDraftResult {
   return {
     template: "general.yml",
-    title: form.intent,
+    title: form.overrideTitle ?? form.intent,
     fields: {
       details: form.intent,
     },
@@ -884,7 +884,9 @@ describe("Report issue capture dialog (deep interactions)", () => {
           name: /You may contact me at test@example.com/,
         }),
       );
-      // Diagnostics default on; toggle off so privateDiagnostics is omitted.
+      // Diagnostics default on; toggle off so includeDiagnostics is false.
+      // main is the sole authority on what that gates - the request still
+      // carries privateDiagnostics regardless of the toggle.
       fireEvent.click(
         screen.getByRole("switch", {
           name: "Diagnostics (crash context, versions, provider info)",
@@ -895,7 +897,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
       await screen.findByRole("heading", { name: "Report sent" });
       const form = lastSubmittedForm(harness);
       expect(form.allowContact).toBe(true);
-      expect(form.privateDiagnostics).toBeUndefined();
+      expect(form.includeDiagnostics).toBe(false);
+      expect(form.privateDiagnostics).toBeDefined();
     });
 
     it("hides the contact checkbox when the snapshot has no signed-in email (G1)", async () => {
@@ -1181,6 +1184,38 @@ describe("Report issue capture dialog (deep interactions)", () => {
         await screen.findByRole("heading", {
           name: "Preview the public issue",
         }),
+      ).not.toBeNull();
+      expect(harness.openedLinks).toEqual([]);
+    });
+
+    it("maps a rejected submitReport promise to the same failed retry/fallback shape", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () => Promise.reject(new Error("IPC bridge exploded")),
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Rejected promise should not be a dead end" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toBe(
+        "Your report could not be sent. Nothing was lost - it is still here.",
+      );
+      expect(
+        screen.getByRole("button", { name: "Report on GitHub instead" }),
+      ).not.toBeNull();
+      expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+      expect(
+        screen.getByDisplayValue("Rejected promise should not be a dead end"),
       ).not.toBeNull();
       expect(harness.openedLinks).toEqual([]);
     });
@@ -1740,6 +1775,50 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(form.images[0]?.mimeType).toBe("image/png");
       expect(form.images[0]?.bytes).toBeInstanceOf(ArrayBuffer);
       expect(form.images[0]?.bytes.byteLength).toBeGreaterThan(0);
+    });
+
+    it("disables Send while an image is mid-ingest so a just-pasted screenshot cannot be silently omitted", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Send must wait for the ingest to finish" },
+      });
+
+      const target = screen.getByRole("button", { name: "Attach screenshots" });
+      fireEvent.paste(target, {
+        clipboardData: makeFileTransfer([makePngFile("mid-flight.png")]),
+      });
+
+      // The file read is still in flight - Send must stay disabled and say why.
+      const sendButton = screen.getByRole("button", { name: "Send report" });
+      if (!(sendButton instanceof HTMLButtonElement)) {
+        throw new Error("Expected the Send report button.");
+      }
+      expect(sendButton.disabled).toBe(true);
+      expect(
+        screen.getByText("Adding image... Send is disabled until it finishes."),
+      ).not.toBeNull();
+      fireEvent.click(sendButton);
+      expect(harness.submittedForms).toEqual([]);
+
+      await screen.findByRole("img", { name: "mid-flight.png" });
+      await waitFor(() => {
+        expect(sendButton.disabled).toBe(false);
+      });
+
+      fireEvent.click(sendButton);
+      await screen.findByRole("heading", { name: "Report sent" });
+      expect(lastSubmittedForm(harness).images).toHaveLength(1);
     });
   });
 });

@@ -72,7 +72,13 @@ const FORM: SupportSubmitReportRequest = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeDiagnostics: true,
   images: [],
+  overrideTitle: null,
+  // Most tests below exercise a confirmed-delivery buildPublicDraft call;
+  // the handful exercising unavailable/failed routes override this to
+  // "none" explicitly (see the "buildPublicDraft outcome honesty" describe).
+  privateOutcome: "delivered",
 };
 
 const LOG_ATTACHMENT_MAX_BYTES = 512_000;
@@ -305,6 +311,79 @@ describe("DesktopSupportService.submitReport - identity gating (G1)", () => {
     expect(
       (feedback as { name?: string; email?: string } | undefined)?.email,
     ).toBeUndefined();
+  });
+});
+
+describe("DesktopSupportService.submitReport - includeDiagnostics gate", () => {
+  const diagnosticsForm: SupportSubmitReportRequest = {
+    ...FORM,
+    privateDiagnostics: {
+      cause: null,
+      registry: {
+        routeTemplate: { status: "unavailable" },
+        hostId: { status: "unavailable" },
+        epicId: { status: "unavailable" },
+        tabId: { status: "unavailable" },
+        artifactId: { status: "unavailable" },
+        chatId: { status: "unavailable" },
+        agentId: { status: "unavailable" },
+        harnessId: { status: "unavailable" },
+        model: { status: "unavailable" },
+        profileId: { status: "unavailable" },
+        providerSelectionClass: { status: "unavailable" },
+        providerVersion: { status: "unavailable" },
+      },
+      fingerprint: "fp:v1:gate",
+      stackFamily: "family-a",
+      correlationId: "corr-gate",
+    },
+  };
+
+  it("omits layer-0/process-metrics/version-platform-host tags and every context when off", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...diagnosticsForm, includeDiagnostics: false },
+      KEY,
+    );
+    const { tags, contexts } = lastHint().captureContext;
+    expect(tags.appVersion).toBeUndefined();
+    expect(tags.platform).toBeUndefined();
+    expect(tags.localHostVersion).toBeUndefined();
+    expect(tags.electronVersion).toBeUndefined();
+    expect(tags.layer0Status).toBeUndefined();
+    expect(tags.stackFamily).toBeUndefined();
+    expect(contexts).toBeUndefined();
+  });
+
+  it("still tags the report's own identity - reportId, fingerprint, correlationId - when off", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...diagnosticsForm, includeDiagnostics: false },
+      KEY,
+    );
+    const { tags } = lastHint().captureContext;
+    expect(tags.reportId).toMatch(/^rpt_[0-9a-f]{32}$/);
+    expect(tags.fingerprint).toBe("fp:v1:gate");
+    expect(tags.correlationId).toBe("corr-gate");
+  });
+
+  it("includes the gated tags and a registry context when on", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...diagnosticsForm, includeDiagnostics: true },
+      KEY,
+    );
+    const { tags, contexts } = lastHint().captureContext;
+    expect(tags.appVersion).toBeDefined();
+    expect(tags.platform).toBeDefined();
+    expect(tags.localHostVersion).toBeDefined();
+    expect(tags.electronVersion).toBeDefined();
+    expect(tags.layer0Status).toBe("absent");
+    expect(tags.stackFamily).toBe("family-a");
+    expect(contexts?.registry).toBeDefined();
   });
 });
 
@@ -639,23 +718,29 @@ describe("DesktopSupportService.buildPublicDraft", () => {
     expect(draft.fields.repro).toBe("Filed from the in-app reporter.");
   });
 
-  it("is callable and correct when Sentry has no DSN", async () => {
+  it("is callable and correct when Sentry has no DSN - honestly points at no report", async () => {
     sentryMock.isInitialized.mockReturnValue(false);
     const service = buildService(null);
-    const { reportId } = await service.freezeEvidence(KEY, null);
+    await service.freezeEvidence(KEY, null);
 
-    const draft = await service.buildPublicDraft(FORM, KEY);
+    // No-DSN builds never upload anything - the dialog sends "none" here,
+    // matching the real route (Flow 4 Case B). A `reportId` being resolvable
+    // from frozen evidence must not, on its own, make the draft claim a
+    // private report exists to see.
+    const draft = await service.buildPublicDraft(
+      { ...FORM, privateOutcome: "none" },
+      KEY,
+    );
 
     expect(draft.title).toBe(FORM.intent);
     if (draft.template !== "bug_report.yml") return;
-    expect(draft.fields.repro).toBe(
-      `Not captured step-by-step - see the private support report ${reportId}.`,
-    );
+    expect(draft.fields.repro).toBe("Filed from the in-app reporter.");
+    expect(draft.fields["what-happened"]).not.toContain("Support report:");
     // buildPublicDraft must not consult Sentry at all (unlike submitReport).
     expect(sentryMock.captureFeedback).not.toHaveBeenCalled();
   });
 
-  it("is callable and correct after a submitReport that returned failed", async () => {
+  it("is callable and correct after a submitReport that returned failed - honestly points at no report", async () => {
     sentryMock.captureFeedback.mockImplementation(() => {
       throw new Error("DSN rejected");
     });
@@ -665,13 +750,17 @@ describe("DesktopSupportService.buildPublicDraft", () => {
     const submitResult = await service.submitReport(FORM, KEY);
     expect(submitResult).toEqual({ status: "failed", reason: "error" });
 
-    const draft = await service.buildPublicDraft(FORM, KEY);
+    // A definite `failed` submit leaves nothing on the Sentry side either -
+    // the dialog sends "none" for this route too.
+    const draft = await service.buildPublicDraft(
+      { ...FORM, privateOutcome: "none" },
+      KEY,
+    );
 
     expect(draft.title).toBe(FORM.intent);
     if (draft.template !== "bug_report.yml") return;
-    expect(draft.fields.repro).toMatch(
-      /^Not captured step-by-step - see the private support report rpt_[0-9a-f]{32}\.$/,
-    );
+    expect(draft.fields.repro).toBe("Filed from the in-app reporter.");
+    expect(draft.fields["what-happened"]).not.toContain("Support report:");
     expect(draft.fields.component).toBe("Desktop app");
   });
 
@@ -847,6 +936,46 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     };
     expect(bundle.logs.desktop).toBe("");
     expect(bundle.logs.host).not.toBe("");
+  });
+
+  it("omits appVersion/platform/arch/versions/host from the bundle when includeDiagnostics is off", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const { path } = await service.saveDiagnosticBundle(
+      { ...FORM, includeDiagnostics: false },
+      KEY,
+    );
+    const bundle = JSON.parse(await readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(bundle).not.toHaveProperty("appVersion");
+    expect(bundle).not.toHaveProperty("platform");
+    expect(bundle).not.toHaveProperty("arch");
+    expect(bundle).not.toHaveProperty("versions");
+    expect(bundle).not.toHaveProperty("host");
+    // The report's own identity is not "diagnostics" - it still writes.
+    expect(bundle.reportId).toMatch(/^rpt_[0-9a-f]{32}$/);
+    expect(bundle.type).toBe(FORM.type);
+    expect(bundle.intent).toBe(FORM.intent);
+  });
+
+  it("includes appVersion/platform/arch/versions/host in the bundle when includeDiagnostics is on", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const { path } = await service.saveDiagnosticBundle(
+      { ...FORM, includeDiagnostics: true },
+      KEY,
+    );
+    const bundle = JSON.parse(await readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(bundle.appVersion).toBeDefined();
+    expect(bundle.platform).toBeDefined();
+    expect(bundle.arch).toBeDefined();
+    expect(bundle.versions).toBeDefined();
+    expect(bundle.host).toBeDefined();
   });
 
   it("deliberately omits form.images from the diagnostic bundle JSON", async () => {

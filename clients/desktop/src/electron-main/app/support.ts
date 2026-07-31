@@ -323,10 +323,19 @@ export class DesktopSupportService {
     }
 
     const snapshot = await this.getSnapshot();
-    const processMetrics = await handleGetMetrics().catch((err: unknown) => {
-      log.error("[support] failed to collect process metrics", { err });
-      return null;
-    });
+    // Diagnostics toggle gates layer-0/process-metrics/version-platform-host
+    // tags+contexts - main computes these itself from its own snapshot, so
+    // the renderer omitting `privateDiagnostics` alone can never withhold
+    // them; this is the actual gate. `fingerprint`/`correlationId` are never
+    // gated by it - they are the report's own identity, not "diagnostics" in
+    // the privacy sense, and travel below independent of this flag.
+    const includeDiagnostics = form.includeDiagnostics;
+    const processMetrics = includeDiagnostics
+      ? await handleGetMetrics().catch((err: unknown) => {
+          log.error("[support] failed to collect process metrics", { err });
+          return null;
+        })
+      : null;
 
     // Scrubbed as one composed string, not field-by-field: every piece
     // (intent, location) is user- or error-derived free text, and
@@ -335,7 +344,7 @@ export class DesktopSupportService {
     const message = scrubSupportText(
       [
         `Type: ${form.type}`,
-        layer0MessageLine(snapshot.host.layer0),
+        includeDiagnostics ? layer0MessageLine(snapshot.host.layer0) : false,
         form.intent && `What they were trying to do:\n${form.intent}`,
         form.location && `Where: ${form.location}`,
         form.frequency && `Frequency: ${form.frequency}`,
@@ -365,27 +374,29 @@ export class DesktopSupportService {
     // carry absolute paths (host.log is unredacted at source), and
     // `errorCause.stack`/`.message` are exactly the private strings this
     // scrubber exists for. `registry` and `processMetrics` are opaque
-    // ids/numbers by contract - scrubbing them is a no-op, not a risk.
-    const contexts: Record<
-      string,
-      Record<string, unknown>
-    > = deepScrubSupportValue({
-      ...(snapshot.host.layer0 === null
-        ? {}
-        : { layer0: { ...snapshot.host.layer0 } }),
-      ...(processMetrics === null
-        ? {}
-        : { processMetrics: { ...processMetrics } }),
-      ...(privateDiagnostics?.cause == null
-        ? {}
-        : { errorCause: { ...privateDiagnostics.cause } }),
-      // D10: the registry's `hostId` is the tab-bound host, which can differ
-      // from the "local host" this file attaches logs and version from below -
-      // named `registry`, never `host`, so the two can't be read as one.
-      ...(privateDiagnostics === undefined
-        ? {}
-        : { registry: { ...privateDiagnostics.registry } }),
-    });
+    // ids/numbers by contract - scrubbing them is a no-op, not a risk. All of
+    // it is diagnostics content, so the whole block is skipped when the
+    // consent toggle is off, not just individually omitted per-key.
+    const contexts: Record<string, Record<string, unknown>> = includeDiagnostics
+      ? deepScrubSupportValue({
+          ...(snapshot.host.layer0 === null
+            ? {}
+            : { layer0: { ...snapshot.host.layer0 } }),
+          ...(processMetrics === null
+            ? {}
+            : { processMetrics: { ...processMetrics } }),
+          ...(privateDiagnostics?.cause == null
+            ? {}
+            : { errorCause: { ...privateDiagnostics.cause } }),
+          // D10: the registry's `hostId` is the tab-bound host, which can
+          // differ from the "local host" this file attaches logs and
+          // version from below - named `registry`, never `host`, so the
+          // two can't be read as one.
+          ...(privateDiagnostics === undefined
+            ? {}
+            : { registry: { ...privateDiagnostics.registry } }),
+        })
+      : {};
     try {
       Sentry.captureFeedback(
         {
@@ -401,24 +412,34 @@ export class DesktopSupportService {
           event_id: sentryEventIdFromReportId(frozen.reportId),
           captureContext: {
             tags: {
+              // The report's own identity - always attached regardless of
+              // the diagnostics toggle (not "diagnostics" in the privacy
+              // sense; without it a retry or a support conversation has
+              // nothing to key off).
               reportId: frozen.reportId,
-              appVersion: snapshot.appVersion,
-              platform: `${snapshot.platform}/${snapshot.arch}`,
-              // "local" because it names the traycer-host this Electron
-              // process supervises, not necessarily the (possibly remote)
-              // host a failing tab is bound to - see the `registry` context.
-              localHostVersion: snapshot.host.version ?? "unknown",
-              electronVersion: snapshot.versions.electron ?? "unknown",
-              layer0Status: layer0StatusTag(snapshot.host.layer0),
+              ...(includeDiagnostics
+                ? {
+                    appVersion: snapshot.appVersion,
+                    platform: `${snapshot.platform}/${snapshot.arch}`,
+                    // "local" because it names the traycer-host this
+                    // Electron process supervises, not necessarily the
+                    // (possibly remote) host a failing tab is bound to - see
+                    // the `registry` context.
+                    localHostVersion: snapshot.host.version ?? "unknown",
+                    electronVersion: snapshot.versions.electron ?? "unknown",
+                    layer0Status: layer0StatusTag(snapshot.host.layer0),
+                  }
+                : {}),
               ...(privateDiagnostics?.fingerprint == null
                 ? {}
                 : { fingerprint: privateDiagnostics.fingerprint }),
               // Sub-clustering only - deliberately not part of `fingerprint`
-              // (a one-frame refactor must not re-identify a defect), but
-              // still a bounded, filterable tag like fingerprint itself.
-              ...(privateDiagnostics?.stackFamily == null
-                ? {}
-                : { stackFamily: privateDiagnostics.stackFamily }),
+              // (a one-frame refactor must not re-identify a defect), and
+              // unlike fingerprint/correlationId this IS diagnostics content
+              // (stack shape), so it is gated with the rest.
+              ...(includeDiagnostics && privateDiagnostics?.stackFamily != null
+                ? { stackFamily: privateDiagnostics.stackFamily }
+                : {}),
               ...(privateDiagnostics === undefined
                 ? {}
                 : { correlationId: privateDiagnostics.correlationId }),
@@ -513,11 +534,21 @@ export class DesktopSupportService {
       intent: scrubSupportText(form.intent),
       frequency: form.frequency,
       location: form.location === null ? null : scrubSupportText(form.location),
-      appVersion: snapshot.appVersion,
-      platform: snapshot.platform,
-      arch: snapshot.arch,
-      versions: snapshot.versions,
-      host: { status: snapshot.host.status, version: snapshot.host.version },
+      // Same diagnostics toggle `submitReport` honors: version/platform/host
+      // is environment diagnostics, not the report's own identity, so an
+      // "off" toggle withholds it from the bundle too, not just the upload.
+      ...(form.includeDiagnostics
+        ? {
+            appVersion: snapshot.appVersion,
+            platform: snapshot.platform,
+            arch: snapshot.arch,
+            versions: snapshot.versions,
+            host: {
+              status: snapshot.host.status,
+              version: snapshot.host.version,
+            },
+          }
+        : {}),
       // Same consent-panel toggles submitReport honors - an "off" log toggle
       // must withhold the tail from the bundle too, not just the upload.
       logs: {
@@ -560,6 +591,8 @@ export class DesktopSupportService {
       reportId: frozen?.reportId ?? null,
       privateDiagnostics: form.privateDiagnostics,
       imageCount: form.images.length,
+      overrideTitle: form.overrideTitle,
+      privateOutcome: form.privateOutcome,
     });
   }
 

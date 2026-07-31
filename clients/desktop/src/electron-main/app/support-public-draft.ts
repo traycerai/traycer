@@ -7,6 +7,7 @@ import type {
   SupportGeneralDraftFields,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
+  SupportPrivateOutcome,
   SupportReportFrequency,
   SupportReportType,
 } from "../../ipc-contracts/window-types";
@@ -72,13 +73,24 @@ export interface BuildPublicDraftInput {
   // public draft; this just drives the "N screenshot(s) attached to the
   // private report" line below.
   readonly imageCount: number;
+  // What (if anything) the private channel actually did with this draft -
+  // controls whether the report-ID reference, the repro/proposal
+  // placeholder, and the screenshot-count line may honestly point at a
+  // private report at all. See `SupportPrivateOutcome`.
+  readonly privateOutcome: SupportPrivateOutcome;
+  // The user's as-typed preview-title edit, when re-invoking the builder to
+  // open the GitHub draft (not the initial preview fetch, where this is
+  // null and the title is derived normally). Always re-scrubbed and re-fit
+  // through the same budget pipeline as a derived title - `issue-reporter.ts`
+  // is assembly-only and must never see raw, unbounded user text.
+  readonly overrideTitle: string | null;
 }
 
 export function buildPublicDraftFields(
   input: BuildPublicDraftInput,
 ): SupportBuildPublicDraftResult {
   const cause = input.privateDiagnostics?.cause;
-  const title = deriveTitle(input.intent, cause);
+  const title = resolveTitle(input.overrideTitle, input.intent, cause);
   const body = composeReportBody({
     narrative: scrubSupportText(input.intent),
     environmentSummary: composeEnvironmentSummary({
@@ -91,6 +103,7 @@ export function buildPublicDraftFields(
     frequency: input.frequency,
     reportId: input.reportId,
     imageCount: input.imageCount,
+    privateOutcome: input.privateOutcome,
   });
 
   switch (input.type) {
@@ -105,6 +118,7 @@ export function buildPublicDraftFields(
           repro: composePlaceholderField(
             "Not captured step-by-step",
             input.reportId,
+            input.privateOutcome,
           ),
         },
         ["what-happened", "repro", "title"],
@@ -131,6 +145,7 @@ export function buildPublicDraftFields(
           proposal: composePlaceholderField(
             "Not captured separately",
             input.reportId,
+            input.privateOutcome,
           ),
           alternatives: "",
           component: COMPONENT_DESKTOP_APP,
@@ -206,26 +221,39 @@ function composeEnvironmentSummary(input: {
 // template field carries the narrative (what-happened for bug, problem for
 // idea, details for other), since GitHub issue forms take one text box per
 // field, not a separate box per line here.
+//
+// Every reference to the report id or an attachment is honest about
+// `privateOutcome`: "none" means nothing was ever uploaded (no-DSN, or a
+// definite `failed` submit) - there is no private report to point readers
+// at, so the report-ID line and the screenshot-count line are both omitted
+// entirely rather than pointing at an id nothing was ever filed under.
 function composeReportBody(input: {
   readonly narrative: string;
   readonly environmentSummary: string;
   readonly frequency: SupportReportFrequency | null;
   readonly reportId: string | null;
   readonly imageCount: number;
+  readonly privateOutcome: SupportPrivateOutcome;
 }): string {
   const frequencyLine =
     input.frequency !== null
       ? `Frequency: ${FREQUENCY_LABELS[input.frequency]}`
       : null;
   const reportLine =
-    input.reportId !== null ? `Support report: ${input.reportId}` : null;
+    input.privateOutcome !== "none" && input.reportId !== null
+      ? `Support report: ${reportReferenceText(input.reportId, input.privateOutcome)}`
+      : null;
   const metaLine = [frequencyLine, reportLine]
     .filter((line): line is string => line !== null)
     .join(" · ");
   // Never "N screenshots attached" bare - a public reader must not learn
   // image content exists without also learning where it actually lives
-  // (never here, never the GitHub URL - only the private report).
-  const attachmentLine = attachmentLineFor(input.imageCount);
+  // (never here, never the GitHub URL - only the private report, and only
+  // when a private report actually exists to hold them).
+  const attachmentLine =
+    input.privateOutcome === "none"
+      ? null
+      : attachmentLineFor(input.imageCount);
   return [
     input.narrative.trim(),
     `Environment: ${input.environmentSummary}`,
@@ -237,6 +265,19 @@ function composeReportBody(input: {
     .join("\n\n");
 }
 
+// "rpt_x" when delivered, "rpt_x (upload unconfirmed)" when the transport
+// never confirmed - honest about what state the reader would actually find
+// if they went looking, never a bare id that implies certainty this module
+// does not have.
+function reportReferenceText(
+  reportId: string,
+  privateOutcome: "delivered" | "unconfirmed",
+): string {
+  return privateOutcome === "delivered"
+    ? reportId
+    : `${reportId} (upload unconfirmed)`;
+}
+
 function attachmentLineFor(imageCount: number): string | null {
   if (imageCount <= 0) return null;
   const noun = imageCount === 1 ? "screenshot" : "screenshots";
@@ -246,15 +287,40 @@ function attachmentLineFor(imageCount: number): string | null {
 // Shared shape for a required template field this ticket has no direct UI
 // capture for (bug's `repro`, idea's `proposal`): points at the private
 // report rather than silently leaving the field's own required validation to
-// block the organic-filer flow it also serves.
+// block the organic-filer flow it also serves - but only when a private
+// report actually exists to point at (`privateOutcome !== "none"`); the
+// no-DSN and definite-failure routes fall back to the generic placeholder
+// even when a `reportId` happens to be known (frozen evidence resolved but
+// nothing was ever uploaded under it).
 function composePlaceholderField(
   whatWasNotCaptured: string,
   reportId: string | null,
+  privateOutcome: SupportPrivateOutcome,
 ): string {
-  if (reportId !== null) {
-    return `${whatWasNotCaptured} - see the private support report ${reportId}.`;
+  if (reportId !== null && privateOutcome !== "none") {
+    return `${whatWasNotCaptured} - see the private support report ${reportReferenceText(reportId, privateOutcome)}.`;
   }
   return PLACEHOLDER_NO_REPORT;
+}
+
+/**
+ * `overrideTitle` is the user's as-typed preview-title edit, re-submitted
+ * when they click "Open GitHub draft" - it must go through the exact same
+ * scrub-and-cap treatment as a derived title (`truncatedTitleText`) rather
+ * than riding into `fitFieldsToUrlBudget` raw, or a path/token typed into the
+ * preview would reach the URL verbatim and unbounded (`issue-reporter.ts` is
+ * assembly-only by design and does no scrubbing of its own). An override that
+ * scrubs down to nothing (the user cleared the field) falls back to the
+ * generic title rather than shipping an empty one.
+ */
+function resolveTitle(
+  overrideTitle: string | null,
+  intent: string,
+  cause: SupportPrivateDiagnosticsCause | null | undefined,
+): string {
+  if (overrideTitle === null) return deriveTitle(intent, cause);
+  const scrubbed = truncatedTitleText(overrideTitle);
+  return scrubbed !== "" ? scrubbed : GENERIC_FALLBACK_TITLE;
 }
 
 /**

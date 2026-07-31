@@ -20,7 +20,10 @@ const VALID_FORM = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeDiagnostics: true,
   images: [],
+  overrideTitle: null,
+  privateOutcome: "delivered",
 };
 
 /** Small valid PNG magic + padding. */
@@ -255,6 +258,81 @@ describe("parseSupportSubmitReportRequest", () => {
     });
     expect(result.includeDesktopLog).toBe(false);
     expect(result.includeHostLog).toBe(true);
+  });
+
+  it("rejects a missing includeDiagnostics key", () => {
+    const { includeDiagnostics: _includeDiagnostics, ...withoutKey } =
+      VALID_FORM;
+    expect(() => parseSupportSubmitReportRequest(withoutKey)).toThrow();
+  });
+
+  it("rejects a non-boolean includeDiagnostics", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        includeDiagnostics: "yes",
+      }),
+    ).toThrow();
+  });
+
+  it.each([true, false])("accepts includeDiagnostics %s", (value) => {
+    const result = parseSupportSubmitReportRequest({
+      ...VALID_FORM,
+      includeDiagnostics: value,
+    });
+    expect(result.includeDiagnostics).toBe(value);
+  });
+
+  it("rejects a missing overrideTitle key - the wire always carries it", () => {
+    const { overrideTitle: _overrideTitle, ...withoutKey } = VALID_FORM;
+    expect(() => parseSupportSubmitReportRequest(withoutKey)).toThrow();
+  });
+
+  it("accepts a null overrideTitle - the initial preview fetch", () => {
+    const result = parseSupportSubmitReportRequest({
+      ...VALID_FORM,
+      overrideTitle: null,
+    });
+    expect(result.overrideTitle).toBeNull();
+  });
+
+  it("accepts a non-null overrideTitle - the user's as-typed preview edit", () => {
+    const result = parseSupportSubmitReportRequest({
+      ...VALID_FORM,
+      overrideTitle: "Edited title",
+    });
+    expect(result.overrideTitle).toBe("Edited title");
+  });
+
+  it("rejects a non-string non-null overrideTitle", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({ ...VALID_FORM, overrideTitle: 42 }),
+    ).toThrow();
+  });
+
+  it("rejects a missing privateOutcome key", () => {
+    const { privateOutcome: _privateOutcome, ...withoutKey } = VALID_FORM;
+    expect(() => parseSupportSubmitReportRequest(withoutKey)).toThrow();
+  });
+
+  it.each(["delivered", "unconfirmed", "none"])(
+    "accepts privateOutcome %s",
+    (privateOutcome) => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateOutcome,
+      });
+      expect(result.privateOutcome).toBe(privateOutcome);
+    },
+  );
+
+  it("rejects a privateOutcome outside delivered/unconfirmed/none", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateOutcome: "failed",
+      }),
+    ).toThrow();
   });
 
   it("rejects an unlisted top-level field - the allowlist is not caller-discipline", () => {

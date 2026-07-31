@@ -816,7 +816,7 @@ describe("<DesktopDialogHost />", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "Failed to submit report. Please try again.",
+      "Your report could not be sent. Nothing was lost - it is still here.",
     );
     await waitFor(() => {
       expect(document.activeElement).toBe(alert);
@@ -825,6 +825,10 @@ describe("<DesktopDialogHost />", () => {
       screen.getByDisplayValue("Edited private-safe details"),
     ).not.toBeNull();
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
+    expect(
+      screen.getByRole("button", { name: "Report on GitHub instead" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
   });
 
   it("states the no-private-channel case up front, with no Send round-trip, when privateDeliveryAvailable is false", async () => {

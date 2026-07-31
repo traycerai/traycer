@@ -20,6 +20,7 @@ import type {
   SupportLogTarget,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
+  SupportPrivateOutcome,
   SupportReadFrozenLogTailInput,
   SupportReportFrequency,
   SupportReportType,
@@ -269,7 +270,10 @@ const SUPPORT_SUBMIT_REPORT_KEYS = new Set([
   "allowContact",
   "includeDesktopLog",
   "includeHostLog",
+  "includeDiagnostics",
   "images",
+  "overrideTitle",
+  "privateOutcome",
   "privateDiagnostics",
 ]);
 
@@ -312,6 +316,16 @@ function assertBoolean(
   if (typeof value !== "boolean") {
     throw new Error(`${context} must be a boolean`);
   }
+}
+
+function parseSupportPrivateOutcome(
+  value: unknown,
+  context: string,
+): SupportPrivateOutcome {
+  if (value === "delivered" || value === "unconfirmed" || value === "none") {
+    return value;
+  }
+  throw new Error(`${context} must be "delivered", "unconfirmed", or "none"`);
 }
 
 // Exactly ticket 05's five `SerializedReportIssuePrivateDiagnostics` keys,
@@ -669,12 +683,25 @@ export function parseSupportSubmitReportRequest(
     "supportSubmitReport.includeDesktopLog",
   );
   assertBoolean(form.includeHostLog, "supportSubmitReport.includeHostLog");
+  assertBoolean(
+    form.includeDiagnostics,
+    "supportSubmitReport.includeDiagnostics",
+  );
   // Always present on the wire (empty array when nothing attached), matching
   // frequency/location's "no missing key" contract.
   assertHasKey(form, "images", "supportSubmitReport");
   const images = parseSupportImageAttachments(
     form.images,
     "supportSubmitReport.images",
+  );
+  assertHasKey(form, "overrideTitle", "supportSubmitReport");
+  const overrideTitle = parseNullableString(
+    form.overrideTitle,
+    "supportSubmitReport.overrideTitle",
+  );
+  const privateOutcome = parseSupportPrivateOutcome(
+    form.privateOutcome,
+    "supportSubmitReport.privateOutcome",
   );
   const privateDiagnostics = parsePrivateDiagnostics(form.privateDiagnostics);
   return {
@@ -686,7 +713,10 @@ export function parseSupportSubmitReportRequest(
     allowContact: form.allowContact,
     includeDesktopLog: form.includeDesktopLog,
     includeHostLog: form.includeHostLog,
+    includeDiagnostics: form.includeDiagnostics,
     images,
+    overrideTitle,
+    privateOutcome,
     ...(privateDiagnostics === undefined ? {} : { privateDiagnostics }),
   };
 }

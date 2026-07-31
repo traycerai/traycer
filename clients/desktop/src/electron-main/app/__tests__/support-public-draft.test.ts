@@ -65,6 +65,8 @@ const baseInput: BuildPublicDraftInput = {
   reportId: "rpt_abc123",
   privateDiagnostics: undefined,
   imageCount: 0,
+  overrideTitle: null,
+  privateOutcome: "delivered",
 };
 
 const BASE_ENVIRONMENT_LINE = "Environment: Traycer 1.2.3 · darwin arm64";
@@ -230,6 +232,146 @@ describe("buildPublicDraftFields", () => {
       expect(result.title).toContain("<path-");
       expect(result.fields["what-happened"]).not.toContain("/Users/anurag");
       expect(result.fields["what-happened"]).toContain("Bearer <redacted>");
+    });
+
+    it("uses the derived title when overrideTitle is null", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        overrideTitle: null,
+      });
+      expect(result.title).toBe("The app crashed");
+    });
+
+    it("scrubs paths/tokens out of an edited overrideTitle before it reaches the draft", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        overrideTitle:
+          "See /Users/anurag/project/log.txt for the Bearer abc123 token",
+      });
+      expect(result.title).not.toContain("/Users/anurag");
+      expect(result.title).toContain("<path-");
+      expect(result.title).toContain("Bearer <redacted>");
+    });
+
+    it("caps an oversized overrideTitle independently of the URL budget, same as a derived title", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        overrideTitle: "y".repeat(20_000),
+      });
+      expect(result.title.endsWith("…")).toBe(true);
+      expect(result.title.length).toBeLessThan(100);
+    });
+
+    it("falls back to the generic title when overrideTitle scrubs down to nothing", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        overrideTitle: "   ",
+      });
+      expect(result.title).toBe("Traycer desktop issue");
+    });
+
+    it("re-fits the whole draft to the URL budget using the override title, not the derived one", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        intent: "x".repeat(20_000),
+        overrideTitle: "A short edited title",
+      });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.title).toBe("A short edited title");
+      expect(result.truncated).toBe(true);
+      expect(result.fields["what-happened"].endsWith(TRUNCATION_MARKER)).toBe(
+        true,
+      );
+    });
+  });
+
+  describe("privateOutcome (edited-title round-trip / honest fallback drafts)", () => {
+    it("delivered: reports the reportId as-is and the see-private-report repro sentence", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        privateOutcome: "delivered",
+      });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).toContain(BASE_REPORT_LINE);
+      expect(result.fields.repro).toBe(
+        "Not captured step-by-step - see the private support report rpt_abc123.",
+      );
+    });
+
+    it("unconfirmed: phrases the reportId reference as upload-unconfirmed", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        privateOutcome: "unconfirmed",
+      });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).toContain(
+        "Support report: rpt_abc123 (upload unconfirmed)",
+      );
+      expect(result.fields.repro).toBe(
+        "Not captured step-by-step - see the private support report rpt_abc123 (upload unconfirmed).",
+      );
+    });
+
+    it("none: omits the report-ID line entirely and uses the honest no-report repro/proposal/details sentence", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        privateOutcome: "none",
+      });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).not.toContain("Support report:");
+      expect(result.fields["what-happened"]).not.toContain("rpt_abc123");
+      expect(result.fields.repro).toBe("Filed from the in-app reporter.");
+    });
+
+    it("none: omits the screenshots line even when imageCount > 0 - none were ever uploaded", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        privateOutcome: "none",
+        imageCount: 2,
+      });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).not.toContain("screenshot");
+      expect(result.fields["what-happened"]).not.toContain(
+        "attached to the private report",
+      );
+    });
+
+    it("unconfirmed: still shows the screenshots line - the images did ride the same (unconfirmed) upload attempt", () => {
+      const result = buildPublicDraftFields({
+        ...baseInput,
+        privateOutcome: "unconfirmed",
+        imageCount: 1,
+      });
+      expect(result.template).toBe("bug_report.yml");
+      if (result.template !== "bug_report.yml") return;
+      expect(result.fields["what-happened"]).toContain(
+        "1 screenshot attached to the private report.",
+      );
+    });
+
+    it("applies the same outcome phrasing to idea's proposal and other's details placeholders", () => {
+      const idea = buildPublicDraftFields({
+        ...baseInput,
+        type: "idea",
+        privateOutcome: "none",
+      });
+      expect(idea.template).toBe("feature_request.yml");
+      if (idea.template !== "feature_request.yml") return;
+      expect(idea.fields.proposal).toBe("Filed from the in-app reporter.");
+
+      const other = buildPublicDraftFields({
+        ...baseInput,
+        type: "other",
+        privateOutcome: "none",
+      });
+      expect(other.template).toBe("general.yml");
+      if (other.template !== "general.yml") return;
+      expect(other.fields.details).not.toContain("Support report:");
     });
   });
 

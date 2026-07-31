@@ -46,7 +46,10 @@ const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeDiagnostics: true,
   images: [],
+  overrideTitle: null,
+  privateOutcome: "none",
 };
 
 // Frozen-evidence key is composed in the IPC layer (sender id + draftId);
