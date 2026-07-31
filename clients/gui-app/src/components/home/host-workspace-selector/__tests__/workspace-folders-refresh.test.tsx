@@ -1,5 +1,13 @@
 import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -121,9 +129,13 @@ describe("folder-mapping refresh affordance", () => {
     await fixture.openPicker();
     await fixture.settle();
 
-    fireEvent.click(screen.getByTestId("folder-branch-trigger"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose worktree branch" }),
+    );
     await screen.findByTestId("folder-branch-popover");
-    const branchName = screen.getByTestId("new-worktree-branch-name");
+    const branchName = screen.getByRole("textbox", {
+      name: "New branch name",
+    });
 
     expect(
       fixture.refreshesDuring(() => {
@@ -194,7 +206,9 @@ describe("folder-mapping refresh affordance", () => {
     });
     await fixture.openPicker();
 
-    expect(screen.queryByTestId("workspace-folders-refresh")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Refresh folder details" }),
+    ).toBeNull();
   });
 
   it("stays quiet on open when the surface has no host to ask", async () => {
@@ -210,9 +224,7 @@ describe("folder-mapping refresh affordance", () => {
     });
     await fixture.openPicker();
 
-    expect(
-      screen.getByTestId("workspace-folders-refresh").hasAttribute("disabled"),
-    ).toBe(true);
+    expect(refreshButton().disabled).toBe(true);
     expect(fixture.refresh).not.toHaveBeenCalled();
   });
 
@@ -271,11 +283,15 @@ describe("folder-mapping refresh affordance", () => {
     // A newer overlay opens on top and takes the key.
     const newer = vi.fn();
     const releaseNewer = claimBareKey("r", newer);
+    // Registered BEFORE the assertions below, not after: `claimBareKey` owns a
+    // module-level stack and a window listener, so a failing assertion would
+    // otherwise leave this claim on top for every later test in the file.
+    onTestFinished(releaseNewer);
 
     // The picker's own refresh runs to completion - through the button, since
     // `R` is no longer its to press. `refreshing` goes true and back to false,
     // which is the identity change under test.
-    fireEvent.click(screen.getByTestId("workspace-folders-refresh"));
+    fireEvent.click(refreshButton());
     await fixture.settle();
 
     const stolen = fixture.refreshesDuring(() => {
@@ -283,9 +299,25 @@ describe("folder-mapping refresh affordance", () => {
     });
     expect(stolen).toBe(0);
     expect(newer).toHaveBeenCalledTimes(1);
-    releaseNewer();
   });
 });
+
+/**
+ * The Refresh affordance, by role and accessible name.
+ *
+ * Narrowed with `instanceof` rather than asserted: it makes the native
+ * `disabled` property readable, and it is itself worth asserting - a refresh
+ * "button" that is not a `<button>` would take neither Enter nor Space.
+ */
+function refreshButton(): HTMLButtonElement {
+  const element = screen.getByRole("button", {
+    name: "Refresh folder details",
+  });
+  if (!(element instanceof HTMLButtonElement)) {
+    throw new Error("the Refresh affordance is not a <button>");
+  }
+  return element;
+}
 
 interface RefreshFixture {
   readonly refresh: Mock<() => Promise<void>>;
@@ -354,8 +386,7 @@ function renderControl(over: {
     // test, would be what suppressed the call.
     settle: async () => {
       await waitFor(() => {
-        const button = screen.getByTestId("workspace-folders-refresh");
-        if (button.hasAttribute("disabled")) {
+        if (refreshButton().disabled) {
           throw new Error("refresh still in flight");
         }
       });

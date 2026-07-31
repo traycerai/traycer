@@ -40,9 +40,14 @@ const mocks = vi.hoisted(() => {
   const resolvedWorkspace: {
     current: { readonly folders: readonly ResolvedFolder[] };
   } = { current: { folders: [] } };
+  // The bound host, movable. `HostClient.bind()` rebinds IN PLACE, so a swap
+  // moves what the client reports without moving the client - which is exactly
+  // the shape the rows arm has to notice.
+  const activeHostId = { current: "host-home" };
   return {
     request,
     resolvedWorkspace,
+    activeHostId,
     selectHost: vi.fn(),
     pickAndPrepareFolders: vi.fn(() => Promise.resolve(null)),
   };
@@ -73,16 +78,18 @@ const SUMMARY: WorktreeWorkspaceSummaryV13 = {
   resolvedAt: 1,
 };
 
+// ONE object for the lifetime of the suite, as in production: `bind()` mutates
+// the client rather than replacing it, so its identity is not a host signal.
 const hostClient: MockHostClient = {
   getActiveHost: () => ({
-    hostId: "host-home",
+    hostId: mocks.activeHostId.current,
     label: "Home Mac",
     kind: "local",
     websocketUrl: "ws://127.0.0.1:4917/rpc",
     version: "0.0.0-test",
     status: "available",
   }),
-  getActiveHostId: () => "host-home",
+  getActiveHostId: () => mocks.activeHostId.current,
   getRequestContextUserId: () => "user-home",
   request: mocks.request,
   onChange: () => () => undefined,
@@ -110,7 +117,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-home",
+  useReactiveActiveHostId: () => mocks.activeHostId.current,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -176,6 +183,7 @@ beforeEach(() => {
   mocks.request.mockReset();
   mocks.request.mockResolvedValue({ workspaces: [SUMMARY] });
   mocks.resolvedWorkspace.current = { folders: [RESOLVED_FOLDER] };
+  mocks.activeHostId.current = "host-home";
 });
 
 afterEach(cleanup);
@@ -195,6 +203,46 @@ describe("stacked rows refresh-on-mount", () => {
     expect(forcedRefreshCalls()[0]).toMatchObject({
       workspacePaths: [WORKSPACE_PATH],
       forceRefresh: true,
+    });
+  });
+
+  it("forces again for a host swapped underneath the same mount", async () => {
+    // A swap the surface never unmounts for: the user picks a different host
+    // while the launcher stays open. `bind()` rebinds in place, so neither the
+    // client object nor the folder list moves - the ONLY thing that moves is
+    // the bound host id. A latch keyed off the client would still be holding
+    // the previous host's key here and skip the new host entirely, leaving
+    // these rows rendering the old machine's branch labels with no Refresh
+    // button to correct them.
+    const { rerenderFresh } = renderControls("stacked");
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(1);
+    });
+
+    mocks.activeHostId.current = "host-work";
+    rerenderFresh();
+
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(2);
+    });
+  });
+
+  it("forces again on the next mount, which is how close-and-reopen recovers", async () => {
+    // The latch has to be per MOUNT. These surfaces live in dialogs with no
+    // `forceMount`, so closing one unmounts it and reopening mounts it fresh -
+    // that reopen IS the recovery this arm exists to provide. A module-level
+    // "force only once ever" latch would satisfy every other case in this file
+    // and silently take that recovery away after the first open.
+    const first = renderControls("stacked");
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(1);
+    });
+    first.unmount();
+
+    renderControls("stacked");
+
+    await waitFor(() => {
+      expect(forcedRefreshCalls().length).toBe(2);
     });
   });
 
@@ -268,6 +316,8 @@ function forcedRefreshCalls(): Array<Record<string, unknown>> {
 function renderControls(layout: "inline" | "stacked"): {
   /** Re-renders from a FRESH element - React bails out on an identical one. */
   readonly rerenderFresh: () => void;
+  /** Explicit, because `cleanup` only runs in `afterEach`. */
+  readonly unmount: () => void;
 } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -287,8 +337,9 @@ function renderControls(layout: "inline" | "stacked"): {
       </TooltipProvider>
     </QueryClientProvider>
   );
-  const { rerender } = render(buildTree());
+  const { rerender, unmount } = render(buildTree());
   return {
+    unmount,
     rerenderFresh: () => {
       rerender(buildTree());
     },

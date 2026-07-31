@@ -274,7 +274,12 @@ export function useWorktreeWorkspacesRefresh(args: {
     mutateAsyncRef.current = mutateAsync;
   }, [mutateAsync]);
   const refresh = useCallback(async () => {
-    if (workspacePaths.length === 0) return;
+    // The same condition `canRefresh` advertises, enforced HERE rather than
+    // trusted to every call site. Today all of them gate on it, so this changes
+    // no behaviour; without it, one future caller that forgets turns an unbound
+    // host into a `hostClientUnavailableError` toast on a surface whose own
+    // affordance was sitting disabled the whole time.
+    if (client === null || workspacePaths.length === 0) return;
     try {
       await mutateAsync({
         workspacePaths: [...workspacePaths],
@@ -289,7 +294,7 @@ export function useWorktreeWorkspacesRefresh(args: {
       // rejection. Real failures still reject, having toasted.
       if (!(error instanceof CancelledError)) throw error;
     }
-  }, [mutateAsync, workspacePaths]);
+  }, [client, mutateAsync, workspacePaths]);
   const checkedAt = useMemo(
     () => oldestResolvedAt(summaries.map((summary) => summary.resolvedAt)),
     [summaries],

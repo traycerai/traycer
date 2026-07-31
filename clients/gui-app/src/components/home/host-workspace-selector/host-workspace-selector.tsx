@@ -403,6 +403,7 @@ export function ActiveHostWorkspaceControls(
             workspaceSource={workspaceSource}
             resolvedFolders={resolved.folders}
             activeHostClient={activeHostClient}
+            activeHostId={activeHostId}
             stagingKey={props.stagingKey}
             seedIntent={props.seedIntent}
             seedIntentOverride={props.seedIntentOverride}
@@ -433,6 +434,7 @@ export function ActiveHostWorkspaceControls(
       workspaceSource={workspaceSource}
       resolvedFolders={resolved.folders}
       activeHostClient={activeHostClient}
+      activeHostId={activeHostId}
       stagingKey={props.stagingKey}
       seedIntent={props.seedIntent}
       seedIntentOverride={props.seedIntentOverride}
@@ -461,6 +463,14 @@ function HomeWorkspaceRows(props: {
   readonly workspaceSource: HomeWorkspaceSource;
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
+  /**
+   * Passed separately from the client because it is the only one of the two
+   * that MOVES on a host swap. `HostClient.bind()` rebinds in place, so the
+   * active-scope client is one object for the app's lifetime - reading its host
+   * id inside a memo keyed on the client alone would pin the first host's
+   * answer. See `rowsIntentKey`.
+   */
+  readonly activeHostId: string | null;
   readonly stagingKey: WorktreeStagingKey;
   /**
    * The source conversation's intent - top precedence when seeding folders (the
@@ -562,10 +572,14 @@ function HomeWorkspaceRows(props: {
   const rowsResting = props.restingMode === "rows";
   const canRefreshSummaries = summariesRefresh.canRefresh;
   const refreshSummaries = summariesRefresh.refresh;
+  // Keyed on the REACTIVE host id, not on `activeHostClient.getActiveHostId()`.
+  // The active-scope client rebinds in place, so its identity survives a host
+  // swap: a memo keyed on the client would keep returning the previous host's
+  // key, and this surface - which unmounts on close and has no Refresh button
+  // of its own - would spend its one intent edge on the host the user just left.
   const rowsIntentKey = useMemo(
-    () =>
-      `${activeHostClient?.getActiveHostId() ?? ""} ${queryableFolderPaths.join(" ")}`,
-    [activeHostClient, queryableFolderPaths],
+    () => `${props.activeHostId ?? ""} ${queryableFolderPaths.join(" ")}`,
+    [props.activeHostId, queryableFolderPaths],
   );
   useEffect(() => {
     if (!rowsResting || !canRefreshSummaries) return;

@@ -399,19 +399,23 @@ function summariesFor(
   readonly scriptsAtRefs: never[];
 } {
   return {
-    workspaces: workspacePaths.map(() =>
-      workspaceSummary({ branch, resolvedAt }),
+    // Each summary answers for the path it was asked about. The host has no
+    // other way to answer, and a fixture that reports one path twice would let
+    // a wrong-path write pass as long as nothing read past `workspaces[0]`.
+    workspaces: workspacePaths.map((workspacePath) =>
+      workspaceSummary({ workspacePath, branch, resolvedAt }),
     ),
     scriptsAtRefs: [],
   };
 }
 
 function workspaceSummary(args: {
+  readonly workspacePath: string;
   readonly branch: string;
   readonly resolvedAt: number | null;
 }): WorktreeWorkspaceSummaryV13 {
   return {
-    workspacePath: REPO,
+    workspacePath: args.workspacePath,
     isGitRepo: true,
     repoIdentifier: { owner: "acme", repo: "app" },
     mainBranch: "main",
@@ -419,7 +423,7 @@ function workspaceSummary(args: {
     // the summary itself has no `branch` field.
     worktrees: [
       {
-        worktreePath: REPO,
+        worktreePath: args.workspacePath,
         branch: args.branch,
         head: null,
         isMain: true,
