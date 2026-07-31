@@ -4,6 +4,7 @@ import type {
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import {
   readInterviewDraftSnapshot,
   selectInterviewDraft,
@@ -28,17 +29,6 @@ export const QUESTION_TRANSITION = {
   duration: ADVANCE_DELAY_MS / 1000,
   ease: "easeOut",
 } as const;
-
-// True when the key event originated inside a text field, so digit shortcuts
-// must defer to normal typing.
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return (
-    target.tagName === "TEXTAREA" ||
-    target.tagName === "INPUT" ||
-    target.isContentEditable
-  );
-}
 
 // Only a multi-line textarea needs Enter for newlines; the single-line Other
 // input lets Enter proceed/submit.
@@ -405,7 +395,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // handlers on non-widget elements; useEffectEvent keeps it on fresh state.
   const handleKey = useEffectEvent((event: KeyboardEvent) => {
     if (isBusy) return;
-    const editable = isEditableTarget(event.target);
+    const editable = isEditableEventTarget(event.target);
     let handled = false;
     if (event.key === "Enter") handled = handleEnter(event);
     else if (event.key === "Escape") handled = handleEscape(editable);
