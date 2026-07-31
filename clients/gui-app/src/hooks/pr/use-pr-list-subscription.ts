@@ -7,6 +7,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   prSubscribeListForEpicServerFrameSchema,
   type PrLightItem,
+  type PrSourceNotice,
   type PrSourceStatus,
   type PrSubscribeListForEpicMode,
   type PrSubscribeListForEpicServerFrame,
@@ -16,6 +17,8 @@ import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 
 export interface PrListSubscriptionData {
   readonly sourceStatus: PrSourceStatus;
+  /** Non-null while the host's fetch layer is paused for this GitHub host. */
+  readonly notice: PrSourceNotice | null;
   readonly items: readonly PrLightItem[];
 }
 
@@ -365,6 +368,7 @@ function writeIntoCache(
 ): void {
   queryClient.setQueryData(prQueryKeys.listForEpic(args.hostId, args.epicId), {
     sourceStatus: frame.sourceStatus,
+    notice: frame.notice,
     items: frame.items,
   } satisfies PrListSubscriptionData);
 }
@@ -386,6 +390,7 @@ function replayLastEventIntoCache(
   if (queryClient.getQueryData(key) !== undefined) return;
   queryClient.setQueryData(key, {
     sourceStatus: frame.sourceStatus,
+    notice: frame.notice,
     items: frame.items,
   } satisfies PrListSubscriptionData);
 }

@@ -2,6 +2,7 @@ import { useCallback, type ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { Button } from "@/components/ui/button";
+import { PrSourceNoticeHint } from "@/components/epic-canvas/pr/pr-source-notice";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -57,6 +58,7 @@ function PrPanelActionsLive(props: {
     subscription.data === null
       ? null
       : newestObservedAt(subscription.data.items);
+  const notice = subscription.data?.notice ?? null;
 
   const onRefresh = useCallback((): Promise<void> => {
     subscription.sendRefresh();
@@ -74,7 +76,10 @@ function PrPanelActionsLive(props: {
       className="flex min-w-0 items-center gap-1"
       data-testid="pr-panel-actions"
     >
-      {observedAt === null ? null : <PrStalenessHint observedAt={observedAt} />}
+      {subscription.data === null ? null : (
+        <PrStalenessHint observedAt={observedAt} />
+      )}
+      {notice === null ? null : <PrSourceNoticeHint notice={notice} />}
       <Button
         type="button"
         variant="ghost"
@@ -93,14 +98,31 @@ function PrPanelActionsLive(props: {
   );
 }
 
-function PrStalenessHint(props: { readonly observedAt: number }): ReactNode {
-  const label = useRelativeTimestamp(props.observedAt);
+/**
+ * The panel's freshness line, including the state where there is no freshness
+ * to report. A null `observedAt` means no row has ever landed for any PR here,
+ * and saying so is the only thing that distinguishes "nothing fetched yet"
+ * from "fetched, and nothing has changed since" - which matters most while a
+ * pause is in effect and the ⓘ beside this text explains why.
+ */
+function PrStalenessHint(props: {
+  readonly observedAt: number | null;
+}): ReactNode {
   return (
     <span
       className="max-w-[min(40vw,8rem)] truncate text-ui-xs text-muted-foreground"
       data-testid="pr-panel-staleness"
     >
-      {label === "Just now" ? "Updated just now" : `Updated ${label}`}
+      {props.observedAt === null ? (
+        "Not yet fetched"
+      ) : (
+        <PrStalenessLabel observedAt={props.observedAt} />
+      )}
     </span>
   );
+}
+
+function PrStalenessLabel(props: { readonly observedAt: number }): ReactNode {
+  const label = useRelativeTimestamp(props.observedAt);
+  return <>{label === "Just now" ? "Updated just now" : `Updated ${label}`}</>;
 }

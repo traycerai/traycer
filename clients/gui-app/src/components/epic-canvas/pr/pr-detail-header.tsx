@@ -9,11 +9,16 @@ import {
   RotateCcw,
   type LucideIcon,
 } from "lucide-react";
-import type { PrDetailCore, PrState } from "@traycer/protocol/host/pr-schemas";
+import type {
+  PrDetailCore,
+  PrSourceNotice,
+  PrState,
+} from "@traycer/protocol/host/pr-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
+import { PrSourceNoticeHint } from "@/components/epic-canvas/pr/pr-source-notice";
 import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
@@ -90,6 +95,7 @@ export function PrDetailHeader(props: {
   readonly epicId: string;
   readonly notLive: boolean;
   readonly observedAt: number | null;
+  readonly notice: PrSourceNotice | null;
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
 }): ReactNode {
@@ -109,6 +115,16 @@ export function PrDetailHeader(props: {
         {title}
       </h1>
       <div className="flex shrink-0 items-center gap-1">
+        {/* Freshness lives here and not only in the context card: that card is
+            hidden below 1180px, so on a narrower tile the ⓘ beside it would be
+            explaining a pause with nothing on screen to say how old the rows
+            it is pausing actually are. */}
+        <span className="max-w-[min(40vw,10rem)] truncate text-ui-xs text-muted-foreground">
+          <PrDetailStaleness observedAt={props.observedAt} />
+        </span>
+        {props.notice === null ? null : (
+          <PrSourceNoticeHint notice={props.notice} />
+        )}
         <PrDetailGitHubLink prUrl={props.core.prUrl} />
         <Button
           type="button"
@@ -221,14 +237,28 @@ function PrBranchChip(props: { readonly name: string | null }): ReactNode {
 
 /** Shared with the context card, which now owns the freshness gauge. */
 export function PrDetailStaleness(props: {
+  readonly observedAt: number | null;
+}): ReactNode {
+  return (
+    <span data-testid="pr-detail-staleness">
+      {props.observedAt === null ? (
+        "Not yet fetched"
+      ) : (
+        <PrDetailStalenessLabel observedAt={props.observedAt} />
+      )}
+    </span>
+  );
+}
+
+/**
+ * Split out because the relative-time hook cannot be called conditionally, and
+ * "never fetched" is not a timestamp to format - it is the absence of one.
+ */
+function PrDetailStalenessLabel(props: {
   readonly observedAt: number;
 }): ReactNode {
   const label = useRelativeTimestamp(props.observedAt);
-  return (
-    <span data-testid="pr-detail-staleness">
-      {label === "Just now" ? "Updated just now" : `Updated ${label}`}
-    </span>
-  );
+  return <>{label === "Just now" ? "Updated just now" : `Updated ${label}`}</>;
 }
 
 function PrDetailGitHubLink(props: {

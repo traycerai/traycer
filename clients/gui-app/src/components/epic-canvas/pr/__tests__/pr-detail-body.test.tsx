@@ -15,6 +15,7 @@ import type {
   PrDetailCore,
   PrFilesSection,
   PrLiveness,
+  PrSourceNotice,
   PrSourceStatus,
   PrSubscribeDetailServerFrame,
 } from "@traycer/protocol/host/pr-schemas";
@@ -325,6 +326,7 @@ function buildPrDetailFrame(
   overrides: Partial<{
     readonly kind: "snapshot" | "updated";
     readonly sourceStatus: PrSourceStatus;
+    readonly notice: PrSourceNotice | null;
     readonly liveness: PrLiveness;
     readonly core: Partial<PrDetailCore>;
     readonly checks: Partial<PrChecksSection>;
@@ -338,6 +340,7 @@ function buildPrDetailFrame(
     kind: overrides.kind ?? "snapshot",
     hasBinaryPayload: false,
     sourceStatus: overrides.sourceStatus ?? "ok",
+    notice: overrides.notice ?? null,
     liveness: overrides.liveness ?? "live",
     core: buildPrDetailCore(overrides.core ?? {}),
     checks: buildPrChecksSection(overrides.checks ?? {}),
@@ -351,6 +354,7 @@ function buildPrDetailFrame(
 function buildPrDetailSubscriptionData(
   overrides: Partial<{
     readonly sourceStatus: PrSourceStatus;
+    readonly notice: PrSourceNotice | null;
     readonly liveness: PrLiveness;
     readonly core: Partial<PrDetailCore>;
     readonly checks: Partial<PrChecksSection>;
@@ -362,6 +366,7 @@ function buildPrDetailSubscriptionData(
 ): PrDetailSubscriptionData {
   return {
     sourceStatus: overrides.sourceStatus ?? "ok",
+    notice: overrides.notice ?? null,
     liveness: overrides.liveness ?? "live",
     core: buildPrDetailCore(overrides.core ?? {}),
     checks: buildPrChecksSection(overrides.checks ?? {}),

@@ -35,6 +35,25 @@ export const prSourceStatusSchema = z.enum([
 export type PrSourceStatus = z.infer<typeof prSourceStatusSchema>;
 
 /**
+ * Why the host is not refreshing right now, when that reason is the FETCH
+ * LAYER rather than any one PR's outcome.
+ *
+ * Deliberately a separate channel from `sourceStatus`: the host's per-epic
+ * status is the worst per-fact outcome, and `cached` ranks LOWEST there, so a
+ * rate-limit pause would be masked the moment one fact came back `ok`. A
+ * paused emission is `sourceStatus: "cached"` PLUS this notice.
+ *
+ * `retryAt` is an epoch-ms estimate of when fetching resumes - `null` when the
+ * host has not learned a reset time yet (a fresh restart mid-limit). Copy is
+ * built CLIENT-SIDE from `kind` + `retryAt`; the host never sends prose.
+ */
+export const prSourceNoticeSchema = z.object({
+  kind: z.enum(["rate-limited", "backing-off"]),
+  retryAt: z.number().nullable(),
+});
+export type PrSourceNotice = z.infer<typeof prSourceNoticeSchema>;
+
+/**
  * Network eligibility for a PR, NOT connectivity health. `cache-only` marks
  * GHES/unknown-host PRs the policy never sweeps by design; a github.com PR
  * that simply hasn't been swept yet is still `live` (its frames carry
@@ -180,6 +199,10 @@ export type PrLightItem = z.infer<typeof prLightItemSchema>;
 const PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS = {
   hasBinaryPayload: z.literal(false),
   sourceStatus: prSourceStatusSchema,
+  // Present on HYDRATION snapshots too, not just sweep-driven updates: a
+  // panel opened while the host is already paused must say so on its first
+  // frame rather than looking merely stale.
+  notice: prSourceNoticeSchema.nullable(),
   items: z.array(prLightItemSchema),
 } as const;
 
@@ -527,6 +550,7 @@ export type PrDetailCore = z.infer<typeof prDetailCoreSchema>;
 const PR_SUBSCRIBE_DETAIL_FRAME_FIELDS = {
   hasBinaryPayload: z.literal(false),
   sourceStatus: prSourceStatusSchema,
+  notice: prSourceNoticeSchema.nullable(),
   liveness: prLivenessSchema,
   core: prDetailCoreSchema,
   checks: prChecksSectionSchema,

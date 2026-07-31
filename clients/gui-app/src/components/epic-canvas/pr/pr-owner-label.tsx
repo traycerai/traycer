@@ -192,7 +192,10 @@ function PrOwnerOverflow(props: {
         {/* Capped by viewport rather than a row count: the same popover serves
             the narrow sidebar row and the wider detail card. */}
         <ScrollArea className="max-h-[min(50vh,18rem)]">
-          <div className="flex flex-col p-1" data-testid="pr-owner-overflow-list">
+          <div
+            className="flex flex-col p-1"
+            data-testid="pr-owner-overflow-list"
+          >
             {props.owners.map((owner) => (
               <PrOwnerRow
                 key={`${owner.ownerKind}:${owner.ownerId}`}

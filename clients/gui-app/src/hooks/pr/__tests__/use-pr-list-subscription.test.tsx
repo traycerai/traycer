@@ -379,4 +379,123 @@ describe("usePrListSubscription", () => {
       expect(session.closed).toBe(true);
     });
   });
+
+  it("carries the fetch-layer notice from a snapshot frame into the cache, and keeps it across an updated frame that clears it", async () => {
+    const { result, rerender } = renderHook(
+      () =>
+        usePrListSubscription({
+          hostId: "host1",
+          epicId: "epic1",
+          mode: "foreground",
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeListForEpic", {
+      epicId: "epic1",
+      mode: "foreground",
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    // Hydration snapshot arrives while the host is already paused - the
+    // notice must reach the cache on the FIRST frame, not just later updates.
+    act(() => {
+      session.emitFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sourceStatus: "cached",
+        notice: { kind: "rate-limited", retryAt: 1_000 },
+        items: [],
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.data?.notice).toEqual({
+        kind: "rate-limited",
+        retryAt: 1_000,
+      });
+    });
+
+    // A later `updated` frame that resumed fetching clears the notice - a
+    // re-render (forced here via `rerender`) must not resurrect the stale
+    // value from a stale closure.
+    act(() => {
+      session.emitFrame({
+        kind: "updated",
+        hasBinaryPayload: false,
+        sourceStatus: "ok",
+        notice: null,
+        items: [],
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.data?.notice).toBeNull();
+    });
+
+    rerender();
+    expect(result.current.data?.notice).toBeNull();
+  });
+
+  it("replays the last frame's notice into the cache for a second consumer joining an already-live session", async () => {
+    const consumerA = renderHook(
+      () =>
+        usePrListSubscription({
+          hostId: "host1",
+          epicId: "epic1",
+          mode: "foreground",
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeListForEpic", {
+      epicId: "epic1",
+      mode: "foreground",
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    act(() => {
+      session.emitFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sourceStatus: "cached",
+        notice: { kind: "backing-off", retryAt: null },
+        items: [],
+      });
+    });
+    await waitFor(() => {
+      expect(consumerA.result.current.data?.notice).toEqual({
+        kind: "backing-off",
+        retryAt: null,
+      });
+    });
+
+    // GC the query cache slot to simulate it being unobserved before B joins.
+    act(() => {
+      queryClient.removeQueries();
+    });
+
+    const consumerB = renderHook(
+      () =>
+        usePrListSubscription({
+          hostId: "host1",
+          epicId: "epic1",
+          mode: "foreground",
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => {
+      expect(consumerB.result.current.data?.notice).toEqual({
+        kind: "backing-off",
+        retryAt: null,
+      });
+    });
+  });
 });

@@ -13,6 +13,7 @@ import {
   type PrFilesSection,
   type PrLiveness,
   type PrReviewThreadsSection,
+  type PrSourceNotice,
   type PrSourceStatus,
   type PrSubscribeDetailServerFrame,
 } from "@traycer/protocol/host/pr-schemas";
@@ -25,6 +26,8 @@ import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 
 export interface PrDetailSubscriptionData {
   readonly sourceStatus: PrSourceStatus;
+  /** Non-null while the host's fetch layer is paused for this GitHub host. */
+  readonly notice: PrSourceNotice | null;
   readonly liveness: PrLiveness;
   readonly core: PrDetailCore;
   readonly checks: PrChecksSection;
@@ -415,6 +418,7 @@ function toSubscriptionData(
 ): PrDetailSubscriptionData {
   return {
     sourceStatus: frame.sourceStatus,
+    notice: frame.notice,
     liveness: frame.liveness,
     core: frame.core,
     checks: frame.checks,

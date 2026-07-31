@@ -1,10 +1,14 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
 
-const openTileInEpic = vi.fn();
+// Typed to the real signature so `mock.calls` destructures as a tuple. An
+// untyped `vi.fn()` hands back `any[]`, which reads fine and asserts nothing.
+const openTileInEpic =
+  vi.fn<(epicId: string, node: EpicCanvasTileRef) => null>();
 
 // Both lookup hooks run unconditionally (rules-of-hooks) with the id gated to
 // `null` for the kind that doesn't apply, so each owner resolves through

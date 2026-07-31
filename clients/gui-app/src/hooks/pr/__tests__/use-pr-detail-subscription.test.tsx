@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import type { PrSubscribeDetailServerFrame } from "@traycer/protocol/host/pr-schemas";
+import type {
+  PrSourceNotice,
+  PrSubscribeDetailServerFrame,
+} from "@traycer/protocol/host/pr-schemas";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -169,6 +172,60 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     const key = JSON.stringify({ method, params });
     return this.sessions.get(key);
   }
+}
+
+function buildDetailFrame(
+  kind: "snapshot" | "updated",
+  notice: PrSourceNotice | null,
+): PrSubscribeDetailServerFrame {
+  return {
+    kind,
+    hasBinaryPayload: false,
+    sourceStatus: "cached",
+    notice,
+    liveness: "live",
+    core: {
+      observedAt: 1_000,
+      githubHost: "github.com",
+      base: { owner: "acme", repo: "widgets", prNumber: 7 },
+      prUrl: "https://github.com/acme/widgets/pull/7",
+      state: "open",
+      isDraft: false,
+      title: "Add feature X",
+      body: "Some description",
+      author: { login: "octocat", avatarUrl: null },
+      baseRefName: "main",
+      headRefName: "feature/x",
+      headRefOid: "abc123",
+      additions: 10,
+      deletions: 2,
+      checksRollup: null,
+      reviewDecision: null,
+      reviewRequests: [],
+      commentCount: 0,
+      updatedAt: 1_000,
+      mergedAt: null,
+      repoIdentifier: { owner: "acme", repo: "widgets" },
+      repoRole: "superproject",
+      linkGroupKey: null,
+      owners: [],
+    },
+    checks: { observedAt: 1_000, contexts: [], isTruncated: false },
+    activity: { observedAt: 1_000, items: [], isTruncated: false },
+    reviewThreads: { observedAt: 1_000, threads: [], isTruncated: false },
+    files: {
+      observedAt: 1_000,
+      files: [],
+      totalCount: null,
+      isTruncated: false,
+    },
+    commits: {
+      observedAt: 1_000,
+      commits: [],
+      totalCount: null,
+      isTruncated: false,
+    },
+  };
 }
 
 describe("usePrDetailSubscription - non-default-host subscription", () => {
@@ -403,5 +460,115 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
     expect(session.sentClientFrames).toEqual([
       { kind: "refresh", hasBinaryPayload: false },
     ]);
+  });
+
+  it("carries the fetch-layer notice from a snapshot frame into the cache, and keeps it fresh across an updated frame that clears it", async () => {
+    tabHostIdRef.value = "host6";
+    const args = {
+      epicId: "epic-5",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 9,
+      enabled: true,
+    };
+
+    const { result, rerender } = renderHook(
+      () => usePrDetailSubscription(args),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-5",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 9,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    // Hydration snapshot arrives while the host is already paused - the
+    // notice must reach the cache on the FIRST frame.
+    act(() => {
+      session.emitFrame(
+        buildDetailFrame("snapshot", { kind: "rate-limited", retryAt: 1_000 }),
+      );
+    });
+    await waitFor(() => {
+      expect(result.current.data?.notice).toEqual({
+        kind: "rate-limited",
+        retryAt: 1_000,
+      });
+    });
+
+    // A later `updated` frame that resumed fetching clears the notice - a
+    // re-render must not resurrect the stale value from a stale closure.
+    act(() => {
+      session.emitFrame(buildDetailFrame("updated", null));
+    });
+    await waitFor(() => {
+      expect(result.current.data?.notice).toBeNull();
+    });
+
+    rerender();
+    expect(result.current.data?.notice).toBeNull();
+  });
+
+  it("replays the last frame's notice into the cache for a second consumer joining an already-live session", async () => {
+    tabHostIdRef.value = "host7";
+    const args = {
+      epicId: "epic-6",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 10,
+      enabled: true,
+    };
+
+    const consumerA = renderHook(() => usePrDetailSubscription(args), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-6",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 10,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    act(() => {
+      session.emitFrame(
+        buildDetailFrame("snapshot", { kind: "backing-off", retryAt: null }),
+      );
+    });
+    await waitFor(() => {
+      expect(consumerA.result.current.data?.notice).toEqual({
+        kind: "backing-off",
+        retryAt: null,
+      });
+    });
+
+    // GC the query cache slot to simulate it being unobserved before B joins.
+    act(() => {
+      queryClient.removeQueries();
+    });
+
+    const consumerB = renderHook(() => usePrDetailSubscription(args), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => {
+      expect(consumerB.result.current.data?.notice).toEqual({
+        kind: "backing-off",
+        retryAt: null,
+      });
+    });
   });
 });

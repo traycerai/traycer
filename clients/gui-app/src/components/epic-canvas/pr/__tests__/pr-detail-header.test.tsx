@@ -8,7 +8,10 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { PrDetailCore } from "@traycer/protocol/host/pr-schemas";
+import type {
+  PrDetailCore,
+  PrSourceNotice,
+} from "@traycer/protocol/host/pr-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
 import { RunnerHostContext } from "@/providers/runner-host-context";
@@ -63,7 +66,11 @@ function createRunnerHost(): MockRunnerHost {
   });
 }
 
-function renderHeader(host: MockRunnerHost | null) {
+function renderHeader(
+  host: MockRunnerHost | null,
+  notice: PrSourceNotice | null,
+  observedAt: number | null,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
@@ -75,7 +82,8 @@ function renderHeader(host: MockRunnerHost | null) {
             core={buildPrDetailCore({})}
             epicId="epic-1"
             notLive={false}
-            observedAt={1_000}
+            observedAt={observedAt}
+            notice={notice}
             refreshing={false}
             onRefresh={() => undefined}
           />
@@ -84,6 +92,55 @@ function renderHeader(host: MockRunnerHost | null) {
     </QueryClientProvider>,
   );
 }
+
+describe("PrDetailHeader source notice", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("says nothing when the fetch layer is running normally", () => {
+    // The absence of a notice is the common case, and an always-present ⓘ
+    // would train the eye to ignore the one that means something.
+    renderHeader(createRunnerHost(), null, 1_000);
+    expect(screen.queryByTestId("pr-source-notice")).toBeNull();
+  });
+
+  it("shows the pause on the tile header, not just in the panel", () => {
+    // A PR opened straight from a deep link never renders the panel, so the
+    // tile has to carry the explanation itself.
+    renderHeader(
+      createRunnerHost(),
+      {
+        kind: "rate-limited",
+        retryAt: null,
+      },
+      1_000,
+    );
+    expect(
+      screen.getByTestId("pr-source-notice").getAttribute("data-notice-kind"),
+    ).toBe("rate-limited");
+  });
+});
+
+describe("PrDetailHeader staleness", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("says 'Not yet fetched' when no PR has ever been observed - the card's own gauge is gone, this is the only freshness stamp on screen", () => {
+    renderHeader(createRunnerHost(), null, null);
+    expect(screen.getByTestId("pr-detail-staleness").textContent).toBe(
+      "Not yet fetched",
+    );
+  });
+
+  it("says 'Updated …' once a real observedAt is known", () => {
+    renderHeader(createRunnerHost(), null, 1_000);
+    const staleness = screen.getByTestId("pr-detail-staleness");
+    expect(staleness.textContent).not.toBe("Not yet fetched");
+    expect(staleness.textContent).toMatch(/^Updated /);
+  });
+});
 
 describe("PrDetailHeader GitHub link", () => {
   afterEach(() => {
@@ -100,7 +157,7 @@ describe("PrDetailHeader GitHub link", () => {
       .spyOn(host, "openExternalLink")
       .mockImplementation(() => bridge);
 
-    renderHeader(host);
+    renderHeader(host, null, 1_000);
 
     // By role + accessible name: this also pins the anchor semantics the
     // action depends on, which a test-id query would silently let regress.

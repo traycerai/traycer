@@ -23,7 +23,6 @@ import {
   prReviewDecisionTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
-import { PrDetailStaleness } from "@/components/epic-canvas/pr/pr-detail-header";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { cn } from "@/lib/utils";
 
@@ -79,7 +78,6 @@ export interface PrDetailCardProps {
   readonly queue: PrAttentionQueue;
   readonly epicId: string;
   readonly notLive: boolean;
-  readonly observedAt: number | null;
   readonly className: string | undefined;
 }
 
@@ -177,13 +175,6 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
             <PrCardGauge
               label="Comments"
               value={props.core.commentCount}
-              valueClassName={undefined}
-            />
-          ) : null}
-          {props.observedAt !== null ? (
-            <PrCardGauge
-              label="Updated"
-              value={<PrDetailStaleness observedAt={props.observedAt} />}
               valueClassName={undefined}
             />
           ) : null}

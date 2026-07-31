@@ -240,6 +240,7 @@ describe("prSubscribeListForEpicServerFrameSchema", () => {
         kind: "snapshot" as const,
         hasBinaryPayload: false as const,
         sourceStatus,
+        notice: null,
         items: [LIGHT_ITEM_POPULATED_FIXTURE],
       };
       const parsed1 = prSubscribeListForEpicServerFrameSchema.parse(fixture);
@@ -252,6 +253,7 @@ describe("prSubscribeListForEpicServerFrameSchema", () => {
         kind: "updated" as const,
         hasBinaryPayload: false as const,
         sourceStatus,
+        notice: null,
         items: [LIGHT_ITEM_NULL_ENRICHMENT_FIXTURE],
       };
       const parsed1 = prSubscribeListForEpicServerFrameSchema.parse(fixture);
@@ -935,6 +937,61 @@ describe("prCommitsSectionSchema", () => {
   });
 });
 
+describe("prSourceNoticeSchema on both stream frames", () => {
+  const NOTICES = [
+    { kind: "rate-limited" as const, retryAt: 1_726_000_000_000 },
+    // `retryAt: null` is the fresh-restart-mid-limit case, and it has to
+    // survive the wire intact: collapsing it to a number would turn "we do
+    // not know when GitHub resets" into a specific promise.
+    { kind: "rate-limited" as const, retryAt: null },
+    { kind: "backing-off" as const, retryAt: 1_726_000_000_000 },
+    { kind: "backing-off" as const, retryAt: null },
+  ];
+
+  NOTICES.forEach((notice) => {
+    it(`round-trips a list frame carrying notice ${notice.kind}/${String(notice.retryAt)}`, () => {
+      const parsed = prSubscribeListForEpicServerFrameSchema.parse({
+        kind: "updated" as const,
+        hasBinaryPayload: false as const,
+        // A pause is `cached` PLUS a notice - never its own sourceStatus.
+        sourceStatus: "cached" as const,
+        notice,
+        items: [LIGHT_ITEM_POPULATED_FIXTURE],
+      });
+      expect(parsed.kind === "updated" ? parsed.notice : null).toEqual(notice);
+    });
+
+    it(`round-trips a detail frame carrying notice ${notice.kind}/${String(notice.retryAt)}`, () => {
+      const parsed = prSubscribeDetailServerFrameSchema.parse({
+        kind: "updated" as const,
+        hasBinaryPayload: false as const,
+        sourceStatus: "cached" as const,
+        notice,
+        liveness: "live" as const,
+        core: DETAIL_CORE_POPULATED_FIXTURE,
+        checks: DETAIL_CHECKS_FIXTURE,
+        activity: DETAIL_ACTIVITY_FIXTURE,
+        reviewThreads: DETAIL_REVIEW_THREADS_FIXTURE,
+        files: DETAIL_FILES_FIXTURE,
+        commits: DETAIL_COMMITS_FIXTURE,
+      });
+      expect(parsed.kind === "updated" ? parsed.notice : null).toEqual(notice);
+    });
+  });
+
+  it("rejects a notice kind the client has no copy for", () => {
+    expect(
+      prSubscribeListForEpicServerFrameSchema.safeParse({
+        kind: "updated" as const,
+        hasBinaryPayload: false as const,
+        sourceStatus: "cached" as const,
+        notice: { kind: "throttled", retryAt: null },
+        items: [],
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("prSubscribeDetailServerFrameSchema", () => {
   prSourceStatusSchema.options.forEach((sourceStatus) => {
     prLivenessSchema.options.forEach((liveness) => {
@@ -943,6 +1000,7 @@ describe("prSubscribeDetailServerFrameSchema", () => {
           kind: "snapshot" as const,
           hasBinaryPayload: false as const,
           sourceStatus,
+          notice: null,
           liveness,
           core: DETAIL_CORE_POPULATED_FIXTURE,
           checks: DETAIL_CHECKS_FIXTURE,
@@ -964,6 +1022,7 @@ describe("prSubscribeDetailServerFrameSchema", () => {
         kind: "updated" as const,
         hasBinaryPayload: false as const,
         sourceStatus,
+        notice: null,
         liveness: "live" as const,
         core: DETAIL_CORE_POPULATED_FIXTURE,
         checks: DETAIL_CHECKS_FIXTURE,

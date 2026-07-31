@@ -244,6 +244,7 @@ describe("PrPanelBody card list", () => {
       kind: "snapshot",
       hasBinaryPayload: false,
       sourceStatus: "ok",
+      notice: null,
       items: [...items],
     });
     return session;

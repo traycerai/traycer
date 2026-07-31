@@ -45,9 +45,10 @@ describe("pr presence store", () => {
     usePrPresenceStore.getState().recordPrPresence(HOST_ID, EPIC_ID, true);
 
     expect(
-      selectPrScopeHasItems("other-host", EPIC_ID)(
-        usePrPresenceStore.getState(),
-      ),
+      selectPrScopeHasItems(
+        "other-host",
+        EPIC_ID,
+      )(usePrPresenceStore.getState()),
     ).toBe(false);
   });
 

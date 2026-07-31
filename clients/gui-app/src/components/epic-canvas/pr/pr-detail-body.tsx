@@ -358,6 +358,7 @@ function PrDetailLoaded(props: {
             epicId={props.epicId}
             notLive={props.data.liveness === "cache-only"}
             observedAt={oldestObservedAt(props.data)}
+            notice={props.data.notice}
             refreshing={props.refreshing}
             onRefresh={props.onRefresh}
           />
@@ -448,7 +449,6 @@ function PrDetailLoaded(props: {
           queue={queue}
           epicId={props.epicId}
           notLive={props.data.liveness === "cache-only"}
-          observedAt={oldestObservedAt(props.data)}
           className="sticky top-8"
         />
       </aside>
