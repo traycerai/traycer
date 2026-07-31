@@ -32,6 +32,9 @@ vi.mock("@sentry/electron/main", () => ({
   isInitialized: vi.fn((): boolean => false),
   captureFeedback: vi.fn((): string => "sentry-event-id"),
   flush: vi.fn(async (): Promise<boolean> => true),
+  // No client exercised in this file - `submitReport` falls back to
+  // `flush`'s own boolean, exactly as before the afterSendEvent mechanism.
+  getClient: vi.fn(() => undefined),
 }));
 
 import * as Sentry from "@sentry/electron/main";

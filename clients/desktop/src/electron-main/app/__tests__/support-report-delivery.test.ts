@@ -19,10 +19,30 @@ interface CapturedHint {
   readonly attachments: readonly CapturedAttachment[];
 }
 
+interface FakeAfterSendEventListener {
+  (
+    event: { readonly event_id?: string },
+    sendResponse: { readonly statusCode?: number },
+  ): void;
+}
+
+interface FakeSentryClient {
+  readonly on: (
+    hook: "afterSendEvent",
+    callback: FakeAfterSendEventListener,
+  ) => () => void;
+  readonly emitAfterSendEvent: FakeAfterSendEventListener;
+  readonly listenerCount: () => number;
+}
+
 const sentryMock = vi.hoisted(() => ({
   isInitialized: vi.fn<() => boolean>(),
   captureFeedback: vi.fn<(feedback: unknown, hint: CapturedHint) => string>(),
   flush: vi.fn<(timeout: number) => Promise<boolean>>(),
+  // Defaults to `undefined` (as if no client were resolvable), matching the
+  // pre-fix world for every test below that never touches it: `submitReport`
+  // then falls back to `flush`'s own boolean, exactly as before.
+  getClient: vi.fn<() => FakeSentryClient | undefined>(),
 }));
 
 const loggerMock = vi.hoisted(() => ({
@@ -160,6 +180,20 @@ function lastHint(): CapturedHint {
   const call = sentryMock.captureFeedback.mock.calls.at(-1);
   if (call === undefined) throw new Error("captureFeedback was never called");
   return call[1];
+}
+
+function makeFakeSentryClient(): FakeSentryClient {
+  const listeners = new Set<FakeAfterSendEventListener>();
+  return {
+    on: (_hook, callback) => {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+    emitAfterSendEvent: (event, sendResponse) => {
+      for (const listener of listeners) listener(event, sendResponse);
+    },
+    listenerCount: () => listeners.size,
+  };
 }
 
 beforeEach(async () => {
@@ -549,6 +583,130 @@ describe("DesktopSupportService.submitReport - unconfirmed", () => {
     const result = await freezeAndSubmit(buildService(null));
 
     expect(result.status).toBe("unconfirmed");
+  });
+});
+
+describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEvent)", () => {
+  // E2E Round 3 F1: `flush` draining the queue was read as "delivered" even
+  // when Sentry's store definitively rejected the event (HTTP 500, or the
+  // connection destroyed after receiving the body) - draining only means the
+  // envelope reached the transport, not that the store accepted it. These
+  // tests drive the real per-event outcome mechanism (`afterSendEvent`)
+  // instead of trusting `flush`'s boolean alone.
+  let fakeClient: FakeSentryClient;
+
+  beforeEach(() => {
+    fakeClient = makeFakeSentryClient();
+    sentryMock.getClient.mockReturnValue(fakeClient);
+  });
+
+  function mockFlushWithSendOutcome(sendResponse: {
+    readonly statusCode?: number;
+  }): void {
+    // Stands in for the SDK: by the time `flush` is called, `captureFeedback`
+    // has already run, so the event_id it used is on the last captured hint -
+    // exactly what `afterSendEvent` would carry for the event actually sent.
+    sentryMock.flush.mockImplementationOnce(async () => {
+      fakeClient.emitAfterSendEvent(
+        { event_id: lastHint().event_id },
+        sendResponse,
+      );
+      return true;
+    });
+  }
+
+  it("returns delivered when afterSendEvent reports a 2xx status for our event", async () => {
+    mockFlushWithSendOutcome({ statusCode: 200 });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result.status).toBe("delivered");
+  });
+
+  it("returns failed, not delivered, when afterSendEvent reports a 500", async () => {
+    mockFlushWithSendOutcome({ statusCode: 500 });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    // The live gap this closes: a 500 previously still came back "Sent
+    // privately" with a report id that existed nowhere.
+    expect(result).toEqual({ status: "failed", reason: "error" });
+  });
+
+  it("returns failed when afterSendEvent reports a 429 (rate-limited, dropped)", async () => {
+    mockFlushWithSendOutcome({ statusCode: 429 });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result).toEqual({ status: "failed", reason: "error" });
+  });
+
+  it("returns failed when the connection is destroyed - no status code, not delivered", async () => {
+    // A network-level failure never reaches an HTTP response: the SDK's own
+    // `sendEnvelope` catches the transport rejection and still emits
+    // `afterSendEvent`, but with an empty response carrying no status code
+    // at all. This must read as a definite non-delivery, same as a 500 - not
+    // silently fall through to "delivered".
+    mockFlushWithSendOutcome({});
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result).toEqual({ status: "failed", reason: "error" });
+  });
+
+  it("still returns unconfirmed on silence - the flush-timeout path is unchanged", async () => {
+    // The hook never fires at all (the send is still in flight); `flush`
+    // itself gives up first. Must stay byte-identical to the pre-existing
+    // flush-timeout path, not get reclassified by the new mechanism.
+    sentryMock.flush.mockResolvedValueOnce(false);
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result.status).toBe("unconfirmed");
+  });
+
+  it("a 500-then-retry flow reuses the same reportId and can subsequently succeed", async () => {
+    const service = buildService(null);
+    const { reportId } = await service.freezeEvidence(KEY, null);
+
+    mockFlushWithSendOutcome({ statusCode: 500 });
+    const first = await service.submitReport(FORM, KEY);
+    expect(first).toEqual({ status: "failed", reason: "error" });
+
+    mockFlushWithSendOutcome({ statusCode: 200 });
+    const second = await service.submitReport(FORM, KEY);
+    expect(second.status).toBe("delivered");
+    expect(second.status === "delivered" && second.reportId).toBe(reportId);
+
+    // Same Sentry event_id on both attempts - the retry rode the same
+    // idempotency key, not a fresh one.
+    const eventIds = sentryMock.captureFeedback.mock.calls.map(
+      (call) => call[1].event_id,
+    );
+    expect(eventIds[0]).toBe(eventIds[1]);
+  });
+
+  it("unsubscribes its afterSendEvent listener once a delivered submit settles", async () => {
+    mockFlushWithSendOutcome({ statusCode: 200 });
+    await freezeAndSubmit(buildService(null));
+
+    expect(fakeClient.listenerCount()).toBe(0);
+  });
+
+  it("unsubscribes even when the flush times out (unconfirmed path)", async () => {
+    sentryMock.flush.mockResolvedValueOnce(false);
+    await freezeAndSubmit(buildService(null));
+
+    expect(fakeClient.listenerCount()).toBe(0);
+  });
+
+  it("unsubscribes even when captureFeedback throws (failed-before-flush path)", async () => {
+    sentryMock.captureFeedback.mockImplementationOnce(() => {
+      throw new Error("DSN rejected");
+    });
+    await freezeAndSubmit(buildService(null));
+
+    expect(fakeClient.listenerCount()).toBe(0);
   });
 });
 

@@ -49,6 +49,16 @@ const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
 // The user is watching a spinner, but losing the report costs far more than
 // waiting: 2s was not enough to upload two log attachments on a slow link.
 const SENTRY_FLUSH_TIMEOUT_MS = 10_000;
+// `flush` reports the queue drained the instant our envelope's transport
+// promise settles, but the `afterSendEvent` hook that carries the real HTTP
+// outcome is chained off that same settlement through its own, separately
+// registered `.then()`s - close, but not guaranteed to fire before `flush`
+// resolves. This only bounds the (practically unreachable, since nothing in
+// this app's Sentry init samples or filters feedback events) case where the
+// hook never fires at all despite `flush` saying the queue is empty; in the
+// normal case the hook resolves within a handful of microtasks, nowhere near
+// this window.
+const SEND_OUTCOME_GRACE_MS = 500;
 // A draft's frozen evidence is dropped explicitly on cancel/replacement; this
 // is only a backstop against a lost discard message (e.g. a window force-
 // closed mid-dialog) growing the map without bound across a long-lived app.
@@ -369,6 +379,17 @@ export class DesktopSupportService {
     // benefit (accepted trade-off, ticket 08: the scrubber does not touch
     // image bytes).
     const imageAttachments = sentryAttachmentsForImages(form.images);
+    const eventId = sentryEventIdFromReportId(frozen.reportId);
+    // Registered before `captureFeedback` so the listener is live the instant
+    // our envelope goes out - `afterSendEvent` carries the transport's real
+    // response (a status code even for a 4xx/5xx rejection; nothing at all on
+    // a network-level failure), which `flush` alone cannot distinguish from
+    // success: `flush` resolves true once the queue has drained, and the
+    // queue drains identically whether the store accepted the event or
+    // definitively rejected it - only a genuine hang (never settling either
+    // way) makes `flush` resolve false. That gap is what let a Sentry 500 or
+    // a destroyed connection come back as `delivered`.
+    const sendOutcome = watchSentrySendOutcome(eventId);
     // Deep-scrubbed as a whole right before it rides in the Sentry event:
     // `layer0.evidence`/`raw` are free text off a filesystem error and can
     // carry absolute paths (host.log is unredacted at source), and
@@ -416,113 +437,140 @@ export class DesktopSupportService {
         })
       : {};
     try {
-      Sentry.captureFeedback(
-        {
-          name: userEmail ?? "anonymous",
-          email: userEmail ?? undefined,
-          message,
-        },
-        {
-          // Sentry's ingest dedupes on `event_id` within a time window, which
-          // is what makes a retry idempotent - the reportId's suffix already
-          // is a valid 32-hex-char event id (the uuid minus dashes), so
-          // reusing it here instead of a per-call id is the whole mechanism.
-          event_id: sentryEventIdFromReportId(frozen.reportId),
-          captureContext: {
-            tags: {
-              // The report's own identity - always attached regardless of
-              // the diagnostics toggle (not "diagnostics" in the privacy
-              // sense; without it a retry or a support conversation has
-              // nothing to key off).
-              reportId: frozen.reportId,
-              ...(includeDiagnostics
-                ? {
-                    appVersion: snapshot.appVersion,
-                    platform: `${snapshot.platform}/${snapshot.arch}`,
-                    // "local" because it names the traycer-host this
-                    // Electron process supervises, not necessarily the
-                    // (possibly remote) host a failing tab is bound to - see
-                    // the `registry` context.
-                    localHostVersion: snapshot.host.version ?? "unknown",
-                    electronVersion: snapshot.versions.electron ?? "unknown",
-                    layer0Status: layer0StatusTag(snapshot.host.layer0),
-                  }
-                : {}),
-              ...(privateDiagnostics?.fingerprint == null
-                ? {}
-                : { fingerprint: privateDiagnostics.fingerprint }),
-              // Sub-clustering only - deliberately not part of `fingerprint`
-              // (a one-frame refactor must not re-identify a defect), and
-              // unlike fingerprint/correlationId this IS diagnostics content
-              // (stack shape), so it is gated with the rest.
-              ...(includeDiagnostics && privateDiagnostics?.stackFamily != null
-                ? { stackFamily: privateDiagnostics.stackFamily }
-                : {}),
-              ...(privateDiagnostics === undefined
-                ? {}
-                : { correlationId: privateDiagnostics.correlationId }),
-            },
-            ...(Object.keys(contexts).length === 0 ? {} : { contexts }),
+      try {
+        Sentry.captureFeedback(
+          {
+            name: userEmail ?? "anonymous",
+            email: userEmail ?? undefined,
+            message,
           },
-          // Consent panel's two log toggles gate this directly: an "off"
-          // toggle must actually withhold the tail, not just stop rendering
-          // it, or the toggle is a dishonest no-op.
-          attachments: [
-            ...(form.includeDesktopLog && frozen.desktop.content
-              ? [{ filename: "desktop.log", data: frozen.desktop.content }]
-              : []),
-            // Named for the local traycer-host this Electron process
-            // supervises (D10) - a tab can be bound to a different host, so
-            // this must never be read as "the log for that host".
-            ...(form.includeHostLog && frozen.host.content
-              ? [{ filename: "local-host.log", data: frozen.host.content }]
-              : []),
-            // Screenshots attach here only - never to the GitHub URL/public
-            // draft (ticket 08).
-            ...imageAttachments,
-          ],
-        },
-      );
-    } catch (err) {
-      log.error("[support] captureFeedback threw", {
-        reportId: frozen.reportId,
-        err,
-      });
-      return { status: "failed", reason: "error" };
-    }
-
-    // `flush` resolves false when the queue did not drain inside the timeout.
-    // That is not the same as lost - the transport may still deliver it - so
-    // this maps to `unconfirmed`, never `failed`; a blanket "failed" would
-    // tell users a report failed that in fact arrived.
-    const flushed = await Sentry.flush(SENTRY_FLUSH_TIMEOUT_MS).catch(
-      (err: unknown) => {
-        log.error("[support] sentry flush failed", {
+          {
+            // Sentry's ingest dedupes on `event_id` within a time window,
+            // which is what makes a retry idempotent - the reportId's suffix
+            // already is a valid 32-hex-char event id (the uuid minus
+            // dashes), so reusing it here instead of a per-call id is the
+            // whole mechanism.
+            event_id: eventId,
+            captureContext: {
+              tags: {
+                // The report's own identity - always attached regardless of
+                // the diagnostics toggle (not "diagnostics" in the privacy
+                // sense; without it a retry or a support conversation has
+                // nothing to key off).
+                reportId: frozen.reportId,
+                ...(includeDiagnostics
+                  ? {
+                      appVersion: snapshot.appVersion,
+                      platform: `${snapshot.platform}/${snapshot.arch}`,
+                      // "local" because it names the traycer-host this
+                      // Electron process supervises, not necessarily the
+                      // (possibly remote) host a failing tab is bound to -
+                      // see the `registry` context.
+                      localHostVersion: snapshot.host.version ?? "unknown",
+                      electronVersion: snapshot.versions.electron ?? "unknown",
+                      layer0Status: layer0StatusTag(snapshot.host.layer0),
+                    }
+                  : {}),
+                ...(privateDiagnostics?.fingerprint == null
+                  ? {}
+                  : { fingerprint: privateDiagnostics.fingerprint }),
+                // Sub-clustering only - deliberately not part of
+                // `fingerprint` (a one-frame refactor must not re-identify a
+                // defect), and unlike fingerprint/correlationId this IS
+                // diagnostics content (stack shape), so it is gated with the
+                // rest.
+                ...(includeDiagnostics &&
+                privateDiagnostics?.stackFamily != null
+                  ? { stackFamily: privateDiagnostics.stackFamily }
+                  : {}),
+                ...(privateDiagnostics === undefined
+                  ? {}
+                  : { correlationId: privateDiagnostics.correlationId }),
+              },
+              ...(Object.keys(contexts).length === 0 ? {} : { contexts }),
+            },
+            // Consent panel's two log toggles gate this directly: an "off"
+            // toggle must actually withhold the tail, not just stop
+            // rendering it, or the toggle is a dishonest no-op.
+            attachments: [
+              ...(form.includeDesktopLog && frozen.desktop.content
+                ? [{ filename: "desktop.log", data: frozen.desktop.content }]
+                : []),
+              // Named for the local traycer-host this Electron process
+              // supervises (D10) - a tab can be bound to a different host,
+              // so this must never be read as "the log for that host".
+              ...(form.includeHostLog && frozen.host.content
+                ? [
+                    {
+                      filename: "local-host.log",
+                      data: frozen.host.content,
+                    },
+                  ]
+                : []),
+              // Screenshots attach here only - never to the GitHub URL/public
+              // draft (ticket 08).
+              ...imageAttachments,
+            ],
+          },
+        );
+      } catch (err) {
+        log.error("[support] captureFeedback threw", {
           reportId: frozen.reportId,
           err,
         });
-        return false;
-      },
-    );
-    if (!flushed) {
-      log.warn("[support] report upload did not confirm within timeout", {
-        reportId: frozen.reportId,
-      });
-      return { status: "unconfirmed", reportId: frozen.reportId };
+        return { status: "failed", reason: "error" };
+      }
+
+      // `flush` resolves false when the queue did not drain inside the
+      // timeout. That is not the same as lost - the transport may still
+      // deliver it - so this maps to `unconfirmed`, never `failed`; a
+      // blanket "failed" would tell users a report failed that in fact
+      // arrived.
+      const flushed = await Sentry.flush(SENTRY_FLUSH_TIMEOUT_MS).catch(
+        (err: unknown) => {
+          log.error("[support] sentry flush failed", {
+            reportId: frozen.reportId,
+            err,
+          });
+          return false;
+        },
+      );
+      if (!flushed) {
+        log.warn("[support] report upload did not confirm within timeout", {
+          reportId: frozen.reportId,
+        });
+        return { status: "unconfirmed", reportId: frozen.reportId };
+      }
+      // The queue draining only means our envelope reached the transport,
+      // not that Sentry's store accepted it - a 500 or a destroyed
+      // connection drains the queue exactly as cleanly as a real success.
+      // Resolve the actual per-event outcome the `afterSendEvent` hook
+      // captured before trusting "delivered".
+      const outcome = await sendOutcome.awaitOutcome();
+      if (outcome !== null && outcome.status === "failed") {
+        log.error("[support] sentry rejected the report", {
+          reportId: frozen.reportId,
+          statusCode: outcome.statusCode,
+        });
+        return { status: "failed", reason: "error" };
+      }
+      // Only confirmed deliveries land in the filed-report half of the
+      // ledger. unconfirmed/failed/unavailable must not - a phantom entry
+      // would inflate later router counts and fixed-in work. Fire-and-
+      // forget: ledger failure must not turn a successful upload into a
+      // failed submit result.
+      const deliveredFingerprint = privateDiagnostics?.fingerprint;
+      if (
+        deliveredFingerprint !== null &&
+        deliveredFingerprint !== undefined &&
+        deliveredFingerprint.length > 0
+      ) {
+        void recordFiledReport(frozen.reportId, deliveredFingerprint);
+      }
+      return { status: "delivered", reportId: frozen.reportId };
+    } finally {
+      sendOutcome.unsubscribe();
     }
-    // Only confirmed deliveries land in the filed-report half of the ledger.
-    // unconfirmed/failed/unavailable must not - a phantom entry would inflate
-    // later router counts and fixed-in work. Fire-and-forget: ledger failure
-    // must not turn a successful upload into a failed submit result.
-    const deliveredFingerprint = privateDiagnostics?.fingerprint;
-    if (
-      deliveredFingerprint !== null &&
-      deliveredFingerprint !== undefined &&
-      deliveredFingerprint.length > 0
-    ) {
-      void recordFiledReport(frozen.reportId, deliveredFingerprint);
-    }
-    return { status: "delivered", reportId: frozen.reportId };
   }
 
   /**
@@ -752,6 +800,73 @@ function generateReportId(): string {
 // this is just re-deriving it, not generating anything new.
 function sentryEventIdFromReportId(reportId: string): string {
   return reportId.slice(REPORT_ID_PREFIX.length);
+}
+
+interface SentrySendOutcome {
+  readonly status: "delivered" | "failed";
+  // Undefined on a network-level failure (e.g. a destroyed connection) -
+  // there was no HTTP response to read a code off, but the send still
+  // definitively did not reach the store, so it is still `"failed"`.
+  readonly statusCode: number | undefined;
+}
+
+/**
+ * Watches for the real transport outcome of the event `submitReport` is about
+ * to send with `eventId`, via the SDK's `afterSendEvent` client hook - the
+ * only place the actual HTTP response (status code, or nothing at all on a
+ * network-level failure) is available. Must be constructed before
+ * `Sentry.captureFeedback` is called, so the listener is live before the send
+ * it needs to observe starts.
+ *
+ * `awaitOutcome` is only meaningful to call once `Sentry.flush` has already
+ * reported the queue drained; before that point the outcome legitimately has
+ * not happened yet, and `flush`'s own timeout remains the source of truth for
+ * `unconfirmed`. `SEND_OUTCOME_GRACE_MS` bounds the case where the hook never
+ * fires despite `flush` saying the queue is empty - it resolves `null`, and
+ * the caller falls back to `flush`'s own "delivered" determination rather
+ * than guessing.
+ *
+ * Callers must call `unsubscribe` exactly once, on every exit path, whether
+ * or not `awaitOutcome` was ever called - otherwise every `submitReport` call
+ * leaks one more permanent listener on the shared Sentry client.
+ */
+function watchSentrySendOutcome(eventId: string): {
+  readonly awaitOutcome: () => Promise<SentrySendOutcome | null>;
+  readonly unsubscribe: () => void;
+} {
+  const client = Sentry.getClient();
+  if (client === undefined) {
+    return { awaitOutcome: () => Promise.resolve(null), unsubscribe: () => {} };
+  }
+  let settleOutcome: (outcome: SentrySendOutcome) => void = () => {};
+  const outcome = new Promise<SentrySendOutcome>((resolve) => {
+    settleOutcome = resolve;
+  });
+  const unsubscribe = client.on("afterSendEvent", (event, sendResponse) => {
+    if (event.event_id !== eventId) return;
+    const statusCode = sendResponse.statusCode;
+    settleOutcome({
+      status:
+        statusCode !== undefined && statusCode >= 200 && statusCode < 300
+          ? "delivered"
+          : "failed",
+      statusCode,
+    });
+  });
+  return {
+    unsubscribe,
+    awaitOutcome: () =>
+      new Promise((resolve) => {
+        const graceTimer = setTimeout(
+          () => resolve(null),
+          SEND_OUTCOME_GRACE_MS,
+        );
+        void outcome.then((result) => {
+          clearTimeout(graceTimer);
+          resolve(result);
+        });
+      }),
+  };
 }
 
 /**
