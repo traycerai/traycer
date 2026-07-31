@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -138,6 +139,20 @@ function terminalNode(id: string, instanceId: string): EpicTerminalRef {
     titleSource: "manual",
     hostId: HOST_ID,
     cwd: "/work/repo",
+  };
+}
+
+function signInTerminalNode(id: string, instanceId: string): EpicTerminalRef {
+  return {
+    id,
+    instanceId,
+    type: "terminal",
+    name: "Copilot sign-in",
+    titleSource: "manual",
+    hostId: HOST_ID,
+    cwd: "~",
+    origin: "provider-login",
+    originProviderId: "copilot",
   };
 }
 
@@ -355,6 +370,45 @@ describe("<TerminalTile /> close navigation", () => {
     if (canvas === undefined) throw new Error("expected view tab canvas");
     const pane = collectPanes(canvas.root)[0];
     expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
+  });
+
+  // A sign-in terminal is exempt from the clean-exit auto-close every
+  // ordinary terminal gets (the "routes PTY-exit close" case above): it is
+  // the only surface that can restart the sign-in, and closing it on a clean
+  // exit (the user typing `exit` after signing in) would retract that
+  // restart affordance and the CLI's last words with no explanation.
+  // Probed: dropping `isSignInTerminal` from `TerminalLive`'s exit effect
+  // dependency guard makes this tile close identically to the ordinary one -
+  // confirmed and reverted.
+  it("keeps a sign-in terminal tile open after a clean exit, unlike an ordinary terminal", async () => {
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
+    store.openTileInTab(viewTabId, signInNode);
+    const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvasBefore === undefined) throw new Error("expected view tab canvas");
+    const paneId = collectPanes(canvasBefore.root)[0].id;
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={viewTabId}
+          node={signInNode}
+          tileId={paneId}
+          isActive
+        />,
+      ),
+    );
+
+    // Give the exit effect a couple of ticks - the same window the ordinary
+    // "routes PTY-exit close" case awaits its close through.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expectTileOpen(viewTabId, signInNode.instanceId);
+    expect(testState.navigateNested).not.toHaveBeenCalled();
   });
 });
 

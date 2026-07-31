@@ -7,27 +7,38 @@ import {
 import { providerDisplayName } from "@/lib/provider-ordering";
 
 /**
- * Whether this provider signs in from a real terminal instead of a headless
- * browser-OAuth child.
+ * Whether this provider can actually be signed in from a real terminal, rather
+ * than through a headless browser-OAuth child.
  *
- * ONE helper, three consumers (this module's two exports, the composer
- * re-auth banner's `deriveLoginOptions`, and the picker's
- * `resolveCreateProfileGate`) so a surface cannot drift into offering the
- * headless button for a provider the host will refuse.
+ * ONE helper, four consumers (this module's two exports, the composer re-auth
+ * banner's `deriveLoginOptions`, and the picker's `resolveCreateProfileGate`)
+ * so a surface cannot drift into offering the headless button for a provider
+ * the host will refuse.
+ *
+ * It answers CAN, not merely `terminalLogin !== null`, because the command the
+ * terminal runs is `oauthArgs` - a provider advertising `terminalLogin` with no
+ * command has no terminal sign-in to offer. Folding that in here rather than
+ * re-checking it per call site is what makes the consumers agree: they check
+ * this in different orders relative to their own `oauthArgs` branches, and with
+ * a laxer predicate those orders disagree about the same provider.
  *
  * The `!== null && !== undefined` spelling is load-bearing, not defensive
- * noise. A client decodes an old host's `providers.list` through the
- * NEGOTIATED FROZEN schema, so the live schema's `.catch(null)` never runs and
- * a host that predates this capability delivers the key genuinely `undefined`.
- * `!= null` would say the same thing but `eqeqeq: ["error", "always"]` forbids
- * it, and a bare `!== null` would read `undefined` as "supports terminal
- * login" and hide the working headless button on every old host.
+ * noise, though not for the reason it is tempting to assume. An old host's
+ * payload arrives with the key filled to `null` by the v6 -> v7 upgrade bridge
+ * (`registry.ts`), not absent. `undefined` comes from the optional chain: a
+ * provider whose `loginCapability` is itself `null` (Cursor, Traycer) or not
+ * yet loaded (a map lookup before `providers.list` resolves). A bare `!== null`
+ * would read those as "supports terminal login" and tell every such provider's
+ * user to sign in from a composer affordance that will never appear. `!= null`
+ * would be equivalent but `eqeqeq: ["error", "always"]` forbids it.
  */
 export function providerSupportsTerminalLogin(
   loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): boolean {
   const terminalLogin = loginCapability?.terminalLogin;
-  return terminalLogin !== null && terminalLogin !== undefined;
+  if (terminalLogin === null || terminalLogin === undefined) return false;
+  const oauthArgs = loginCapability?.oauthArgs ?? null;
+  return oauthArgs !== null && oauthArgs.length > 0;
 }
 
 /**
@@ -74,8 +85,9 @@ export function providerSignInUnavailableHint(
     // Also a permanent provider property, and it outranks the host check
     // below for the same reason - and additionally because it is FALSE there:
     // a device flow needs no loopback, so terminal login works on a remote
-    // host. This provider has `oauthArgs`, so it passes the check above; the
-    // command is real, it just cannot run headlessly.
+    // host. Reached only with real `oauthArgs` (both this branch and the one
+    // above require them), so the command exists; it just cannot run
+    // headlessly.
     return `${providerDisplayName(state.providerId)} is signed in from a terminal. Use the sign-in option in the chat composer.`;
   }
   if (!isSelectedHostLocal) {

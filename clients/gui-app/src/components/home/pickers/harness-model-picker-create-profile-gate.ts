@@ -66,18 +66,19 @@ export function resolveCreateProfileGate(
   hostIsLocal: boolean,
   loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): { readonly disabled: boolean; readonly reason: string | undefined } {
-  const oauthArgs = loginCapability?.oauthArgs ?? null;
   // A terminal-login provider has real `oauthArgs` (they are the command the
   // terminal runs), so without this it would read as gate-passing here and
   // offer a "Create new profile" flow the host refuses. Its own reason has to
   // come first, because the generic copy names browser sign-in - which is
-  // exactly the thing this provider does not do.
+  // exactly the thing this provider does not do. Ordering is safe against a
+  // null/absent capability because the helper answers false for both.
   if (providerSupportsTerminalLogin(loginCapability)) {
     return {
       disabled: true,
       reason: "This provider is signed in from a terminal, not the browser.",
     };
   }
+  const oauthArgs = loginCapability?.oauthArgs ?? null;
   const disabled = !hostIsLocal || oauthArgs === null || oauthArgs.length === 0;
   return {
     disabled,

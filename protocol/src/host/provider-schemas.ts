@@ -1938,8 +1938,11 @@ export type ProvidersTouchLoginResponse = z.infer<
  *
  * `epicId` scopes the session so it lands in the epic's Terminals surface and
  * the initiating view can open it as a tile - the same scope `terminal.create`
- * uses. `cols`/`rows` are the initiating view's dimensions, applied while the
- * shell's output is still buffered so its first redraw is correctly sized.
+ * uses. `cols`/`rows` are the size the PTY is opened at, applied while the
+ * shell's output is still buffered so its first redraw is not torn; they are
+ * an INITIAL size, not a promise about the user's viewport - the tile resizes
+ * on mount, and today's client sends a fixed 80x24. A host must not treat them
+ * as the real geometry (no sizing heuristics, no resize-suppression window).
  *
  * No `profileId`: terminal login is Copilot-only today and Copilot has no
  * managed profiles, so the field could only ever carry the ambient sentinel -
@@ -2051,11 +2054,12 @@ export function downgradeProviderAuthV20ToV10(
 // those). `providersListDowngradeV2ToV1` (v2.0/mutation-v2.0 sources) and the
 // v3.0/latest downgrade paths (live source) share this one stripping
 // function.
-// `loginCapability` is typed as either the live or frozen-v10 capability
-// shape for the same reason: the v2.0/v3.0 frozen states carry the
-// pre-`codePaste` shape (`providerLoginCapabilitySchemaV10`), not the live
-// one - either is fine here since the strict v1.0 parse below only keeps
-// `oauthArgs`/`token` regardless.
+// `loginCapability` is typed as the live OR either frozen capability shape for
+// the same reason: the v2.0/v3.0 frozen states carry the pre-`codePaste` shape
+// (`providerLoginCapabilitySchemaV10`) and `ProviderMutationCliStateV21` carries
+// the pre-`terminalLogin` one (`providerLoginCapabilitySchemaV40`), neither of
+// them live. All three are fine here since the strict v1.0 parse below only
+// keeps `oauthArgs`/`token` regardless.
 // Exported so `registry.ts` names the same shape instead of restating it: the
 // two definitions had already been written twice, identically, and the widened
 // `loginCapability` below is exactly the kind of detail that drifts when only

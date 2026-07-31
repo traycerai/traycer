@@ -52,7 +52,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
-import { useProviderTerminalLogin } from "./use-provider-terminal-login";
+import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 function noop(): void {}
@@ -244,11 +244,10 @@ function deriveLoginOptions(
   // terminal runs - so they pass the check below and must be excluded first,
   // or the banner offers a headless button the host refuses. No `isLocalHost`
   // requirement: unlike browser OAuth there is no loopback here, so a device
-  // flow works just as well against a remote host.
-  const canTerminalLogin =
-    providerSupportsTerminalLogin(loginCapability) &&
-    oauthArgs !== null &&
-    oauthArgs.length > 0;
+  // flow works just as well against a remote host. The `oauthArgs` requirement
+  // lives INSIDE the helper, so this surface and the two gate helpers cannot
+  // answer differently for the same provider.
+  const canTerminalLogin = providerSupportsTerminalLogin(loginCapability);
   // A real login needs a non-empty subcommand. `null` = no OAuth; `[]` is also
   // inert because the host would spawn the bare binary under piped stdio, which
   // for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the
@@ -472,6 +471,9 @@ function TerminalLoginRow({
     providerId,
     epicId,
     viewTabId,
+    // The banner is not a tile; there is nothing to retire but the session the
+    // host itself reports as replaced.
+    launchedFromTile: null,
   });
   return (
     <div className="flex flex-col gap-1.5">

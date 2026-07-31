@@ -30,14 +30,26 @@ type StartTerminalLoginMutationResult = UseMutationResult<
  * that query, it never polls, and it shares a 60 s `staleTime`, so without
  * this the epic's Terminals sidebar stays blind to the session for a minute.
  * Same reason `useSetupTerminalListRefreshDriver` exists for setup terminals.
+ *
+ * `onSuccess` is required and lands at the MUTATION level, not per-`mutate`:
+ * this call makes the host create a PTY, so a caller that unmounts before the
+ * response (a canvas tab switch, a host-binding blip) must still get its tile
+ * opened. Per-`mutate` callbacks are dropped in exactly that case, which would
+ * leave a live sign-in terminal the user can only reach by hunting through the
+ * Terminals sidebar.
  */
 export function useProvidersStartTerminalLoginForClient(
   client: HostClient<HostRpcRegistry> | null,
+  onSuccess: (
+    data: ResponseOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
+    variables: RequestOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
+  ) => void,
 ): StartTerminalLoginMutationResult {
   return useHostScopedMutationForClient(client, {
     method: "providers.startTerminalLogin",
     mutationKey: providersMutationKeys.startTerminalLogin(),
     errorMessage: "Couldn't open a sign-in terminal.",
     invalidateMethods: ["terminal.list"],
+    onSuccess,
   });
 }

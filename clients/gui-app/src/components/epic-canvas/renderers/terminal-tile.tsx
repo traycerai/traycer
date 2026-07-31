@@ -2,7 +2,7 @@ import { useStore } from "zustand";
 import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import { useProviderTerminalLogin } from "@/components/chat/composer/use-provider-terminal-login";
+import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import {
@@ -226,7 +226,11 @@ function TerminalTileLive(
     instanceId,
     sessionKind: "terminal",
     preparePayload,
-    enabled: !isSignInTerminal,
+    // `adoptOnly`, not `enabled: false`: the create must never fire, but the
+    // measure-grid wait still has to arm or a probe that never reports (a
+    // stalled xterm chunk, a zero-sized container) strands the tile on
+    // "Starting terminal session…" with no bounded fallback.
+    adoptOnly: isSignInTerminal,
   });
   const closeExitedTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
@@ -247,7 +251,9 @@ function TerminalTileLive(
   //
   // A sign-in terminal is exempt: closing it would silently retract the only
   // surface that can restart the sign-in, leaving the user with a vanished tab
-  // and no explanation. It shows the restart affordance below instead.
+  // and no explanation. It shows the restart affordance below instead. The
+  // attached path in `TerminalLive` carries the same exemption, so the rule
+  // holds however the login shell ends.
   const exitedBeforeAttach =
     bootstrap.hostSessionExited &&
     bootstrap.handle === null &&
@@ -307,6 +313,8 @@ function TerminalTileLive(
         providerId={signInProviderId}
         epicId={epicId}
         viewTabId={props.viewTabId}
+        sessionId={sessionId}
+        closeSelf={closeExitedTile}
       />
     );
   }
@@ -346,6 +354,7 @@ function TerminalTileLive(
       isActive={props.isActive}
       recovery={props.recovery}
       onCrashExit={props.onCrashExit}
+      isSignInTerminal={isSignInTerminal}
     />
   );
 }
@@ -358,6 +367,9 @@ interface TerminalLiveProps {
   readonly isActive: boolean;
   readonly recovery: TerminalSessionRecovery;
   readonly onCrashExit: () => void;
+  /** Keeps the tile on screen when the login shell exits - see the exit effect
+   *  below. */
+  readonly isSignInTerminal: boolean;
 }
 
 function TerminalLive(props: TerminalLiveProps) {
@@ -394,8 +406,18 @@ function TerminalLive(props: TerminalLiveProps) {
   // A crash remains visible in its tile so its unread failure indicator has a
   // tab to attach to. Clean and lifecycle exits retain the existing close
   // behavior. Reuse the notification predicate so emit/close cannot drift.
+  //
+  // A sign-in terminal is exempt from ALL of it. The tile is the only surface
+  // that can restart the sign-in, and a login shell exits on both outcomes -
+  // the user typing `exit` after signing in, and the CLI giving up. Closing on
+  // the clean exit would retract the restart affordance in exactly the case
+  // the user still needs it, and would take the CLI's last words off screen
+  // with no explanation. The tile shows the ended panel instead; the user
+  // closes the tab themselves.
+  const isSignInTerminal = props.isSignInTerminal;
   useEffect(() => {
     if (status !== "exited") return;
+    if (isSignInTerminal) return;
     if (
       isTerminalCrashExit({
         status,
@@ -410,7 +432,7 @@ function TerminalLive(props: TerminalLiveProps) {
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` silently no-ops, leaving the tab open after exit.
     closeCanvasTile();
-  }, [status, exitCode, exitReason, closeCanvasTile]);
+  }, [status, exitCode, exitReason, closeCanvasTile, isSignInTerminal]);
 
   const overlayState = resolveTerminalOverlayState({
     status,
@@ -506,6 +528,9 @@ function SignInTerminalEndedPanel(props: {
   readonly providerId: ProviderId | null;
   readonly epicId: string;
   readonly viewTabId: string;
+  /** This dead tile's own session, so the restart can retire it. */
+  readonly sessionId: string;
+  readonly closeSelf: () => void;
 }) {
   return (
     <div
@@ -524,6 +549,8 @@ function SignInTerminalEndedPanel(props: {
           providerId={props.providerId}
           epicId={props.epicId}
           viewTabId={props.viewTabId}
+          sessionId={props.sessionId}
+          closeSelf={props.closeSelf}
         />
       )}
     </div>
@@ -536,8 +563,21 @@ function SignInRestartButton(props: {
   readonly providerId: ProviderId;
   readonly epicId: string;
   readonly viewTabId: string;
+  readonly sessionId: string;
+  readonly closeSelf: () => void;
 }) {
-  const terminalLogin = useProviderTerminalLogin(props);
+  const terminalLogin = useProviderTerminalLogin({
+    providerId: props.providerId,
+    epicId: props.epicId,
+    viewTabId: props.viewTabId,
+    // After a host restart the coordinator has no pointer, so it reports
+    // `replacedSessionId: null` and nothing else would ever close this dead
+    // panel - it would accumulate one stale tile per press.
+    launchedFromTile: {
+      sessionId: props.sessionId,
+      close: props.closeSelf,
+    },
+  });
   return (
     <Button
       type="button"

@@ -13,6 +13,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import {
   DEFAULT_TERMINAL_TITLE,
   deriveTitleSourceFromSessionTitle,
@@ -125,8 +126,16 @@ export function useTerminalsOpenerItems(
       keywords: ["new", "terminal", "shell"],
       subpage: NEW_TERMINAL_SUBPAGE,
     });
-    const existing = sessions.map((session) =>
-      openerExistingLeaf("terminals", ctx, {
+    const existing = sessions.map((session) => {
+      // A host-created sign-in terminal must carry its origin here too, or the
+      // eviction-recreate below - correct for an ordinary shell - spawns a bare
+      // prompt under the sign-in session's id and label. `terminal.list` cannot
+      // tell us; the renderer's record of host-created sign-in terminals can.
+      const signInProviderId = providerLoginTerminalProviderId(
+        defaultHostId,
+        session.sessionId,
+      );
+      return openerExistingLeaf("terminals", ctx, {
         id: session.sessionId,
         instanceId: uuidv4(),
         type: "terminal",
@@ -139,8 +148,14 @@ export function useTerminalsOpenerItems(
         // Recorded so an eviction-recreate lands back in the session's
         // directory - same as the sidebar's open-existing path.
         cwd: session.cwd,
-      }),
-    );
+        ...(signInProviderId === null
+          ? {}
+          : {
+              origin: "provider-login" as const,
+              originProviderId: signInProviderId,
+            }),
+      });
+    });
     return [newTerminal, ...existing];
   }, [ctx, defaultHostId, scope.epicId, sessionsData]);
 }

@@ -253,46 +253,12 @@ const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
   terminalLogin: {},
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-/**
- * Narrows a `JSON.parse`d wire payload into `ProviderLoginCapability` without
- * asserting `terminalLogin` is present - deliberately, since the whole point
- * of this fixture is a shape that genuinely lacks that key (an old host's
- * echo decodes with it ABSENT, not `null`). `JSON.parse` alone returns `any`;
- * parsing into `unknown` first and narrowing through this predicate (rather
- * than `as`) is what keeps the fixture honest and lint-clean.
- */
-function looksLikeLoginCapability(
-  value: unknown,
-): value is ProviderLoginCapability {
-  return (
-    isRecord(value) &&
-    "oauthArgs" in value &&
-    "token" in value &&
-    "codePaste" in value
-  );
-}
-
-function oldHostLoginCapability(): ProviderLoginCapability {
-  const parsed: unknown = JSON.parse(
-    JSON.stringify({
-      oauthArgs: ["auth", "login"],
-      token: null,
-      codePaste: null,
-      terminalLogin: null,
-    }),
-  );
-  if (!looksLikeLoginCapability(parsed)) {
-    throw new Error("expected the fixture to at least resemble a capability");
-  }
-  return parsed;
-}
-
-const PRE_TERMINAL_LOGIN_CAP: ProviderLoginCapability =
-  oldHostLoginCapability();
+// The unreachable case this used to model: an old host's payload cannot
+// decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge
+// (`registry.ts`) fills it to `null` on that exact hop. What DOES leave
+// `providerSupportsTerminalLogin` reading "not a terminal-login provider" for
+// a real reason is the provider's whole `loginCapability` being `null`
+// (Cursor, Traycer) - the case below.
 
 function copilotState(
   loginCapability: ProviderLoginCapability | null,
@@ -488,16 +454,21 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
   });
 
-  // Row 2: an old host's echo decodes with `terminalLogin` genuinely ABSENT
-  // (not `null`) - `providerSupportsTerminalLogin` must treat that the same
-  // as "not a terminal-login provider" and fall back to the headless button.
-  it("falls back to the headless OAuth button when terminalLogin is absent from an old host's payload", () => {
+  // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
+  // Traycer, or any CLI with no OAuth session to reconnect) makes the
+  // helper's optional chain yield `undefined` for `terminalLogin` -
+  // `providerSupportsTerminalLogin` must read that as "not a terminal-login
+  // provider" the same as an explicit `null`. copilotState's own capability
+  // has real `oauthArgs`, so a null capability here also exercises the "no
+  // reconnect method at all" branch rather than the headless button; assert
+  // on the absence of the terminal button, which is Row 2's actual claim.
+  it("does not offer 'Sign in from a terminal' when loginCapability is null", () => {
     render(
       <ProviderReauthBanner
         epicId="epic-1"
         viewTabId="tab-1"
         providerId="copilot"
-        state={copilotState(PRE_TERMINAL_LOGIN_CAP)}
+        state={copilotState(null)}
         reason="provider_unauthenticated"
         profileId={null}
         profileLabel={null}
@@ -505,7 +476,35 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+  });
+
+  // Unified gate: `terminalLogin` present but no real `oauthArgs` (the
+  // command the terminal would run) must read the same way here as it does
+  // in `providerSupportsTerminalLogin` and `resolveCreateProfileGate` - the
+  // banner falls through to the CLI stub, offering neither button.
+  it("offers neither sign-in button when terminalLogin is present but oauthArgs is empty", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState({
+          oauthArgs: [],
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+        })}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Sign in from a terminal/ }),
     ).toBeNull();

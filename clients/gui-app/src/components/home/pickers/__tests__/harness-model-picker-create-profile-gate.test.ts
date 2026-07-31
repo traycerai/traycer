@@ -32,4 +32,42 @@ describe("resolveCreateProfileGate", () => {
     expect(gate.reason).not.toContain("browser sign-in");
     expect(gate.reason).toContain("terminal");
   });
+
+  // `providerSupportsTerminalLogin` answers false for both a null and an
+  // undefined capability, so the terminal-login branch above must fall
+  // through cleanly to the generic reason instead of throwing or matching on
+  // `undefined.oauthArgs`. This is the case the ordering comment ("safe
+  // against a null/absent capability") in the source claims but the suite
+  // never exercised.
+  it("falls through to the generic reason for a null loginCapability", () => {
+    const gate = resolveCreateProfileGate(true, null);
+    expect(gate.disabled).toBe(true);
+    expect(gate.reason).toBe(
+      "Add profiles from a local host with browser sign-in available.",
+    );
+  });
+
+  it("falls through to the generic reason for an undefined loginCapability", () => {
+    const gate = resolveCreateProfileGate(true, undefined);
+    expect(gate.disabled).toBe(true);
+    expect(gate.reason).toBe(
+      "Add profiles from a local host with browser sign-in available.",
+    );
+  });
+
+  // Unified gate: terminalLogin present but no real oauthArgs must read the
+  // same as "not a terminal-login provider" here too - the generic reason,
+  // not the terminal-specific one.
+  it("uses the generic reason, not the terminal one, when oauthArgs is empty", () => {
+    const gate = resolveCreateProfileGate(true, {
+      oauthArgs: [],
+      token: null,
+      codePaste: null,
+      terminalLogin: {},
+    });
+    expect(gate.disabled).toBe(true);
+    expect(gate.reason).toBe(
+      "Add profiles from a local host with browser sign-in available.",
+    );
+  });
 });

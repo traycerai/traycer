@@ -161,5 +161,13 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       (p: ProviderListEntry) => p.providerId === "copilot",
     );
     expect(copilot?.loginCapability?.terminalLogin).toEqual({});
+    // The missing direction: `terminalLogin` staying `{}` is also what a
+    // no-op merge (one that dropped the WHOLE echo, not just its
+    // `loginCapability`) would produce, since the seeded cache already has
+    // it. Only a merge that actually overlays the echo's other fields would
+    // flip `auth.status` from the seeded "unauthenticated" to the echo's
+    // "authenticated" - proving the echo is authoritative for what it models,
+    // not merely inert here.
+    expect(copilot?.auth.status).toBe("authenticated");
   });
 });

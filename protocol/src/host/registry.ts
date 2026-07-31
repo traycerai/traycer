@@ -975,10 +975,13 @@ function upgradeLoginCapabilityFromV10(
 //
 // Filling this MATTERS on the client, not just for type completeness: a
 // client decodes an old host's payload through the negotiated FROZEN schema,
-// so the live `.catch(null)` never runs and the key arrives genuinely
-// `undefined` rather than `null`. GUI gates therefore test
-// `!== null && !== undefined`, and this bridge is what makes the value `null`
-// on the only hop that lands on the live shape.
+// so the live `.catch(null)` never runs and the key comes out of the DECODE
+// absent. This bridge is what turns that into `null` before any GUI code sees
+// it, on the only hop that lands on the live shape. GUI gates still spell
+// their check `!== null && !== undefined`, but for their own reason - a
+// provider whose whole `loginCapability` is null makes the optional chain
+// yield `undefined` - not because an old host's payload reaches them with the
+// key missing. It does not.
 function upgradeLoginCapabilityFromV40(
   loginCapability: ProviderLoginCapabilityV40 | null,
 ): ProviderLoginCapability | null {
