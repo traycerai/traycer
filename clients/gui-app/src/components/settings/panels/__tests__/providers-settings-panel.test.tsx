@@ -4872,6 +4872,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -4965,6 +4967,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -5049,6 +5053,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -5132,6 +5138,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -5219,6 +5227,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
