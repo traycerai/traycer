@@ -4827,6 +4827,60 @@ describe("blockDelta coalescing", () => {
     harness.manual.runAll();
     expect(liveText(harness.handle)).toBe("");
   });
+
+  it("publishes a pending interview only once its streaming block is observable", () => {
+    // The host emits the interview's `blockDelta` before the
+    // `interviewRequested` frame, but the delta sits in the coalescing buffer
+    // until the next tick. If the pending id lands first, a host-pending
+    // interview is briefly visible with no `streaming` segment - which
+    // `findUnanswerableInterviews` reads as permanently stuck and offers to
+    // dismiss, cancelling a live question mid-Q&A.
+    const harness = createCoalesceHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "interview.requested",
+        blockId: "interview-1",
+        timestamp: 10,
+        toolName: "AskUserQuestion",
+        questions: [],
+      },
+    });
+    // Still buffered: nothing has reached the store yet.
+    expect(harness.manual.pendingCount()).toBe(1);
+
+    callbacks.onInterviewRequested({
+      kind: "interviewRequested",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-1",
+      requestedAt: 10,
+    });
+
+    // Read BEFORE any coordinator tick - this is the window the renderer would
+    // have rendered the escape hatch in.
+    const state = harness.handle.store.getState();
+    expect(state.pendingInterviews).toEqual([
+      { blockId: "interview-1", requestedAt: 10 },
+    ]);
+    const streamingInterviewIds = (
+      state.liveAssistantMessage?.blocks ?? []
+    ).flatMap((block) =>
+      block.type === "interview" && block.status === "streaming"
+        ? [block.blockId]
+        : [],
+    );
+    expect(streamingInterviewIds).toEqual(["interview-1"]);
+    // The consuming frame drained the buffer, so the tick has nothing left.
+    expect(harness.manual.pendingCount()).toBe(0);
+  });
 });
 
 describe("surface visibility rollup", () => {

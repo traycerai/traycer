@@ -55,6 +55,7 @@ import {
   cloudNotificationFeedId,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
+import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
@@ -76,6 +77,7 @@ import {
   type HostNotificationsCloudFeedRow,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedClearAllRequest,
+  type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
@@ -125,6 +127,16 @@ export interface MergedNotificationsActions {
   readonly clear: (row: MergedNotificationRow) => void;
   readonly clearAll: () => void;
   readonly markAllAsRead: () => void;
+  /**
+   * View consumption for one entity - the cloud counterpart of the v1
+   * `host.notifications.markRead {kind:"entity"}` RPC, which in cloud mode
+   * addresses rows the connected host may not even hold.
+   *
+   * Cloud mode only: local mode keeps issuing the host RPC from the session
+   * provider, because there the host's own SQLite is the authority being
+   * consumed. No-op in every other mode.
+   */
+  readonly markEntityAsRead: (entity: HostNotificationsEntityRef) => void;
   readonly loadMoreHost: () => void;
   readonly canLoadMoreHost: boolean;
   readonly isLoadingMoreHost: boolean;
@@ -1066,6 +1078,26 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             resolveHostAll.mutate({ occurrences });
           }
         }
+      },
+      markEntityAsRead: (entity) => {
+        if (feedMode !== "cloud") return;
+        // Selection, single-flight, backoff and the retry timer all live in
+        // the driver: they have to outlive this render and stay single-flight
+        // across every caller. There is no cloud mark-many RPC, so the driver
+        // serializes per entry the way `markAllAsRead` does.
+        requestCloudEntityRead(entity, {
+          markRead: async (entryId) => {
+            const result = await cloudMarkRead.mutateAsync({ entryId });
+            // `unavailable` is a refusal, not a transport failure - the
+            // mutation resolves, so the driver has to be told explicitly or it
+            // would record a success the server never performed.
+            if (result.status === "unavailable") {
+              throw new Error("cloud feed unavailable");
+            }
+          },
+          now: () => Date.now(),
+          random: () => Math.random(),
+        });
       },
       clear: (row) => {
         if (row.source !== "cloud" || feedMode !== "cloud") return;

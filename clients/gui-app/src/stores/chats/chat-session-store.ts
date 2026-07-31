@@ -789,8 +789,9 @@ export function createChatSessionStore(
     // `blockDelta` coalescing. Deltas accumulate here and are folded into a
     // single `set()` per coordinator tick (one animation frame in production)
     // instead of one `set()` per token. Every non-delta frame that consumes
-    // message/turn state (`onSnapshot`, `onTurnStateChanged`, `onMessageAccepted`)
-    // flushes the buffer first, so observable ordering matches arrival order.
+    // message/turn state (`onSnapshot`, `onTurnStateChanged`, `onMessageAccepted`,
+    // `onInterviewRequested`) flushes the buffer first, so observable ordering
+    // matches arrival order.
     let bufferedDeltas: RuntimeEvent[] = [];
 
     // `providers.list` nudge driven by the DURABLE auth-failure signal: an
@@ -1359,6 +1360,13 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // Consuming frame: the host emits this interview's `blockDelta` first,
+        // but that delta is still buffered until the next coordinator tick.
+        // Publishing the pending id ahead of its block would expose a
+        // host-pending interview with no `streaming` segment - which
+        // `findUnanswerableInterviews` reads as permanently stuck and answers
+        // with the destructive dismiss affordance, mid-normal-Q&A.
+        flushBlockDeltas();
         set((state) => ({
           pendingInterviews: upsertPendingInterview(state.pendingInterviews, {
             blockId: frame.blockId,

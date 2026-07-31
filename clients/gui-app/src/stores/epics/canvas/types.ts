@@ -1,3 +1,4 @@
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
@@ -110,6 +111,31 @@ export interface EpicTerminalRef {
   readonly titleSource: TerminalTitleSource;
   readonly hostId: string;
   readonly cwd: string;
+  /**
+   * Who created the session behind this tile. Absent (the overwhelming
+   * majority) and `"shell"` both mean the ordinary case: the tile owns the
+   * session and may `terminal.create` it if the host has no record - that is
+   * how a restart or a reopened epic gets its shell back.
+   *
+   * `"provider-login"` means the HOST created it, for a provider sign-in. That
+   * tile must never create: re-creating the id would spawn a bare shell with
+   * none of the provider's spawn env, so the user would face a prompt that
+   * cannot sign them in and no error saying why. It renders a retry affordance
+   * that re-runs the RPC instead.
+   *
+   * Optional rather than required: making it required would force every
+   * existing terminal-ref construction site to state `origin: "shell"` for no
+   * behavioural gain, and absent already means the same thing.
+   */
+  readonly origin?: "shell" | "provider-login";
+  /**
+   * Which provider's sign-in this terminal was opened for. Meaningful only
+   * alongside `origin: "provider-login"`, and required for the retry
+   * affordance to work at all: restarting a sign-in means calling
+   * `providers.startTerminalLogin` again, and only the tile knows which
+   * provider it is standing in for.
+   */
+  readonly originProviderId?: ProviderId;
 }
 
 export function makeOpenableNodeRef(args: {
