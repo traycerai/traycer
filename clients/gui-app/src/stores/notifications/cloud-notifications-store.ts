@@ -8,6 +8,7 @@ import {
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   type HostNotificationsCloudFeedRow,
   type HostNotificationsCloudFeedSummary,
+  type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
@@ -40,6 +41,26 @@ export interface CloudNotificationsState {
   /** Increments whenever ownership changes, so a late command from an old
    * host/session cannot change the replacement session's presentation. */
   readonly sessionEpoch: number;
+  /**
+   * Entries whose view-consumption mark-read the server ACCEPTED this session.
+   *
+   * Keyed on the outcome, not the attempt: a marker the server took is durable
+   * (set-once, min-merged), so re-sending it could only ever be a no-op - while
+   * a snapshot that keeps replaying the row as unread would otherwise re-arm
+   * the fan-out on every frame. Suppressing on success is what makes a lagging
+   * or replaying feed cost nothing; failures deliberately stay retryable.
+   */
+  readonly entityReadSucceeded: ReadonlySet<string>;
+  /**
+   * Per-entry retry state for view-consumption marks that have NOT yet been
+   * accepted. An entry present here is either in flight
+   * (`nextEligibleAt === Infinity`) or waiting out its backoff, and in both
+   * cases is invisible to fresh discovery - which is what keeps at most one
+   * attempt per entry alive at a time.
+   */
+  readonly entityReadRetries: Readonly<
+    Partial<Record<string, CloudEntityReadRetry>>
+  >;
   readonly connectionState: CloudNotificationsConnectionState;
   applySnapshot(input: {
     readonly rows: ReadonlyArray<HostNotificationsCloudFeedRow>;
@@ -50,8 +71,97 @@ export interface CloudNotificationsState {
    * reconciles the row, but the common successful mutation never waits on a
    * wake or the relay's correctness poll to look read. */
   markReadLocally(entryId: string, readAt: number): void;
+  /** One atomic step for a view-consumption fan-out: claim every entry as
+   * in-flight and apply its optimistic marker in a single write, so no
+   * subscriber can observe the new rows before the claim is visible. */
+  beginEntityRead(entryIds: ReadonlyArray<string>, readAt: number): void;
+  /** The server took the marker: stop retrying it, and never rediscover it. */
+  recordEntityReadSuccess(entryId: string): void;
+  /** The server did not take it: count the attempt and park the entry until
+   * `nextEligibleAt`. */
+  recordEntityReadFailure(entryId: string, nextEligibleAt: number): void;
+  /** Drop retry state for an entry the feed no longer carries - a mark for a
+   * row that is gone has nothing left to converge on. */
+  clearEntityReadRetries(entryIds: ReadonlyArray<string>): void;
   setConnectionState(state: CloudNotificationsConnectionState): void;
   reset(): void;
+}
+
+export interface CloudEntityReadRetry {
+  /** Failed attempts so far. `0` while the first attempt is in flight. */
+  readonly attempts: number;
+  /** `Infinity` while an attempt is in flight. */
+  readonly nextEligibleAt: number;
+}
+
+/**
+ * The entries a visit to `entity` should mark read, mirroring the host's
+ * `hostNotificationsMarkEntityRead` SQL exactly:
+ *
+ * - `severity IN ('done','failure')` - `needs_action` is EXCLUDED on purpose.
+ *   Looking at a chat must never silently dismiss a pending approval or
+ *   interview; only answering or explicitly dismissing one may do that.
+ * - `read_at IS NULL` - set-once markers never re-fire.
+ * - entity clause: a chat visit matches `chat_id = ?`; an epic visit matches
+ *   `epic_id = ? AND chat_id IS NULL`, i.e. epic-level rows ONLY. This is
+ *   deliberately NARROWER than the indicator rollup, which does aggregate an
+ *   epic's chats - visiting an epic must not mark its chats' rows read.
+ *
+ * Visibility needs no clause here: a cloud snapshot is already the visible set.
+ * Entries already accepted, in flight, or waiting out a backoff are excluded -
+ * those are driven by `selectCloudEntityReadRetries` instead.
+ */
+export function selectCloudEntityReadTargets(
+  state: Pick<
+    CloudNotificationsState,
+    "rows" | "entityReadSucceeded" | "entityReadRetries"
+  >,
+  entity: HostNotificationsEntityRef,
+): ReadonlyArray<string> {
+  const targets: string[] = [];
+  for (const row of Object.values(state.rows)) {
+    if (row === undefined) continue;
+    const { entry } = row;
+    if (entry.severity !== "done" && entry.severity !== "failure") continue;
+    if (entry.readAt !== null) continue;
+    if (state.entityReadSucceeded.has(row.entryId)) continue;
+    if (Object.hasOwn(state.entityReadRetries, row.entryId)) continue;
+    const matchesEntity =
+      entity.chatId === undefined
+        ? entry.epicId === entity.epicId && entry.chatId === null
+        : entry.chatId === entity.chatId;
+    if (!matchesEntity) continue;
+    targets.push(row.entryId);
+  }
+  return targets;
+}
+
+/**
+ * Entries whose backoff has elapsed and are due another attempt.
+ *
+ * Deliberately NOT filtered on the row's local `readAt`: the optimistic marker
+ * was already applied when the attempt began, so re-deriving retries from the
+ * rows would make every failure permanently invisible. Retry state is the
+ * record of what the server has not yet accepted; the local marker only says
+ * what the user has been shown.
+ */
+export function selectCloudEntityReadRetries(
+  state: Pick<CloudNotificationsState, "rows" | "entityReadRetries">,
+  now: number,
+): {
+  readonly due: ReadonlyArray<string>;
+  readonly dropped: ReadonlyArray<string>;
+} {
+  const due: string[] = [];
+  const dropped: string[] = [];
+  for (const [entryId, retry] of Object.entries(state.entityReadRetries)) {
+    if (!Object.hasOwn(state.rows, cloudNotificationFeedId(entryId))) {
+      dropped.push(entryId);
+      continue;
+    }
+    if (retry !== undefined && retry.nextEligibleAt <= now) due.push(entryId);
+  }
+  return { due, dropped };
 }
 
 export function cloudNotificationFeedId(entryId: string): string {
@@ -70,6 +180,8 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
     connectionState: "unavailable",
     hasSnapshot: false,
     sessionEpoch: 0,
+    entityReadSucceeded: new Set<string>(),
+    entityReadRetries: {},
     applySnapshot: (input) => {
       const arrivals: HostNotificationsCloudFeedRow[] = [];
       set((state) => {
@@ -117,6 +229,59 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
                 },
         };
       }),
+    beginEntityRead: (entryIds, readAt) =>
+      set((state) => {
+        const retries = { ...state.entityReadRetries };
+        const rows = { ...state.rows };
+        let flipped = 0;
+        for (const entryId of entryIds) {
+          retries[entryId] = {
+            attempts: retries[entryId]?.attempts ?? 0,
+            nextEligibleAt: Number.POSITIVE_INFINITY,
+          };
+          const key = cloudNotificationFeedId(entryId);
+          const row = rows[key];
+          if (row === undefined || row.entry.readAt !== null) continue;
+          rows[key] = { ...row, entry: { ...row.entry, readAt } };
+          flipped += 1;
+        }
+        return {
+          rows,
+          entityReadRetries: retries,
+          summary:
+            state.summary === null
+              ? null
+              : {
+                  ...state.summary,
+                  unreadCount: Math.max(0, state.summary.unreadCount - flipped),
+                },
+        };
+      }),
+    recordEntityReadSuccess: (entryId) =>
+      set((state) => {
+        const retries = { ...state.entityReadRetries };
+        delete retries[entryId];
+        const succeeded = new Set(state.entityReadSucceeded);
+        succeeded.add(entryId);
+        return { entityReadRetries: retries, entityReadSucceeded: succeeded };
+      }),
+    recordEntityReadFailure: (entryId, nextEligibleAt) =>
+      set((state) => ({
+        entityReadRetries: {
+          ...state.entityReadRetries,
+          [entryId]: {
+            attempts: (state.entityReadRetries[entryId]?.attempts ?? 0) + 1,
+            nextEligibleAt,
+          },
+        },
+      })),
+    clearEntityReadRetries: (entryIds) =>
+      set((state) => {
+        if (entryIds.length === 0) return state;
+        const retries = { ...state.entityReadRetries };
+        for (const entryId of entryIds) delete retries[entryId];
+        return { entityReadRetries: retries };
+      }),
     setConnectionState: (connectionState) =>
       set((state) => ({
         connectionState:
@@ -132,6 +297,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         connectionState: "unavailable",
         hasSnapshot: false,
         sessionEpoch: state.sessionEpoch + 1,
+        // View-consumption bookkeeping is relay-session scoped, like every
+        // other field here: a new session rediscovers from its own snapshot.
+        entityReadSucceeded: new Set<string>(),
+        entityReadRetries: {},
       })),
   }),
 );

@@ -87,7 +87,7 @@ import {
   type HistoryFacets,
 } from "@/hooks/home/use-history-query";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   useAmbientHistorySearchState,
   useRouteHistorySearchState,
@@ -300,7 +300,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     () => items.map((item) => item.epicId),
     [items],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: indicatorEpicIds,
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
@@ -586,9 +586,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           facets={facets}
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
-        <NotificationIndicatorsProvider
-          indicators={notificationIndicators.data}
-        >
+        <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <div className="min-h-0 flex-1 overflow-y-auto pb-10">
             <EpicsListBody
               error={error}
