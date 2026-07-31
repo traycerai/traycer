@@ -542,6 +542,30 @@ export const providerLoginCapabilitySchema = z.object({
    * peers degrade to no paste UI.
    */
   codePaste: z.object({}).nullable().catch(null),
+  /**
+   * Non-null when this provider must be signed in from a real terminal rather
+   * than the headless `providers.startLogin` child - the host opens an
+   * epic-scoped PTY over `providers.startTerminalLogin` and delivers the
+   * provider's login command into it, and the user reads the device code and
+   * URL the CLI prints. Copilot is the case: its `copilot login` prints a
+   * device code that a headless child discards while the browser opens the
+   * bare `github.com/login/device` page, dead-ending the sign-in. No CLI or
+   * SDK exposes that code natively, so Traycer never parses it out - the user
+   * reads it from the terminal Traycer opened.
+   *
+   * Set here, `oauthArgs` stays the command source but the GUI must NOT offer
+   * headless browser OAuth; the host refuses `providers.startLogin` for the
+   * same reason, so a released client that predates this field cannot start a
+   * concurrent broken flow. Shape carries no fields today - existence alone is
+   * the signal - but stays an object for the same reason `codePaste` does.
+   *
+   * `.catch(null)` hardens a present-but-unrecognized value. A genuinely
+   * ABSENT key (an old host that predates the field, decoded through the
+   * client's negotiated frozen schema) reads `undefined`, not `null` - the
+   * v6->v7 upgrade bridge fills it, and GUI gates must test
+   * `!== null && !== undefined`.
+   */
+  terminalLogin: z.object({}).nullable().catch(null),
 });
 export type ProviderLoginCapability = z.infer<
   typeof providerLoginCapabilitySchema
@@ -566,6 +590,34 @@ export const providerLoginCapabilitySchemaV10 = z.object({
 });
 export type ProviderLoginCapabilityV10 = z.infer<
   typeof providerLoginCapabilitySchemaV10
+>;
+
+/**
+ * Frozen post-code-paste snapshot of `providerLoginCapabilitySchema`, as it
+ * shipped on the v4.0 line (host-v1.1.7): `oauthArgs` + `token` + `codePaste`.
+ * Same hand-copy discipline as `providerLoginCapabilitySchemaV10` above - NOT
+ * derived from the live schema.
+ *
+ * `providerCliStateBaseShapeV40` points here rather than at the live
+ * capability, which pins four already-released wire shapes at once: the v4.0,
+ * v5.0 and v6.0 `providers.list` lines and the @2.1 mutation state echo. Before
+ * this pin, the base shape spread the LIVE capability, so a field added to the
+ * capability leaked onto all four - the same defect the `V10` snapshot fixed
+ * for the older lines and the same one that pinning the base shape itself
+ * fixed for `profiles`/registry fields. `terminalLogin` is the concrete case
+ * this guards against: it is a v7.0 field, and a v6.0 client that negotiated
+ * before it existed must not decode it.
+ *
+ * Do not add fields here. Extend the live `providerLoginCapabilitySchema` and
+ * let the v6->v7 upgrade bridge fill the new field for old hosts.
+ */
+export const providerLoginCapabilitySchemaV40 = z.object({
+  oauthArgs: z.array(z.string()).nullable(),
+  token: z.object({ vars: z.array(z.string()) }).nullable(),
+  codePaste: z.object({}).nullable().catch(null),
+});
+export type ProviderLoginCapabilityV40 = z.infer<
+  typeof providerLoginCapabilitySchemaV40
 >;
 
 /**
@@ -1018,6 +1070,12 @@ export type ProvidersListResponseV30 = z.infer<
 // the v4.0 line, with the frozen v4.0 provider-id enum - NOT derived via
 // `.extend()` from the live schema, so future live-only fields do not leak
 // into the v4.0 wire for already-shipped clients.
+//
+// `loginCapability` points at the hand-frozen `providerLoginCapabilitySchemaV40`
+// for the same reason the shape itself is hand-frozen: pinning the shape's KEYS
+// while leaving one of them wired to a live sub-schema leaves that sub-schema
+// free to grow on every line this shape backs (v4.0, v5.0, v6.0 list responses
+// and the @2.1 mutation echo). See that schema's comment.
 const providerCliStateBaseShapeV40 = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -1028,7 +1086,7 @@ const providerCliStateBaseShapeV40 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  loginCapability: providerLoginCapabilitySchemaV40.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
   profiles: z.array(providerProfileSchema).catch([]),
 };
@@ -1870,6 +1928,71 @@ export type ProvidersTouchLoginResponse = z.infer<
 >;
 
 /**
+ * Start (or restart) a host-owned, epic-scoped terminal running this
+ * provider's login command, for providers whose capability declares
+ * `terminalLogin`. The host - not the client - creates the PTY: only the host
+ * can build the provider's spawn env (binary path, profile overrides,
+ * `COPILOT_AUTO_UPDATE=false`) and pick the cwd, and a plain `terminal.create`
+ * would get bare filtered `process.env` in a surface that has no cwd of its
+ * own. The client's job is to render the session the host names back.
+ *
+ * `epicId` scopes the session so it lands in the epic's Terminals surface and
+ * the initiating view can open it as a tile - the same scope `terminal.create`
+ * uses. `cols`/`rows` are the size the PTY is opened at, applied while the
+ * shell's output is still buffered so its first redraw is not torn; they are
+ * an INITIAL size, not a promise about the user's viewport - the tile resizes
+ * on mount, and today's client sends a fixed 80x24. A host must not treat them
+ * as the real geometry (no sizing heuristics, no resize-suppression window).
+ *
+ * No `profileId`: terminal login is Copilot-only today and Copilot has no
+ * managed profiles, so the field could only ever carry the ambient sentinel -
+ * a value with two live spellings in the host (`"ambient"` on the wire, `null`
+ * in the domain) and therefore a way for one provider to end up with two
+ * "single" login shells. If terminal login ever reaches a provider WITH
+ * managed profiles, add the field then and normalize it at the resolver
+ * boundary.
+ *
+ * No `desiredSessionId` either: the host mints a fresh one per attempt. A
+ * reused id is what makes a retry silently fail - a killed session lingers
+ * `exited` in the host's grace window, so a readiness watch armed on that id
+ * settles immediately and the login command is never delivered, and a reused
+ * tile id re-focuses the previous, permanently dead tile.
+ */
+export const providersStartTerminalLoginRequestSchema = z.object({
+  providerId: providerIdSchema,
+  epicId: z.string().min(1),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+});
+export type ProvidersStartTerminalLoginRequest = z.infer<
+  typeof providersStartTerminalLoginRequestSchema
+>;
+
+/**
+ * `sessionId` is the freshly created session - the client opens it as a tile
+ * and ATTACHES; it must never `terminal.create` that id itself.
+ *
+ * `replacedSessionId` is the previous login session this attempt killed, or
+ * `null` on a first attempt. Every click starts a fresh sign-in (a completed
+ * login leaves an idle interactive shell behind that carries no state worth
+ * resuming), so the client closes any open tile bound to this id before
+ * focusing the new one - otherwise the retry lands on a tile that can never
+ * come back to life.
+ */
+export const providersStartTerminalLoginResponseSchema = z.object({
+  // Bounded like the request's `epicId`: an empty id decodes fine and then
+  // vanishes downstream - `useFocusEpicTerminalSession` returns early on a
+  // zero-length session id - leaving the host holding a live sign-in PTY with
+  // no tile and no error. The host mints a uuid so this is a contract floor,
+  // not a live defect.
+  sessionId: z.string().min(1),
+  replacedSessionId: z.string().nullable(),
+});
+export type ProvidersStartTerminalLoginResponse = z.infer<
+  typeof providersStartTerminalLoginResponseSchema
+>;
+
+/**
  * User-initiated "get this provider's managed pack ready". A NON-BLOCKING
  * kick: the host promotes the pack to the front of its install queue, clears
  * the cell's exponential backoff (this is a human pressing retry, not an
@@ -1936,11 +2059,12 @@ export function downgradeProviderAuthV20ToV10(
 // those). `providersListDowngradeV2ToV1` (v2.0/mutation-v2.0 sources) and the
 // v3.0/latest downgrade paths (live source) share this one stripping
 // function.
-// `loginCapability` is typed as either the live or frozen-v10 capability
-// shape for the same reason: the v2.0/v3.0 frozen states carry the
-// pre-`codePaste` shape (`providerLoginCapabilitySchemaV10`), not the live
-// one - either is fine here since the strict v1.0 parse below only keeps
-// `oauthArgs`/`token` regardless.
+// `loginCapability` is typed as the live OR either frozen capability shape for
+// the same reason: the v2.0/v3.0 frozen states carry the pre-`codePaste` shape
+// (`providerLoginCapabilitySchemaV10`) and `ProviderMutationCliStateV21` carries
+// the pre-`terminalLogin` one (`providerLoginCapabilitySchemaV40`), neither of
+// them live. All three are fine here since the strict v1.0 parse below only
+// keeps `oauthArgs`/`token` regardless.
 // Exported so `registry.ts` names the same shape instead of restating it: the
 // two definitions had already been written twice, identically, and the widened
 // `loginCapability` below is exactly the kind of detail that drifts when only

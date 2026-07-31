@@ -180,14 +180,13 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -688,7 +687,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         .sort(),
     [tree, visibleIds],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds: indicatorChatIds,
     enabled: indicatorChatIds.length > 0,
@@ -802,7 +801,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   }
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <SidebarArchiveSupportedContext.Provider value={canArchive}>
         <SidebarViewerContext.Provider value={isViewer}>
           <SidebarSortContext.Provider value={comparator}>
@@ -1339,13 +1338,13 @@ function ChatNodeShellBody(
   // "New child agent" opens the shared New Conversation modal seeded with this
   // row as the parent - the same action the standalone hover "+" used to
   // trigger, now consolidated into the row menu (right-click + ⋯) so there is a
-  // single hover affordance. Forcing chat mode mirrors `NewConversationModalAction`.
+  // single hover affordance. It preserves the modal's remembered interface,
+  // matching the top-level new-agent trigger.
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
-    useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
     openNewConversationModal({
       epicId,
       tabId,

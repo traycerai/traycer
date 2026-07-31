@@ -28,7 +28,10 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
+import {
+  useFocusEpicTerminalSession,
+  type EpicTerminalRefOverrides,
+} from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
@@ -375,6 +378,7 @@ interface SharedHandlers {
   readonly focusTerminal: (
     terminalSessionId: string | null,
     cwd: string,
+    overrides: EpicTerminalRefOverrides | null,
   ) => void;
   readonly livenessFor: (sessionId: string | null) => TerminalLiveness;
   readonly onRetry: (workspace: SetupCardWorkspace) => void;
@@ -464,6 +468,7 @@ function WorkspaceSetupDetail(
               focusTerminal(
                 entry.terminalSessionId,
                 entry.worktreePath ?? entry.workspacePath,
+                null,
               )
             }
           />

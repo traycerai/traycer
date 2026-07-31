@@ -10,6 +10,7 @@ import { WorktreeOwnerSettingsHeader } from "@/components/worktree/worktree-owne
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
+import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 
 // The git probes this forces are disk-bound and the `gh` PR probe is a network
@@ -100,21 +101,23 @@ export function WorktreeOwnerMetadataTooltip(props: {
   // relying on it: a disabled button ignores clicks, but nothing stops this
   // listener, and firing without a client would reject straight into the
   // failure toast.
-  useEffect(() => {
-    if (!open || !canRefresh) return;
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key.toLowerCase() !== "r") return;
-      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
-        return;
-      }
-      event.preventDefault();
-      trigger();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [canRefresh, open, trigger]);
+  //
+  // Claimed through the shared owner rather than bound at the window directly:
+  // the folder-mapping picker claims bare `R` too and can be open in the same
+  // pane, and two raw window listeners would both fire for one keystroke. Last
+  // claim wins, so whichever overlay opened most recently owns the key - which
+  // is why the claim depends only on this card being OPEN. `trigger` changes
+  // identity whenever `refreshing` toggles, and re-claiming on that would let
+  // this card jump back above a picker that opened after it, purely because a
+  // refresh finished. See `useBareKeyClaimer`.
+  const claimRefreshKey = useBareKeyClaimer("r", (event) => {
+    event.preventDefault();
+    trigger();
+  });
+  useEffect(
+    () => (open && canRefresh ? claimRefreshKey() : undefined),
+    [canRefresh, claimRefreshKey, open],
+  );
   return (
     <HoverPreviewCard
       content={

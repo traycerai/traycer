@@ -2,6 +2,9 @@ import {
   DEFAULT_AGENT_MODE as PROTOCOL_DEFAULT_AGENT_MODE,
   agentModeSchema,
   guiHarnessIdSchema,
+  modelsForHarness,
+  readableModelMatch,
+  resolveModelBySlug,
   tuiHarnessIdSchema,
   type GuiAgentModelOption,
   type GuiHarnessId,
@@ -275,17 +278,35 @@ export function modelDisplayLabel(model: ModelOption): string {
   return stripProviderPrefix(model.label, providerPrefix);
 }
 
+// A READ-ONLY lookup: the row is used for display and for reading capability
+// off, never to rewrite the persisted slug. That is why an AMBIGUOUS alias
+// match is acceptable here - tied rows are the same underlying model, so any
+// of them answers "what is this model called / what can it do". The write side
+// (`resolveModelSlug` in the composer toolbar store) is the one that must
+// refuse an ambiguous match.
+//
+// KNOWN LIMIT, deliberately not designed around: the caller also clamps the
+// sticky reasoning effort and service tier against this row
+// (`normalizeReasoningForModel` / `normalizeServiceTierForModel` in
+// `deriveToolbarState`), so if tied rows ever disagreed about an effort the
+// user had selected, first-in-catalog-order would silently drop it from the
+// emitted settings. Measured against the live Claude catalog the two tied rows
+// (`default`, `opus[1m]`) expose identical efforts and both expose the fast
+// tier, so there is nothing to choose between them today. Preferring whichever
+// tied row happens to support the request would pick a row based on what was
+// asked for, which is worse than picking one by a stable order. The host-side
+// A2A readers, which CAN report back, surface the disagreement through their
+// `warnings` channel instead - see `aliasDisagreementWarnings`.
 export function findSelectedModel(
   models: ReadonlyArray<ModelOption>,
   selection: HarnessModelSelection,
 ): ModelOption | null {
   if (selection.modelSlug.length === 0) return findDefaultModel(models);
-  return (
-    models.find(
-      (model) =>
-        model.harnessId === selection.harnessId &&
-        model.slug === selection.modelSlug,
-    ) ?? null
+  return readableModelMatch(
+    resolveModelBySlug(
+      modelsForHarness(models, selection.harnessId),
+      selection.modelSlug,
+    ),
   );
 }
 

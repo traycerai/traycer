@@ -1,102 +1,133 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import { buildGitHubIssueUrl } from "../issue-reporter";
+import { buildGitHubIssueUrl, type PublicIssueDraft } from "../issue-reporter";
 
-const base: Parameters<typeof buildGitHubIssueUrl>[0] = {
-  appVersion: "1.2.3",
-  platform: "darwin",
-  arch: "arm64",
-  electronVersion: null,
-  chromeVersion: null,
-  nodeVersion: null,
-  hostVersion: null,
-  hostStatus: null,
-  hostPid: null,
-  title: "Something broke",
-  whatHappened: "The app crashed",
-  stepsToReproduce: "1. Open app\n2. Click button",
-  expectedBehavior: "It should work",
-  actualBehavior: "It crashed",
-  reportId: null,
+const THIS_DIR = dirname(fileURLToPath(import.meta.url));
+const SOURCE_PATH = join(THIS_DIR, "../issue-reporter.ts");
+
+// Every field pre-built and pre-scrubbed, exactly as `support:buildPublicDraft`
+// (Electron main, ticket 09 / ticket 07's type-to-template routing) would
+// hand it over the IPC boundary.
+const bugDraft: PublicIssueDraft = {
+  template: "bug_report.yml",
+  title: "chat.subscribe - RPC_ERROR: Sending a message hangs",
+  fields: {
+    "what-happened": "The app crashed",
+    version: "1.2.3",
+    os: "darwin (arm64)",
+    component: "Desktop app",
+    repro: "1. Open app\n2. Click button",
+  },
 };
 
-function extractBody(url: string): string {
-  return decodeURIComponent(new URL(url).searchParams.get("body")!);
-}
+const ideaDraft: PublicIssueDraft = {
+  template: "feature_request.yml",
+  title: "Add a dark-mode toggle",
+  fields: {
+    problem: "There's no dark mode",
+    proposal:
+      "Not captured separately - see the private support report rpt_test.",
+    alternatives: "",
+    component: "Desktop app",
+  },
+};
 
-function extractTitle(url: string): string {
-  return decodeURIComponent(new URL(url).searchParams.get("title")!);
+const otherDraft: PublicIssueDraft = {
+  template: "general.yml",
+  title: "Feedback on onboarding",
+  fields: {
+    details: "The onboarding flow was confusing",
+  },
+};
+
+function paramsOf(url: string): URLSearchParams {
+  return new URL(url).searchParams;
 }
 
 describe("buildGitHubIssueUrl", () => {
   it("points to the OSS repo issues/new endpoint", () => {
-    const url = buildGitHubIssueUrl(base);
-    expect(url).toMatch(/^https:\/\/github\.com\/.*\/issues\/new/);
-  });
-
-  it("sets the title param from info.title", () => {
-    expect(extractTitle(buildGitHubIssueUrl(base))).toBe("Something broke");
-  });
-
-  it("includes app version and platform in body", () => {
-    const body = extractBody(buildGitHubIssueUrl(base));
-    expect(body).toContain("1.2.3");
-    expect(body).toContain("darwin (arm64)");
-  });
-
-  it("omits optional runtime fields when null", () => {
-    const body = extractBody(buildGitHubIssueUrl(base));
-    expect(body).not.toContain("Electron");
-    expect(body).not.toContain("Node.js");
-    expect(body).not.toContain("Host");
-  });
-
-  it("includes runtime versions when provided", () => {
-    const body = extractBody(
-      buildGitHubIssueUrl({
-        ...base,
-        electronVersion: "28.0.0",
-        chromeVersion: "120.0.0",
-        nodeVersion: "20.11.0",
-        hostVersion: "0.5.1",
-        hostStatus: "ready",
-        hostPid: 1234,
-      }),
+    expect(buildGitHubIssueUrl(bugDraft)).toMatch(
+      /^https:\/\/github\.com\/.*\/issues\/new\?/,
     );
-    expect(body).toContain("28.0.0");
-    expect(body).toContain("120.0.0");
-    expect(body).toContain("20.11.0");
-    expect(body).toContain("0.5.1");
-    expect(body).toContain("ready");
-    expect(body).toContain("1234");
   });
 
-  it("includes report ID when provided", () => {
-    const body = extractBody(
-      buildGitHubIssueUrl({ ...base, reportId: "rpt_abc123" }),
+  it("routes a bug report through the bug_report.yml issue form template", () => {
+    expect(paramsOf(buildGitHubIssueUrl(bugDraft)).get("template")).toBe(
+      "bug_report.yml",
     );
-    expect(body).toContain("rpt_abc123");
-    expect(body).toContain("Support Report");
   });
 
-  it("omits support report row when reportId is null", () => {
-    const body = extractBody(buildGitHubIssueUrl(base));
-    expect(body).not.toContain("Support Report");
+  it("routes an idea through the feature_request.yml issue form template", () => {
+    expect(paramsOf(buildGitHubIssueUrl(ideaDraft)).get("template")).toBe(
+      "feature_request.yml",
+    );
   });
 
-  it("includes user-provided content in body", () => {
-    const body = extractBody(buildGitHubIssueUrl(base));
-    expect(body).toContain("The app crashed");
-    expect(body).toContain("1. Open app");
-    expect(body).toContain("It should work");
-    expect(body).toContain("It crashed");
+  it("routes 'something else' through the general.yml issue form template", () => {
+    expect(paramsOf(buildGitHubIssueUrl(otherDraft)).get("template")).toBe(
+      "general.yml",
+    );
   });
 
-  it("includes all required template sections", () => {
-    const body = extractBody(buildGitHubIssueUrl(base));
-    expect(body).toContain("### What happened?");
-    expect(body).toContain("### Steps to reproduce");
-    expect(body).toContain("### Expected behavior");
-    expect(body).toContain("### Actual behavior");
-    expect(body).toContain("### Additional context");
+  it("assembles every bug field verbatim from the given draft - zero composition of its own", () => {
+    const params = paramsOf(buildGitHubIssueUrl(bugDraft));
+    expect(params.get("title")).toBe(bugDraft.title);
+    expect(params.get("what-happened")).toBe(bugDraft.fields["what-happened"]);
+    expect(params.get("version")).toBe(bugDraft.fields.version);
+    expect(params.get("os")).toBe(bugDraft.fields.os);
+    expect(params.get("component")).toBe(bugDraft.fields.component);
+    expect(params.get("repro")).toBe(bugDraft.fields.repro);
+  });
+
+  it("assembles every idea field verbatim from the given draft", () => {
+    const params = paramsOf(buildGitHubIssueUrl(ideaDraft));
+    expect(params.get("title")).toBe(ideaDraft.title);
+    expect(params.get("problem")).toBe(ideaDraft.fields.problem);
+    expect(params.get("proposal")).toBe(ideaDraft.fields.proposal);
+    expect(params.get("alternatives")).toBe(ideaDraft.fields.alternatives);
+    expect(params.get("component")).toBe(ideaDraft.fields.component);
+  });
+
+  it("assembles every 'something else' field verbatim from the given draft", () => {
+    const params = paramsOf(buildGitHubIssueUrl(otherDraft));
+    expect(params.get("title")).toBe(otherDraft.title);
+    expect(params.get("details")).toBe(otherDraft.fields.details);
+  });
+
+  it("does not set body or labels (the template owns those)", () => {
+    for (const draft of [bugDraft, ideaDraft, otherDraft]) {
+      const params = paramsOf(buildGitHubIssueUrl(draft));
+      expect(params.has("body")).toBe(false);
+      expect(params.has("labels")).toBe(false);
+    }
+  });
+
+  it("never truncates - the 8 KiB URL budget is the caller's contract to uphold, not this module's", () => {
+    const oversized: PublicIssueDraft = {
+      ...bugDraft,
+      fields: { ...bugDraft.fields, "what-happened": "x".repeat(20_000) },
+    };
+    const params = paramsOf(buildGitHubIssueUrl(oversized));
+    expect(params.get("what-happened")).toBe("x".repeat(20_000));
+  });
+
+  // Ticket 09 guardrail (critique C1): the renderer emitting public text is
+  // the anti-pattern this ticket exists to kill. A grep-level check is the
+  // tripwire since TypeScript alone can't enforce "contains no logic".
+  it("contains no body/title composition or truncation logic", () => {
+    const source = readFileSync(SOURCE_PATH, "utf8");
+    for (const bannedIdentifier of [
+      "composeWhatHappened",
+      "composeReportBody",
+      "composeRepro",
+      "composePlaceholderField",
+      "truncateToFit",
+      "shrinkField",
+      "deriveTitle",
+    ]) {
+      expect(source).not.toContain(bannedIdentifier);
+    }
   });
 });

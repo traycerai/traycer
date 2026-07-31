@@ -52,7 +52,7 @@ describe("useFocusEpicTerminalSession", () => {
 
     const { result } = renderFocusHook(viewTabId);
     act(() => {
-      result.current(EXISTING_TERMINAL.id, EXISTING_TERMINAL.cwd);
+      result.current(EXISTING_TERMINAL.id, EXISTING_TERMINAL.cwd, null);
     });
 
     // A revert to raw `setActiveTilePane`/`setActiveTileTab` calls would never
@@ -75,7 +75,7 @@ describe("useFocusEpicTerminalSession", () => {
 
     const { result } = renderFocusHook(viewTabId);
     act(() => {
-      result.current("term-new", "/work/new-repo");
+      result.current("term-new", "/work/new-repo", null);
     });
 
     expect(nestedFocusBoundaryMock.navigateNested).toHaveBeenCalledWith(
@@ -102,8 +102,8 @@ describe("useFocusEpicTerminalSession", () => {
 
     const { result } = renderFocusHook(viewTabId);
     act(() => {
-      result.current(null, "/work/repo");
-      result.current("", "/work/repo");
+      result.current(null, "/work/repo", null);
+      result.current("", "/work/repo", null);
     });
 
     expect(nestedFocusBoundaryMock.navigateNested).not.toHaveBeenCalled();

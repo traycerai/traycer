@@ -850,6 +850,15 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Opening a sign-in terminal kills the previous one and spawns a PTY, so
+  // ordering is load-bearing: a "latest wins" policy could drop the call that
+  // actually left a terminal behind. Concurrent clicks are collapsed
+  // host-side, which is where that decision belongs.
+  "providers.startTerminalLogin": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an API key changes persisted credentials.
   "providers.setApiKey": {
     mode: "fifo",

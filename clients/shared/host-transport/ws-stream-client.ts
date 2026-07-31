@@ -28,6 +28,7 @@ import {
   streamMethodFrameEnvelopeSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
+  STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE,
   type ClientStreamOpenFrame,
   type ClientStreamSubscribeFrame,
   type ClientStreamFatalErrorFrame,
@@ -1441,14 +1442,15 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
-    // `retryable` marks a transient, host-side rejection (e.g. the host's JWKS
-    // fetch timed out while verifying our bearer). Our credential is fine, so
-    // credential revalidation can't help and the no-progress give-up bound must
-    // not apply - treat it exactly like an ordinary transport drop and let the
-    // reconnect backoff ride until the host recovers. Checked before the
-    // `UNAUTHORIZED` branch because the host keeps the wire `code` as
-    // `UNAUTHORIZED` (so older clients still get the credential path).
-    if (details.retryable === true) {
+    // `retryable` marks a transient host-side rejection. The stable subscribe-
+    // timeout code is checked too because hosts through 1.1.9 emitted it without
+    // the additive flag; a new client must still recover when paired with one of
+    // those hosts. In either case credential recovery cannot help, so route it
+    // through ordinary transport reconnect before the `UNAUTHORIZED` branch.
+    if (
+      details.retryable === true ||
+      details.code === STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE
+    ) {
       // A transient host blip must not count toward the credential give-up
       // bound, mirroring the `network-error` revalidation outcome: clear any
       // streak left by a prior genuine `UNAUTHORIZED` episode so a later real

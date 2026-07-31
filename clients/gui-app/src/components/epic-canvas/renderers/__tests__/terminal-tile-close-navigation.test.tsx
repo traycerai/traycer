@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { create } from "zustand";
 import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/unary-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -93,6 +95,17 @@ vi.mock("@/lib/perf/terminal-load-perf", () => ({
   beginTerminalLoad: vi.fn(),
 }));
 
+// An exited sign-in tile renders the restart button, which instantiates the
+// terminal-login mutation and therefore reaches for the tab's host client.
+// These cases never press it, so a stub that can answer `getActiveHostId` is
+// enough - the full host runtime is not what is under test here.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({
+    getActiveHostId: () => HOST_ID,
+    request: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/analytics", () => ({
   AnalyticsEvent: {
     TerminalOpened: "TerminalOpened",
@@ -110,7 +123,14 @@ const EPIC_ID = "epic-1";
 const HOST_ID = "host-1";
 
 function withTabHost(node: ReactNode): ReactNode {
-  return <TabHostProvider hostId={HOST_ID}>{node}</TabHostProvider>;
+  // A sign-in tile that has exited renders the restart button, and that button
+  // instantiates the terminal-login mutation hook - so this wrapper needs a
+  // QueryClient even though the ordinary-terminal cases never reach one.
+  return (
+    <QueryClientProvider client={new QueryClient()}>
+      <TabHostProvider hostId={HOST_ID}>{node}</TabHostProvider>
+    </QueryClientProvider>
+  );
 }
 
 function resetNavigationSpy(): void {
@@ -138,6 +158,20 @@ function terminalNode(id: string, instanceId: string): EpicTerminalRef {
     titleSource: "manual",
     hostId: HOST_ID,
     cwd: "/work/repo",
+  };
+}
+
+function signInTerminalNode(id: string, instanceId: string): EpicTerminalRef {
+  return {
+    id,
+    instanceId,
+    type: "terminal",
+    name: "Copilot sign-in",
+    titleSource: "manual",
+    hostId: HOST_ID,
+    cwd: "~",
+    origin: "provider-login",
+    originProviderId: "copilot",
   };
 }
 
@@ -355,6 +389,56 @@ describe("<TerminalTile /> close navigation", () => {
     if (canvas === undefined) throw new Error("expected view tab canvas");
     const pane = collectPanes(canvas.root)[0];
     expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
+  });
+
+  // A sign-in terminal is exempt from the clean-exit auto-close every
+  // ordinary terminal gets (the "routes PTY-exit close" case above): it is
+  // the only surface that can restart the sign-in, and closing it on a clean
+  // exit (the user typing `exit` after signing in) would retract that
+  // restart affordance and the CLI's last words with no explanation.
+  // Probed: dropping `isSignInTerminal` from `TerminalLive`'s exit effect
+  // dependency guard makes this tile close identically to the ordinary one -
+  // confirmed and reverted.
+  it("keeps a sign-in terminal tile open after a clean exit, unlike an ordinary terminal", async () => {
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
+    store.openTileInTab(viewTabId, signInNode);
+    const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvasBefore === undefined) throw new Error("expected view tab canvas");
+    const paneId = collectPanes(canvasBefore.root)[0].id;
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={viewTabId}
+          node={signInNode}
+          tileId={paneId}
+          isActive
+        />,
+      ),
+    );
+
+    // Give the exit effect a couple of ticks - the same window the ordinary
+    // "routes PTY-exit close" case awaits its close through.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expectTileOpen(viewTabId, signInNode.instanceId);
+    expect(testState.navigateNested).not.toHaveBeenCalled();
+
+    // Staying open is only half the contract: the tile has to SAY the shell
+    // ended and offer the restart. `signInSessionGone` in the parent cannot
+    // cover this - it reads `terminal.list`, which has a 60s staleTime and
+    // never polls, so on the ATTACHED path it still believes the session is
+    // live long after the store's stream-driven status says otherwise. Before
+    // `TerminalLive` learned to render the panel itself, this assertion failed
+    // while the one above passed: an open tile holding a dead, torn-down xterm
+    // with no explanation and no way back.
+    expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
+    expect(screen.getByRole("button", { name: /Start again/ })).toBeDefined();
   });
 });
 

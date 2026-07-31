@@ -52,3 +52,14 @@ paths = [
 regexes = [
   '''^dGhlIHNhbXBsZSBub25jZQ==$''',
 ]
+
+[[allowlists]]
+description = "JWT-shaped scrubber fixture. This exact dummy value verifies redaction of JWTs in user text and logs; require both its precise test path and full value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/app/__tests__/support-scrubber\.test\.ts$''',
+]
+regexes = [
+  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9[.]eyJzdWIiOiIxMjM0NTY3ODkwIn0[.]dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U$''',
+]
