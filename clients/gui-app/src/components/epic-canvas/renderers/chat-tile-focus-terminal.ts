@@ -8,13 +8,30 @@ import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+
+/**
+ * Ref fields a caller may set on the tile it is opening. Applied on the OPEN
+ * path only: an already-open tile keeps the ref it was opened with and is
+ * merely activated, which is the honest behaviour - a tile's origin is a fact
+ * about the session behind it, not about who focused it.
+ */
+export interface EpicTerminalRefOverrides {
+  readonly name: string;
+  readonly origin: EpicTerminalRef["origin"];
+  readonly originProviderId: EpicTerminalRef["originProviderId"];
+}
 
 // Calling with `null` is a no-op so callers can pass through whatever id
 // the latest setup event carried (or didn't, for missing-metadata frames)
 // without branching at every call site.
 export function useFocusEpicTerminalSession(
   viewTabId: string,
-): (terminalSessionId: string | null, cwd: string) => void {
+): (
+  terminalSessionId: string | null,
+  cwd: string,
+  overrides: EpicTerminalRefOverrides | null,
+) => void {
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -26,7 +43,7 @@ export function useFocusEpicTerminalSession(
   // that emitted the event - same artifact, same host binding.
   const activeHostId = useTabHostId();
   return useCallback(
-    (terminalSessionId, cwd) => {
+    (terminalSessionId, cwd, overrides) => {
       if (terminalSessionId === null) return;
       if (terminalSessionId.length === 0) return;
       // This is a committed user open/focus, so the nested route search must
@@ -58,10 +75,12 @@ export function useFocusEpicTerminalSession(
           id: terminalSessionId,
           instanceId: uuidv4(),
           type: "terminal",
-          name: DEFAULT_EPIC_NODE_NAMES.terminal,
+          name: overrides?.name ?? DEFAULT_EPIC_NODE_NAMES.terminal,
           titleSource: "manual",
           hostId: activeHostId,
           cwd,
+          origin: overrides?.origin,
+          originProviderId: overrides?.originProviderId,
         }),
       );
     },

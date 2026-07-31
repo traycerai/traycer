@@ -4,4 +4,5 @@ export * from "./subscribe";
 export * from "./agent-runtime";
 export * from "./agent-runtime-accumulator";
 export * from "./interview-tools";
+export * from "./model-slug-resolution";
 export * from "./task-todo-tools";

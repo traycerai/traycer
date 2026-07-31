@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import {
   readCredentialsFile,
@@ -213,7 +214,7 @@ describe("FileTokenStore.migrateLegacyCredentials (real fs + lock/WAL)", () => {
   beforeEach(async () => {
     homeDir = mkdtempSync(join(tmpdir(), "traycer-credentials-migration-"));
     previousHome = process.env.HOME;
-    process.env.HOME = homeDir;
+    sandboxHome(homeDir);
     vi.resetModules();
     ({ FileTokenStore } = await import("../file-token-store"));
   });

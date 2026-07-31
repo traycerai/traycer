@@ -613,6 +613,12 @@ function providerCliState(input: {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
@@ -647,9 +653,20 @@ function providerCliStateWithProfiles(input: {
     // this to exercise the capability gate.
     loginCapability:
       input.loginCapability === undefined
-        ? { oauthArgs: ["auth", "login"], token: null, codePaste: null }
+        ? {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          }
         : input.loginCapability,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
@@ -1761,6 +1778,60 @@ describe("<HarnessModelPicker />", () => {
     ).not.toBeNull();
   });
 
+  it("degrades a signed-out provider even while its harness is still available", async () => {
+    // The Copilot-after-real-logout shape: the binary is installed, so the
+    // availability probe (which never consults auth) keeps reporting
+    // `available: true` - only the ambient account's definitive sign-out says
+    // this provider cannot run.
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "unauthenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+    const { selections } = renderPicker(undefined);
+
+    await openPicker();
+    const claudeTab = screen.getByRole("tab", { name: "Claude" });
+    expect(claudeTab.getAttribute("data-degraded")).toBe("true");
+
+    // Browse-only: clicking it rebases the rail but must NOT commit a switch.
+    fireEvent.click(claudeTab);
+    expect(claudeTab.getAttribute("aria-selected")).toBe("true");
+    expect(selections).toEqual([]);
+    // ...and the panel names the reason instead of leaving the gray-out mute.
+    expect(screen.getByText("Not authenticated")).not.toBeNull();
+  });
+
+  it("shows the ambient account's auth source for a single-profile provider", async () => {
+    // A single-profile provider can authenticate through a credential the user
+    // never handed to it (Copilot riding the GitHub CLI's login). The probe
+    // names the source and account; the picker surfaces both so the state is
+    // never mistaken for a stale catalog.
+    const codexState = providerCliState({
+      providerId: "codex",
+      authStatus: "authenticated",
+      apiKey: { supported: false, configured: false, source: null },
+    });
+    queryMock.providerStates = [
+      {
+        ...codexState,
+        auth: {
+          status: "authenticated",
+          badgeText: "GitHub CLI",
+          label: "Authenticated as hdkshingala",
+          detail: null,
+        },
+      },
+    ];
+    renderPicker(undefined);
+    await openPicker();
+
+    expect(screen.getByText("GitHub CLI")).not.toBeNull();
+    expect(screen.getByText("Authenticated as hdkshingala")).not.toBeNull();
+  });
+
   it("keeps a provider visible when its terminal profile reports the logout before the provider summary converges", async () => {
     const codex = codexModels();
     const signedOutClaude: HarnessOption = {
@@ -2660,6 +2731,7 @@ describe("<HarnessModelPicker />", () => {
           oauthArgs: ["auth", "login"],
           token: null,
           codePaste: null,
+          terminalLogin: null,
         },
         profiles: [],
       }),
@@ -2686,6 +2758,7 @@ describe("<HarnessModelPicker />", () => {
           oauthArgs: ["auth", "login"],
           token: null,
           codePaste: null,
+          terminalLogin: null,
         },
         profiles: claudeProfilesForDropdown(),
       }),

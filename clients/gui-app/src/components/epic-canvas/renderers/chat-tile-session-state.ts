@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  ChatPendingInterviewState,
   ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -17,7 +18,10 @@ import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-ass
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
-import type { PendingInterviewView } from "./chat-tile-types";
+import type {
+  PendingInterviewView,
+  UnanswerableInterviewView,
+} from "./chat-tile-types";
 
 /**
  * Fallback harness id used when the inline-edit settings do not carry a
@@ -309,17 +313,30 @@ export function canModifyChatMessages(input: {
     | "runStatus"
     | "activeTurn"
     | "queue"
+    | "backgroundItems"
+    | "turnInProgress"
     | "pendingUserMessages"
     | "pendingActions"
   >;
 }): boolean {
   if (!input.canAct) return false;
-  // `runStatus` is the host-owned source of truth for an in-progress run and
-  // covers windows `activeTurn` misses - the pre-turn `turnActivating` phase
-  // (provider/worktree setup) and stop-during-activation both report a non-idle
-  // `runStatus` while `activeTurn` is still null. Gate on it so edit/delete stay
-  // disabled for the whole run, matching the composer's `runStatus`-driven UX.
-  if (input.state.runStatus !== "idle") return false;
+  // Narrowed via `resolvedTurnStatus`, not the raw `runStatus`: the raw value
+  // also reads "running" while visible background work outlives the settled
+  // turn (Bash `run_in_background` / a subagent / Monitor), which would keep
+  // edit/delete hidden indefinitely with no turn to wait for - the composer
+  // and restore gating already read the narrowed value for the same reason.
+  // The narrowed signal still covers the windows `activeTurn` misses: the
+  // pre-turn `turnActivating` phase (provider/worktree setup) and
+  // stop-during-activation both keep the host's `turnInProgress` true until
+  // the run truly unwinds. Queued sends are handled by the queue check below.
+  if (
+    resolvedTurnStatus(
+      input.state,
+      composerTurnStatus(input.state.runStatus),
+    ) !== null
+  ) {
+    return false;
+  }
   if (input.state.activeTurn !== null) return false;
   if (input.state.queue.items.length > 0) return false;
   if (input.state.pendingUserMessages.length > 0) return false;
@@ -575,4 +592,55 @@ export function findPendingInterview(
     }
   }
   return null;
+}
+
+// Stable identity for the (overwhelmingly common) "nothing is stuck" answer.
+// `findUnanswerableInterviews` runs off `renderedMessages`, which changes on
+// every streaming token, so returning a fresh `[]` would churn the composer
+// memo chain on every token - the exact regression
+// chat-tile-composer-rerender.test.tsx pins.
+const NO_UNANSWERABLE_INTERVIEWS: ReadonlyArray<UnanswerableInterviewView> = [];
+
+/**
+ * Host-pending interviews with no answerable card in this transcript.
+ *
+ * `findPendingInterview` renders a card only for a `streaming` interview block,
+ * so a host-pending blockId whose block is already settled - or missing from
+ * the transcript entirely - yields nothing to answer while the host keeps
+ * rejecting sends. This is the disjoint complement of `findPendingInterview`
+ * over the host's pending set: every id here has no streaming block, so the two
+ * can never name the same block.
+ *
+ * There is no transient window to debounce. The host broadcasts an interview's
+ * `blockDelta` before the `interviewRequested` frame that makes it pending
+ * (chat-session-manager `handleRuntimeEvent`), and hydration surfaces detached
+ * waits in the same snapshot that carries their persisted blocks - so a pending
+ * id without a streaming block is genuinely stuck, not mid-arrival.
+ */
+export function findUnanswerableInterviews(
+  messages: ReadonlyArray<ChatMessageModel>,
+  hostPendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
+): ReadonlyArray<UnanswerableInterviewView> {
+  if (hostPendingInterviews.length === 0) return NO_UNANSWERABLE_INTERVIEWS;
+  const streamingBlockIds = new Set<string>();
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (segment.kind !== "interview") continue;
+      if (segment.status !== "streaming") continue;
+      streamingBlockIds.add(segment.id);
+    }
+  }
+  const unanswerable: UnanswerableInterviewView[] = [];
+  for (const interview of hostPendingInterviews) {
+    if (streamingBlockIds.has(interview.blockId)) continue;
+    unanswerable.push({
+      blockId: interview.blockId,
+      requestedAt: interview.requestedAt,
+    });
+  }
+  if (unanswerable.length === 0) return NO_UNANSWERABLE_INTERVIEWS;
+  // Oldest first: the earliest dangling question is the one that has been
+  // blocking the chat, so it reads first in the notice.
+  unanswerable.sort((left, right) => left.requestedAt - right.requestedAt);
+  return unanswerable;
 }

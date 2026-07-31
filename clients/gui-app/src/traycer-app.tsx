@@ -41,6 +41,7 @@ import { NotificationsSessionProvider } from "@/providers/notifications-session-
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
@@ -191,6 +192,7 @@ interface TraycerAuthenticatedRuntimeProps {
 function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
   return (
     <CommandPaletteProvider router={props.router}>
+      <SupportContextRegistryBridge router={props.router} />
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
         <HostCredentialProvisionProvider>

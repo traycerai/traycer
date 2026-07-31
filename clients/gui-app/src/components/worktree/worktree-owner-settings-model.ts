@@ -1,3 +1,7 @@
+import {
+  readableModelMatch,
+  resolveModelBySlug,
+} from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
@@ -145,12 +149,14 @@ function findHarnessEntry(
   return harnesses.find((harness) => harness.id === harnessId) ?? null;
 }
 
+// Read-only: the row is only read for its label and reasoning options, so an
+// ambiguous alias match is fine here (see `readableModelMatch`).
 function findModel(
   entry: GuiHarnessCatalogEntry | null,
   slug: string,
 ): ModelOption | null {
   if (entry === null) return null;
-  return entry.models.find((model) => model.slug === slug) ?? null;
+  return readableModelMatch(resolveModelBySlug(entry.models, slug));
 }
 
 // `findReasoningLabel` falls back to the raw level when the model (or its

@@ -17,6 +17,8 @@ import {
   providerManagedInstallStateSchema,
   providerMutationCliStateSchemaV20,
   providerMutationCliStateSchemaV21,
+  providerLoginCapabilitySchema,
+  providerLoginCapabilitySchemaV40,
   providerVersionVisibilitySchema,
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
@@ -27,6 +29,8 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
   providersSetEnabledResponseSchema,
+  providersStartTerminalLoginRequestSchema,
+  providersStartTerminalLoginResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -553,7 +557,10 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
       hostRpcRegistry["providers.list"],
       7,
       6,
-      { providers: [stateWithRegistryFields] },
+      // `native` is required here and absent from the major-6 cases above
+      // because v7.0 is the live response shape, which carries it - v6.0 froze
+      // before it existed. Same reason the registry fields only ride v7.0.
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -695,5 +702,181 @@ describe("provider.* mutation lines never carry the provider-pack-registry field
     expect(onWire.state).not.toHaveProperty("managedInstallState");
     expect(onWire.state).not.toHaveProperty("versionVisibility");
     expect(onWire.state).not.toHaveProperty("advisory");
+  });
+});
+
+/**
+ * `terminalLogin` marks a provider whose sign-in must run in a real terminal
+ * (Copilot: `copilot login` prints a device code that a headless child
+ * discards). It is a v7.0 field, and every already-released `providers.list`
+ * line plus every @2.1 mutation echo is backed by the hand-frozen
+ * `providerCliStateBaseShapeV40` - whose `loginCapability` is now pinned to
+ * `providerLoginCapabilitySchemaV40` rather than the live capability.
+ *
+ * Both directions are asserted, because either one alone passes for the wrong
+ * reason: "the frozen shape strips it" is also true of a schema that never
+ * models the field anywhere, and "the live shape keeps it" is also true of a
+ * frozen shape that leaks.
+ */
+describe("terminalLogin is a v7.0-only login capability", () => {
+  const capabilityWithTerminalLogin = {
+    oauthArgs: ["login"],
+    token: null,
+    codePaste: null,
+    terminalLogin: {},
+  };
+
+  it("the live capability keeps terminalLogin", () => {
+    const parsed = providerLoginCapabilitySchema.parse(
+      capabilityWithTerminalLogin,
+    );
+    expect(Object.keys(parsed)).toContain("terminalLogin");
+    expect(parsed.terminalLogin).toEqual({});
+  });
+
+  it("the frozen v4.0 capability strips terminalLogin", () => {
+    const parsed = providerLoginCapabilitySchemaV40.parse(
+      capabilityWithTerminalLogin,
+    );
+    expect(Object.keys(parsed)).not.toContain("terminalLogin");
+  });
+
+  it.each([
+    ["providers.list@4.0", providersListResponseSchemaV40],
+    ["providers.list@5.0", providersListResponseSchemaV50],
+    ["providers.list@6.0", providersListResponseSchemaV60],
+  ])("%s strips terminalLogin from a provider row", (_label, schema) => {
+    const parsed = schema.parse({
+      providers: [
+        {
+          ...providerState("copilot"),
+          loginCapability: capabilityWithTerminalLogin,
+        },
+      ],
+    });
+    const capability = parsed.providers[0].loginCapability;
+    expect(capability).not.toBeNull();
+    expect(Object.keys(capability ?? {})).not.toContain("terminalLogin");
+    // The rest of the capability still rides this line - this is a field
+    // freeze, not a capability blackout.
+    expect(capability?.oauthArgs).toEqual(["login"]);
+  });
+
+  it("the @2.1 mutation state echo strips terminalLogin", () => {
+    // Ten released @2.1 echoes share this shape. An echo that carried the
+    // field would break a released client for a value a login can never
+    // change anyway.
+    const parsed = providerMutationCliStateSchemaV21.parse({
+      ...providerState("copilot"),
+      loginCapability: capabilityWithTerminalLogin,
+    });
+    expect(Object.keys(parsed.loginCapability ?? {})).not.toContain(
+      "terminalLogin",
+    );
+  });
+
+  it("the live providers.list response keeps terminalLogin", () => {
+    const parsed = providersListResponseSchema.parse({
+      providers: [
+        {
+          ...providerState("copilot"),
+          loginCapability: capabilityWithTerminalLogin,
+        },
+      ],
+    });
+    expect(parsed.providers[0].loginCapability?.terminalLogin).toEqual({});
+  });
+});
+
+describe("providers.list v6->v7 fills terminalLogin for an old host", () => {
+  it("fills null through the REGISTERED bridge, not just a hand-called helper", () => {
+    // A client decodes an old host's payload through the negotiated FROZEN
+    // schema, so the live `.catch(null)` never runs and the key would arrive
+    // genuinely `undefined`. This bridge is the only hop onto the live shape,
+    // so it is the only place the fill can happen.
+    //
+    // Two mechanisms currently produce it: the bridge's explicit
+    // `upgradeLoginCapabilityFromV40` call, and the live re-parse inside
+    // `upgradeProviderCliStateListToLatest` (which exists for
+    // `nativeCapabilities` and incidentally runs `.catch(null)`). This test
+    // asserts the OUTCOME, so it stays green while either survives and goes
+    // red only if both go - which is the contract worth pinning. Do not read
+    // it as proof that either mechanism alone is present.
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
+      providersListResponseSchemaV60.parse({
+        providers: [
+          {
+            ...providerState("copilot"),
+            loginCapability: { oauthArgs: ["login"], token: null },
+          },
+        ],
+      }),
+    );
+    const capability = upgraded.providers[0].loginCapability;
+    expect(capability).not.toBeNull();
+    // Own key, not merely `undefined` - a missing key and an explicit null
+    // are what the GUI gate has to tell apart.
+    expect(Object.keys(capability ?? {})).toContain("terminalLogin");
+    expect(capability?.terminalLogin).toBeNull();
+  });
+
+  it("leaves a null capability null rather than inventing an object", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
+      providersListResponseSchemaV60.parse({
+        providers: [{ ...providerState("cursor"), loginCapability: null }],
+      }),
+    );
+    expect(upgraded.providers[0].loginCapability).toBeNull();
+  });
+});
+
+describe("providers.startTerminalLogin is an additive optional method", () => {
+  it("is registered, declares unsupported degradation, and stays out of the released floor", () => {
+    // A new method NAME is handshake-fatal against a released peer, so it has
+    // to ride the optional-capability channel exactly like
+    // `providers.submitLoginCode` / `touchLogin` do.
+    const entry = hostRpcRegistry["providers.startTerminalLogin"];
+    expect(entry).toBeDefined();
+    expect(entry.degrade).toEqual({ kind: "unsupported" });
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
+      "providers.startTerminalLogin",
+    );
+  });
+
+  it("requires an epic-scoped request and answers with the session it created", () => {
+    expect(
+      providersStartTerminalLoginRequestSchema.safeParse({
+        providerId: "copilot",
+        epicId: "epic-1",
+        cols: 120,
+        rows: 40,
+      }).success,
+    ).toBe(true);
+    // No epic means no terminal surface to render the session in.
+    expect(
+      providersStartTerminalLoginRequestSchema.safeParse({
+        providerId: "copilot",
+        epicId: "",
+        cols: 120,
+        rows: 40,
+      }).success,
+    ).toBe(false);
+    const response = providersStartTerminalLoginResponseSchema.parse({
+      sessionId: "sess-2",
+      replacedSessionId: "sess-1",
+    });
+    expect(response.replacedSessionId).toBe("sess-1");
+    expect(
+      providersStartTerminalLoginResponseSchema.parse({
+        sessionId: "sess-1",
+        replacedSessionId: null,
+      }).replacedSessionId,
+    ).toBeNull();
   });
 });

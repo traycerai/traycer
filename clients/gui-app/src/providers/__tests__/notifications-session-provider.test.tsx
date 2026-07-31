@@ -10,11 +10,13 @@ import type {
   IStreamSession,
   ServerFrameHandler,
   StatusChangeHandler,
+  StreamCloseReason,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
   WsStreamClient,
   type ParamsOf,
+  type StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
@@ -24,6 +26,7 @@ import {
 import {
   hostNotificationsSubscribeClientFrameSchema,
   type HostNotificationEntry,
+  type HostNotificationsCloudFeedRow,
   type HostNotificationsMarkReadRequest,
   type HostNotificationsSubscribeClientFrame,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -37,6 +40,7 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { NotificationNavigate } from "@/lib/notifications";
+import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 
 interface HostState {
   id: string | null;
@@ -45,15 +49,22 @@ interface HostState {
 
 interface StreamState {
   client: WsStreamClient<HostStreamRpcRegistry> | null;
+  cloudFeedSupport: StreamMethodSupport | null;
+  useClientSupport: boolean;
 }
 
 const hostState = vi.hoisted<HostState>(() => ({ id: "host-a", client: null }));
-const streamState = vi.hoisted<StreamState>(() => ({ client: null }));
+const streamState = vi.hoisted<StreamState>(() => ({
+  client: null,
+  cloudFeedSupport: null,
+  useClientSupport: false,
+}));
 
 const mockAuth = {
   onChange: vi.fn((_handler: (status: string) => void) => ({
     dispose: vi.fn(),
   })),
+  revalidateCurrentContext: vi.fn(() => Promise.resolve(null)),
 };
 
 vi.mock("@/lib/host", () => ({
@@ -64,6 +75,10 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => streamState.client,
+  useStreamMethodSupport: (method: keyof HostStreamRpcRegistry & string) =>
+    streamState.useClientSupport
+      ? (streamState.client?.getMethodSupport(method) ?? null)
+      : streamState.cloudFeedSupport,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -77,8 +92,12 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   },
 }));
 
+const showNotificationMock = vi.hoisted(() =>
+  vi.fn<NotificationShow>(() => Promise.resolve()),
+);
+
 vi.mock("@/hooks/notifications/use-notifications", () => ({
-  useNotificationShow: () => () => Promise.resolve(),
+  useNotificationShow: () => showNotificationMock,
 }));
 
 const activateMock = vi.hoisted(() =>
@@ -129,6 +148,12 @@ vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
     useMergedNotificationsActions: () => ({
       markAsRead: markAsReadMock,
       markAllAsRead: vi.fn(),
+      // Cloud view-consumption fan-out. These cases never reach it (jsdom
+      // reports the document blurred, so the locally-read focus signal stays
+      // null), but the provider holds a reference to it - leaving it off the
+      // mock would make any future focus stub here a TypeError, not a
+      // behaviour change.
+      markEntityAsRead: vi.fn(),
       loadMoreHost: vi.fn(),
       canLoadMoreHost: false,
       isLoadingMoreHost: false,
@@ -182,6 +207,7 @@ import {
   __resetHostNotificationsStoreForTests,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   emitTerminalCrashedNotification,
   useAppLocalNotificationsStore,
@@ -247,6 +273,10 @@ class MockStreamSession implements IStreamSession {
   emitStatus(status: "connecting" | "open" | "closed" | "reconnecting"): void {
     this.statusChangeHandler?.(status, null);
   }
+
+  emitClosed(reason: StreamCloseReason): void {
+    this.statusChangeHandler?.("closed", reason);
+  }
 }
 
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
@@ -293,7 +323,9 @@ function resetAuth(
       status,
       profile: { userId, userName: userId, email },
       contextMetadata: { userId, username: userId },
-      subscriptionStatus: "PRO",
+      // Tier is deliberately irrelevant to feed selection. Most cases in
+      // this suite pin the methodless-host fallback configured in beforeEach.
+      subscriptionStatus: "FREE",
     });
     return;
   }
@@ -361,6 +393,49 @@ function hostEntry(input: {
       epicId: input.epicId,
       chatId: input.chatId,
       outcome: "completed",
+    },
+  };
+}
+
+function cloudRow(
+  entryId: string,
+  createdAt: number,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-a",
+    coalesceKey: "agent.stopped:chat-cloud",
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-cloud",
+      chatId: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+        taskTitle: "Cloud epic",
+        agentName: "Cloud chat",
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
+  };
+}
+
+function fatalClose(code: string): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code,
+      reason: `test close: ${code}`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
     },
   };
 }
@@ -493,7 +568,11 @@ describe("<NotificationsSessionProvider />", () => {
     hostState.id = "host-a";
     hostState.client = null;
     streamState.client = null;
+    streamState.cloudFeedSupport = "unsupported";
+    streamState.useClientSupport = false;
     mockAuth.onChange.mockClear();
+    mockAuth.revalidateCurrentContext.mockClear();
+    showNotificationMock.mockClear();
     mockAuth.onChange.mockImplementation(
       (_handler: (status: string) => void) => ({
         dispose: vi.fn(),
@@ -502,6 +581,7 @@ describe("<NotificationsSessionProvider />", () => {
     activationHookState.navigate = null;
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
     useAppLocalNotificationsStore.getState().resetForTests();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __setNotificationsStreamFactoryForTests(null);
@@ -512,11 +592,357 @@ describe("<NotificationsSessionProvider />", () => {
     cleanup();
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
     useAppLocalNotificationsStore.getState().resetForTests();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __setNotificationsStreamFactoryForTests(null);
     resetAuth("signed-out", null, null);
     vi.restoreAllMocks();
+  });
+
+  it("opens only the cloud relay for a free-tier user when the host confirms support", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+    emitTerminalCrashedNotification({
+      instanceId: "terminal-before-cloud",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-before-cloud",
+      },
+      cause: "exit",
+    });
+    appendEntry(invitedEntry("global-before-cloud", "epic-1"));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+      expect(useNotificationsStore.getState().entryIds).toEqual([]);
+    });
+  });
+
+  it("turns only post-baseline cloud snapshot arrivals into notification displays", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+
+    const baseline = cloudRow("entry-baseline", 7);
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 7,
+        rows: [baseline],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      });
+    });
+    expect(showNotificationMock).not.toHaveBeenCalled();
+
+    const arrived = cloudRow("entry-arrived", 8);
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 8,
+        rows: [baseline, arrived],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      });
+    });
+    await waitFor(() => {
+      expect(showNotificationMock).toHaveBeenCalledTimes(1);
+    });
+    expect(showNotificationMock.mock.calls[0]?.[0]).toMatchObject({
+      payload: {
+        feed: { source: "cloud", id: "entry-arrived" },
+        originHostId: "host-a",
+      },
+    });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 8,
+        rows: [baseline, arrived],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      });
+    });
+    expect(showNotificationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a cloud snapshot across an A to null to A binding cycle", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudRow("entry-a", 7)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 7,
+      });
+      hostState.id = null;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      const cloud = useCloudNotificationsStore.getState();
+      expect(cloud.hasSnapshot).toBe(false);
+      expect(cloud.rows).toEqual({});
+      expect(cloud.version).toBeNull();
+      expect(cloud.connectionState).toBe("unavailable");
+    });
+
+    act(() => {
+      hostState.id = mockLocalHostEntry.hostId;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+      expect(useCloudNotificationsStore.getState().hasSnapshot).toBe(false);
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "unavailable",
+      );
+    });
+  });
+
+  it("drops cloud ownership when the websocket client is replaced", async () => {
+    const queryClient = new QueryClient();
+    const firstClient = new MockWsStreamClient();
+    const replacementClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = firstClient;
+    streamState.cloudFeedSupport = "supported";
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(firstClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudRow("entry-a", 7)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 7,
+      });
+      streamState.client = replacementClient;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(replacementClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+      const cloud = useCloudNotificationsStore.getState();
+      expect(cloud.hasSnapshot).toBe(false);
+      expect(cloud.rows).toEqual({});
+      expect(cloud.version).toBeNull();
+      expect(cloud.connectionState).toBe("unavailable");
+    });
+  });
+
+  it("keeps the dormant entitlement refusal on a stable unavailable wall", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    __setNotificationsStreamFactoryForTests(() => ({
+      applyUpdate: () => undefined,
+      close: () => undefined,
+    }));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+
+    act(() => {
+      streamClient.session.emitClosed(fatalClose("FREE_TIER_NO_CLOUD_SYNC"));
+    });
+    await waitFor(() => {
+      expect(useAuthStore.getState().subscriptionStatus).toBe("FREE");
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "unavailable",
+      );
+      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+      expect(
+        streamClient.subscribedMethods.filter(
+          (method) => method === "host.notifications.cloudFeed.subscribe",
+        ),
+      ).toHaveLength(1);
+      expect(streamClient.subscribedMethods).not.toContain(
+        "host.notifications.feed.subscribe",
+      );
+    });
+  });
+
+  it("keeps retained v1 rows while a rebuilt client's capability is pending offline", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => null,
+      bearer: () => null,
+      auth: null,
+      hostCredentialMint: null,
+      webSocketFactory: {
+        create: () => {
+          throw new Error("offline client must not dial");
+        },
+      },
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const subscribeSpy = vi.spyOn(streamClient, "subscribe");
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.useClientSupport = true;
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "retained-local-row",
+            epicId: "epic-local",
+            chatId: "chat-local",
+            severity: "done",
+          }),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(subscribeSpy.mock.calls.map(([method]) => method)).toEqual([
+        "notifications.subscribe",
+        "host.notifications.feed.subscribe",
+      ]);
+    });
+    expect(
+      useHostNotificationsStore.getState().byId["retained-local-row"],
+    ).toBeDefined();
+    expect(
+      streamClient.getMethodSupport("host.notifications.cloudFeed.subscribe"),
+    ).toBe("unknown");
+    view.unmount();
+    streamClient.close("test-complete");
   });
 
   it("reopens the stream and resets the local replica on signed-in user switches", async () => {

@@ -41,6 +41,23 @@ describe("notification activation envelope", () => {
     expect(feedIdFromEnvelopeFeed(envelope.feed)).toBe("app-local:local-1");
   });
 
+  it("keys a cloud feed identity by notification id alone, independent of origin host", () => {
+    const envelope = buildNotificationActivationEnvelope({
+      route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      feed: { source: "cloud", id: "notification/1" },
+      originHostId: "host/a",
+    });
+
+    expect(feedIdFromEnvelopeFeed(envelope.feed)).toBe(
+      "cloud:notification%2F1",
+    );
+    expect(envelope.originHostId).toBe("host/a");
+    expect(parseNotificationActivationPayload(envelope)).toEqual({
+      kind: "v1",
+      envelope,
+    });
+  });
+
   it("falls back to a legacy raw route payload", () => {
     const payload = {
       kind: "artifact",

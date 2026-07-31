@@ -357,7 +357,9 @@ export enum AnalyticsEvent {
   UpdateInstallGuidanceOpened = "update_install_guidance_opened",
   UpdateFailed = "update_failed",
   ReportIssueOpened = "report_issue_opened",
-  ReportIssueHandedOff = "report_issue_handed_off",
+  ReportIssueBlocked = "report_issue_blocked",
+  ReportIssuePrivateSubmit = "report_issue_private_submit",
+  ReportIssuePublicOpenAttempted = "report_issue_public_open_attempted",
   AppQuitRequested = "app_quit_requested",
   TabCloseBlocked = "tab_close_blocked",
 }
@@ -730,9 +732,38 @@ export interface AnalyticsEventProperties {
     readonly blocker: AnalyticsBlocker;
   };
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties;
-  readonly [AnalyticsEvent.ReportIssueHandedOff]:
-    | { readonly outcome: "failed"; readonly blocker: AnalyticsBlocker }
-    | { readonly outcome: "succeeded"; readonly blocker: null };
+  // Which report type's gate blocked the attempt (ticket 07's evidence gate,
+  // Flow 2 manual opens only) - downstream funnels join this against a later
+  // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
+  // `blocked_action` (review round N1) - the gate guards every report-
+  // producing action, not just Send, so this says which one the user hit.
+  readonly [AnalyticsEvent.ReportIssueBlocked]: {
+    readonly report_type: "bug" | "idea" | "other";
+    readonly blocked_action:
+      "send" | "open_github_issue" | "report_on_github" | "save_bundle";
+  };
+  readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
+    | {
+        readonly outcome: "confirmed";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "unconfirmed";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "failed";
+        readonly blocker: AnalyticsBlocker;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "unavailable";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      };
+  readonly [AnalyticsEvent.ReportIssuePublicOpenAttempted]: null;
   readonly [AnalyticsEvent.AppQuitRequested]: SourceProperties;
   readonly [AnalyticsEvent.TabCloseBlocked]: {
     readonly decision: "cancel" | "discard";
@@ -1250,8 +1281,12 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["source", "section", "setting"],
   ),
   ...eventKeyEntries(
-    [AnalyticsEvent.ReportIssueHandedOff],
-    ["outcome", "blocker"],
+    [AnalyticsEvent.ReportIssueBlocked],
+    ["report_type", "blocked_action"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.ReportIssuePrivateSubmit],
+    ["outcome", "blocker", "attachment_count"],
   ),
   ...eventKeyEntries([AnalyticsEvent.TabCloseBlocked], ["decision"]),
 ]);
@@ -1276,6 +1311,7 @@ const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
   AnalyticsEvent.CommentDeleted,
   AnalyticsEvent.VoiceDictationCancelled,
   AnalyticsEvent.UpdateDownloadSucceeded,
+  AnalyticsEvent.ReportIssuePublicOpenAttempted,
 ]);
 
 function eventPropertyKeys(
@@ -1496,9 +1532,24 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["person", "team"]),
   ),
   ...eventValueEntries(
-    [AnalyticsEvent.WorktreeDeleted, AnalyticsEvent.ReportIssueHandedOff],
+    [AnalyticsEvent.WorktreeDeleted],
     "outcome",
     new Set(["failed", "succeeded"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssuePrivateSubmit],
+    "outcome",
+    new Set(["confirmed", "unconfirmed", "failed", "unavailable"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssueBlocked],
+    "report_type",
+    new Set(["bug", "idea", "other"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssueBlocked],
+    "blocked_action",
+    new Set(["send", "open_github_issue", "report_on_github", "save_bundle"]),
   ),
 ]);
 
@@ -1517,6 +1568,7 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
 const COUNT_PROPERTY_KEYS = new Set<string>([
   "answer_count",
   "artifact_count",
+  "attachment_count",
   "failed_count",
   "file_count",
   "requested_count",
@@ -1560,7 +1612,7 @@ function isAnalyticsPropertyValue(
     if (value === null) {
       return (
         event === AnalyticsEvent.WorktreeDeleted ||
-        event === AnalyticsEvent.ReportIssueHandedOff
+        event === AnalyticsEvent.ReportIssuePrivateSubmit
       );
     }
     return typeof value === "string" && ANALYTICS_BLOCKERS.has(value);
@@ -1584,19 +1636,37 @@ function isAnalyticsPropertyValue(
   );
 }
 
+function analyticsOutcomeBlockerPairIsValid(
+  properties: Record<string, unknown>,
+  successOutcomes: ReadonlySet<string>,
+): boolean {
+  if (
+    typeof properties.outcome === "string" &&
+    successOutcomes.has(properties.outcome)
+  ) {
+    return properties.blocker === null;
+  }
+  return (
+    properties.outcome === "failed" &&
+    typeof properties.blocker === "string" &&
+    ANALYTICS_BLOCKERS.has(properties.blocker)
+  );
+}
+
 function analyticsPropertiesAreRelationallyValid(
   event: AnalyticsEvent,
   properties: Record<string, unknown>,
 ): boolean {
-  if (
-    event === AnalyticsEvent.WorktreeDeleted ||
-    event === AnalyticsEvent.ReportIssueHandedOff
-  ) {
-    return (
-      (properties.outcome === "succeeded" && properties.blocker === null) ||
-      (properties.outcome === "failed" &&
-        typeof properties.blocker === "string" &&
-        ANALYTICS_BLOCKERS.has(properties.blocker))
+  if (event === AnalyticsEvent.WorktreeDeleted) {
+    return analyticsOutcomeBlockerPairIsValid(
+      properties,
+      new Set(["succeeded"]),
+    );
+  }
+  if (event === AnalyticsEvent.ReportIssuePrivateSubmit) {
+    return analyticsOutcomeBlockerPairIsValid(
+      properties,
+      new Set(["confirmed", "unconfirmed", "unavailable"]),
     );
   }
   if (event === AnalyticsEvent.WorktreesBulkDeleted) {
@@ -1915,6 +1985,76 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
     ANALYTICS_BLOCKER_PATTERNS.find(({ pattern }) => pattern.test(text))
       ?.blocker ?? "unknown"
   );
+}
+
+/**
+ * Maps the four-state delivery result onto private-submit analytics
+ * outcomes. `unconfirmed` never claims failure and never claims delivery -
+ * it gets its own outcome rather than collapsing onto `confirmed` or
+ * `failed`. A structured `failed` result (capture threw, DSN rejected) has no
+ * `Error` to classify, so it gets a fixed `unknown` blocker; a thrown
+ * exception from the mutation itself still goes through
+ * `analyticsBlockerFromError` on the `onError` path.
+ *
+ * `attachmentCount` (ticket 08 / T5) is the number of images on the request
+ * that produced `result` - a low-cardinality integer the count-property
+ * validator already accepts, so it rides along on every outcome rather than
+ * needing its own event.
+ */
+export function reportIssuePrivateSubmitPropertiesFromResult(
+  result:
+    | { readonly status: "delivered" }
+    | { readonly status: "unconfirmed" }
+    | { readonly status: "unavailable" }
+    | { readonly status: "failed" },
+  attachmentCount: number,
+):
+  | {
+      readonly outcome: "confirmed";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "unconfirmed";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "unavailable";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "failed";
+      readonly blocker: AnalyticsBlocker;
+      readonly attachment_count: number;
+    } {
+  switch (result.status) {
+    case "delivered":
+      return {
+        outcome: "confirmed",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
+    case "unconfirmed":
+      return {
+        outcome: "unconfirmed",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
+    case "unavailable":
+      return {
+        outcome: "unavailable",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
+    case "failed":
+      return {
+        outcome: "failed",
+        blocker: "unknown",
+        attachment_count: attachmentCount,
+      };
+  }
 }
 
 /**

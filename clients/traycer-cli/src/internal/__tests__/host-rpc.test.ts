@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callHostRpc, toAgentCliError } from "../host-rpc";
+import { callHostRpc, callHostRpcFastFail, toAgentCliError } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
@@ -36,15 +36,28 @@ vi.mock("../../logger", () => ({
     value instanceof Error ? value : new Error(String(value)),
 }));
 
-vi.mock("../../../../shared/host-transport/ws-rpc-client", () => ({
-  WsRpcClient: class {
-    constructor(options: unknown) {
-      rpcClientConstructorMock(options);
-    }
+vi.mock(
+  "../../../../shared/host-transport/ws-rpc-client",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../../shared/host-transport/ws-rpc-client")
+      >();
+    return {
+      // Only `WsRpcClient` is replaced; the real
+      // `HOST_POST_OPEN_ATTESTATION_WINDOW_MS` stays, so the constructor
+      // assertion below reads the value the CLI actually ships.
+      ...actual,
+      WsRpcClient: class {
+        constructor(options: unknown) {
+          rpcClientConstructorMock(options);
+        }
 
-    request = requestMock;
+        request = requestMock;
+      },
+    };
   },
-}));
+);
 
 vi.mock("../host-auth", () => ({
   resolveHostAuth: vi.fn(),
@@ -155,6 +168,49 @@ describe("callHostRpc", () => {
     // The per-run store is always disposed on the success path (finally), so a
     // `commit-failed` continuation timer can't outlive the command.
     expect(fakeStore.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("dials with an attestation window that outlasts the host's post-openAck deadline", async () => {
+    requestMock.mockResolvedValue({ agents: [] });
+
+    await callHostRpc(METHOD, {
+      epicId: "e",
+      senderAgentId: "agent-1",
+      scope: "user",
+    });
+
+    // The CLI gives up on a response after 15s, but a stalled host only attests
+    // that it never dispatched the request once its own 30s post-`openAck`
+    // timer finally runs - measured at 35.7-40.8s in issue #726, and up to
+    // ~45s for the profiled stall class. Without a window that outlasts that,
+    // the CLI closes the socket early and the recoverable stall surfaces as an
+    // ambiguous, non-retryable failure.
+    expect(rpcClientConstructorMock).toHaveBeenCalledTimes(1);
+    const options: unknown = rpcClientConstructorMock.mock.calls[0]?.[0];
+    expect(options).toMatchObject({
+      frameTimeoutMs: 15_000,
+      hostAttestationWindowMs: 50_000,
+    });
+  });
+
+  it("fast-fail dials with a zero attestation window so a miss fails at the 15s response deadline", async () => {
+    requestMock.mockResolvedValue({ agents: [] });
+
+    await callHostRpcFastFail(METHOD, {
+      epicId: "e",
+      senderAgentId: "agent-1",
+      scope: "user",
+    });
+
+    // Latency-bound IDE hooks never redial, so waiting for an attestation they
+    // cannot act on would only inflate time-to-failure. The policy therefore
+    // opts out of the window entirely while keeping the same 15s frame budget.
+    expect(rpcClientConstructorMock).toHaveBeenCalledTimes(1);
+    const options: unknown = rpcClientConstructorMock.mock.calls[0]?.[0];
+    expect(options).toMatchObject({
+      frameTimeoutMs: 15_000,
+      hostAttestationWindowMs: 0,
+    });
   });
 
   it("rejects invalid host metadata endpoints before constructing the WS client", async () => {

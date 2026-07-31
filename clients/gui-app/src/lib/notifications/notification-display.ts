@@ -3,11 +3,15 @@ import { createElement } from "react";
 import { toast } from "sonner";
 import {
   rowFromAppLocalEntry,
+  rowFromCloudFeedRow,
   rowFromHostEntry,
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationEntryV21 } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntryV21,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
   notificationEntityMatchesPresence,
@@ -136,6 +140,32 @@ export function displayHostChannelEmission(
     target,
     originHostId,
   );
+}
+
+/** Whole cloud snapshots carry no emission frame, so accepted post-baseline
+ * entryId diffs are the arrival edge. Display each row with its own origin:
+ * unlike a v1 channel batch, one snapshot can contain entries from several
+ * hosts and every native activation envelope must retain the correct one. */
+export function displayCloudSnapshotArrivals(
+  entries: ReadonlyArray<HostNotificationsCloudFeedRow>,
+  target: NotificationDisplayTarget,
+): void {
+  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  for (const entry of entries) {
+    const entity = notificationEntityFromHostEntry(entry.entry);
+    if (
+      focusedEntity !== null &&
+      entity !== null &&
+      notificationEntityMatchesPresence(entity, focusedEntity)
+    ) {
+      continue;
+    }
+    displayNotificationRows(
+      [rowFromCloudFeedRow(entry)],
+      target,
+      entry.originHostId,
+    );
+  }
 }
 
 export function displayAppLocalNotification(

@@ -311,6 +311,9 @@ describe("reconcileCli - newest-wins", () => {
   });
 
   it("trusts a newer manifest CLI silently", async () => {
+    // The probe must CONFIRM the newer version - trusting rests on the
+    // binary being able to answer, not on the manifest's claim alone (see
+    // the probe-failure tests below for the other half of that contract).
     const { deps, install } = makeDeps({
       manifest: {
         version: "2.0.0",
@@ -321,6 +324,7 @@ describe("reconcileCli - newest-wins", () => {
       },
       bundledPath: "/bundled/traycer",
       bundledVersion: "1.4.2",
+      probeCliVersion: () => "2.0.0",
     });
     const result = await reconcileCli(deps);
     expect(install).not.toHaveBeenCalled();
@@ -328,6 +332,62 @@ describe("reconcileCli - newest-wins", () => {
     if (result.kind === "trusted-equal") {
       expect(result.installedVersion).toBe("2.0.0");
       expect(result.binaryPath).toBe("/new/traycer");
+    }
+  });
+
+  it("re-stages the bundled CLI over a desktop-owned slot binary that fails the version probe", async () => {
+    // v1.1.9-rc.3 field incident: the slot binary was overwritten with a
+    // non-executable file while the manifest kept claiming 2.0.0. The
+    // version compare then read "newer than bundled" on every launch and
+    // trusted a binary that could not even print `--version` - a
+    // permanently dead CLI with no self-heal short of reinstalling the
+    // app. A failed probe on the desktop-owned slot must route through
+    // the upgrade path, never the trust branch.
+    const { deps, install } = makeDeps({
+      manifest: {
+        version: "2.0.0",
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: "/stable/traycer",
+        source: "desktop",
+        pendingUpgrade: null,
+      },
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      probeCliVersion: () => null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).toHaveBeenCalledWith({
+      bundledCliPath: "/bundled/traycer",
+      version: "1.4.2",
+      source: "desktop",
+    });
+    expect(result.kind).toBe("upgraded");
+    if (result.kind === "upgraded") {
+      expect(result.previousVersion).toBe("2.0.0");
+      expect(result.newVersion).toBe("1.4.2");
+    }
+  });
+
+  it("routes a probe-failed slot to upgrade-blocked when no bundled binary is reachable", async () => {
+    // Broken slot AND no bundled source to heal from (a packaging bug):
+    // surfacing upgrade-blocked beats calling the dead binary trusted.
+    const { deps, install } = makeDeps({
+      manifest: {
+        version: "2.0.0",
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: "/stable/traycer",
+        source: "desktop",
+        pendingUpgrade: null,
+      },
+      bundledPath: null,
+      bundledVersion: "1.4.2",
+      probeCliVersion: () => null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).not.toHaveBeenCalled();
+    expect(result.kind).toBe("upgrade-blocked");
+    if (result.kind === "upgrade-blocked") {
+      expect(result.reason).toBe("manifest-rewrite-failed");
     }
   });
 
@@ -557,6 +617,7 @@ describe("reconcileCli - newest-wins", () => {
       },
       bundledPath: "/bundled/traycer",
       bundledVersion: "1.4.2",
+      probeCliVersion: () => "1.4.2",
     });
     const result = await reconcileCli(deps);
     expect(install).not.toHaveBeenCalled();

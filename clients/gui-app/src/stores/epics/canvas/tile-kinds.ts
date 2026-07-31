@@ -9,6 +9,13 @@ const TILE_KIND_TERMINAL = "terminal";
 const TILE_KIND_WORKSPACE_FILE = "workspace-file";
 export const TILE_KIND_GIT_DIFF = "git-diff";
 export const TILE_KIND_SNAPSHOT_DIFF = "snapshot-diff";
+/**
+ * The per-epic communication graph. Epic-scoped rather than host-scoped: the
+ * tile itself fans in one `epic.communicationGraph.subscribe` per host the
+ * epic's agents live on, so it carries no host binding (see
+ * `CommGraphTileRef`).
+ */
+export const TILE_KIND_COMM_GRAPH = "comm-graph";
 // A "blank" tab: a real strip tab whose body renders the inline opener until
 // content is picked (which replaces it in place).
 export const TILE_KIND_BLANK = "blank";
@@ -24,6 +31,7 @@ export type TileKindId =
   | typeof TILE_KIND_WORKSPACE_FILE
   | typeof TILE_KIND_GIT_DIFF
   | typeof TILE_KIND_SNAPSHOT_DIFF
+  | typeof TILE_KIND_COMM_GRAPH
   | typeof TILE_KIND_BLANK;
 
 export const isTileKind = makeLiteralGuard<TileKindId>({
@@ -37,5 +45,6 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_WORKSPACE_FILE]: true,
   [TILE_KIND_GIT_DIFF]: true,
   [TILE_KIND_SNAPSHOT_DIFF]: true,
+  [TILE_KIND_COMM_GRAPH]: true,
   [TILE_KIND_BLANK]: true,
 });

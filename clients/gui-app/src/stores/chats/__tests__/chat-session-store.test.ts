@@ -1976,6 +1976,55 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
   });
 
+  it("keeps the first restoration when a second send is rejected before the composer consumes it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    const rejectSend = (index: number, reason: string): string => {
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          index === 0 ? CONTENT : IMAGE_CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        );
+      const frame = harness.sent[index];
+      if (frame.kind !== "send") throw new Error("Expected send frame");
+      callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId: frame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason,
+        code: "ACTION_REJECTED",
+        backgroundStopTaskIds: [],
+      });
+      return frame.clientActionId;
+    };
+
+    const firstActionId = rejectSend(0, "First rejection.");
+    rejectSend(1, "Second rejection.");
+
+    // The slot is single-consumer: the second rejection must not clobber
+    // content the composer has not restored yet.
+    expect(harness.handle.store.getState().failedSendRestoration).toMatchObject(
+      {
+        clientActionId: firstActionId,
+        content: CONTENT,
+        reason: "First rejection.",
+      },
+    );
+
+    // Once acked, the slot is free again for the next failure.
+    harness.handle.store.getState().ackFailedSendRestoration(firstActionId);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+  });
+
   it("does not send owner actions for read-only viewers", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "viewer");
@@ -4771,6 +4820,60 @@ describe("blockDelta coalescing", () => {
     harness.manual.runAll();
     expect(liveText(harness.handle)).toBe("");
   });
+
+  it("publishes a pending interview only once its streaming block is observable", () => {
+    // The host emits the interview's `blockDelta` before the
+    // `interviewRequested` frame, but the delta sits in the coalescing buffer
+    // until the next tick. If the pending id lands first, a host-pending
+    // interview is briefly visible with no `streaming` segment - which
+    // `findUnanswerableInterviews` reads as permanently stuck and offers to
+    // dismiss, cancelling a live question mid-Q&A.
+    const harness = createCoalesceHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "interview.requested",
+        blockId: "interview-1",
+        timestamp: 10,
+        toolName: "AskUserQuestion",
+        questions: [],
+      },
+    });
+    // Still buffered: nothing has reached the store yet.
+    expect(harness.manual.pendingCount()).toBe(1);
+
+    callbacks.onInterviewRequested({
+      kind: "interviewRequested",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-1",
+      requestedAt: 10,
+    });
+
+    // Read BEFORE any coordinator tick - this is the window the renderer would
+    // have rendered the escape hatch in.
+    const state = harness.handle.store.getState();
+    expect(state.pendingInterviews).toEqual([
+      { blockId: "interview-1", requestedAt: 10 },
+    ]);
+    const streamingInterviewIds = (
+      state.liveAssistantMessage?.blocks ?? []
+    ).flatMap((block) =>
+      block.type === "interview" && block.status === "streaming"
+        ? [block.blockId]
+        : [],
+    );
+    expect(streamingInterviewIds).toEqual(["interview-1"]);
+    // The consuming frame drained the buffer, so the tick has nothing left.
+    expect(harness.manual.pendingCount()).toBe(0);
+  });
 });
 
 describe("surface visibility rollup", () => {
@@ -5410,5 +5513,199 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       },
     ]);
     expect(harness.nudgeCount()).toBe(1);
+  });
+});
+
+describe("turn-settled stranded-send reconciliation", () => {
+  it("drops the optimistic user message and restores its content when a stop lands before messageAccepted", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
+
+    // The pre-turn activation window: the host accepts the send and reports
+    // the run as in progress before the message is appended.
+    acceptLastAction(harness);
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: true,
+    });
+    // The accepted ack deliberately keeps the optimistic entry alive - the
+    // durable messageAccepted frame is what normally clears it.
+    expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
+
+    // A stop aborts activation: the turn settles without the host ever
+    // appending the message - no messageAccepted or rejected ack will arrive.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration).toEqual({
+      clientActionId: frame.clientActionId,
+      content: CONTENT,
+      reason: "The message was not recorded before the turn stopped.",
+    });
+  });
+
+  it("keeps an optimistic entry whose ack is still in flight when an unrelated settle frame arrives", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
+
+    // e.g. a background task settling broadcasts a turn-settled frame while
+    // the fresh send's ack is still on the wire - the entry must survive.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toHaveLength(1);
+    expect(state.failedSendRestoration).toBeNull();
+  });
+
+  it("heals on an older host via runStatus idle when the frame omits turnInProgress", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    acceptLastAction(harness);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration?.clientActionId).toBe(
+      frame.clientActionId,
+    );
+  });
+
+  it("reconciles an accepted-but-unrecorded send from a settled reconnect snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    // The accepted ack removes the pending action but keeps the optimistic
+    // entry; the connection then dies before any settling frame arrives.
+    acceptLastAction(harness);
+    callbacks.onConnectionStatus("reconnecting", null);
+
+    // The reconnect snapshot is the only authoritative settled state: no
+    // turn in progress, and the message never reached the transcript.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration).toEqual({
+      clientActionId: frame.clientActionId,
+      content: CONTENT,
+      reason: "The message was not recorded before the turn stopped.",
+    });
+  });
+
+  it("clears stale optimistic bookkeeping without restoration when the reconnect snapshot carries the message", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    acceptLastAction(harness);
+    callbacks.onConnectionStatus("reconnecting", null);
+
+    // The send did land host-side; the lost frame was `messageAccepted`, not
+    // the message itself. The persisted row is authoritative - no composer
+    // restoration.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage(frame.messageId)],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration).toBeNull();
   });
 });

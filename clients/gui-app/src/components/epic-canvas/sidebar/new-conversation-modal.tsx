@@ -168,11 +168,10 @@ interface NewConversationModalActionProps {
 
 /**
  * The single "+" trigger for the New Conversation modal, shared by the chats
- * panel header (top-level) and each chat row (child). It always opens in chat
- * mode; the modal's own switcher is the one way to flip to a terminal agent, so
- * there are no per-trigger dropdowns. Forcing chat mode here overrides the
- * projection-derived seed default and prevents a previously-dismissed
- * terminal/PaneOpener draft from leaking its mode in.
+ * panel header (top-level) and each chat row (child). The modal opens with its
+ * remembered draft mode, falling back to the latest conversation's interface
+ * when there is no draft, so a terminal-agent launch carries forward just like
+ * a chat launch. The modal's own switcher remains the one way to change modes.
  */
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
@@ -180,9 +179,6 @@ export function NewConversationModalAction(
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const handleOpen = useCallback((): void => {
     if (props.disabled) return;
-    useNewConversationModalStore
-      .getState()
-      .setComposerMode(props.epicId, "chat");
     openModal({
       epicId: props.epicId,
       tabId: props.tabId,

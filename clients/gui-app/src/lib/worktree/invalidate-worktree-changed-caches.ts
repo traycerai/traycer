@@ -49,6 +49,18 @@ export function invalidateWorktreeChangedCaches(
     ),
     refetchType: "active",
   });
+  // The branch LIST is a separate host-side read, so a summary refresh alone
+  // leaves a branch deleted outside Traycer sitting in the new-worktree source
+  // picker. `refetchType: "active"` (unlike the manual Refresh, which uses
+  // "all"): this path fires on every external git event, and these lists live
+  // in nested forms that are usually unmounted - refetching every cached one
+  // per event would be the amplification this whole module exists to avoid.
+  // Inactive lists are still MARKED invalidated, and the app leaves
+  // `refetchOnMount` at its default, so they re-read the moment they mount.
+  void queryClient.invalidateQueries({
+    queryKey: hostQueryKeys.methodScope(hostId, "worktree.listBranches"),
+    refetchType: "active",
+  });
   // The epic-scoped binding listing feeds the git-diff / file-tree workspace
   // pickers. Without this scope, a host-push correction (a worktree finishing
   // setup, a cold row re-deriving as a git repo) never reaches those pickers

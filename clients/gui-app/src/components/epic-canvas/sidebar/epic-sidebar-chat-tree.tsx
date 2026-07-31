@@ -121,7 +121,8 @@ import {
   useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
-import { AgentRoleBadges, AgentRoleHoverContent } from "./agent-role-badges";
+import { AgentRoleBadges } from "./agent-role-badges";
+import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -179,17 +180,15 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
-import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
 import { resolveProfileAccentDot } from "@/components/worktree/worktree-owner-settings-model";
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -693,7 +692,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         .sort(),
     [tree, visibleIds],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds: indicatorChatIds,
     enabled: indicatorChatIds.length > 0,
@@ -807,7 +806,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   }
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <SidebarArchiveSupportedContext.Provider value={canArchive}>
         <SidebarViewerContext.Provider value={isViewer}>
           <SidebarSortContext.Provider value={comparator}>
@@ -1344,13 +1343,13 @@ function ChatNodeShellBody(
   // "New child agent" opens the shared New Conversation modal seeded with this
   // row as the parent - the same action the standalone hover "+" used to
   // trigger, now consolidated into the row menu (right-click + ⋯) so there is a
-  // single hover affordance. Forcing chat mode mirrors `NewConversationModalAction`.
+  // single hover affordance. It preserves the modal's remembered interface,
+  // matching the top-level new-agent trigger.
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
-    useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
     openNewConversationModal({
       epicId,
       tabId,
@@ -1968,14 +1967,6 @@ function resourceOwnerKindForNode(
   return null;
 }
 
-function roleHoverContentForAgent(
-  agentName: string,
-  roleClaims: readonly RoleClaim[],
-) {
-  if (roleClaims.length === 0) return null;
-  return <AgentRoleHoverContent agentName={agentName} claims={roleClaims} />;
-}
-
 function AgentRoleBadgesForOwner(props: {
   readonly ownerKind: ResourceOwnerKindWire | null;
   readonly claims: readonly RoleClaim[];
@@ -2039,7 +2030,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const ownerHostId = useEpicNodeHostId(nodeId);
   const ownerKind = useEpicNodeOwnerKind(nodeId);
-  const roleHoverContent = roleHoverContentForAgent(nodeName, roleClaims);
 
   // Only the "⋯" more menu now reveals on hover (the standalone "+" moved into
   // that menu as "New child agent"), so the single-control pad-right reserve is
@@ -2107,15 +2097,19 @@ function ChatRowButton(props: ChatRowButtonProps) {
         </span>
       </label>
     );
+    // No owner metadata while bulk-selecting, so this reduces to the role
+    // tooltip - the same one this branch rendered inline before.
     return (
-      <TooltipWrapper
-        label={roleHoverContent ?? nodeName}
+      <AgentHoverTooltip
+        trigger={selectionRow}
+        epicId={epicId}
+        nodeId={nodeId}
+        nodeName={nodeName}
+        hostId={null}
+        ownerKind={null}
+        roleClaims={roleClaims}
         side="right"
-        sideOffset={6}
-        align="start"
-      >
-        {selectionRow}
-      </TooltipWrapper>
+      />
     );
   }
 
@@ -2188,28 +2182,19 @@ function ChatRowButton(props: ChatRowButtonProps) {
       </span>
     </button>
   );
-  if (ownerHostId !== null && ownerKind !== null) {
-    return (
-      <WorktreeOwnerMetadataTooltip
-        trigger={button}
-        title={nodeName}
-        hostId={ownerHostId}
-        epicId={epicId}
-        ownerId={nodeId}
-        ownerKind={ownerKind}
-        supplementalContent={roleHoverContent}
-      />
-    );
-  }
+  // Same composition the graph nodes use - extracted so the navigator and the
+  // canvas cannot describe one agent two ways.
   return (
-    <TooltipWrapper
-      label={roleHoverContent ?? nodeName}
+    <AgentHoverTooltip
+      trigger={button}
+      epicId={epicId}
+      nodeId={nodeId}
+      nodeName={nodeName}
+      hostId={ownerHostId}
+      ownerKind={ownerKind}
+      roleClaims={roleClaims}
       side="right"
-      sideOffset={6}
-      align="start"
-    >
-      {button}
-    </TooltipWrapper>
+    />
   );
 }
 

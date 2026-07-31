@@ -5,11 +5,13 @@ import type {
   ServiceLabel,
 } from "../index";
 import {
+  createBytesOnlyInstallLifecycle,
   createServiceInstallLifecycle,
   type BootstrapServiceOptions,
   type ServiceInstallLifecycleState,
 } from "../install-lifecycle";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
+import type { SwapLockRecovery } from "../../installer";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -17,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   resolveServiceCliInvocationMock: vi.fn(),
   readRegisteredCliInvocationMock: vi.fn(),
   cliLoggerWarnMock: vi.fn(),
+  killLingeringSlotProcessesMock: vi.fn(),
+  describeSlotLockHoldersMock: vi.fn(),
 }));
 
 // The externally-managed branch reports an unforeseen repair failure through
@@ -50,6 +54,14 @@ vi.mock("../cli-binary", () => ({
 // registration.
 vi.mock("../platforms/macos", () => ({
   readRegisteredCliInvocation: mocks.readRegisteredCliInvocationMock,
+}));
+
+// The Windows swap-lock recovery functions shell out to schtasks /
+// powershell / taskkill - stub the module so the wiring tests can assert
+// the lifecycle hands the label through without touching the OS.
+vi.mock("../platforms/windows", () => ({
+  killLingeringSlotProcesses: mocks.killLingeringSlotProcessesMock,
+  describeSlotLockHolders: mocks.describeSlotLockHoldersMock,
 }));
 
 const label: ServiceLabel = {
@@ -451,5 +463,87 @@ describe("service install lifecycle re-registration", () => {
     });
     expect(harness.start).not.toHaveBeenCalled();
     expect(harness.restart).not.toHaveBeenCalled();
+  });
+});
+
+describe("swap-lock recovery wiring", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+    mocks.killLingeringSlotProcessesMock.mockResolvedValue(undefined);
+    mocks.describeSlotLockHoldersMock.mockResolvedValue([]);
+  });
+
+  function withPlatform(platform: string, run: () => void): void {
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    if (original === undefined) {
+      throw new Error("process.platform descriptor missing");
+    }
+    Object.defineProperty(process, "platform", {
+      value: platform,
+      configurable: true,
+    });
+    try {
+      run();
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
+  }
+
+  it("wires Windows recovery to the platform kill and detail scan on both lifecycle factories", async () => {
+    let recoveries: (SwapLockRecovery | null)[] = [];
+    withPlatform("win32", () => {
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const serviceHandle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+      });
+      const bytesOnly = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+      );
+      recoveries = [
+        serviceHandle.lifecycle.swapLockRecovery,
+        bytesOnly.swapLockRecovery,
+      ];
+    });
+
+    for (const recovery of recoveries) {
+      // A null here is exactly the quiet regression this test exists to
+      // catch: the installer would silently run without re-kill or
+      // holder diagnostics on the only platform that needs them.
+      expect(recovery).not.toBeNull();
+      if (recovery === null) throw new Error("unreachable");
+      await recovery.killLingeringProcesses();
+      const holders = [
+        { pid: 7, name: "orphan.exe", executablePath: "C:\\orphan.exe" },
+      ];
+      mocks.describeSlotLockHoldersMock.mockResolvedValueOnce(holders);
+      await expect(recovery.describeLockHolders()).resolves.toEqual(holders);
+    }
+    expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledTimes(2);
+    expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledWith(
+      label,
+      null,
+    );
+    expect(mocks.describeSlotLockHoldersMock).toHaveBeenCalledWith(label, null);
+  });
+
+  it("carries no swap-lock recovery off Windows", () => {
+    withPlatform("darwin", () => {
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const serviceHandle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+      });
+      const bytesOnly = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+      );
+      expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
+      expect(bytesOnly.swapLockRecovery).toBeNull();
+    });
   });
 });

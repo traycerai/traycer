@@ -4,7 +4,7 @@ import type { UserSessionListItem } from "@traycer/protocol/auth/devices-session
 import {
   Clock,
   Globe,
-  Laptop,
+  HelpCircle,
   LogOut,
   Monitor,
   Server,
@@ -62,7 +62,7 @@ function sessionClientLabel(session: UserSessionListItem): string {
     case "host":
       return "Host";
     default:
-      return "Unknown";
+      return "Unknown client";
   }
 }
 
@@ -75,7 +75,7 @@ function sessionDisplayLine(session: UserSessionListItem): string {
     // row - a session in the wrong place is what a user actually scans for.
     session.location,
   ].filter((part): part is string => part !== null && part.trim().length > 0);
-  return parts.length === 0 ? "No device details recorded" : parts.join(" / ");
+  return parts.length === 0 ? "Session details unavailable" : parts.join(" / ");
 }
 
 function formatRelativeTime(value: string): string {
@@ -111,6 +111,10 @@ function sessionStatusLine(session: UserSessionListItem): string {
   return `Last seen ${formatRelativeTime(session.lastSeenAt)}`;
 }
 
+function sessionTimelineLine(session: UserSessionListItem): string {
+  return `Created ${formatRelativeTime(session.createdAt)} · ${sessionStatusLine(session)}`;
+}
+
 function sortSessions(
   sessions: readonly UserSessionListItem[],
 ): readonly UserSessionListItem[] {
@@ -136,7 +140,7 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
     case "host":
       return <Server className={className} />;
     default:
-      return <Laptop className={className} />;
+      return <HelpCircle className={className} />;
   }
 }
 
@@ -255,13 +259,13 @@ export function DevicesSessionsPanel() {
   return (
     <>
       <SettingsPanelShell
-        title="Devices"
-        description="Review signed-in sessions and sign out devices that should no longer have access."
+        title="Sessions"
+        description="Review where your account is signed in and remove access you no longer recognize."
       >
         <div className="flex flex-col">
           <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 space-y-1">
-              <h2 className="text-ui font-medium">Sessions</h2>
+              <h2 className="text-ui font-medium">Signed-in sessions</h2>
               <p className="text-ui-xs text-muted-foreground">
                 Browser, desktop, CLI, extension, and host access for this
                 account.
@@ -269,12 +273,12 @@ export function DevicesSessionsPanel() {
             </div>
             <Button
               type="button"
-              variant="destructive"
+              variant="outline"
               size="sm"
               disabled={!signedIn || actionBusy}
               onClick={() => void handleRevokeAll()}
             >
-              <ShieldAlert className="size-3.5" />
+              <LogOut className="size-3.5" />
               Sign out everywhere
               {revokeAllSessions.isPending ? (
                 <AgentSpinningDots
@@ -351,7 +355,7 @@ function DevicesSessionsBody(props: {
       )}
       {props.sessions.length === 0 ? (
         <div className="px-5 py-6 text-ui-sm text-muted-foreground">
-          No tracked sessions yet.
+          No signed-in sessions found.
         </div>
       ) : (
         <ul className="divide-y divide-border/60">
@@ -402,7 +406,7 @@ function SessionRow(props: {
       )}
     >
       <div className="flex min-w-0 gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
           {sessionIcon(session)}
         </div>
         <div className="min-w-0 space-y-1">
@@ -411,9 +415,6 @@ function SessionRow(props: {
               {session.current ? "This session" : "Session"}
             </span>
             <Badge variant="outline">{sessionClientLabel(session)}</Badge>
-            {session.current ? (
-              <Badge variant="secondary">Current</Badge>
-            ) : null}
             {session.revoked ? (
               <Badge variant="outline" className="text-muted-foreground">
                 Signed out
@@ -425,19 +426,19 @@ function SessionRow(props: {
           </p>
           <p className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
             <Clock className="size-3.5" />
-            {pending ? "Signing out" : sessionStatusLine(session)}
+            {pending ? "Signing out" : sessionTimelineLine(session)}
           </p>
         </div>
       </div>
       <Button
         type="button"
-        variant={session.current ? "destructive" : "outline"}
+        variant="outline"
         size="sm"
         disabled={disabled}
         onClick={() => void props.onRevokeSession(session, mutation)}
       >
         <LogOut className="size-3.5" />
-        {session.current ? "Log me out" : "Sign out"}
+        Sign out
         {pending ? (
           <AgentSpinningDots
             className="text-current"

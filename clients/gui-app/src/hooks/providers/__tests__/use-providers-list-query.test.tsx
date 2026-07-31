@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   focusManager,
@@ -58,6 +59,7 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
     providerId,
     enabled: true,
     disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     selected: { kind: "bundled" },
     candidates: [],
     auth: {
@@ -118,7 +120,7 @@ function createProvidersFixture(): ProvidersFixture {
         "providers.list": () => {
           requestCount.value += 1;
           if (error !== null) throw error;
-          return { providers: [...providers] };
+          return { providers: [...providers], native: null };
         },
       },
     }),

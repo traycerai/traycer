@@ -4,9 +4,15 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  SupportBuildPublicDraftResult,
+  SupportFingerprintOccurrence,
+  SupportFreezeEvidenceInput,
+  SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
+  SupportReadFrozenLogTailInput,
   SupportRevealLogResult,
+  SupportSaveDiagnosticBundleResult,
   SupportSnapshot,
   SupportSubmitReportRequest,
   SupportSubmitReportResult,
@@ -43,6 +49,22 @@ export interface SupportBridgeSurface {
       readonly target: SupportLogTarget;
       readonly tailLines: number;
     }): Promise<SupportLogTailResult>;
+    freezeEvidence(
+      input: SupportFreezeEvidenceInput,
+    ): Promise<SupportFreezeEvidenceResult>;
+    discardFrozenEvidence(draftId: number): Promise<void>;
+    readFrozenLogTail(
+      input: SupportReadFrozenLogTailInput,
+    ): Promise<SupportLogTailResult>;
+    saveDiagnosticBundle(
+      form: SupportSubmitReportRequest,
+    ): Promise<SupportSaveDiagnosticBundleResult>;
+    getFingerprintOccurrence(
+      fingerprint: string,
+    ): Promise<SupportFingerprintOccurrence | null>;
+    buildPublicDraft(
+      form: SupportSubmitReportRequest,
+    ): Promise<SupportBuildPublicDraftResult>;
   };
 }
 
@@ -106,6 +128,36 @@ export function buildSupportBridge(): SupportBridgeSurface {
           RunnerHostInvoke.supportTailLog,
           input,
         ) as Promise<SupportLogTailResult>,
+      freezeEvidence: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportFreezeEvidence,
+          input,
+        ) as Promise<SupportFreezeEvidenceResult>,
+      discardFrozenEvidence: (draftId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportDiscardFrozenEvidence,
+          draftId,
+        ),
+      readFrozenLogTail: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportReadFrozenLogTail,
+          input,
+        ) as Promise<SupportLogTailResult>,
+      saveDiagnosticBundle: (form) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportSaveDiagnosticBundle,
+          form,
+        ) as Promise<SupportSaveDiagnosticBundleResult>,
+      getFingerprintOccurrence: (fingerprint) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportGetFingerprintOccurrence,
+          fingerprint,
+        ) as Promise<SupportFingerprintOccurrence | null>,
+      buildPublicDraft: (form) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportBuildPublicDraft,
+          form,
+        ) as Promise<SupportBuildPublicDraftResult>,
     },
   };
 }

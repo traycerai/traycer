@@ -156,6 +156,7 @@ function openTuiHoverCard(): void {
       ownerId="owner-1"
       ownerKind="terminal-agent"
       supplementalContent={null}
+      side="right"
     />,
   );
   const trigger = screen.getByTestId("tui-row");

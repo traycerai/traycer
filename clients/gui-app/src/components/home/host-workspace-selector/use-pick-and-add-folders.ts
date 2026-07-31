@@ -24,8 +24,10 @@ export function usePickAndAddWorkspaceFolders(
   return useCallback(async (): Promise<boolean> => {
     const result = await folderActions.pickAndPrepareFolders();
     if (result === null) return false;
-    const folders = result.folders.map(
-      preparedWorkspaceFolderToWorkspaceFolderInfo,
+    // Stamp with dispatch-time hostId from the prepare result — never re-read
+    // the mutable client after the await (B6 host-switch race).
+    const folders = result.folders.map((folder) =>
+      preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
     );
     workspaceSource.addResolvedFolders(folders);
     return folders.length > 0;

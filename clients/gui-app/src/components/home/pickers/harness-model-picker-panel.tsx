@@ -4,6 +4,7 @@ import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-model-picker-search";
 import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-picker-list";
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
+import { PickerProviderAuthLine } from "@/components/home/pickers/harness-model-picker-auth-line";
 import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
 import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
@@ -13,7 +14,10 @@ import type {
   ProviderId,
 } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
@@ -52,6 +56,10 @@ interface HarnessModelPickerPanelProps {
   readonly activeProfileId: string | null;
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
   readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
+  /** The browsed provider's CLI state, for the ambient-auth line shown when
+   *  the provider has under 2 profiles (the profile dropdown owns identity
+   *  above that). `null` when `providers.list` hasn't resolved it. */
+  readonly activeProviderState: ProviderCliState | null;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
   readonly preparingByHarnessId: ReadonlyMap<
@@ -124,6 +132,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     activeProfileId,
     activeProfileIdByHarnessId,
     activeProviderProfiles,
+    activeProviderState,
     lockedHarnessId,
     degradedHarnessIds,
     preparingByHarnessId,
@@ -230,7 +239,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           {/* The dropdown is the picker's second interaction level: only when
               the active provider has 2+ profiles, and it persists while
               typing - search stays scoped to the active provider+profile
-              pair. */}
+              pair. Under 2 profiles the same slot carries the ambient-auth
+              line instead, so account identity has one home either way. */}
           {activeProviderProfiles.length >= 2 ? (
             <div className="shrink-0 border-b p-2">
               <PickerProfileDropdown
@@ -259,7 +269,9 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
                 admissionByProfileId={profileAdmission}
               />
             </div>
-          ) : null}
+          ) : (
+            <PickerProviderAuthLine state={activeProviderState} />
+          )}
           <div className="min-h-0 flex-1 overflow-hidden">
             <HarnessModelPickerList
               idPrefix={idPrefix}

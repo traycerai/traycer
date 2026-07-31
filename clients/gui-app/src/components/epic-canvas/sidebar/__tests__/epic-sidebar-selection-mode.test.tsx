@@ -16,6 +16,8 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 
 interface TestTreeNode {
   readonly id: string;
@@ -730,6 +732,8 @@ describe("epic sidebar selection mode", () => {
     testState.rowHostClient = { getActiveHostId: () => "host-1" };
     testState.activeHostClient = { getActiveHostId: () => "host-1" };
     testState.sessionHandleByChatId = {};
+    useNewConversationModalStore.getState().resetForTests();
+    useNewConversationModalOpenStore.getState().close();
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
@@ -994,6 +998,9 @@ describe("epic sidebar selection mode", () => {
 
   it("consolidates row actions into one menu with 'New child agent' first, reachable from both the ⋯ dropdown and right-click", async () => {
     seedChatTree();
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode(EPIC_ID, "terminal");
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -1013,13 +1020,25 @@ describe("epic sidebar selection mode", () => {
     expect(
       await screen.findByTestId("epic-sidebar-context-new-child-chat-root"),
     ).not.toBeNull();
-    expect(
-      screen.getByRole("menuitem", { name: "New child agent" }),
-    ).not.toBeNull();
+    const newChildAgent = screen.getByRole("menuitem", {
+      name: "New child agent",
+    });
     expect(
       await screen.findByRole("menuitem", { name: "Rename" }),
     ).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
+
+    fireEvent.click(newChildAgent);
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.composerMode,
+    ).toBe("terminal");
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      parentId: "chat-root",
+    });
   });
 
   it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {

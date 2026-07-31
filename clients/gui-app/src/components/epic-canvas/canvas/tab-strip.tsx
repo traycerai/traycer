@@ -53,10 +53,12 @@ import type {
 } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
 } from "@/stores/epics/canvas/types";
+import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
@@ -66,7 +68,7 @@ import {
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
@@ -230,14 +232,14 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds,
     enabled: chatIds.length > 0,
   });
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <div
         ref={stripRef}
         data-testid="tab-strip"
@@ -923,6 +925,9 @@ function TabIcon(props: {
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isCommGraphTileRef(props.tab)) {
+    return <CommGraphTileIcon className="size-3.5" />;
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win

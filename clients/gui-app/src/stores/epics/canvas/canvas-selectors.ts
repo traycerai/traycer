@@ -152,7 +152,30 @@ export function useEpicCanvas(tabId: string | undefined): EpicCanvasState {
 }
 
 export function makeSelectActiveEpicArtifactId(tabId: string | undefined) {
-  return (state: EpicCanvasStore): string | null => {
+  const selectRef = makeSelectActiveEpicArtifactRef(tabId);
+  return (state: EpicCanvasStore): string | null =>
+    selectRef(state)?.id ?? null;
+}
+
+export function useActiveEpicArtifactId(
+  tabId: string | undefined,
+): string | null {
+  const selector = useMemo(
+    () => makeSelectActiveEpicArtifactId(tabId),
+    [tabId],
+  );
+  return useEpicCanvasStore(selector);
+}
+
+/**
+ * Same active-tile resolution and filtering as
+ * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
+ * than just its id - callers that need to discriminate the active tile's
+ * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
+ * otherwise have to re-walk the pane tree.
+ */
+export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
+  return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
     if (tabId === undefined) return null;
     const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
     if (canvas.activePaneId === null) return null;
@@ -162,15 +185,15 @@ export function makeSelectActiveEpicArtifactId(tabId: string | undefined) {
     if (active === undefined) return null;
     if (active.type === WORKSPACE_FILE_TAB_KIND) return null;
     if (isDiffTileRef(active)) return null;
-    return active.id;
+    return active;
   };
 }
 
-export function useActiveEpicArtifactId(
+export function useActiveEpicArtifactRef(
   tabId: string | undefined,
-): string | null {
+): EpicCanvasTileRef | null {
   const selector = useMemo(
-    () => makeSelectActiveEpicArtifactId(tabId),
+    () => makeSelectActiveEpicArtifactRef(tabId),
     [tabId],
   );
   return useEpicCanvasStore(selector);

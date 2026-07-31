@@ -33,6 +33,7 @@ import {
   ArtifactFilterMenu,
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
+import { CommGraphOpenButton } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -1650,6 +1651,14 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
       <SidebarStartSelectionButton
         label="Select agents"
         disabled={props.collapsed}
+      />
+      <CommGraphOpenButton
+        epicId={props.epicId}
+        disabled={props.collapsed}
+        className={cn(
+          PANEL_HEADER_ACTION_REVEAL_CLASS,
+          COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
+        )}
       />
       <CompactPanelHeaderMoreMenu
         epicId={props.epicId}

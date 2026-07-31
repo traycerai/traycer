@@ -11,6 +11,12 @@ export interface WorkspaceFolderInfo {
   readonly path: string;
   readonly name: string;
   readonly repoIdentifier: TaskRepoIdentifier | null;
+  /**
+   * Host that prepared/opened this folder. Required for non-git (local-only)
+   * paths so Project-scope MCP does not send Host A's scratch path to Host B.
+   * Null only for legacy persisted rows that predate host stamping.
+   */
+  readonly hostId: string | null;
 }
 
 interface WorkspaceFoldersStore {
@@ -172,6 +178,7 @@ function parsePersistedFolderInfo(
     path: value.path,
     name: value.name,
     repoIdentifier: parsePersistedRepoIdentifier(value.repoIdentifier),
+    hostId: typeof value.hostId === "string" ? value.hostId : null,
   };
 }
 
@@ -206,6 +213,7 @@ function mergeWorkspaceFolderInfo(
             path,
             name: folder.name,
             repoIdentifier: folder.repoIdentifier,
+            hostId: folder.hostId,
           },
         ]
       : [];
@@ -269,7 +277,8 @@ function mergeOneFolder(
   if (
     existing === null ||
     !sameRepoIdentifier(existing.repoIdentifier, folder.repoIdentifier) ||
-    existing.name !== folder.name
+    existing.name !== folder.name ||
+    existing.hostId !== folder.hostId
   ) {
     acc.infoByPath[folder.path] = folder;
     acc.changed = true;
