@@ -63,6 +63,35 @@ function makeJpegFile(name: string): File {
   return new File([bytes], name, { type: "image/jpeg" });
 }
 
+interface DeferredPngFile {
+  readonly file: File;
+  readonly resolve: () => void;
+}
+
+/**
+ * A PNG `File` whose `arrayBuffer()` read stays pending until `resolve()` is
+ * called - lets interleaving tests park two concurrent `ingest()` loops
+ * mid-read (both past their pre-await checks, neither committed yet) and
+ * then control which one's commit lands first.
+ */
+function makeDeferredPngFile(name: string): DeferredPngFile {
+  const file = makeDefaultPngFile(name);
+  const bytes = pngBytes(32);
+  // Definite-assignment assertion, not a type-erasing cast: the `Promise`
+  // executor below is invoked synchronously (per spec) before this function
+  // returns, so `release` is always assigned before `makeDeferredPngFile`'s
+  // caller can read it off the returned object.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(file, "arrayBuffer").mockImplementation(async () => {
+    await gate;
+    return bytes.buffer;
+  });
+  return { file, resolve: release };
+}
+
 let urlCounter = 0;
 const createObjectURLMock = vi.fn((): string => `blob:mock/${++urlCounter}`);
 const revokeObjectURLMock = vi.fn((): void => undefined);
@@ -322,5 +351,113 @@ describe("useReportIssueAttachments", () => {
       expect(result.current.images).toHaveLength(1);
     });
     expect(result.current.images[0]?.fileName).toBe("keep.png");
+  });
+
+  describe("concurrent addFiles interleaving", () => {
+    it("keeps isIngesting true until every concurrent batch has settled", async () => {
+      const { result } = renderHook(() => useReportIssueAttachments());
+      const fast = makeDefaultPngFile("fast.png");
+      const slow = makeDeferredPngFile("slow.png");
+
+      // A drop (fast) and a paste (slow, still reading) land back to back.
+      act(() => {
+        result.current.addFiles([fast]);
+        result.current.addFiles([slow.file]);
+      });
+
+      await waitFor(() => {
+        expect(
+          result.current.images.some((image) => image.fileName === "fast.png"),
+        ).toBe(true);
+      });
+      // The fast batch already committed and its own loop returned, but the
+      // slow batch is still mid-read - a per-loop boolean would have already
+      // flipped this to false here, silently telling a submit-time consumer
+      // ingestion is done while an image is still in flight.
+      expect(result.current.isIngesting).toBe(true);
+      expect(result.current.images).toHaveLength(1);
+
+      act(() => {
+        slow.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.images).toHaveLength(2);
+        expect(result.current.isIngesting).toBe(false);
+      });
+    });
+
+    it("two concurrent batches with room for both admit each exactly once", async () => {
+      const { result } = renderHook(() => useReportIssueAttachments());
+      const drop = makeDeferredPngFile("drop.png");
+      const paste = makeDeferredPngFile("paste.png");
+
+      act(() => {
+        result.current.addFiles([drop.file]);
+        result.current.addFiles([paste.file]);
+      });
+
+      act(() => {
+        drop.resolve();
+        paste.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.images).toHaveLength(2);
+        expect(result.current.isIngesting).toBe(false);
+      });
+      expect(result.current.rejection).toBeNull();
+      expect(
+        result.current.images.map((image) => image.fileName).sort(),
+      ).toEqual(["drop.png", "paste.png"]);
+    });
+
+    it("a paste landing mid-drop for the last slot loses the commit-time cap race, not the pre-await one", async () => {
+      const { result } = renderHook(() => useReportIssueAttachments());
+
+      act(() => {
+        result.current.addFiles([
+          makeDefaultPngFile("1.png"),
+          makeDefaultPngFile("2.png"),
+        ]);
+      });
+      await waitFor(() => {
+        expect(result.current.images).toHaveLength(2);
+      });
+
+      // Both batches pass the pre-await count check against the SAME prior
+      // count (2 < 3) before either has committed - the TOCTOU window the
+      // commit-time recheck exists to close.
+      const drop = makeDeferredPngFile("drop.png");
+      const paste = makeDeferredPngFile("paste.png");
+      act(() => {
+        result.current.addFiles([drop.file]);
+        result.current.addFiles([paste.file]);
+      });
+
+      // drop resolves first, so it wins the one remaining slot; paste's
+      // commit-time recheck must then see the cap already reached.
+      act(() => {
+        drop.resolve();
+        paste.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.images).toHaveLength(MAX_REPORT_IMAGES);
+        expect(result.current.isIngesting).toBe(false);
+      });
+      expect(
+        result.current.images.some((image) => image.fileName === "drop.png"),
+      ).toBe(true);
+      expect(
+        result.current.images.some((image) => image.fileName === "paste.png"),
+      ).toBe(false);
+      // Commit-time drop surfaces the same honest copy as an attach-time one -
+      // never a silently swallowed rejection.
+      expect(result.current.rejection?.reason).toBe("count");
+      expect(result.current.rejection?.message).toBe(
+        `You can attach up to ${MAX_REPORT_IMAGES} screenshots.`,
+      );
+    });
   });
 });

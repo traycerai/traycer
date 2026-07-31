@@ -121,6 +121,15 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
   // via `commitImage`/`removeImage` below) rather than a stale closure.
   const imagesRef = useRef<ReadonlyArray<ReportIssueAttachmentImage>>(images);
   const activeRef = useRef(true);
+  // A second concurrent `addFiles` call (paste landing mid-drop, or two
+  // drops in quick succession) spawns its own `ingest()` loop with its own
+  // try/finally - a plain boolean `isIngesting` set independently by each
+  // loop would flip back to `false` the instant the FIRST loop to finish
+  // returns, even while a second loop is still mid-read and about to commit
+  // an image the dialog's submit snapshot would then silently miss. Count
+  // concurrently-active loops instead: `isIngesting` is true from the first
+  // loop's start until the LAST one settles.
+  const pendingIngestCountRef = useRef(0);
 
   useEffect(() => {
     activeRef.current = true;
@@ -153,6 +162,7 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
       const isActive = (): boolean => activeRef.current;
 
       async function ingest(): Promise<void> {
+        pendingIngestCountRef.current += 1;
         setIsIngesting(true);
         try {
           for (const file of candidates) {
@@ -186,6 +196,29 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
               continue;
             }
             if (!isActive()) return;
+            // Re-checked synchronously here, immediately before the commit
+            // below with no `await` in between: a concurrent `addFiles`
+            // batch (paste landing mid-drop) can only have advanced past its
+            // own await and mutated `imagesRef.current` on some EARLIER
+            // microtask turn, never during this synchronous stretch, so this
+            // recheck-then-commit pair is atomic with respect to every other
+            // ingest loop. Closes the TOCTOU window the pre-await checks
+            // above leave open: two loops can both pass the pre-await count
+            // check against the same prior count, then both resolve their
+            // reads and race to commit - only the recheck here, not the
+            // pre-await one, can see the OTHER loop's commit and back off.
+            if (imagesRef.current.length >= MAX_REPORT_IMAGES) {
+              setRejection(rejectionFor("count", ""));
+              return;
+            }
+            const committedTotal = imagesRef.current.reduce(
+              (sum, image) => sum + image.size,
+              0,
+            );
+            if (reportImagesExceedBudget(committedTotal + bytes.byteLength)) {
+              setRejection(rejectionFor("budget", file.name));
+              continue;
+            }
             commitImage({
               id: crypto.randomUUID(),
               fileName: file.name || "screenshot.png",
@@ -196,7 +229,10 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
             });
           }
         } finally {
-          if (isActive()) setIsIngesting(false);
+          pendingIngestCountRef.current -= 1;
+          if (isActive() && pendingIngestCountRef.current === 0) {
+            setIsIngesting(false);
+          }
         }
       }
 
