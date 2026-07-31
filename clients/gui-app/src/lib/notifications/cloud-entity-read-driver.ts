@@ -45,6 +45,18 @@ export interface CloudEntityReadDeps {
 let inFlight = false;
 let retryTimer: TimerHandle | null = null;
 let queuedEntity: HostNotificationsEntityRef | null = null;
+/**
+ * Bumped by every reset. Both continuations that can outlive the caller - the
+ * armed retry timer and the in-flight loop's own re-entry - capture it and
+ * stand down if it moved.
+ *
+ * Without this, a reset is only half a stop: it clears the timer, but the
+ * async pass already running re-enters in its `finally` and re-arms a new one
+ * from the generation that was just torn down. Both continuations carry `deps`
+ * captured from one render, so anything they schedule after teardown would run
+ * against a mutation client and relay session that no longer exist.
+ */
+let generation = 0;
 
 /**
  * Jitter over [50%, 100%] of the exponential rather than AWS "full jitter"
@@ -93,6 +105,7 @@ export function requestCloudEntityRead(
   // subscriber the row change wakes, so nothing can start a parallel pass.
   state.beginEntityRead(entryIds, deps.now());
   inFlight = true;
+  const passGeneration = generation;
   void (async (): Promise<void> => {
     try {
       for (const entryId of entryIds) {
@@ -117,12 +130,17 @@ export function requestCloudEntityRead(
         }
       }
     } finally {
-      inFlight = false;
-      const next = queuedEntity ?? entity;
-      queuedEntity = null;
-      // Re-enter once: picks up anything that arrived mid-pass, and otherwise
-      // falls through to arming the backoff timer.
-      requestCloudEntityRead(next, deps);
+      // A reset during the pass already cleared the claim and moved on. Re-
+      // entering here would revive the torn-down generation - and arm a fresh
+      // timer holding its dead `deps`.
+      if (generation === passGeneration) {
+        inFlight = false;
+        const next = queuedEntity ?? entity;
+        queuedEntity = null;
+        // Re-enter once: picks up anything that arrived mid-pass, and
+        // otherwise falls through to arming the backoff timer.
+        requestCloudEntityRead(next, deps);
+      }
     }
   })();
 }
@@ -143,15 +161,29 @@ function scheduleNextAttempt(
   }
   if (!Number.isFinite(soonest)) return;
   const delayMs = Math.max(0, soonest - deps.now());
+  const armedGeneration = generation;
   retryTimer = globalThis.setTimeout(() => {
+    // Belt and braces with `resetCloudEntityReadDriver`'s `clearTimeout`: a
+    // timer that already fired into the macrotask queue before the reset ran
+    // cannot be cancelled, so it has to check for itself.
+    if (generation !== armedGeneration) return;
     retryTimer = null;
     requestCloudEntityRead(entity, deps);
   }, delayMs);
 }
 
-/** Drops the in-flight claim, the queued entity and any armed timer. Called
- * when the relay session's ownership changes, and between tests. */
+/**
+ * Drops the in-flight claim, the queued entity and any armed timer, and
+ * invalidates every continuation the previous generation could still run.
+ *
+ * Called wherever the relay session's ownership ends - including provider
+ * UNMOUNT, which owns nothing else here: an armed retry timer is re-armed on
+ * each failure, so without this a persistently failing server keeps a chain of
+ * timers alive past teardown, firing host RPCs through a mutation client and
+ * relay session that are gone.
+ */
 export function resetCloudEntityReadDriver(): void {
+  generation += 1;
   inFlight = false;
   queuedEntity = null;
   if (retryTimer !== null) {

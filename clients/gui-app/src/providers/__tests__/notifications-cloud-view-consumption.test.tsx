@@ -86,7 +86,10 @@ vi.mock("sonner", () => ({
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import {
+  cloudNotificationFeedId,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
 import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
@@ -310,7 +313,12 @@ function setWindowFocused(focused: boolean): void {
 }
 
 function readAtFor(entryId: string): number | null {
-  const row = useCloudNotificationsStore.getState().rows[`cloud:${entryId}`];
+  // Production keys come from this helper (it percent-encodes the entry id);
+  // rebuilding the prefix by hand would silently miss any id needing encoding.
+  const row =
+    useCloudNotificationsStore.getState().rows[
+      cloudNotificationFeedId(entryId)
+    ];
   if (row === undefined) throw new Error(`missing cloud row ${entryId}`);
   return row.entry.readAt;
 }
@@ -631,6 +639,83 @@ describe("cloud-mode view consumption", () => {
  * `Math.random` is stubbed so the jitter window is deterministic; the clock is
  * faked so a five-minute cap does not mean a five-minute test.
  */
+describe("cloud-mode view-consumption teardown", () => {
+  /**
+   * The retry timer re-arms on every failure, so a persistently failing server
+   * keeps a chain of timers alive. Unmount reaches none of the relay-session
+   * reset sites, so the driver has to be stopped there explicitly - otherwise
+   * these timers fire host RPCs through a torn-down mutation client.
+   */
+  it("issues no further requests after the provider unmounts", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    cloudMarkReadMode.value = "always-fails";
+
+    renderProvider();
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-done",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: CHAT_ID,
+        }),
+      ],
+      1,
+    );
+    focusChat(EPIC_ID, CHAT_ID);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(calls.cloudMarkRead).toHaveLength(1);
+
+    cleanup();
+
+    // Well past every backoff the chain could have reached.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(calls.cloudMarkRead).toHaveLength(1);
+  });
+
+  it("does not let a pass that was in flight at teardown re-arm the chain", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    cloudMarkReadMode.value = "always-fails";
+    cloudMarkReadGate.armed = true;
+
+    renderProvider();
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-done",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: CHAT_ID,
+        }),
+      ],
+      1,
+    );
+    focusChat(EPIC_ID, CHAT_ID);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(calls.cloudMarkRead).toHaveLength(1);
+    expect(cloudMarkReadGate.waiting).toHaveLength(1);
+
+    // Unmount while the request is parked, THEN let it settle: the pass's own
+    // completion path is the second way a dead generation can re-arm.
+    cleanup();
+    releaseOneGatedRequest();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(calls.cloudMarkRead).toHaveLength(1);
+  });
+});
+
 describe("cloud-mode view-consumption retries", () => {
   function useDeterministicBackoff(fraction: number): void {
     vi.useFakeTimers();

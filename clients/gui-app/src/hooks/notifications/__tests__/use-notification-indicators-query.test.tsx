@@ -472,7 +472,7 @@ describe("cloud-derived notification indicators", () => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
 
-    screen.getByTestId("mark-read").click();
+    screen.getByRole("button", { name: "Mark read" }).click();
 
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("none");
@@ -511,7 +511,7 @@ describe("cloud-derived notification indicators", () => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
 
-    screen.getByTestId("mark-read").click();
+    screen.getByRole("button", { name: "Mark read" }).click();
 
     await waitFor(() => {
       expect(useCloudNotificationsStore.getState().connectionState).toBe(

@@ -112,11 +112,21 @@ describe("cloud notification indicator derivation", () => {
     });
   }
 
+  /** The payload is inert for indicator derivation (only kind, severity and
+   * the markers are read), but it is still shaped the way its entry kind's
+   * producer shapes it, so the fixture is not a misleading example of a
+   * legal-looking pairing production never emits. */
   function prompt(
     entryId: string,
     kind: "approval.requested" | "interview.requested",
     resolvedAt: number | null,
   ): HostNotificationsCloudFeedRow {
+    const shared = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Chat",
+      taskTitle: "Epic",
+    };
     return wrap(entryId, {
       id: entryId,
       updatedAt: 1,
@@ -128,7 +138,10 @@ describe("cloud notification indicator derivation", () => {
       resolvedAt,
       epicId: "epic-1",
       chatId: "chat-1",
-      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      payload:
+        kind === "approval.requested"
+          ? { kind: "approval", ...shared, approvalId: entryId }
+          : { kind: "interview", ...shared, interviewBlockId: entryId },
     });
   }
 

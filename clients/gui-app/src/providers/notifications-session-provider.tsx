@@ -590,6 +590,11 @@ export function NotificationsSessionProvider(
   useEffect(() => {
     return () => {
       tearDown();
+      // `tearDown` only closes streams. The view-consumption driver keeps its
+      // own re-arming retry timer, and unmount is the one teardown edge that
+      // reaches none of the `resetCloudRelaySession` call sites - so without
+      // this, a failing server's retry chain outlives the provider.
+      resetCloudEntityReadDriver();
     };
   }, [tearDown]);
 
