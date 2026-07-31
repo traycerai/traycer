@@ -65,9 +65,9 @@ export function useRefreshProviders(): () => Promise<void> {
       hostQueryKeys.method<HostRpcRegistry, "providers.list">(
         hostId,
         "providers.list",
-        {},
+        { native: null },
       ),
     );
-    await mutateAsync({ forceAuthRefresh: true });
+    await mutateAsync({ forceAuthRefresh: true, native: null });
   }, [client, mutateAsync, queryClient]);
 }

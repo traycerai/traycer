@@ -1153,15 +1153,39 @@ export class AuthService {
    * Fetches the signed-in user's device/session list via authn-v3. The raw
    * bearer remains inside this auth boundary; callers consume a parsed DTO from
    * TanStack Query and render signed-out as an empty state.
+   *
+   * `signal` is the reading query's cancellation, and it is load-bearing for
+   * more than the request: the repair below spends a single-use refresh
+   * rotation. Identity fencing alone does not cover this, because the common
+   * cancellations - a revoke invalidating the list, a panel unmount, a poll
+   * superseded by a focus refetch - leave the SAME account live, so every
+   * authority check still passes while nobody is waiting for the answer.
+   * Aborting is therefore checked on entry and after each list await, and
+   * throws rather than returning `null`, so a cancelled read can never be
+   * mistaken for the signed-out empty state.
    */
-  async fetchUserSessions(): Promise<ListUserSessionsResponse | null> {
+  async fetchUserSessions(
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsResponse | null> {
+    signal.throwIfAborted();
     const initialAuthority = this.captureLiveSessionAuthority();
     if (initialAuthority === null) {
       return null;
     }
     const initial = await this.runnerHost.listUserSessions(
       initialAuthority.bearer,
+      signal,
     );
+    // This is the fence that keeps a cancelled read out of the repair below:
+    // everything between here and the rotation is synchronous, so bailing here
+    // is the same as bailing there.
+    //
+    // Ordered before the authority check on purpose: an aborted read is a
+    // non-answer, not an account change, and the two shells disagree on how an
+    // aborted request surfaces (in-process `fetch` collapses it into
+    // `network-error`; the desktop bridge rejects). Checking here makes both
+    // reach the caller as the same cancellation.
+    signal.throwIfAborted();
     if (!this.isLiveSessionAuthority(initialAuthority)) {
       return null;
     }
@@ -1204,7 +1228,9 @@ export class AuthService {
 
     const repaired = await this.runnerHost.listUserSessions(
       repairedAuthority.bearer,
+      signal,
     );
+    signal.throwIfAborted();
     if (!this.isLiveSessionAuthority(repairedAuthority)) {
       return null;
     }

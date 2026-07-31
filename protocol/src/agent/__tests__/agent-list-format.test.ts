@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSummary, ListAgentsResponse } from "@traycer/protocol/host";
+import { listAgentsResponseSchema } from "@traycer/protocol/host/agent/shared";
 import { formatAgentListResponse, formatAgentSelf } from "../agent-list-format";
 
 function agent(
@@ -173,6 +174,107 @@ describe("formatAgentListResponse categorization", () => {
     expect(output).toContain('"<title>": the agent\'s chat/session title');
   });
 
+  it("marks host-enriched archived rows and explains reactivation", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const archived = {
+      ...agent({ id: "done", parentId: "caller" }),
+      archived: true,
+    };
+    const output = formatAgentListResponse(
+      response([caller, archived], "caller"),
+    );
+
+    expect(output).toContain("done [archived] gui/claude");
+    expect(output).toContain(
+      "[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message",
+    );
+  });
+
+  it("strips archive rendering end to end when parsed through the CLI's versioned response schema", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const archived = {
+      ...agent({ id: "done", parentId: "caller" }),
+      archived: true,
+    };
+    const parsed = listAgentsResponseSchema.parse(
+      response([caller, archived], "caller"),
+    );
+    const output = formatAgentListResponse(parsed);
+
+    // The versioned wire schema has no `archived` field, so zod strips it -
+    // no row marker, and the legend line explaining it must not appear either.
+    expect(output).not.toContain("[archived]");
+    expect(output).not.toContain(
+      "[archived]: the agent/chat is archived and treated as inactive",
+    );
+  });
+
+  it("still explains [archived] when every enriched row is unarchived (presence, not truthiness)", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const notArchived = {
+      ...agent({ id: "active", parentId: "caller" }),
+      archived: false,
+    };
+    const output = formatAgentListResponse(
+      response([caller, notArchived], "caller"),
+    );
+
+    // No row is archived, so no row carries the `[archived]` marker...
+    expect(output).not.toContain("active [archived]");
+    // ...but every row carries the enrichment key, so the legend must still
+    // explain what the marker would mean.
+    expect(output).toContain(
+      "[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message",
+    );
+  });
+
+  it("still explains [archived] for an all-unarchived enriched listing when sending is unavailable", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const notArchived = {
+      ...agent({ id: "active", parentId: "caller" }),
+      archived: false,
+    };
+    const output = formatAgentListResponse({
+      ...response([caller, notArchived], "caller"),
+      caller: { agentId: "caller", canSendMessages: false },
+    });
+
+    expect(output).toContain("Sending is unavailable in this session");
+    expect(output).toContain(
+      "[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message",
+    );
+  });
+
+  it("leaves the rest of the legend and row formatting untouched for a non-enriched (stripped) response", () => {
+    const agents = [
+      agent({
+        id: "caller",
+        isSelf: true,
+        title: "Fix login",
+        folderPaths: ["/repo"],
+      }),
+      agent({
+        id: "child",
+        parentId: "caller",
+        folderPaths: ["/repo/.worktrees/child"],
+        isWorktree: true,
+      }),
+    ];
+    const parsed = listAgentsResponseSchema.parse(response(agents, "caller"));
+    const output = formatAgentListResponse(parsed);
+
+    expect(output).not.toContain("[archived]");
+    expect(output).toContain('caller [self] "Fix login" gui/claude');
+    expect(output).toContain("R/S");
+    expect(output).toContain("dir: /repo");
+    expect(output).toContain("worktree: /repo/.worktrees/child");
+    expect(output).toContain(
+      '[self]: this agent, i.e. the caller of agent.list\n"<title>"',
+    );
+    expect(output).toContain("dir: <path>: the working directory");
+    expect(output).toContain("worktree: <path>: the agent runs in a dedicated");
+  });
+
   it("falls back to a single forest when the caller is absent", () => {
     const agents = [
       agent({ id: "a", parentId: null }),
@@ -220,6 +322,14 @@ describe("formatAgentSelf", () => {
     ).toContain("title: Fix login");
     expect(formatAgentSelf(agent({ id: "self", title: null }))).toContain(
       "title: -",
+    );
+  });
+
+  it("reports the host-enriched archive state", () => {
+    const archived = { ...agent({ id: "self", isSelf: true }), archived: true };
+    expect(formatAgentSelf(archived)).toContain("archived: yes");
+    expect(formatAgentSelf(agent({ id: "self", isSelf: true }))).toContain(
+      "archived: no",
     );
   });
 

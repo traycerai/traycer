@@ -745,7 +745,9 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       signInUrl: "https://auth.example.invalid/sign-in",
     });
 
-    await expect(host.listUserSessions("jwt")).resolves.toEqual({
+    await expect(
+      host.listUserSessions("jwt", new AbortController().signal),
+    ).resolves.toEqual({
       kind: "network-error",
     });
     await expect(
@@ -761,11 +763,58 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       kind: "network-error",
     });
 
+    // Deliberately still one argument: an `AbortSignal` is not cloneable
+    // across the context bridge, so the signal is consumed on this side and
+    // never forwarded into main.
     expect(listUserSessions).toHaveBeenCalledWith("jwt");
     expect(revokeUserSession).toHaveBeenCalledWith("jwt", "family-1", true);
     expect(revokeAllSessions).toHaveBeenCalledWith("jwt");
     expect(requestStepUpChallenge).toHaveBeenCalledWith("jwt");
     expect(verifyStepUpChallenge).toHaveBeenCalledWith("jwt", "123456");
+  });
+
+  it("settles a cancelled session list without waiting for the main-process reply", async () => {
+    // Main keeps running the GET (bounded by the fetcher's own timeout) because
+    // the signal cannot cross the bridge. What must not happen is the caller
+    // waiting it out: `AuthService.fetchUserSessions()` follows a list with a
+    // repair that spends a single-use refresh rotation, so cancellation has to
+    // reach it now rather than seconds later.
+    const fake = buildFakeBridge(null);
+    fake.bridge.listUserSessions = vi.fn(
+      () => new Promise<never>(() => undefined),
+    );
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    const controller = new AbortController();
+    const pending = host.listUserSessions("jwt", controller.signal);
+    const reason = new Error("cancelled by the sessions query");
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+  });
+
+  it("rejects a session list requested with an already-aborted signal", async () => {
+    const fake = buildFakeBridge(null);
+    const listUserSessions = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    fake.bridge.listUserSessions = listUserSessions;
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    const controller = new AbortController();
+    const reason = new Error("cancelled before the request went out");
+    controller.abort(reason);
+
+    await expect(host.listUserSessions("jwt", controller.signal)).rejects.toBe(
+      reason,
+    );
+    expect(listUserSessions).not.toHaveBeenCalled();
   });
 
   it("exposes the desktop-only windows bridge without changing IRunnerHost", async () => {

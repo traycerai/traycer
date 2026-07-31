@@ -90,17 +90,31 @@ function jsonHeaders(bearerToken: string): Record<string, string> {
   };
 }
 
+/**
+ * Every call is bounded by the same timeout. `callerSignal` additionally lets a
+ * caller abandon the request early - today only the session list, whose reader
+ * is a TanStack query that can be cancelled by a refetch, an unmount, or an
+ * account switch. Callers with no cancellation of their own pass `null`.
+ */
+function requestSignal(callerSignal: AbortSignal | null): AbortSignal {
+  const timeout = AbortSignal.timeout(DEVICES_SESSIONS_FETCH_TIMEOUT_MS);
+  return callerSignal === null
+    ? timeout
+    : AbortSignal.any([callerSignal, timeout]);
+}
+
 async function fetchAuthn(
   authnBaseUrl: string,
   path: string,
   bearerToken: string,
   init: Omit<RequestInit, "headers" | "signal">,
+  callerSignal: AbortSignal | null,
 ): Promise<Response | null> {
   try {
     return await fetch(authnApiUrl(authnBaseUrl, path), {
       ...init,
       headers: jsonHeaders(bearerToken),
-      signal: AbortSignal.timeout(DEVICES_SESSIONS_FETCH_TIMEOUT_MS),
+      signal: requestSignal(callerSignal),
     });
   } catch {
     return null;
@@ -139,9 +153,16 @@ async function parseOk<T>(
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * Reads the account session list. `signal` is the reader's own cancellation
+ * (the TanStack query's); an abort collapses into `network-error` like any
+ * other transport failure, because the only caller re-checks its signal before
+ * interpreting this result and never reaches that branch.
+ */
 export async function listUserSessionsViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
+  signal: AbortSignal | null,
 ): Promise<ListUserSessionsFetchResult> {
   const response = await fetchAuthn(
     authnBaseUrl,
@@ -150,6 +171,7 @@ export async function listUserSessionsViaHttp(
     {
       method: "GET",
     },
+    signal,
   );
   if (response === null) {
     return { kind: "network-error" };
@@ -172,9 +194,13 @@ export async function revokeUserSessionViaHttp(
   familyId: string,
 ): Promise<RevokeUserSessionFetchResult> {
   const path = `api/v3/user/sessions/${encodeURIComponent(familyId)}`;
-  const response = await fetchAuthn(authnBaseUrl, path, bearerToken, {
-    method: "DELETE",
-  });
+  const response = await fetchAuthn(
+    authnBaseUrl,
+    path,
+    bearerToken,
+    { method: "DELETE" },
+    null,
+  );
   if (response === null) {
     return { kind: "network-error" };
   }
@@ -208,6 +234,7 @@ export async function revokeAllSessionsViaHttp(
       method: "POST",
       body: "{}",
     },
+    null,
   );
   if (response === null) {
     return { kind: "network-error" };
@@ -249,6 +276,7 @@ export async function mintHostCredentialViaHttp(
       method: "POST",
       body: JSON.stringify(request),
     },
+    null,
   );
   if (response === null) {
     return { kind: "network-error" };
@@ -293,6 +321,7 @@ export async function requestStepUpChallengeViaHttp(
       method: "POST",
       body: "{}",
     },
+    null,
   );
   if (response === null) {
     return { kind: "network-error" };
@@ -322,6 +351,7 @@ export async function verifyStepUpChallengeViaHttp(
       method: "POST",
       body: JSON.stringify({ code }),
     },
+    null,
   );
   if (response === null) {
     return { kind: "network-error" };

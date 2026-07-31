@@ -81,9 +81,19 @@ export interface IRunnerHost {
   /**
    * Fetches the signed-in user's account sessions from authn-v3. Desktop shells
    * run this in Electron main for the same renderer-origin CORS reason as token
-   * validation. Never throws: transport failures collapse into the result.
+   * validation. Transport failures collapse into the result rather than
+   * throwing; a cancellation via `signal` is the one case that may reject.
+   *
+   * `signal` is the reading TanStack query's cancellation. It matters beyond
+   * saving a request: the caller's repair path spends a single-use refresh
+   * rotation, so a list nobody is waiting on must stop before it gets there.
+   * Shells that own the request in-process abort it for real; shells that run it
+   * behind an IPC boundary settle the caller and let the bounded request finish.
    */
-  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult>;
 
   /**
    * Revokes one session family. Callers pass the user's normal session bearer

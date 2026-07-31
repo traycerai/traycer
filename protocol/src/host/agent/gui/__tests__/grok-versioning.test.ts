@@ -69,10 +69,8 @@ import {
 // asserts the new v2.0/v3.0/v4.0/v5.0/v6.0 lines and their upgrade/downgrade
 // bridges are well-formed.
 import {
-  providersAwaitLoginDowngradeV2ToV1,
+  providersAwaitLoginDowngradeV21ToV10,
   providersListDowngradeV2ToV1,
-  providersListDowngradeV3ToV1,
-  providersListDowngradeV3ToV2,
   providersListDowngradeV4ToV1,
   providersListDowngradeV4ToV2,
   providersListDowngradeV4ToV3,
@@ -85,7 +83,7 @@ import {
   providersListDowngradeV6ToV3,
   providersListDowngradeV6ToV4,
   providersListDowngradeV6ToV5,
-  providersSetApiKeyDowngradeV2ToV1,
+  providersSetApiKeyDowngradeV21ToV10,
 } from "@traycer/protocol/host/registry";
 
 function harnessOption(id: string) {
@@ -130,6 +128,13 @@ function providerState(providerId: string, status: string) {
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
   };
 }
 
@@ -232,7 +237,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     const state = providersListResponseSchema.parse({
       providers: [providerState("cursor", "unavailable")],
     }).providers[0];
-    const setApiKey = providersSetApiKeyDowngradeV2ToV1.downgradeResponse({
+    const setApiKey = providersSetApiKeyDowngradeV21ToV10.downgradeResponse({
       state,
     });
 
@@ -243,7 +248,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
       providersSetApiKeyResponseSchemaV10.parse(setApiKey.value),
     ).not.toThrow();
 
-    const awaitLogin = providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
+    const awaitLogin = providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
       state,
       existingProfileId: null,
       codeRejected: false,
@@ -253,7 +258,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     expect(awaitLogin.value.state?.auth.status).toBe("unknown");
 
     expect(
-      providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
+      providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
         state: null,
         existingProfileId: null,
         codeRejected: false,
@@ -270,7 +275,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     ).toBe(false);
 
     expect(
-      providersSetApiKeyDowngradeV2ToV1.downgradeRequest({
+      providersSetApiKeyDowngradeV21ToV10.downgradeRequest({
         providerId: "grok",
         apiKey: "grok-key",
       }),
@@ -286,7 +291,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     });
 
     expect(
-      providersSetApiKeyDowngradeV2ToV1.downgradeRequest(
+      providersSetApiKeyDowngradeV21ToV10.downgradeRequest(
         requestWithFutureField,
       ),
     ).toMatchObject({
@@ -295,7 +300,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     });
 
     expect(
-      providersSetApiKeyDowngradeV2ToV1.downgradeRequest({
+      providersSetApiKeyDowngradeV21ToV10.downgradeRequest({
         providerId: "cursor",
         apiKey: "cursor-key",
       }),
@@ -400,15 +405,25 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
-  it("drops the Amp provider from providers.list for v2.0 and v1.0 callers", () => {
-    const v3Response = providersListResponseSchemaV30.parse({
+  it("drops the Amp provider from providers.list for v3.0, v2.0, and v1.0 callers", () => {
+    const liveResponse = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
       ],
     });
 
-    const toV2 = providersListDowngradeV3ToV2.downgradeResponse(v3Response);
+    const toV3 = providersListDowngradeV6ToV3.downgradeResponse(liveResponse);
+    expect(toV3.ok).toBe(true);
+    if (!toV3.ok) return;
+    expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor", "amp"],
+    );
+    expect(() =>
+      providersListResponseSchemaV30.parse(toV3.value),
+    ).not.toThrow();
+
+    const toV2 = providersListDowngradeV6ToV2.downgradeResponse(liveResponse);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -418,7 +433,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = providersListDowngradeV3ToV1.downgradeResponse(v3Response);
+    const toV1 = providersListDowngradeV6ToV1.downgradeResponse(liveResponse);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -430,7 +445,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
   });
 });
 
-describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade bridges", () => {
+describe("post-v3.0 Devin/Pi downgrade bridges (agent.gui.listHarnesses/agent.list v4, providers.list v4.0)", () => {
   it("drops Devin/Pi from agent.gui.listHarnesses for v3.0, v2.0, and v1.0 callers", () => {
     const v4Response = listGuiHarnessesResponseSchemaV40.parse({
       harnesses: [

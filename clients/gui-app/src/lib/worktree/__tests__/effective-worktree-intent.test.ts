@@ -8,11 +8,13 @@ const GIT_FOLDER = {
   path: "/repo/git",
   name: "git",
   repoIdentifier: { owner: "acme", repo: "app" },
+  hostId: null,
 };
 const NON_GIT_FOLDER = {
   path: "/repo/non-git",
   name: "non-git",
   repoIdentifier: null,
+  hostId: null,
 };
 
 function workspace(input: {
@@ -110,8 +112,18 @@ describe("effectiveWorktreeIntent", () => {
   it("resolves a primary from workspace.primaryPath when there is no seed and nothing is staged", () => {
     // Neither folder is git, so nothing auto-stages; the user switches
     // primary before anything ever reaches the staging store.
-    const nonGitA = { path: "/a", name: "a", repoIdentifier: null };
-    const nonGitB = { path: "/b", name: "b", repoIdentifier: null };
+    const nonGitA = {
+      path: "/a",
+      name: "a",
+      repoIdentifier: null,
+      hostId: null,
+    };
+    const nonGitB = {
+      path: "/b",
+      name: "b",
+      repoIdentifier: null,
+      hostId: null,
+    };
     const ws = workspace({
       folders: [nonGitA, nonGitB],
       primaryPath: nonGitB.path,
