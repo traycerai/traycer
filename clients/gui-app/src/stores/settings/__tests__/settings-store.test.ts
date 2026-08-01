@@ -1,9 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_AGENT_MODE,
-  DEFAULT_PERMISSION,
-} from "@/components/home/data/landing-options";
+import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import {
@@ -17,7 +14,6 @@ function resetSettingsStore(): void {
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     defaultPermission: DEFAULT_PERMISSION,
-    defaultAgentMode: DEFAULT_AGENT_MODE,
     defaultEditor: "vscode",
     showGlobalResourceMonitor: true,
     showNavigatorResourceStats: false,
@@ -330,37 +326,6 @@ describe("useSettingsStore", () => {
 
   it("defaults new chats to full access permissions", () => {
     expect(useSettingsStore.getState().defaultPermission).toBe("full_access");
-  });
-
-  it("defaults new runs to regular mode", () => {
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("regular");
-  });
-
-  it("persists epic mode when selected", () => {
-    useSettingsStore.getState().setDefaultAgentMode("epic");
-    const persistedSettings = window.localStorage.getItem(
-      "traycer-gui-app:settings",
-    );
-
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("epic");
-    expect(persistedSettings).not.toBeNull();
-    expect(persistedSettings ?? "").toContain('"defaultAgentMode":"epic"');
-  });
-
-  it("rehydrates epic mode from persisted settings", async () => {
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: {
-          defaultAgentMode: "epic",
-        },
-        version: 1,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("epic");
   });
 
   it("accepts valid persisted default permissions", async () => {

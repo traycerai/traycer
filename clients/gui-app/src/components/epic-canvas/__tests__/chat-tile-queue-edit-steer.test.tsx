@@ -308,12 +308,12 @@ function emitChatSnapshot(
       queue: { status: "idle", items: [...queueItems] },
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: true,
         turnId: "turn-1",
         status: "running",
         harnessId: QUEUED_SETTINGS.harnessId,
         model: QUEUED_SETTINGS.model,
-        agentMode: QUEUED_SETTINGS.agentMode,
         profileId: null,
         userMessageId: "message-active",
         startedAt: 1,

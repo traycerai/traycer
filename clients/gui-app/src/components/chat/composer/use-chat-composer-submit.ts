@@ -227,7 +227,6 @@ export function useChatComposerSubmit(
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
-        agentMode: toolbar.agentMode,
       });
 
       const submittedContent = buildSubmittedChatJSONContent(editorContent);

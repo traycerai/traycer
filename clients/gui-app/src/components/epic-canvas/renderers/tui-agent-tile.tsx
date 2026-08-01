@@ -75,8 +75,6 @@ import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setu
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
-import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
-import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
@@ -324,7 +322,8 @@ function TuiAgentTileLive(
         epicId,
         model: agent.model,
         reasoningEffort: agent.reasoningEffort,
-        agentMode: agent.agentMode,
+        // Epic Mode was removed; the protocol still carries the field.
+        agentMode: "regular",
         tuiAgentId: agent.id,
         harnessSessionId: agent.harnessSessionId,
         forkSourceHarnessSessionId: null,
@@ -570,7 +569,6 @@ function TuiAgentTileLive(
         epicId={epicId}
         viewTabId={props.viewTabId}
         agent={agent}
-        agentMode={agent.agentMode}
         isOwnerActive={isOwnerActive}
         onWorkspaceBindingCommitted={restartAfterWorkspaceBindingChange}
       />
@@ -743,7 +741,6 @@ interface TerminalAgentPreLaunchToolbarProps {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly agent: TuiAgentProjection;
-  readonly agentMode: AgentMode;
   readonly isOwnerActive: boolean;
   readonly onWorkspaceBindingCommitted: () => void;
 }
@@ -894,7 +891,6 @@ function TerminalAgentPreLaunchToolbar(
           onBindingCommitted: handleWorkspaceBindingCommitted,
         }}
       />
-      <AgentModeReadonlyLabel value={props.agentMode} />
       <DropdownMenu>
         <ButtonGroup aria-label="Fork actions" className="shrink-0">
           <TooltipWrapper

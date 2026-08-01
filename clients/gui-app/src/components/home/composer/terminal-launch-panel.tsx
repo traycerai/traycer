@@ -3,7 +3,6 @@ import { useStore } from "zustand";
 import { Terminal } from "lucide-react";
 
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
-import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -54,8 +53,6 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
   const reasoning = useStore(store, (s) => s.reasoning);
-  const agentMode = useStore(store, (s) => s.agentMode);
-  const setAgentMode = useStore(store, (s) => s.setAgentMode);
   // Launch capability is the runtime `modes` the host advertises for the
   // selected harness - the same signal the store uses to reroute off non-TUI
   // harnesses, not the schema id (`isTuiHarnessId`). Gating on `modes` keeps
@@ -134,14 +131,12 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
     if (!isTuiHarnessId(harnessId)) return;
     onStart({
       harnessId,
-      agentMode,
       model: selection.modelSlug.length > 0 ? selection.modelSlug : null,
       reasoningEffort: reasoning.length > 0 ? reasoning : null,
       terminalAgentArgs: argsTouched ? argsDraft : null,
       profileId: selection.profileId,
     });
   }, [
-    agentMode,
     argsDraft,
     argsTouched,
     harnessId,
@@ -193,12 +188,6 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
         />
       </div>
       <div className="flex items-center justify-between gap-2 px-0.5 pb-2.5 pt-1">
-        <AgentModeToggle
-          value={agentMode}
-          disabled={pending}
-          showTooltip
-          onChange={setAgentMode}
-        />
         <StartButton
           hint={launchHint}
           disabled={startDisabled}

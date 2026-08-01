@@ -553,24 +553,6 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
   });
 
-  it("emits agent-mode changes without mutating settings defaults", () => {
-    seedDefault("codex");
-    useSettingsStore.setState({ defaultAgentMode: "regular" });
-    const onSettingsChange = vi.fn();
-    const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
-    );
-
-    act(() => {
-      result.current.getState().setAgentMode("epic");
-    });
-
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("regular");
-    expect(onSettingsChange).toHaveBeenCalledWith(
-      expect.objectContaining({ agentMode: "epic" }),
-    );
-  });
-
   it("commits a (harness,model) selection in a single emit", async () => {
     // The combined action must patch selection + reasoning + tier in one
     // `update()`, so a commit emits exactly once - never the multiple emits a
@@ -1113,7 +1095,6 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         profileId: null,
       }),
     );
-    expect(result.current.getState().agentMode).toBe("epic");
     expect(result.current.getState().permission).toBe("full_access");
   });
 

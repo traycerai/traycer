@@ -47,7 +47,6 @@ export function buildAgentCreateCommand(opts: {
   readonly surface: string | null;
   readonly harness: string | null;
   readonly model: string | null;
-  readonly agentMode: string | null;
   readonly reasoningEffort: string | null;
   readonly fast: boolean;
   readonly permissionMode: string | null;
@@ -70,7 +69,9 @@ export function buildAgentCreateCommand(opts: {
       surface: opts.surface,
       harnessId: opts.harness,
       model: opts.model,
-      agentMode: opts.agentMode,
+      // Epic Mode was removed from the product; the protocol still carries the
+      // field, so every create states the one remaining mode.
+      agentMode: "regular",
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast ? true : null,
       permissionMode: opts.permissionMode ?? "full_access",

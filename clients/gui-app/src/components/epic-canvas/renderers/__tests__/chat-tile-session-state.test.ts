@@ -256,6 +256,7 @@ function expectToastAction(
 }
 
 const ACTIVE_TURN: ChatActiveTurn = {
+  agentMode: "regular",
   sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
@@ -263,7 +264,6 @@ const ACTIVE_TURN: ChatActiveTurn = {
   model: "codex-test",
   reasoningEffort: null,
   serviceTier: null,
-  agentMode: "epic",
   profileId: null,
   userMessageId: "message-1",
   startedAt: 0,

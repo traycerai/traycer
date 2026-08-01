@@ -3,13 +3,11 @@ import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   DEFAULT_PERMISSION,
-  DEFAULT_AGENT_MODE,
   DEFAULT_COMPOSER_MODE,
   DEFAULT_REASONING,
   DEFAULT_SELECTION,
   DEFAULT_SERVICE_TIER,
   type PermissionMode,
-  type AgentMode,
   type ComposerMode,
   type HarnessModelSelection,
   type ReasoningLevel,
@@ -72,7 +70,6 @@ export interface SettingsState {
   defaultReasoning: ReasoningLevel;
   defaultServiceTier: ServiceTier;
   defaultPermission: PermissionMode;
-  defaultAgentMode: AgentMode;
   /**
    * Landing composer surface (chat vs. terminal-agent launcher). Persisted like
    * the other composer defaults so the chosen mode survives restarts.
@@ -148,7 +145,6 @@ export interface SettingsState {
   diffViewerPreferences: DiffViewerPreferences;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
-  setDefaultAgentMode: (mode: AgentMode) => void;
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setShowGlobalResourceMonitor: (value: boolean) => void;
@@ -185,7 +181,6 @@ type PersistedSettingsState = Pick<
   | "defaultReasoning"
   | "defaultServiceTier"
   | "defaultPermission"
-  | "defaultAgentMode"
   | "composerMode"
   | "preventSleepWhileRunning"
   | "showGlobalResourceMonitor"
@@ -254,7 +249,6 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultReasoning: state.defaultReasoning,
     defaultServiceTier: state.defaultServiceTier,
     defaultPermission: state.defaultPermission,
-    defaultAgentMode: state.defaultAgentMode,
     composerMode: state.composerMode,
     preventSleepWhileRunning: state.preventSleepWhileRunning,
     showGlobalResourceMonitor: state.showGlobalResourceMonitor,
@@ -291,7 +285,6 @@ export const useSettingsStore = create<SettingsState>()(
       defaultReasoning: DEFAULT_REASONING,
       defaultServiceTier: DEFAULT_SERVICE_TIER,
       defaultPermission: DEFAULT_PERMISSION,
-      defaultAgentMode: DEFAULT_AGENT_MODE,
       composerMode: DEFAULT_COMPOSER_MODE,
       preventSleepWhileRunning: false,
       showGlobalResourceMonitor: true,
@@ -318,7 +311,6 @@ export const useSettingsStore = create<SettingsState>()(
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: makeSetter(set, "themePreset"),
-      setDefaultAgentMode: makeSetter(set, "defaultAgentMode"),
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setShowGlobalResourceMonitor: makeSetter(
