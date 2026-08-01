@@ -666,6 +666,23 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
+  // The cloud-chat READ surface. All five are reads, so `latest` - and the two
+  // properties that follow from the coordinator keying on PARAMS are exactly
+  // what this fan-out wants: a read of part A never supersedes a concurrent
+  // read of part B (different params, different queue), while two readers
+  // asking for the SAME digest at the same time coalesce onto one request.
+  // `fifo` would serialize a p99 chat's ~165 parts behind each other for no
+  // property gained, since none of these writes anything.
+  //
+  // No polling. A published head changes only when its owning host publishes
+  // again, and this reader has no signal for that; an interval would spend
+  // requests on an answer that is almost always identical. A newer head is
+  // picked up by reopening.
+  "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
+  "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
+  "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {
