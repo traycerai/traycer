@@ -157,6 +157,15 @@ function publishOneMoreTurn(): Promise<PublishedCloudChat> {
   });
 }
 
+/**
+ * ## What this suite deliberately does NOT claim
+ *
+ * The reopen fix turns on observer lifecycle, so the obvious next question is
+ * whether StrictMode's double mount perturbs it. It cannot be answered here: a
+ * probe in this package measured one mount effect with `<StrictMode>` and one
+ * without, so wrapping a test in it would assert nothing while looking like it
+ * asserted something. That class is verified in the dev app, not in jsdom.
+ */
 function renderDialog(open: boolean) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -304,3 +313,4 @@ describe("a payload the cloud will not serve", () => {
     });
   });
 });
+
