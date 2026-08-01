@@ -88,21 +88,38 @@ export const chatShardRecordShape = {
   chatId: z.string().min(1),
   /** Which head section this part carries. */
   section: chatShardSectionSchema,
-  /** Ordered preserved messages. Empty unless `section` is `"messages"`. */
+  /**
+   * Ordered preserved messages: non-empty when `section` is `"messages"`,
+   * empty otherwise. A shard IS a cohort, so there is no empty one - see
+   * `refineChatShardSection`.
+   */
   messages: z.array(preservedChatMessageSchema),
-  /** Ordered preserved events. Empty unless `section` is `"events"`. */
+  /** Ordered preserved events: non-empty when `section` is `"events"`, empty otherwise. */
   events: z.array(preservedChatEventSchema),
-  /** Opaque host state. `null` unless `section` is `"host-private"`. */
+  /** Opaque host state: present when `section` is `"host-private"`, `null` otherwise. */
   hostPrivate: chatSyncHostPrivateSchema.nullable(),
 } as const;
 
 /**
- * A shard's payload must match its own `section` tag.
+ * A shard's payload must match its own `section` tag, and that section must
+ * actually carry something.
  *
  * Stated as a refinement rather than as a nested discriminated union so the
- * record stays one flat captured level (see the module note). Fails closed: a
- * `"messages"` shard carrying events is a writer bug, and assembling it would
- * silently drop them.
+ * record stays one flat captured level (see the module note). Both halves fail
+ * closed:
+ *
+ * - **Wrong section.** A `"messages"` shard carrying events is a writer bug,
+ *   and assembling it would silently drop them.
+ * - **Empty section.** A shard IS a cohort, and an empty cohort is not one. An
+ *   empty `"events"` shard paired with a head whose `events` are `null` states
+ *   an impossible graduation - a section that outgrew the head yet holds
+ *   nothing - and it would assemble to `status: "ok"` with an empty log, which
+ *   is indistinguishable from a chat that never had events. An empty chat is
+ *   represented by an EMPTY SHARD LIST in the head, never by an empty shard;
+ *   the alternative mints content addresses and fetches for nothing.
+ *
+ * `host-private` is the same rule stated over a nullable rather than an array:
+ * the envelope must be present.
  */
 export function refineChatShardSection(
   shard: {
@@ -123,18 +140,25 @@ export function refineChatShardSection(
     if (section === shard.section || !populated[section]) continue;
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: [section === "host-private" ? "hostPrivate" : section],
+      path: [sectionPath(section)],
       message: `A "${shard.section}" shard must not carry ${section} content`,
     });
   }
 
-  if (shard.section === "host-private" && shard.hostPrivate === null) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["hostPrivate"],
-      message: `A "host-private" shard must carry a hostPrivate envelope`,
-    });
-  }
+  if (populated[shard.section]) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: [sectionPath(shard.section)],
+    message:
+      shard.section === "host-private"
+        ? `A "host-private" shard must carry a hostPrivate envelope`
+        : `A "${shard.section}" shard must carry at least one entry; an empty chat is an empty shard list on the head, not an empty shard`,
+  });
+}
+
+function sectionPath(section: ChatShardSection): string {
+  return section === "host-private" ? "hostPrivate" : section;
 }
 
 /**

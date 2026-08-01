@@ -14,8 +14,10 @@ import { describe, expect, it } from "vitest";
 import {
   CHAT_ID,
   eventShard,
+  knownEvent,
   messageShard,
   publishChat,
+  publishRawShard,
   publishShard,
   stageFromText,
   unknownMessage,
@@ -381,8 +383,56 @@ describe("chat assembly fails closed", () => {
     expect(result.diagnostic).toContain("chat-somewhere-else");
   });
 
+  it("refuses an empty graduated section - the impossible graduation", async () => {
+    // The exact shape the review reproduced: a head whose events have
+    // graduated, a non-empty `eventShards` list, and a correctly hashed
+    // `section: "events"` shard whose `events` array is empty. Every integrity
+    // check passes - the bytes really are the ones the head named - so nothing
+    // but the shard schema can catch it, and before the fixup it assembled as
+    // `{status: "ok"}` with an empty event log.
+    //
+    // Forged through `publishRawShard`: the registered schema now refuses to
+    // build one, which is the fix, but a buggy writer can still upload the
+    // bytes.
+    const empty = publishRawShard({
+      schemaVersion: { major: 1, minor: 0 },
+      chatId: CHAT_ID,
+      section: "events",
+      messages: [],
+      events: [],
+      hostPrivate: null,
+    });
+
+    const graduated = publishChat({
+      graduate: { events: true, hostPrivate: false },
+      parentHeadSha256: null,
+    });
+    const head: ChatHeadRecord = {
+      ...graduated.head,
+      events: null,
+      eventShards: [empty.part],
+    };
+
+    const result = await assembleChat({
+      head,
+      readerSupports: READER,
+      fetch: (request) =>
+        Promise.resolve(
+          stageFromText(
+            request.section === "events"
+              ? empty.bytes
+              : (graduated.bytesByPart.get(request.part.sha256) ?? ""),
+          ),
+        ),
+    });
+
+    expect(result.status).toBe("corrupt");
+    if (result.status !== "corrupt") return;
+    expect(result.reason).toBe("schema-rejected");
+  });
+
   it("refuses a part filed under the wrong section", async () => {
-    const events = publishShard(eventShard([]));
+    const events = publishShard(eventShard([knownEvent]));
     const tampered: ChatHeadRecord = {
       ...published.head,
       messageShards: [events.part],
@@ -399,9 +449,11 @@ describe("chat assembly fails closed", () => {
     expect(result.reason).toBe("head-mismatch");
   });
 
-  it("reports the first failure in HEAD order, whichever part lost the race", async () => {
-    // Two bad parts, settling in the opposite order: the caller must still see
-    // one deterministic error.
+  it("reports the HEAD-earliest failure when several parts fail together", async () => {
+    // Both parts are bad and both settle in the same pass, so the failure the
+    // caller sees is decided by the head's order rather than by the network's.
+    // (That determinism only extends to failures already known when the read
+    // ends - see the note in `assembly.ts`.)
     const tampered: ChatHeadRecord = {
       ...published.head,
       messageShards: published.head.messageShards.map((part) => ({
@@ -413,11 +465,10 @@ describe("chat assembly fails closed", () => {
     const result = await assembleChat({
       head: tampered,
       readerSupports: READER,
-      fetch: async (request) => {
+      fetch: (request) => {
         const bytes = published.bytesByPart.get(request.part.sha256);
         if (bytes === undefined) throw new Error("missing part");
-        if (request.index === 0) await Promise.resolve();
-        return stageFromText(bytes);
+        return Promise.resolve(stageFromText(bytes));
       },
     });
 
@@ -434,6 +485,106 @@ describe("chat assembly fails closed", () => {
     await expect(
       assemble(published, () => Promise.reject(transport)),
     ).rejects.toBe(transport);
+  });
+});
+
+/**
+ * A known failure must not wait on a sibling that has not settled.
+ *
+ * With a p99 chat's fan-out this is the whole latency budget: under the earlier
+ * `allSettled` construction one stalled request became the bound for EVERY
+ * outcome, including a transport failure the assembler already knew about.
+ *
+ * Both tests race the read against a macrotask. A never-settling fetch means
+ * the assertion can only pass by ending the read without it, so a regression
+ * here times the suite out rather than passing quietly.
+ */
+describe("chat assembly does not wait on unsettled siblings", () => {
+  const published = publishChat({
+    graduate: { events: false, hostPrivate: false },
+    parentHeadSha256: null,
+  });
+
+  /** Resolves to `"stalled"` if `work` has not settled within a macrotask. */
+  function withinOneTick<T>(work: Promise<T>): Promise<T | "stalled"> {
+    return Promise.race([
+      work,
+      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 50)),
+    ]);
+  }
+
+  /** Part 0 behaves as `first` says; every later part never settles. */
+  function fetchWithHungSibling(first: () => Promise<StagedChatPart>): ChatPartFetcher {
+    return (request) =>
+      request.index === 0 && request.section === "messages"
+        ? first()
+        : new Promise<StagedChatPart>(() => {});
+  }
+
+  it("propagates a transport failure while a sibling hangs", async () => {
+    const transport = new Error("socket hang up");
+    const read = assembleChat({
+      head: published.head,
+      readerSupports: READER,
+      fetch: fetchWithHungSibling(() => Promise.reject(transport)),
+    });
+
+    await expect(withinOneTick(read)).rejects.toBe(transport);
+  });
+
+  it("returns an integrity failure while a sibling hangs", async () => {
+    const bytes = published.bytesByPart.get(
+      published.head.messageShards[0].sha256,
+    );
+    if (bytes === undefined) throw new Error("missing part");
+
+    const result = await withinOneTick(
+      assembleChat({
+        head: published.head,
+        readerSupports: READER,
+        fetch: fetchWithHungSibling(() =>
+          Promise.resolve({ ...stageFromText(bytes), byteLength: 3 }),
+        ),
+      }),
+    );
+
+    expect(result).not.toBe("stalled");
+    if (result === "stalled" || result.status !== "corrupt") return;
+    expect(result.reason).toBe("byte-length-mismatch");
+  });
+
+  it("still waits for every part when none of them fails", async () => {
+    // The complement: prompt FAILURE must not have become prompt SUCCESS. A
+    // reader that stopped waiting for healthy parts would assemble a truncated
+    // chat, which is the exact failure the fail-closed rule exists to prevent.
+    let releaseLast: (staged: StagedChatPart) => void = () => {};
+    const read = assembleChat({
+      head: published.head,
+      readerSupports: READER,
+      fetch: (request) => {
+        const bytes = published.bytesByPart.get(request.part.sha256);
+        if (bytes === undefined) throw new Error("missing part");
+        if (request.index === 1) {
+          return new Promise<StagedChatPart>((resolve) => {
+            releaseLast = resolve;
+          });
+        }
+        return Promise.resolve(stageFromText(bytes));
+      },
+    });
+
+    expect(await withinOneTick(read)).toBe("stalled");
+
+    const lastBytes = published.bytesByPart.get(
+      published.head.messageShards[1].sha256,
+    );
+    if (lastBytes === undefined) throw new Error("missing part");
+    releaseLast(stageFromText(lastBytes));
+
+    const result = await read;
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.chat.messages).toHaveLength(3);
   });
 });
 

@@ -317,10 +317,15 @@ describe("chat-shard section coherence", () => {
     ).toThrow();
   });
 
-  it("accepts an empty cohort - an empty chat is not a malformed one", () => {
-    expect(() =>
-      parse({ ...persistedMessageShard, messages: [] }),
-    ).not.toThrow();
+  it("rejects an empty cohort - a shard IS a cohort", () => {
+    // An empty chat is an empty shard list on the HEAD, never an empty shard.
+    // The case that forces this: an empty `"events"` shard paired with a head
+    // whose `events` are `null` states an impossible graduation - a section
+    // that outgrew the head yet holds nothing - and it assembles to
+    // `status: "ok"` with an empty log, indistinguishable from a chat that
+    // never had events.
+    expect(() => parse({ ...persistedMessageShard, messages: [] })).toThrow();
+    expect(() => parse({ ...persistedEventShard, events: [] })).toThrow();
   });
 });
 

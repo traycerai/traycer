@@ -304,6 +304,15 @@ is a versioned spec readers never parse. That is what makes a publish a hash-dif
 against the previous head, and what makes upload retries converge on the same
 object with no session state.
 
+**A shard IS a cohort.** The selected section's payload must be non-empty:
+`messages` for a `"messages"` shard, `events` for an `"events"` shard, the
+envelope for a `"host-private"` one. An empty chat is an **empty shard list on
+the head**, never an empty shard. Without that rule an empty `"events"` shard
+paired with a head whose `events` are `null` states an impossible graduation — a
+section that outgrew the head yet holds nothing — and it assembles to
+`status: "ok"` with an empty log, which no reader can tell from a chat that
+never had events. It also mints content addresses and fetches for nothing.
+
 **Sections graduate.** Events and `hostPrivate` start inline in the head, because
 they are small and a head is rewritten every publish anyway. Each moves to its
 own content-addressed part when it alone outgrows the shard target (64 KiB —
@@ -356,6 +365,7 @@ coupled surface moves with it. Work the list top to bottom:
 | Add a harness id | nothing here — chat-sync harness ids are open strings. Add it to the epic enums as usual |
 | Add a field carrying a harness id to `core` | reopen it in `open-harness.ts`, or the sweep test fails |
 | Add a `chat-shard` `section` | breaking: the enum is closed and shipped readers fail on an unlisted section, by design. New major, plus the assembly branch and the head's own part list for it |
+| Change a `refineChatShardSection` / `refineChatHeadSections` rule | **the frozen surfaces will not notice** — a Zod refinement has no JSON-Schema form, so the fixtures stay byte-identical (a narrowing here regenerates to no diff at all). Tightening one is an input narrowing: free before a release pins the record, breaking after, because a writer already emitting the looser shape becomes unreadable. Loosening one is breaking in the other direction — a reader that stops enforcing an invariant admits publications shipped readers refuse. Either way the guard is the record's own tests, not the fixture |
 | Change how a section graduates, or the head's part ordering | **breaking**, not additive: shipped readers would assemble a different chat from the same bytes. New major, and a publisher that keeps writing the old shape until old readers are out of support |
 | Cut a new record minor | add its literal + `chatSyncSchemaVersionSchema` in `chat-sync/version.ts`, and pass that constant to BOTH new `defineRecordContract` calls — the payload version is pinned per contract, and the registry binds the same literal rather than repeating it |
 | Name a new modeled field `residual` | don't — the name is reserved at every captured level (§3) |

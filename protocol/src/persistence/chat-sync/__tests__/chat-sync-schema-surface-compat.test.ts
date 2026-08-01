@@ -116,11 +116,24 @@ describe("chat-sync storage projections describe the wire", () => {
     hostPrivateShard: null,
   };
 
+  // Non-empty on purpose: a shard IS a cohort, so the registered schema rejects
+  // an empty selected section (see `refineChatShardSection`). The storage
+  // PROJECTION cannot express that - a refinement has no JSON-Schema form - so
+  // this record has to satisfy both to prove the two describe the same wire.
   const wireShard: JsonObject = {
     schemaVersion: { major: 1, minor: 0 },
     chatId: "chat-1",
     section: "messages",
-    messages: [],
+    messages: [
+      {
+        role: "user",
+        messageId: "m-1",
+        sender: { type: "user", userId: "u-1" },
+        message: { kind: "user", content: { type: "doc" } },
+        timestamp: 1,
+        sessionAnchor: null,
+      },
+    ],
     events: [],
     hostPrivate: null,
   };

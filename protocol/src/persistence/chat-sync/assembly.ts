@@ -43,10 +43,14 @@ import type { ChatSyncPayloadVersion } from "@traycer/protocol/persistence/chat-
  * only thing that says what the transcript IS. The property test pins that:
  * the same head with parts completing in any order assembles to the same chat.
  *
- * **Failing closed.** A part whose bytes do not hash to the address the head
- * named ends the read. It is not skipped, not rendered as a gap, and not
- * retried here - a chat assembled from parts one of which was substituted is
- * not a degraded chat, it is a different one.
+ * **Failing closed, and failing promptly.** A part whose bytes do not hash to
+ * the address the head named ends the read. It is not skipped, not rendered as
+ * a gap, and not retried here - a chat assembled from parts one of which was
+ * substituted is not a degraded chat, it is a different one. And the read ends
+ * as soon as that is KNOWN: it does not wait for siblings that have not
+ * settled, so one stalled request cannot stretch an already-decided outcome out
+ * to its timeout. With a p99 chat's fan-out that difference is the whole
+ * latency budget.
  *
  * Environment-agnostic on purpose. The GUI's host reads through its cloud data
  * client, cloud-ui streams through its own server, a test fetches from a map.
@@ -242,24 +246,78 @@ export async function assembleChat(
         ]),
   ];
 
-  // `allSettled`, not `all`: every fetch is already in flight, so a rejection
-  // must not leave its siblings' rejections unobserved. The first failure in
-  // HEAD order is what surfaces, so a caller sees the same error whichever
-  // part happened to lose the race.
-  const settled = await Promise.allSettled(
-    requests.map((request) => fetch(request)),
-  );
+  // Every part is fetched and verified concurrently, and the read ends as soon
+  // as ANY part is known to have failed - it does not wait on siblings that
+  // have not settled. `Promise.all` is what gives that: it rejects on the first
+  // rejection, and it installs handlers on every input, so a sibling that
+  // rejects later is still observed rather than surfacing as an unhandled
+  // rejection. (`allSettled` was the earlier construction and was wrong on
+  // liveness: one stalled request became the latency bound for every outcome,
+  // including a transport failure already known.)
+  //
+  // What determinism survives: `failures` collects every integrity failure
+  // recorded up to the moment the read ends, and the HEAD-earliest of those is
+  // what surfaces. So a publication whose bad parts fail together reports the
+  // same one every time; one whose parts fail at genuinely different times
+  // reports the earliest among those known when the first failure landed. That
+  // is a diagnostic-quality property, not a contract a caller may lean on.
+  const failures = new Map<number, ChatAssemblyResult>();
+  const verified: { readonly index: number; readonly record: ChatShardRecord }[] =
+    [];
 
+  try {
+    await Promise.all(
+      requests.map(async (request, index) => {
+        // A rejection here is the CALLER's transport failure and propagates
+        // unchanged - see the doc comment.
+        const staged = await fetch(request);
+
+        const outcome = await verifyStagedChatPart(staged, request, head);
+        if ("status" in outcome) {
+          failures.set(index, outcome);
+          throw PART_FAILED;
+        }
+        verified.push({ index, record: outcome.record });
+      }),
+    );
+  } catch (error) {
+    if (error !== PART_FAILED) throw error;
+    return earliestFailure(failures);
+  }
+
+  // Head order, not completion order: `verified` is filled as parts finish, so
+  // it is sorted back onto the request list before assembly.
   const shards: ChatShardRecord[] = [];
-  for (const [index, outcome] of settled.entries()) {
-    if (outcome.status === "rejected") throw outcome.reason;
-
-    const shard = await verifyStagedChatPart(outcome.value, requests[index], head);
-    if ("status" in shard) return shard;
-    shards.push(shard.record);
+  for (const entry of [...verified].sort((a, b) => a.index - b.index)) {
+    shards.push(entry.record);
   }
 
   return { status: "ok", chat: assembleFromShards(head, requests, shards) };
+}
+
+/**
+ * Sentinel for "a part failed integrity checks". Thrown rather than returned so
+ * `Promise.all` ends the read at once; distinguishable from a transport error
+ * by identity, with no class or `instanceof` needed.
+ */
+const PART_FAILED = Symbol("chat-part-failed");
+
+function earliestFailure(
+  failures: ReadonlyMap<number, ChatAssemblyResult>,
+): ChatAssemblyResult {
+  let earliest: { readonly index: number; readonly failure: ChatAssemblyResult } | null =
+    null;
+
+  for (const [index, failure] of failures) {
+    if (earliest === null || index < earliest.index) {
+      earliest = { index, failure };
+    }
+  }
+
+  if (earliest === null) {
+    throw new Error("Chat assembly ended on a part failure but recorded none");
+  }
+  return earliest.failure;
 }
 
 /**

@@ -31,11 +31,12 @@ import {
  * know, and keep round-tripping what they do not.
  *
  * A KNOWN variant that fails to parse still throws. Passthrough is for
- * vocabulary the reader lacks, not a blanket swallow of corruption - version
- * gating (see `publication-ref.ts`) rejects a record on a different major, or
- * one whose ref names an explicit `minReaderVersion` this build is below,
- * before any bytes move. Everything it admits is a record whose known
- * variants are expected to parse.
+ * vocabulary the reader lacks, not a blanket swallow of corruption -
+ * `gateChatHeadVersion` (see `head.ts`) rejects a publication on a different
+ * major, or one whose HEAD carries an explicit `minReaderVersion` this build is
+ * below, before any part is fetched. v2 has no publication-ref union: the head
+ * is the row's opaque JSON, so the gate reads off the head itself. Everything
+ * it admits is a publication whose known variants are expected to parse.
  *
  * Note on the frozen-surface guard: because the persisted side is
  * deliberately open, the `storage` (`io: "input"`) JSON Schema shows the

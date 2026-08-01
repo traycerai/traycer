@@ -9,7 +9,10 @@ import {
   type ChatHeadPart,
   type ChatHeadRecord,
 } from "@traycer/protocol/persistence/chat-sync/head";
-import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
+import {
+  canonicalJsonStringify,
+  type JsonObject,
+} from "@traycer/protocol/persistence/chat-sync/json";
 import { serializeChatShard } from "@traycer/protocol/persistence/chat-sync/shard";
 import {
   persistenceRecordRegistry,
@@ -260,7 +263,28 @@ export function publishShard(wire: JsonObject): {
   readonly bytes: string;
   readonly part: ChatHeadPart;
 } {
-  const bytes = serializeChatShard(parseShard(wire));
+  return addressBytes(serializeChatShard(parseShard(wire)));
+}
+
+/**
+ * Canonical bytes for a wire shard WITHOUT parsing it first.
+ *
+ * For the shapes a writer must not produce: a shard the registered schema
+ * rejects cannot be built through `publishShard`, but a hostile or buggy writer
+ * can still upload its bytes under a correct content address. That is the case
+ * the reader has to refuse on its own, so a test needs a way to forge one.
+ */
+export function publishRawShard(wire: JsonObject): {
+  readonly bytes: string;
+  readonly part: ChatHeadPart;
+} {
+  return addressBytes(canonicalJsonStringify(wire));
+}
+
+function addressBytes(bytes: string): {
+  readonly bytes: string;
+  readonly part: ChatHeadPart;
+} {
   return {
     bytes,
     part: { sha256: sha256Hex(bytes), byteLength: Buffer.byteLength(bytes, "utf8") },
