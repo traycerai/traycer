@@ -1086,6 +1086,71 @@ describe("epic sidebar selection mode", () => {
     ).toBeNull();
   });
 
+  it("preserves selected descendants reparented out of an archive request", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-child"));
+
+    const reparentedChild = treeNode("chat-child", null, "Child chat", "chat");
+    testState.tree = {
+      rootIds: ["chat-root", reparentedChild.id, "agent-root"],
+      childrenByParent: { "chat-root": [] },
+      nodeById: {
+        ...testState.tree.nodeById,
+        [reparentedChild.id]: reparentedChild,
+      },
+    };
+    testState.records = testState.records.map((record) =>
+      record.id === reparentedChild.id
+        ? recordFromNode(reparentedChild)
+        : record,
+    );
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("epic-sidebar-select-chat-root").matches(":checked"),
+      ).toBe(false);
+      expect(
+        screen
+          .getByTestId("epic-sidebar-select-chat-child")
+          .matches(":checked"),
+      ).toBe(true);
+    });
+    expect(
+      screen.getByRole("button", { name: "Cancel selection" }),
+    ).toBeTruthy();
+
+    testState.archivedIds = ["chat-root"];
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-select-chat-child").matches(":checked"),
+    ).toBe(true);
+  });
+
   it("hides the bulk archive action when the host lacks archive support", () => {
     seedChatTree();
     testState.archiveSupport = false;

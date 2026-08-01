@@ -183,6 +183,7 @@ import {
 import {
   Fragment,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1360,7 +1361,7 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
   const activeAgentIds = useEpicActiveAgentIds();
   const tree = useEpicTreeIndex();
   const latestTreeRef = useRef(tree);
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestTreeRef.current = tree;
   }, [tree]);
   const epicId = useOpenEpicHandle().epicId;
@@ -1396,17 +1397,14 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
           const successfulRootIds = selectedRootIds.filter(
             (_id, index) => results[index].status === "fulfilled",
           );
-          // Checkboxes stay interactive while the batch is pending. The union
-          // handles both orderings: the request-era tree still knows a subtree
-          // that projection already removed, while the latest committed tree
-          // includes descendants collaborators added or reparented meanwhile.
+          // Checkboxes stay interactive while the batch is pending. Clear each
+          // successful root even if projection already removed it, plus only
+          // the descendants still beneath it in the latest committed tree.
+          // That includes collaborators' additions without clearing children
+          // they moved elsewhere while the request was in flight.
           const latestTree = latestTreeRef.current;
           const successfulSubtreeIds = new Set([
-            ...sidebarIdsWithinRoots({
-              ids: Object.keys(tree.nodeById),
-              rootIds: successfulRootIds,
-              tree,
-            }),
+            ...successfulRootIds,
             ...sidebarIdsWithinRoots({
               ids: Object.keys(latestTree.nodeById),
               rootIds: successfulRootIds,
@@ -1425,7 +1423,6 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     selectedRootIds,
     selection,
     supported,
-    tree,
   ]);
   return {
     supported,
