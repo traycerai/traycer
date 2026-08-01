@@ -179,6 +179,7 @@ export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "artifactIconColorMode"
   | "artifactIconColors"
+  | "chatTurnMinimapSide"
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"

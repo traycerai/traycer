@@ -256,6 +256,8 @@ export const RunnerHostEvent = {
   // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
   systemResumed: "runnerHost:event:systemResumed",
   notificationClick: "runnerHost:event:notificationClick",
+  notificationForegroundDisplay:
+    "runnerHost:event:notificationForegroundDisplay",
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   hostPickerChange: "runnerHost:event:hostPickerChange",
   quitRequested: "runnerHost:event:quitRequested",

@@ -30,6 +30,7 @@ import {
   focusTerminalInstance,
   resetTerminalFocusRegistryForTests,
 } from "@/lib/terminals/terminal-focus-registry";
+import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
 
 type Disposable = {
   readonly dispose: () => void;
@@ -1428,6 +1429,57 @@ describe("<TerminalXtermHost /> terminal find", () => {
     });
 
     expect(focusOrder).toEqual(["tab", "terminal"]);
+  });
+
+  it("does not steal focus from the control that activated the terminal pane", async () => {
+    vi.useFakeTimers();
+    const shouldYieldAutoFocus = vi.fn(() => true);
+
+    function ActivationHarness() {
+      const [active, setActive] = useState(false);
+      return (
+        <PaneActivationFocusIntentContext.Provider
+          value={{
+            mark: () => undefined,
+            shouldYieldAutoFocus,
+          }}
+        >
+          <button type="button" onClick={() => setActive(true)}>
+            Open terminal control
+          </button>
+          <TerminalXtermHost
+            sessionId="test-session"
+            tileKind="terminal"
+            instanceId="test-instance"
+            effectiveCols={80}
+            effectiveRows={24}
+            onUserInput={vi.fn()}
+            onContainerResize={vi.fn()}
+            onWriterReady={vi.fn()}
+            shouldFocusOnActivePane={active}
+            registerImperativeFocus
+            findTargetId={active ? "terminal:test" : null}
+            keepAlive={false}
+            chrome="padded"
+          />
+        </PaneActivationFocusIntentContext.Provider>
+      );
+    }
+
+    render(<ActivationHarness />);
+    const button = screen.getByRole("button", {
+      name: "Open terminal control",
+    });
+    button.focus();
+    fireEvent.click(button);
+
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(shouldYieldAutoFocus).toHaveBeenCalledTimes(1);
+    expect(xtermMocks.terminals[0].focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button);
   });
 
   it("pastes dropped file paths through xterm's paste path", async () => {

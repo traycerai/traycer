@@ -16,6 +16,7 @@ import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { SegmentTodoItem } from "@/stores/composer/chat-store";
+import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 
 interface CapturedDndContextProps {
   readonly children: ReactNode;
@@ -54,6 +55,12 @@ vi.mock("@dnd-kit/sortable", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/agent-stop-button", () => ({
+  AgentStopButton: (props: { readonly label: string }) => (
+    <button type="button">{props.label}</button>
+  ),
+}));
+
 const SETTINGS: ChatRunSettings = {
   harnessId: "codex",
   model: "codex-test",
@@ -76,6 +83,8 @@ describe("<ChatLowerDock />", () => {
       todo: todoSnapshot([todoItem("Current task")]),
       changes: [fileChange()],
       backgroundItems: undefined,
+      selfAgent: null,
+      activeAgents: [],
       onBackgroundItemClick: () => undefined,
       onBackgroundItemStop: () => null,
       onBackgroundItemsStopAll: () => null,
@@ -103,6 +112,8 @@ describe("<ChatLowerDock />", () => {
       todo: null,
       changes: [fileChange()],
       backgroundItems: undefined,
+      selfAgent: null,
+      activeAgents: [],
       onBackgroundItemClick: () => undefined,
       onBackgroundItemStop: () => null,
       onBackgroundItemsStopAll: () => null,
@@ -134,6 +145,8 @@ describe("<ChatLowerDock />", () => {
       todo: null,
       changes: [],
       backgroundItems: [item],
+      selfAgent: null,
+      activeAgents: [],
       onBackgroundItemClick,
       onBackgroundItemStop,
       onBackgroundItemsStopAll,
@@ -157,6 +170,25 @@ describe("<ChatLowerDock />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop Command" }));
     expect(onBackgroundItemStop).toHaveBeenCalledWith("task-1");
   });
+
+  it("mounts the parent Active agents bar when awareness reports an active child", () => {
+    renderDock({
+      queue: queueState([]),
+      todo: null,
+      changes: [],
+      backgroundItems: undefined,
+      selfAgent: agentRow("parent", "Parent agent", false),
+      activeAgents: [agentRow("child", "Unopened child", true)],
+      onBackgroundItemClick: () => undefined,
+      onBackgroundItemStop: () => null,
+      onBackgroundItemsStopAll: () => null,
+    });
+
+    expect(screen.getByTestId("active-agents-panel")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /Active agents.*1 running/i }),
+    ).toBeDefined();
+  });
 });
 
 function renderDock(input: {
@@ -164,6 +196,8 @@ function renderDock(input: {
   readonly todo: PinnedTodoSnapshot | null;
   readonly changes: ReadonlyArray<AccumulatedFileChange>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly selfAgent: AgentRow | null;
+  readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
@@ -174,8 +208,8 @@ function renderDock(input: {
         snapshotLoaded
         epicId="epic-1"
         viewTabId="tab-1"
-        selfAgent={null}
-        activeAgents={[]}
+        selfAgent={input.selfAgent}
+        activeAgents={input.activeAgents}
         todo={input.todo}
         restore={baseRestore(input.changes)}
         queue={input.queue}
@@ -201,6 +235,16 @@ function renderDock(input: {
       />
     </TooltipProvider>,
   );
+}
+
+function agentRow(id: string, title: string, active: boolean): AgentRow {
+  return {
+    id,
+    title,
+    surface: "gui",
+    active,
+    hostId: "host-1",
+  };
 }
 
 function baseRestore(
