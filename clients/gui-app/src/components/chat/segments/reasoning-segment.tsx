@@ -110,15 +110,20 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   const label = isStreaming ? "Thinking" : reasoningSummaryLabel(durationMs);
 
   // Headerless: body only, and deliberately the FULL content rather than
-  // `ReasoningTail`. The parent that sets this (a sole-reasoning group's live
-  // window, or its expanded body) already bounds and tail-pins the region, and
-  // nesting a second `overflow-y-auto` inside it would fight the outer one for
-  // the wheel and give the reader two scroll positions to reconcile.
+  // `ReasoningTail`. The only caller is the live activity window, which already
+  // bounds and tail-pins its region; nesting a second `overflow-y-auto` inside
+  // it would fight the outer one for the wheel and give the reader two scroll
+  // positions to reconcile. An expanded activity group is NOT such a caller -
+  // its body has no height cap - so it always renders the headed branch below
+  // and keeps this block's own bounded tail.
+  //
+  // No vertical padding: the window sizes itself in `lh` units off this exact
+  // line-height, and padding here would push the last line out of the bound.
   if (headerless) {
     return (
       <ReasoningContent
         markdown={markdown}
-        className="py-1 text-ui-sm leading-6 text-muted-foreground"
+        className="text-ui-sm leading-6 text-muted-foreground"
         isStreaming={isStreaming}
       />
     );

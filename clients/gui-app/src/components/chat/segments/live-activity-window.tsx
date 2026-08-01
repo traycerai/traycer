@@ -1,8 +1,10 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
@@ -12,7 +14,9 @@ import { cn } from "@/lib/utils";
  *
  * Also the delay before its children unmount - the rows must stay in the DOM
  * for the whole exit or the box would collapse against empty content and the
- * transition would have nothing to show.
+ * transition would have nothing to show. The CSS transition is driven from
+ * this same constant (inline `transitionDuration`) rather than a `duration-300`
+ * class, so the timer and the animation cannot drift apart.
  */
 export const LIVE_ACTIVITY_WINDOW_EXIT_MS = 300;
 
@@ -22,6 +26,12 @@ export const LIVE_ACTIVITY_WINDOW_EXIT_MS = 300;
  * well outside it, so one deliberate scroll up suspends the pin.
  */
 const TAIL_PIN_SLACK_PX = 16;
+
+/**
+ * A scroller with 1px or less of hidden content is treated as not scrollable:
+ * it cannot consume a gesture, so it must not swallow one either.
+ */
+const OVERFLOW_EPSILON_PX = 1;
 
 interface LiveActivityWindowProps {
   /**
@@ -45,17 +55,21 @@ interface LiveActivityWindowProps {
  *
  * Two things it adds:
  *
- * 1. `overscroll-contain`. The transcript is a LegendList whose scroll policy
- *    treats any real wheel/touch/pointer gesture as intent to leave the live
- *    edge (`free-scrolling`, until the reader deliberately returns). Without
- *    containment, a wheel that bottoms out in here would chain to the
- *    transcript and strand a reader who only meant to look back two rows.
+ * 1. Gesture containment. The transcript is a LegendList whose scroll policy
+ *    reads any real wheel/touch/pointer gesture as intent to leave the live
+ *    edge - `chatWheelShouldCancelLiveFollow` returns true for EVERY upward
+ *    delta - and drops the reader into `free-scrolling` with a jump-to-latest
+ *    pill. Looking back two rows in here must not trigger that, so the gesture
+ *    is stopped at this element. `overscroll-contain` alone is not enough: it
+ *    governs scroll CHAINING, not event propagation, and the transcript's
+ *    listener fires on the event regardless of whether anything scrolled.
  * 2. An animated exit. The collapse is system-initiated (the turn ended, or
  *    prose started), so it deliberately does NOT route through
  *    `requestChatMeasuredItemChange`: that helper is a flushSync + one-shot
  *    geometric correction and cannot absorb a change spread over 300ms.
- *    LegendList observes every item with a ResizeObserver, so it tracks a
- *    CSS-transitioned height frame by frame on its own.
+ *    LegendList observes every item root with a shared ResizeObserver, and its
+ *    `contain: paint layout style` carries no `size`, so the root is still
+ *    sized by its descendants and this transition is tracked as it runs.
  */
 export function LiveActivityWindow(props: LiveActivityWindowProps) {
   const { shown, children } = props;
@@ -84,6 +98,45 @@ export function LiveActivityWindow(props: LiveActivityWindowProps) {
     return () => clearTimeout(timer);
   }, [mounted, shown]);
 
+  const bindScroller = useCallback((node: HTMLDivElement | null) => {
+    scrollRef.current = node;
+    if (node === null) return;
+
+    // NATIVE listeners, on this element, and deliberately NOT React's
+    // `onWheel`/`onTouchMove`. The transcript attaches its own `wheel` and
+    // `touchmove` listeners directly to the LegendList scroll node
+    // (`chat-messages.tsx`), which is a DESCENDANT of React's root container.
+    // Native bubbling therefore reaches that listener before React dispatches
+    // any synthetic event at the root, so `stopPropagation()` on a synthetic
+    // event would run long after the damage was done.
+    //
+    // Gated on actually being scrollable: a window with nothing hidden cannot
+    // consume the gesture, and swallowing it would make this a dead zone where
+    // the transcript refuses to scroll at all.
+    const stopWhenScrollable = (event: Event): void => {
+      if (node.scrollHeight - node.clientHeight <= OVERFLOW_EPSILON_PX) return;
+      event.stopPropagation();
+    };
+    node.addEventListener("wheel", stopWhenScrollable, { passive: true });
+    node.addEventListener("touchmove", stopWhenScrollable, { passive: true });
+    return () => {
+      node.removeEventListener("wheel", stopWhenScrollable);
+      node.removeEventListener("touchmove", stopWhenScrollable);
+      scrollRef.current = null;
+    };
+  }, []);
+
+  // The transcript ALSO cancels live-follow from a plain `onPointerDown`, and
+  // that one is a React handler, so a synthetic stop is both sufficient and
+  // necessary here. Ungated: clicking inside the live window - to select text
+  // out of it, say - is never intent to stop following the run.
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      event.stopPropagation();
+    },
+    [],
+  );
+
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (el === null) return;
@@ -97,10 +150,17 @@ export function LiveActivityWindow(props: LiveActivityWindowProps) {
   // when the tail needs re-pinning and the overflow flag re-measuring. A
   // dependency list here would have to encode "any content changed", which no
   // stable value expresses. Writes DOM only, never state, so it cannot loop.
-  useEffect(() => {
+  //
+  // Layout, not passive: a passive effect lets the browser paint the stale
+  // scroll offset and the un-masked box for one frame before correcting, and a
+  // visible one-frame jolt per streamed row is the exact thing this widget
+  // exists to remove.
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
-    el.dataset.overflowing = String(el.scrollHeight - el.clientHeight > 1);
+    el.dataset.overflowing = String(
+      el.scrollHeight - el.clientHeight > OVERFLOW_EPSILON_PX,
+    );
     if (pinnedRef.current) el.scrollTop = el.scrollHeight;
   });
 
@@ -115,19 +175,31 @@ export function LiveActivityWindow(props: LiveActivityWindowProps) {
     <div
       data-testid="activity-live-window"
       data-shown={String(shown)}
+      style={{ transitionDuration: `${LIVE_ACTIVITY_WINDOW_EXIT_MS}ms` }}
       className={cn(
-        "grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+        "grid transition-[grid-template-rows] ease-[cubic-bezier(0.32,0.72,0,1)]",
         "motion-reduce:transition-none",
         shown ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
       )}
     >
       <div className="overflow-hidden">
         <div
-          ref={scrollRef}
+          ref={bindScroller}
           onScroll={handleScroll}
+          onPointerDown={handlePointerDown}
           data-testid="activity-live-window-scroller"
+          // Labelled but deliberately not focusable: a tab stop that appears
+          // and vanishes as runs start and end would be worse than none, and
+          // every row in here is reachable by opening the group, which is a
+          // real button.
+          role="group"
+          aria-label="Live activity"
           className={cn(
-            "mt-0.5 ml-5 flex max-h-[4lh] flex-col gap-0.5 overflow-y-auto overscroll-contain border-l border-border/35 pl-3",
+            // `leading-6` is load-bearing, not decoration: `lh` resolves
+            // against THIS element's line-height, and without it the box would
+            // inherit `text-ui-sm`'s 1.25rem and cap at three rows of the
+            // `leading-6` body it mostly holds, not the four that was asked for.
+            "mt-0.5 ml-5 flex max-h-[4lh] flex-col gap-0.5 overflow-y-auto overscroll-contain border-l border-border/35 pl-3 leading-6",
             "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
             "data-[overflowing=true]:[-webkit-mask-image:linear-gradient(to_bottom,transparent,black_1.25rem)]",
             "data-[overflowing=true]:[mask-image:linear-gradient(to_bottom,transparent,black_1.25rem)]",

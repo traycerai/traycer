@@ -1,5 +1,5 @@
 import { Box, ChevronRight } from "lucide-react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -11,10 +11,9 @@ import {
   chatFindActivityGroupChildHeaderUnitId,
   chatFindActivityGroupSummaryUnitId,
 } from "@/components/chat/chat-find";
-import {
-  isSoleReasoningGroup,
-  type ActivityGroupModel,
-  type ActivityGroupDetailSegment,
+import type {
+  ActivityGroupModel,
+  ActivityGroupDetailSegment,
 } from "@/components/chat/chat-activity-groups";
 import { Shimmer } from "@/components/ui/shimmer";
 import { cn } from "@/lib/utils";
@@ -62,19 +61,26 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   );
   const triggerRef = useRef<HTMLButtonElement>(null);
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen, triggerRef);
-  const soleReasoning = isSoleReasoningGroup(group.segments);
   // Computed here rather than inline in the JSX: `jsx-no-leaked-render`
   // rewrites an inline `&&` into `? … : null`, which is right for children and
   // wrong for a boolean prop.
   const liveWindowShown = group.isActive && !open;
-  const children = group.segments.map((segment) => (
-    <ActivityChildSegment
-      key={segment.id}
-      groupId={group.id}
-      segment={segment}
-      headerless={soleReasoning}
-    />
-  ));
+  // `headerless` is decided by the CONTAINER a child renders in, never by the
+  // group's shape. An earlier revision derived it from "this group is one lone
+  // reasoning block", which flips the instant a tool call joins the run - and a
+  // reasoning child that flips to headed loses its body in the same frame,
+  // because `ReasoningSegment` owns an `expanded` state that defaults to false.
+  // That is the very discontinuity this whole design exists to remove, so the
+  // flag is now constant per container and cannot flip under a growing run.
+  const renderChildren = (headerless: boolean): ReactNode =>
+    group.segments.map((segment) => (
+      <ActivityChildSegment
+        key={segment.id}
+        groupId={group.id}
+        segment={segment}
+        headerless={headerless}
+      />
+    ));
 
   return (
     <Collapsible
@@ -131,13 +137,23 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
           work without it growing the turn under the run indicator. Children are
           withheld once the group is open so they never exist in both this
           window and `CollapsibleContent` at once: a find unit rendered twice
-          would double-count. */}
+          would double-count.
+
+          Headerless in here, always: the window already bounds and tail-pins
+          the region, and the trigger directly above is the header. It also
+          keeps a streaming reasoning child from rendering its own `ReasoningTail`
+          - a second `overflow-y-auto` nested inside this one would fight it for
+          the wheel and give the reader two scroll positions to reconcile. */}
       <LiveActivityWindow shown={liveWindowShown}>
-        {open ? null : children}
+        {open ? null : renderChildren(true)}
       </LiveActivityWindow>
+      {/* Headed in here, always: this container has no height cap and no tail
+          pin, so a streaming reasoning child must keep its own bounded
+          `ReasoningTail`. Headed also means every child keeps a find anchor and
+          its own collapse control. */}
       <CollapsibleContent>
         <div className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3">
-          {children}
+          {renderChildren(false)}
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -148,10 +164,10 @@ interface ActivityChildSegmentProps {
   readonly groupId: string;
   readonly segment: ActivityGroupDetailSegment;
   /**
-   * The group's entire content is this one reasoning block, so the group's
-   * summary line is already its header. Only reasoning honours this - no other
-   * child kind can be a group's sole content and also be fully described by the
-   * group summary.
+   * True inside the live window, false inside `CollapsibleContent` - a property
+   * of the container, fixed for as long as the child is mounted in it. Only
+   * reasoning honours it: the window bounds and tail-pins its own region, so a
+   * reasoning child there wants neither its own header nor its own scroller.
    */
   readonly headerless: boolean;
 }
@@ -230,9 +246,10 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
     case "reasoning":
       return (
         <ReasoningSegment
-          // Headerless renders no anchor element, so it must carry no find unit
-          // id either - `chat-find-projection.ts` skips indexing this child in
-          // exactly that case, and the two must not disagree.
+          // Headerless renders no anchor element, so it carries no find unit id.
+          // Nothing is lost: find force-opens the group before it reveals, and
+          // the open container always renders the headed child that owns this
+          // id. The projection indexes that child unconditionally.
           findUnitId={headerless ? null : headerFindUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}

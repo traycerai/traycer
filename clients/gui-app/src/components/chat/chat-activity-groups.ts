@@ -85,6 +85,13 @@ interface ActivitySummaryCounts {
   // A reasoning block in the group is still streaming, so the group's summary
   // leads with "Thinking" instead of a duration that does not exist yet.
   thinkingStreaming: boolean;
+  // The group contains reasoning AT ALL. Tracked separately from the duration
+  // because a completed block can legitimately have none: `completedDurationMs`
+  // returns null when the block carries no `startedAt` (persisted history), and
+  // 0 when it started and finished inside the same millisecond. Without this,
+  // both summed to 0 and the summary fell through to the generic "Ran activity"
+  // - losing the "Thought" line the block used to render for itself.
+  thinkingPresent: boolean;
   exploredFiles: number;
   readFiles: number;
   searched: number;
@@ -174,6 +181,7 @@ function createEmptyCounts(): ActivitySummaryCounts {
   return {
     thinkingDurationMs: 0,
     thinkingStreaming: false,
+    thinkingPresent: false,
     exploredFiles: 0,
     readFiles: 0,
     searched: 0,
@@ -239,9 +247,15 @@ function buildChatActivityTimelineImpl(
     // "Thought for Xs" twice (group summary + the child's own header), but a
     // standalone-vs-group decision that can flip mid-turn - the moment a tool
     // call joins the lone block - is exactly the container change this design
-    // exists to eliminate. The duplicate header is instead suppressed at render
-    // time: a sole-reasoning group renders its child headerless and lets the
-    // group's own summary line be the header (see `ActivityGroupSegment`).
+    // exists to eliminate.
+    //
+    // The duplicate is accepted in the expanded body, deliberately. Suppressing
+    // it there means deriving a render flag from the group's segment count, and
+    // any such flag flips under a growing run: the child re-renders in a
+    // different mode and drops the body the reader was in the middle of. A
+    // redundant line is a far smaller cost than content vanishing. The collapsed
+    // live window, whose shape cannot change this way, does suppress it (see
+    // `ActivityGroupSegment`).
     const group = activityGroupFromRun(run);
     out.push({ kind: "activity_group", id: group.id, group });
     run = [];
@@ -334,28 +348,13 @@ function formatAnsweredQuestionsSummary(
   return `Answered ${answered}/${total} questions`;
 }
 
-/**
- * A group whose entire content is one reasoning block. Such a group renders
- * that child WITHOUT its own header - the group's summary line ("Thinking" /
- * "Thought for Xs") already says exactly what the child's header would.
- *
- * Shared by the renderer (which suppresses the child header) and the find
- * projection (which must then NOT index that child: it has no find-unit anchor
- * to paint, and its text is already indexed once as the group's summary).
- */
-export function isSoleReasoningGroup(
-  segments: ReadonlyArray<ActivityGroupDetailSegment>,
-): boolean {
-  return segments.length === 1 && segments[0].kind === "reasoning";
-}
-
 export function activityGroupSummary(
   segments: ReadonlyArray<ActivityGroupDetailSegment>,
 ): string {
   const counts = createEmptyCounts();
   segments.forEach((segment) => countActivitySegment(counts, segment));
   const parts = [
-    thinkingPhrase(counts.thinkingDurationMs, counts.thinkingStreaming),
+    thinkingPhrase(counts),
     countPhrase(counts.exploredFiles, "explored", "file", "files"),
     countPhrase(counts.readFiles, "read", "file", "files"),
     countPhrase(counts.searched, "searched", "place", "places"),
@@ -689,6 +688,7 @@ function countReasoningSegment(
   counts: ActivitySummaryCounts,
   segment: ReasoningSegment,
 ): void {
+  counts.thinkingPresent = true;
   if (segment.isStreaming) counts.thinkingStreaming = true;
   if (segment.durationMs !== null) {
     counts.thinkingDurationMs += segment.durationMs;
@@ -703,14 +703,17 @@ function countReasoningSegment(
  * (without it the summary would fall through to the generic "Ran activity"
  * until the block completed). Streaming wins over the accumulated duration:
  * while one block streams, a settled earlier one's total is not the headline.
+ *
+ * A completed block with no usable duration reads a bare "thought", mirroring
+ * `reasoningSummaryLabel`'s own null fallback. Falling through to null here
+ * would hand the group the generic "Ran activity" label and erase every trace
+ * of the thinking from both the summary and the find index.
  */
-function thinkingPhrase(
-  thinkingDurationMs: number,
-  thinkingStreaming: boolean,
-): string | null {
-  if (thinkingStreaming) return "thinking";
-  if (thinkingDurationMs <= 0) return null;
-  const seconds = Math.max(1, Math.round(thinkingDurationMs / 1000));
+function thinkingPhrase(counts: ActivitySummaryCounts): string | null {
+  if (counts.thinkingStreaming) return "thinking";
+  if (!counts.thinkingPresent) return null;
+  if (counts.thinkingDurationMs <= 0) return "thought";
+  const seconds = Math.max(1, Math.round(counts.thinkingDurationMs / 1000));
   return `thought for ${formatClockDuration(seconds)}`;
 }
 

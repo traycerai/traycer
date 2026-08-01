@@ -183,33 +183,41 @@ describe("chat find projection", () => {
     );
   });
 
-  // A lone reasoning block is now a group, and the group's summary label IS the
-  // reasoning label. The child is rendered headerless (no anchor to paint), so
-  // the projection must skip it - otherwise the same words are indexed twice
-  // and find reports two matches where the DOM can only highlight one.
-  it("indexes a sole-reasoning group's label exactly once", () => {
+  // A completed block with no usable duration - persisted history with no
+  // `startedAt`, or a same-millisecond completion - used to sum to 0 and let
+  // the summary fall through to the generic "Ran activity". Since a lone
+  // reasoning block is now a group, and the group summary is what find indexes
+  // for it, that erased the word "Thought" from the index entirely: searching
+  // for the thinking you can plainly see would return nothing.
+  it("indexes a duration-less reasoning group as thought, not as generic activity", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
       segments: [
         {
-          id: "reasoning-sole",
+          id: "reasoning-no-duration",
           kind: "reasoning",
           markdown: "sole block body",
           isStreaming: false,
-          durationMs: 2100,
+          durationMs: null,
         },
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const text = rowSearchText(
+      buildChatFindRows([assistant], TILE_INSTANCE_ID)[0],
+    );
 
-    expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(1);
+    expect(text).toContain("Thought");
+    expect(text).not.toContain("Ran activity");
   });
 
-  // The counterpart: once the block has a sibling, the summary no longer
-  // describes it alone, the child regains its header and anchor, and the
-  // projection must index it again.
-  it("indexes the reasoning child once it is no longer the group's only content", () => {
+  // Every child is indexed unconditionally, because a reveal force-opens the
+  // group and the open container always renders each child headed, with its own
+  // anchor. Skipping a child on a predicate over `group.segments` would be
+  // unsound: this projection builds its timeline with an empty promoted-tool
+  // set while the renderer uses the host's live one, so the two can see
+  // different segment lists for the same group.
+  it("indexes the reasoning child alongside the group summary", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
       segments: [

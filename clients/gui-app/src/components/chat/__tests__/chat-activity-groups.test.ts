@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   activityGroupSummary,
   buildChatActivityTimeline,
-  isSoleReasoningGroup,
   latestActivityLabel,
 } from "@/components/chat/chat-activity-groups";
 import type { ChatActivityTimelineItem } from "@/components/chat/chat-activity-groups";
@@ -235,7 +234,6 @@ describe("chat activity grouping", () => {
       throw new Error("Expected a group around the streaming lone block");
     }
     expect(streaming[0].group.summary).toBe("Thinking");
-    expect(isSoleReasoningGroup(streaming[0].group.segments)).toBe(true);
 
     const completed = buildCompleteTimeline([
       reasoningSegment("reasoning-1", false, 3000),
@@ -245,7 +243,38 @@ describe("chat activity grouping", () => {
       throw new Error("Expected a group around the completed lone block");
     }
     expect(completed[0].group.summary).toBe("Thought for 3s");
-    expect(isSoleReasoningGroup(completed[0].group.segments)).toBe(true);
+  });
+
+  // `completedDurationMs` yields null for a block with no `startedAt` (any
+  // persisted history predating that field) and 0 for one that began and ended
+  // inside the same millisecond. Both summed to 0, and a summary built only
+  // from counts then fell through to the generic "Ran activity" - so a lone
+  // reasoning block advertised itself as an unspecified tool run, and the word
+  // "Thought" it used to render for itself vanished from the find index too.
+  it.each([
+    ["no duration at all", null],
+    ["a zero duration", 0],
+  ])("labels a completed lone reasoning block with %s as thought", (_, ms) => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, ms),
+    ]);
+
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected a group around the lone block");
+    }
+    expect(timeline[0].group.summary).toBe("Thought");
+  });
+
+  it("still leads with the thinking clause when a duration-less block has siblings", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, null),
+      commandSegment("command-1", "bun test", false),
+    ]);
+
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected one activity group");
+    }
+    expect(timeline[0].group.summary).toBe("Thought, ran 1 command");
   });
 
   // Guards the `thinkingStreaming` precedence: one block still running must not
@@ -262,7 +291,6 @@ describe("chat activity grouping", () => {
       throw new Error("Expected one activity group");
     }
     expect(timeline[0].group.summary).toBe("Thinking, read 1 file");
-    expect(isSoleReasoningGroup(timeline[0].group.segments)).toBe(false);
   });
 
   it("keeps streaming activity active with a stable summary label", () => {

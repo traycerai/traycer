@@ -2,7 +2,6 @@ import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
 import {
   answeredQuestionsSummary,
   buildChatActivityTimeline,
-  isSoleReasoningGroup,
 } from "@/components/chat/chat-activity-groups";
 import {
   deriveA2AReceivedCollapsibleKey,
@@ -227,20 +226,21 @@ function activityGroupSearchUnits(
       text: group.label,
       owningChain: [],
     }),
-    // A sole-reasoning group renders its child headerless, so that child has no
-    // find-unit anchor to paint - and its text is already indexed just above as
-    // the group's own summary. Indexing it again would both double-count and
-    // count a match that cannot highlight.
-    ...(isSoleReasoningGroup(group.segments)
-      ? []
-      : group.segments.flatMap((segment) =>
-          activityGroupChildSearchUnits(
-            segment,
-            group.id,
-            [groupKey],
-            tileInstanceId,
-          ),
-        )),
+    // Unconditional. A reveal force-opens the group, and the open container
+    // always renders every child headed - with its own anchor - so each of
+    // these units has somewhere to paint. Skipping a child here on a predicate
+    // over `group.segments` would be unsound anyway: this projection builds its
+    // timeline with an empty promoted-tool set (see `chatFindUnitsForMessage`)
+    // while the renderer uses the host's live one, so the two can legitimately
+    // see different segment lists for the same group.
+    ...group.segments.flatMap((segment) =>
+      activityGroupChildSearchUnits(
+        segment,
+        group.id,
+        [groupKey],
+        tileInstanceId,
+      ),
+    ),
   ]);
 }
 

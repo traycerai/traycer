@@ -118,6 +118,96 @@ describe("<LiveActivityWindow />", () => {
     });
   });
 
+  // The transcript listens for `wheel` NATIVELY, on the LegendList scroll node,
+  // and `chatWheelShouldCancelLiveFollow` returns true for every upward delta -
+  // so any wheel that reaches it drops the reader into free-scrolling with a
+  // jump-to-latest pill. `overscroll-behavior: contain` does not help: it stops
+  // scroll CHAINING, not event propagation. Only stopping the event does.
+  //
+  // These assert against a listener on an ANCESTOR, which is what the transcript
+  // actually is. A className assertion cannot fail for a behavioural reason.
+  it("stops a wheel gesture from reaching the transcript while it can scroll", () => {
+    withStubbedGeometry({ scrollHeight: 400, clientHeight: 100 }, () => {
+      const reachedTranscript: WheelEvent[] = [];
+      const listener = (event: Event): void => {
+        reachedTranscript.push(event as WheelEvent);
+      };
+      document.addEventListener("wheel", listener);
+      try {
+        render(
+          <LiveActivityWindow shown>
+            <div>row one</div>
+          </LiveActivityWindow>,
+        );
+
+        screen
+          .getByTestId("activity-live-window-scroller")
+          .dispatchEvent(
+            new WheelEvent("wheel", { bubbles: true, deltaY: -50 }),
+          );
+
+        expect(reachedTranscript).toHaveLength(0);
+      } finally {
+        document.removeEventListener("wheel", listener);
+      }
+    });
+  });
+
+  it("lets the wheel through when it has nothing to scroll, so it is not a dead zone", () => {
+    withStubbedGeometry({ scrollHeight: 100, clientHeight: 100 }, () => {
+      const reachedTranscript: WheelEvent[] = [];
+      const listener = (event: Event): void => {
+        reachedTranscript.push(event as WheelEvent);
+      };
+      document.addEventListener("wheel", listener);
+      try {
+        render(
+          <LiveActivityWindow shown>
+            <div>row one</div>
+          </LiveActivityWindow>,
+        );
+
+        screen
+          .getByTestId("activity-live-window-scroller")
+          .dispatchEvent(
+            new WheelEvent("wheel", { bubbles: true, deltaY: -50 }),
+          );
+
+        // A window with nothing hidden cannot consume the gesture. Swallowing
+        // it would leave the reader unable to scroll the transcript at all
+        // while the pointer happens to sit over a one-row window.
+        expect(reachedTranscript).toHaveLength(1);
+      } finally {
+        document.removeEventListener("wheel", listener);
+      }
+    });
+  });
+
+  // The transcript ALSO cancels live-follow from a plain React `onPointerDown`.
+  // That one is synthetic, so unlike the wheel it is stopped by React's own
+  // propagation - but it still has to be stopped.
+  it("stops a pointer press from reaching the transcript's React handler", () => {
+    const reachedTranscript: string[] = [];
+    render(
+      <div
+        onPointerDown={() => {
+          reachedTranscript.push("transcript");
+        }}
+      >
+        <LiveActivityWindow shown>
+          <div>row one</div>
+        </LiveActivityWindow>
+      </div>,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId("activity-live-window-scroller"),
+      {},
+    );
+
+    expect(reachedTranscript).toHaveLength(0);
+  });
+
   it("flags overflow only when the content actually exceeds the bound", () => {
     withStubbedGeometry({ scrollHeight: 400, clientHeight: 100 }, () => {
       render(
