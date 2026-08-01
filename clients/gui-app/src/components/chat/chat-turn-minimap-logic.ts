@@ -18,7 +18,7 @@ export const CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR = `[${CHAT_TURN_MINIMAP_K
 export const CHAT_TURN_MINIMAP_ITEM_SPACING = 8;
 /** Extra invisible pointer room above the first strip and below the last. */
 export const CHAT_TURN_MINIMAP_END_HIT_PADDING = 12;
-export const CHAT_TURN_MINIMAP_MIN_ITEMS = 2;
+export const CHAT_TURN_MINIMAP_MIN_ITEMS = 1;
 export const CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS =
   "max(1px, calc(100% - 1rem))";

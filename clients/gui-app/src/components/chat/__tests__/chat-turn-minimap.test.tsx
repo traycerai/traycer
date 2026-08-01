@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { createRef, type RefObject } from "react";
+import type { RefObject } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
@@ -88,7 +88,7 @@ function makeA2AUser(index: number, content: string): ChatMessageModel {
   };
 }
 
-/** Two human user turns (min rail) with assistant replies. */
+/** Two human user turns with assistant replies. */
 function makeTwoTurnTranscript(): ChatMessageModel[] {
   return [
     makeUser(0, "First user turn"),
@@ -301,35 +301,32 @@ function renderMinimap(options: RenderOptions): {
 }
 
 describe("ChatTurnMinimap item derivation / filtering", () => {
-  it("renders nothing with fewer than 2 human user turns", () => {
-    const { unmount } = render(
-      <ChatTurnMinimap
-        messages={[
-          makeUser(0, undefined),
-          makeAssistant(1, "only one human turn"),
-        ]}
-        inViewRefreshRef={{ current: () => undefined }}
-        listRef={createRef()}
-        topOffsetAdjustmentRef={{ current: 0 }}
-        viewportRef={createRef()}
-        bottomInset={0}
-        onSelect={vi.fn()}
-        identity={DEFAULT_MINIMAP_IDENTITY}
-        side="right"
-      />,
-    );
-    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
-    unmount();
-
+  it("renders nothing when there are no human user queries", () => {
     renderMinimap({
       messages: [
-        makeUser(0, undefined),
-        makeAssistant(1, "a"),
-        makeA2AUser(2, "a2a"),
+        makeAssistant(0, "assistant-only transcript"),
+        makeA2AUser(1, "agent traffic is not a user query"),
+        makeMessage(2, "system"),
       ],
     });
-    // One human user + one A2A user → still below MIN_ITEMS
     expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+  });
+
+  it("renders a usable rail for exactly one human user query", async () => {
+    renderMinimap({
+      messages: [
+        makeUser(0, "Only human query"),
+        makeAssistant(1, "Only assistant response"),
+        makeA2AUser(2, "Agent traffic must not create another marker"),
+      ],
+    });
+    await flushMinimapFrames(2);
+
+    const rail = screen.getByTestId("chat-turn-minimap");
+    const strips = rail.querySelectorAll("[data-chat-turn-minimap-strip]");
+    expect(strips).toHaveLength(1);
+    expect(strips[0].getAttribute("data-message-id")).toBe("message-0");
+    expect(screen.getByTestId("chat-turn-minimap-hit-strip")).not.toBeNull();
   });
 
   it("only human user rows become strips; A2A, assistant, and system are excluded", async () => {
