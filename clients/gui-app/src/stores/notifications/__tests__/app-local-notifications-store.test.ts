@@ -88,6 +88,24 @@ describe("app-local notifications store", () => {
     expect(second.getState().byId.displayed.displayedUpdatedAt).toBe(10);
   });
 
+  it("keeps a newer row and its local display state when a stale foreground relay arrives", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert(entry("target", 20, null));
+    store.getState().markAsRead("target", 30);
+    store.getState().markAsDisplayed("target", 20);
+
+    store.getState().mergeForegroundDisplayed(entry("target", 10, null));
+
+    expect(store.getState().byId.target).toMatchObject({
+      updatedAt: 20,
+      readAt: 30,
+      displayedUpdatedAt: 20,
+    });
+  });
+
   it("cannot lose the monotonic receipt when a stale window writes another row", () => {
     const key = appLocalNotificationsKey("user-a");
     const seed = createAppLocalNotificationsStore(key);

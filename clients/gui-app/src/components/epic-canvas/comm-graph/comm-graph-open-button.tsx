@@ -12,13 +12,11 @@
  * the content id (the graph's persisted viewport) would otherwise be written by
  * two tabs at once, so panning one would move the other.
  */
-import { useCallback } from "react";
 import { Waypoints } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import { useOpenCommunicationGraph } from "./use-open-communication-graph";
 
 export interface CommGraphOpenButtonProps {
   readonly epicId: string;
@@ -27,17 +25,9 @@ export interface CommGraphOpenButtonProps {
   readonly className: string;
 }
 
-function useOpenCommGraph(epicId: string): () => void {
-  const tileNavigation = useEpicTileNavigation();
-
-  return useCallback(() => {
-    tileNavigation.openTileInEpic(epicId, makeCommGraphTileRef(epicId));
-  }, [epicId, tileNavigation]);
-}
-
 export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
   const { className, disabled, epicId } = props;
-  const openGraph = useOpenCommGraph(epicId);
+  const openGraph = useOpenCommunicationGraph(epicId);
 
   return (
     <Button
@@ -59,7 +49,7 @@ export function CommGraphOpenMenuItem(props: {
   readonly epicId: string;
   readonly disabled: boolean;
 }) {
-  const openGraph = useOpenCommGraph(props.epicId);
+  const openGraph = useOpenCommunicationGraph(props.epicId);
 
   return (
     <DropdownMenuItem

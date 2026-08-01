@@ -7,6 +7,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { useCallback, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type {
@@ -115,7 +116,14 @@ import {
   ArtifactSearchBox,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { ARTIFACT_SEARCH_MIN_COUNT } from "@/components/epic-canvas/sidebar/artifact-search-availability";
-import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
+  panelHeaderSearchSurfaceKey,
+  usePanelHeaderSearchStore,
+} from "@/stores/epics/panel-header-search-store";
+
+const ARTIFACTS_PANEL_ID = "artifacts" as const;
+const DEFAULT_TAB_ID = "tab-1";
+const DEFAULT_EPIC_ID = "epic-1";
 
 function loadingResult(): QueryResultStub {
   return {
@@ -173,25 +181,56 @@ function ready(
 }
 
 /**
+ * Mirrors `PanelHeaderSearchRow`'s register/unregister slot contract so tests
+ * exercise the same identity-guarded cleanup path production uses.
+ */
+function HeaderSearchSlot(props: {
+  readonly tabId: string;
+  readonly testId: string;
+}) {
+  const registerSearchSlot = usePanelHeaderSearchStore(
+    (state) => state.registerSearchSlot,
+  );
+  const unregisterSearchSlot = usePanelHeaderSearchStore(
+    (state) => state.unregisterSearchSlot,
+  );
+  const currentSlotRef = useRef<HTMLDivElement | null>(null);
+  const setSlotRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      const previous = currentSlotRef.current;
+      if (previous !== null && previous !== element) {
+        unregisterSearchSlot(props.tabId, ARTIFACTS_PANEL_ID, previous);
+      }
+      currentSlotRef.current = element;
+      if (element !== null) {
+        registerSearchSlot(props.tabId, ARTIFACTS_PANEL_ID, element);
+      }
+    },
+    [props.tabId, registerSearchSlot, unregisterSearchSlot],
+  );
+  return <div ref={setSlotRef} data-testid={props.testId} />;
+}
+
+/**
  * The box portals its input into the header's slot, so every render needs a
  * registered slot for the input to exist at all. This stands in for
  * `PanelHeaderSearchRow`.
  */
 function BoxHarness(props: {
   readonly epicId: string;
+  readonly tabId: string;
   readonly searchQuery: string;
   readonly debouncedQuery: string;
 }) {
-  const setSearchSlot = usePanelHeaderSearchStore((s) => s.setSearchSlot);
   return (
     <>
-      <div
-        ref={(element) => setSearchSlot("artifacts", element)}
-        data-testid="header-search-slot"
+      <HeaderSearchSlot
+        tabId={props.tabId}
+        testId={`header-search-slot-${props.tabId}`}
       />
       <ArtifactSearchBox
         epicId={props.epicId}
-        tabId="tab-1"
+        tabId={props.tabId}
         searchQuery={props.searchQuery}
         debouncedQuery={props.debouncedQuery}
       />
@@ -203,22 +242,54 @@ function renderBox(args: {
   readonly searchQuery: string;
   readonly debouncedQuery: string;
   readonly epicId: string;
+  readonly tabId: string;
 }) {
   return render(
     <BoxHarness
       epicId={args.epicId}
+      tabId={args.tabId}
       searchQuery={args.searchQuery}
       debouncedQuery={args.debouncedQuery}
     />,
   );
 }
 
-function searchQueryInStore(): string {
-  return usePanelHeaderSearchStore.getState().queryByPanelId.artifacts ?? "";
+function surfaceKey(tabId: string): string {
+  return panelHeaderSearchSurfaceKey(tabId, ARTIFACTS_PANEL_ID);
 }
 
-function searchOpenInStore(): boolean {
-  return usePanelHeaderSearchStore.getState().openByPanelId.artifacts === true;
+function searchQueryInStore(tabId: string): string {
+  return (
+    usePanelHeaderSearchStore.getState().queryBySurfaceKey[surfaceKey(tabId)] ??
+    ""
+  );
+}
+
+function searchOpenInStore(tabId: string): boolean {
+  return (
+    usePanelHeaderSearchStore.getState().openBySurfaceKey[surfaceKey(tabId)] ===
+    true
+  );
+}
+
+function searchSlotInStore(tabId: string): HTMLElement | undefined {
+  return usePanelHeaderSearchStore.getState().slotBySurfaceKey[
+    surfaceKey(tabId)
+  ];
+}
+
+function openArtifactsSearch(tabId: string, seed: string): void {
+  usePanelHeaderSearchStore
+    .getState()
+    .openSearch(tabId, ARTIFACTS_PANEL_ID, seed);
+}
+
+function resetHeaderSearchStore(): void {
+  usePanelHeaderSearchStore.setState({
+    openBySurfaceKey: {},
+    queryBySurfaceKey: {},
+    slotBySurfaceKey: {},
+  });
 }
 
 beforeEach(() => {
@@ -231,11 +302,7 @@ beforeEach(() => {
   harness.isUnreadMock = vi.fn(() => false);
   harness.artifactsById = {};
   harness.artifactIds = [];
-  usePanelHeaderSearchStore.setState({
-    openByPanelId: {},
-    queryByPanelId: {},
-    slotByPanelId: {},
-  });
+  resetHeaderSearchStore();
 });
 
 afterEach(() => {
@@ -246,6 +313,7 @@ afterEach(() => {
 describe("ArtifactSearchBox", () => {
   it("renders only the input and no results region when the query is empty", () => {
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "",
       debouncedQuery: "",
       epicId: "epic-1",
@@ -259,6 +327,7 @@ describe("ArtifactSearchBox", () => {
   it("shows the loading state while the first same-scope result is pending", () => {
     harness.result = loadingResult();
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -283,6 +352,7 @@ describe("ArtifactSearchBox", () => {
       ),
     );
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -306,6 +376,7 @@ describe("ArtifactSearchBox", () => {
     harness.artifactFilter = { statuses: [1], kinds: ["ticket"], read: "all" };
     harness.result = loadingResult();
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -318,6 +389,7 @@ describe("ArtifactSearchBox", () => {
   it("passes null filter axes when no sidebar filter is set", () => {
     harness.result = loadingResult();
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -338,6 +410,7 @@ describe("ArtifactSearchBox", () => {
       ),
     );
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -365,6 +438,7 @@ describe("ArtifactSearchBox", () => {
       ready([hit({ artifactId: "a1", title: "Deleted" })], false),
     );
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -380,6 +454,7 @@ describe("ArtifactSearchBox", () => {
       ready([hit({ artifactId: "a1", title: "Live" })], false),
     );
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -398,6 +473,7 @@ describe("ArtifactSearchBox", () => {
       truncated: false,
     });
     const { rerender } = renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -408,7 +484,12 @@ describe("ArtifactSearchBox", () => {
 
     harness.result = successResult(ready([], false));
     rerender(
-      <BoxHarness epicId="epic-1" searchQuery="auth" debouncedQuery="auth" />,
+      <BoxHarness
+        epicId="epic-1"
+        tabId={DEFAULT_TAB_ID}
+        searchQuery="auth"
+        debouncedQuery="auth"
+      />,
     );
     expect(screen.getByTestId("epic-artifact-search-empty")).toBeTruthy();
   });
@@ -416,6 +497,7 @@ describe("ArtifactSearchBox", () => {
   it("renders the unsupported degrade state without an error", () => {
     harness.result = errorResult("E_HOST_UNSUPPORTED");
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -428,6 +510,7 @@ describe("ArtifactSearchBox", () => {
     const result = errorResult("RPC_ERROR");
     harness.result = result;
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -439,22 +522,24 @@ describe("ArtifactSearchBox", () => {
 
   it("clears the query on the clear button without leaving search mode", () => {
     harness.result = successResult(ready([hit({ artifactId: "a1" })], false));
-    usePanelHeaderSearchStore.getState().openSearch("artifacts", "auth");
+    openArtifactsSearch(DEFAULT_TAB_ID, "auth");
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
     });
     fireEvent.click(screen.getByTestId("epic-artifact-search-clear"));
-    expect(searchQueryInStore()).toBe("");
+    expect(searchQueryInStore(DEFAULT_TAB_ID)).toBe("");
     // Clearing is not leaving: the header stays swapped so the user can retype.
-    expect(searchOpenInStore()).toBe(true);
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(true);
   });
 
   it("leaves search mode entirely on Escape, restoring the header row", () => {
     harness.result = successResult(ready([hit({ artifactId: "a1" })], false));
-    usePanelHeaderSearchStore.getState().openSearch("artifacts", "auth");
+    openArtifactsSearch(DEFAULT_TAB_ID, "auth");
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -462,20 +547,21 @@ describe("ArtifactSearchBox", () => {
     fireEvent.keyDown(screen.getByLabelText("Search artifacts"), {
       key: "Escape",
     });
-    expect(searchOpenInStore()).toBe(false);
-    expect(searchQueryInStore()).toBe("");
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
+    expect(searchQueryInStore(DEFAULT_TAB_ID)).toBe("");
   });
 
   it("leaves search mode from the close button", () => {
     harness.result = successResult(ready([hit({ artifactId: "a1" })], false));
-    usePanelHeaderSearchStore.getState().openSearch("artifacts", "auth");
+    openArtifactsSearch(DEFAULT_TAB_ID, "auth");
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
     });
     fireEvent.click(screen.getByTestId("epic-artifact-search-close"));
-    expect(searchOpenInStore()).toBe(false);
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
   });
 
   it("highlights a multibyte body snippet match", () => {
@@ -499,6 +585,7 @@ describe("ArtifactSearchBox", () => {
       ),
     );
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "naïve",
       debouncedQuery: "naïve",
       epicId: "epic-1",
@@ -512,6 +599,7 @@ describe("ArtifactSearchBox", () => {
   it("shows a truthful, count-free truncation note and status", () => {
     harness.result = successResult(ready([hit({ artifactId: "a1" })], true));
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -528,6 +616,7 @@ describe("ArtifactSearchBox", () => {
   it("gives the input combobox semantics that reference the listbox when shown", () => {
     harness.result = successResult(ready([hit({ artifactId: "a1" })], false));
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -547,6 +636,7 @@ describe("ArtifactSearchBox", () => {
     // aria-controls nor aria-activedescendant may reference a missing element.
     harness.result = loadingResult();
     const { rerender } = renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -560,7 +650,12 @@ describe("ArtifactSearchBox", () => {
     // Empty ready result: still no listbox.
     harness.result = successResult(ready([], false));
     rerender(
-      <BoxHarness epicId="epic-1" searchQuery="auth" debouncedQuery="auth" />,
+      <BoxHarness
+        epicId="epic-1"
+        tabId={DEFAULT_TAB_ID}
+        searchQuery="auth"
+        debouncedQuery="auth"
+      />,
     );
     input = screen.getByLabelText("Search artifacts");
     expect(screen.queryByRole("listbox")).toBeNull();
@@ -571,6 +666,7 @@ describe("ArtifactSearchBox", () => {
   it("announces loading exactly once (no duplicate live regions)", () => {
     harness.result = loadingResult();
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -591,6 +687,7 @@ describe("ArtifactSearchBox", () => {
       ready([hit({ artifactId: "a1", title: "Epic A hit" })], false),
     );
     const { rerender } = renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-A",
@@ -601,7 +698,12 @@ describe("ArtifactSearchBox", () => {
     // results must not linger.
     harness.result = loadingResult();
     rerender(
-      <BoxHarness epicId="epic-B" searchQuery="auth" debouncedQuery="auth" />,
+      <BoxHarness
+        epicId="epic-B"
+        tabId={DEFAULT_TAB_ID}
+        searchQuery="auth"
+        debouncedQuery="auth"
+      />,
     );
     expect(screen.queryByText("Epic A hit")).toBeNull();
     expect(screen.getByTestId("epic-artifact-search-loading")).toBeTruthy();
@@ -612,6 +714,7 @@ describe("ArtifactSearchBox", () => {
       ready([hit({ artifactId: "a1", title: "Kept hit" })], false),
     );
     const { rerender } = renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -622,7 +725,12 @@ describe("ArtifactSearchBox", () => {
     // previous same-scope results instead of blanking.
     harness.result = loadingResult();
     rerender(
-      <BoxHarness epicId="epic-1" searchQuery="authz" debouncedQuery="authz" />,
+      <BoxHarness
+        epicId="epic-1"
+        tabId={DEFAULT_TAB_ID}
+        searchQuery="authz"
+        debouncedQuery="authz"
+      />,
     );
     expect(screen.getByText("Kept hit")).toBeTruthy();
   });
@@ -644,6 +752,7 @@ describe("ArtifactSearchBox", () => {
       ),
     );
     renderBox({
+      tabId: DEFAULT_TAB_ID,
       searchQuery: "auth",
       debouncedQuery: "auth",
       epicId: "epic-1",
@@ -668,19 +777,26 @@ describe("ArtifactPanelSearchShell", () => {
    * The shell renders only the tree; the input is portaled into the header
    * slot, which the section header owns. This stands in for that header.
    */
-  function ShellHarness() {
-    const setSearchSlot = usePanelHeaderSearchStore((s) => s.setSearchSlot);
+  function ShellHarness(props: {
+    readonly epicId: string;
+    readonly tabId: string;
+    readonly children: ReactNode;
+  }) {
     return (
       <>
-        <div
-          ref={(element) => setSearchSlot("artifacts", element)}
-          data-testid="header-search-slot"
+        <HeaderSearchSlot
+          tabId={props.tabId}
+          testId={`header-search-slot-${props.tabId}`}
         />
-        <ArtifactPanelSearchShell epicId="epic-1" tabId="tab-1">
-          <div data-testid="tree-stub">artifact tree</div>
+        <ArtifactPanelSearchShell epicId={props.epicId} tabId={props.tabId}>
+          {props.children}
         </ArtifactPanelSearchShell>
       </>
     );
+  }
+
+  function defaultTreeStub(testId: string): ReactNode {
+    return <div data-testid={testId}>artifact tree</div>;
   }
 
   /** Enough artifacts that the search affordance is available. */
@@ -691,12 +807,20 @@ describe("ArtifactPanelSearchShell", () => {
     );
   }
 
-  function renderShell(args: { readonly searchOpen: boolean }) {
+  function renderShell(args: {
+    readonly searchOpen: boolean;
+    readonly tabId: string;
+    readonly epicId: string;
+  }) {
     withSearchableArtifactCount();
     if (args.searchOpen) {
-      usePanelHeaderSearchStore.getState().openSearch("artifacts", "");
+      openArtifactsSearch(args.tabId, "");
     }
-    return render(<ShellHarness />);
+    return render(
+      <ShellHarness epicId={args.epicId} tabId={args.tabId}>
+        {defaultTreeStub("tree-stub")}
+      </ShellHarness>,
+    );
   }
 
   function typeAndSettle(input: HTMLElement, value: string) {
@@ -707,20 +831,28 @@ describe("ArtifactPanelSearchShell", () => {
   }
 
   it("renders no search input at all in browse mode", () => {
-    renderShell({ searchOpen: false });
+    renderShell({
+      searchOpen: false,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     // The whole point of the rework: browse mode spends zero rows on search.
     expect(screen.queryByLabelText("Search artifacts")).toBeNull();
     expect(screen.getByTestId("tree-stub")).toBeTruthy();
   });
 
   it("enters search mode seeded with the typed character", () => {
-    renderShell({ searchOpen: false });
+    renderShell({
+      searchOpen: false,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     fireEvent.keyDown(screen.getByTestId("epic-artifact-tree-region"), {
       key: "a",
     });
     // The keystroke that started the search is not swallowed by the handoff.
-    expect(searchOpenInStore()).toBe(true);
-    expect(searchQueryInStore()).toBe("a");
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(true);
+    expect(searchQueryInStore(DEFAULT_TAB_ID)).toBe("a");
     expect(screen.getByLabelText("Search artifacts")).toBeTruthy();
   });
 
@@ -729,33 +861,49 @@ describe("ArtifactPanelSearchShell", () => {
       { length: ARTIFACT_SEARCH_MIN_COUNT - 1 },
       (_unused, index) => `art-${index}`,
     );
-    render(<ShellHarness />);
+    render(
+      <ShellHarness epicId={DEFAULT_EPIC_ID} tabId={DEFAULT_TAB_ID}>
+        {defaultTreeStub("tree-stub")}
+      </ShellHarness>,
+    );
     fireEvent.keyDown(screen.getByTestId("epic-artifact-tree-region"), {
       key: "a",
     });
-    expect(searchOpenInStore()).toBe(false);
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
   });
 
   it("ignores modified keys so shortcuts still reach their handlers", () => {
-    renderShell({ searchOpen: false });
+    renderShell({
+      searchOpen: false,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     const region = screen.getByTestId("epic-artifact-tree-region");
     fireEvent.keyDown(region, { key: "a", metaKey: true });
     fireEvent.keyDown(region, { key: " " });
     fireEvent.keyDown(region, { key: "ArrowDown" });
-    expect(searchOpenInStore()).toBe(false);
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
   });
 
   it("does not steal typed input from an editable tree descendant", () => {
-    renderShell({ searchOpen: false });
+    renderShell({
+      searchOpen: false,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     const region = screen.getByTestId("epic-artifact-tree-region");
     const input = document.createElement("input");
     region.append(input);
     fireEvent.keyDown(input, { key: "a" });
-    expect(searchOpenInStore()).toBe(false);
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
   });
 
   it("keeps the tree viewport as the hidden-scrollbar single scroll surface", () => {
-    renderShell({ searchOpen: false });
+    renderShell({
+      searchOpen: false,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     const region = screen.getByTestId("epic-artifact-tree-region");
     // The inner tree viewport is the active scroll surface and keeps the
     // sidebar's hidden-scrollbar convention that SidebarContent used to provide.
@@ -764,7 +912,11 @@ describe("ArtifactPanelSearchShell", () => {
   });
 
   it("keeps the tree mounted but hidden while a query is active", () => {
-    renderShell({ searchOpen: true });
+    renderShell({
+      searchOpen: true,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     const input = screen.getByLabelText("Search artifacts");
     const region = screen.getByTestId("epic-artifact-tree-region");
     expect(region.className).not.toContain("hidden");
@@ -778,7 +930,11 @@ describe("ArtifactPanelSearchShell", () => {
   });
 
   it("restores the tree in the same cycle on clear (no debounce lag)", () => {
-    renderShell({ searchOpen: true });
+    renderShell({
+      searchOpen: true,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     const input = screen.getByLabelText("Search artifacts");
     typeAndSettle(input, "auth");
     expect(screen.getByTestId("epic-artifact-tree-region").className).toContain(
@@ -793,7 +949,11 @@ describe("ArtifactPanelSearchShell", () => {
   });
 
   it("restores the tree in the same cycle on Escape", () => {
-    renderShell({ searchOpen: true });
+    renderShell({
+      searchOpen: true,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     const input = screen.getByLabelText("Search artifacts");
     typeAndSettle(input, "auth");
     expect(screen.getByTestId("epic-artifact-tree-region").className).toContain(
@@ -807,7 +967,11 @@ describe("ArtifactPanelSearchShell", () => {
   });
 
   it("restores the tree scroll position when leaving search mode", () => {
-    renderShell({ searchOpen: true });
+    renderShell({
+      searchOpen: true,
+      tabId: DEFAULT_TAB_ID,
+      epicId: DEFAULT_EPIC_ID,
+    });
     const input = screen.getByLabelText("Search artifacts");
     const region = screen.getByTestId("epic-artifact-tree-region");
 
@@ -821,5 +985,216 @@ describe("ArtifactPanelSearchShell", () => {
     fireEvent.click(screen.getByTestId("epic-artifact-search-clear"));
 
     expect(screen.getByTestId("epic-artifact-tree-region").scrollTop).toBe(120);
+  });
+});
+
+describe("panel-header-search store slot identity guards", () => {
+  it("unregisterSearchSlot ignores a stale ref after the same surface was re-registered", () => {
+    const store = usePanelHeaderSearchStore.getState();
+    const oldA = document.createElement("div");
+    const replacementA = document.createElement("div");
+    const slotB = document.createElement("div");
+
+    // Exact production-style stale-ref sequence: register, overwrite, then the
+    // old element's cleanup must not clobber the replacement (or touch B).
+    store.registerSearchSlot("tab-a", ARTIFACTS_PANEL_ID, oldA);
+    store.registerSearchSlot("tab-b", ARTIFACTS_PANEL_ID, slotB);
+    store.registerSearchSlot("tab-a", ARTIFACTS_PANEL_ID, replacementA);
+    expect(searchSlotInStore("tab-a")).toBe(replacementA);
+    expect(searchSlotInStore("tab-b")).toBe(slotB);
+
+    store.unregisterSearchSlot("tab-a", ARTIFACTS_PANEL_ID, oldA);
+    expect(searchSlotInStore("tab-a")).toBe(replacementA);
+    expect(searchSlotInStore("tab-b")).toBe(slotB);
+
+    store.unregisterSearchSlot("tab-a", ARTIFACTS_PANEL_ID, replacementA);
+    expect(searchSlotInStore("tab-a")).toBeUndefined();
+    expect(searchSlotInStore("tab-b")).toBe(slotB);
+  });
+
+  it("open/close/query mutations on one surface leave the other surface untouched", () => {
+    const store = usePanelHeaderSearchStore.getState();
+    store.openSearch("tab-a", ARTIFACTS_PANEL_ID, "a");
+    store.openSearch("tab-b", ARTIFACTS_PANEL_ID, "b");
+    expect(searchOpenInStore("tab-a")).toBe(true);
+    expect(searchOpenInStore("tab-b")).toBe(true);
+    expect(searchQueryInStore("tab-a")).toBe("a");
+    expect(searchQueryInStore("tab-b")).toBe("b");
+
+    store.setSearchQuery("tab-a", ARTIFACTS_PANEL_ID, "auth");
+    expect(searchQueryInStore("tab-a")).toBe("auth");
+    expect(searchQueryInStore("tab-b")).toBe("b");
+
+    store.closeSearch("tab-a", ARTIFACTS_PANEL_ID);
+    expect(searchOpenInStore("tab-a")).toBe(false);
+    expect(searchQueryInStore("tab-a")).toBe("");
+    expect(searchOpenInStore("tab-b")).toBe(true);
+    expect(searchQueryInStore("tab-b")).toBe("b");
+  });
+});
+
+describe("ArtifactPanelSearchShell dual-surface isolation", () => {
+  const TAB_A = "tab-a";
+  const TAB_B = "tab-b";
+  const EPIC_A = "epic-a";
+  const EPIC_B = "epic-b";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    harness.result = successResult(
+      ready([hit({ artifactId: "a1", title: "Shared hit" })], false),
+    );
+    harness.artifactIds = Array.from(
+      { length: ARTIFACT_SEARCH_MIN_COUNT },
+      (_unused, index) => `art-${index}`,
+    );
+    harness.epicNodeRef = { id: "a1", type: "ticket" };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function DualSurfaceHarness(props: {
+    readonly mountA: boolean;
+    readonly mountB: boolean;
+  }) {
+    return (
+      <>
+        {props.mountA ? (
+          <div data-testid="surface-a">
+            <HeaderSearchSlot
+              tabId={TAB_A}
+              testId={`header-search-slot-${TAB_A}`}
+            />
+            <ArtifactPanelSearchShell epicId={EPIC_A} tabId={TAB_A}>
+              <div data-testid="tree-a">tree a</div>
+            </ArtifactPanelSearchShell>
+          </div>
+        ) : null}
+        {props.mountB ? (
+          <div data-testid="surface-b">
+            <HeaderSearchSlot
+              tabId={TAB_B}
+              testId={`header-search-slot-${TAB_B}`}
+            />
+            <ArtifactPanelSearchShell epicId={EPIC_B} tabId={TAB_B}>
+              <div data-testid="tree-b">tree b</div>
+            </ArtifactPanelSearchShell>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
+  function typeAndSettle(input: HTMLElement, value: string) {
+    fireEvent.change(input, { target: { value } });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+  }
+
+  it("opening and typing search in A leaves B in browse state", () => {
+    openArtifactsSearch(TAB_A, "");
+    render(<DualSurfaceHarness mountA mountB />);
+
+    expect(searchOpenInStore(TAB_A)).toBe(true);
+    expect(searchOpenInStore(TAB_B)).toBe(false);
+    expect(searchQueryInStore(TAB_B)).toBe("");
+
+    const surfaceA = screen.getByTestId("surface-a");
+    const surfaceB = screen.getByTestId("surface-b");
+    const inputA = within(surfaceA).getByLabelText("Search artifacts");
+    expect(within(surfaceB).queryByLabelText("Search artifacts")).toBeNull();
+    expect(within(surfaceB).getByTestId("tree-b")).toBeTruthy();
+
+    typeAndSettle(inputA, "auth");
+    expect(searchQueryInStore(TAB_A)).toBe("auth");
+    expect(searchOpenInStore(TAB_B)).toBe(false);
+    expect(searchQueryInStore(TAB_B)).toBe("");
+    expect(within(surfaceB).queryByLabelText("Search artifacts")).toBeNull();
+  });
+
+  it("portals each open tab's input into only that tab's header slot", () => {
+    openArtifactsSearch(TAB_A, "a");
+    openArtifactsSearch(TAB_B, "b");
+    render(<DualSurfaceHarness mountA mountB />);
+
+    const slotA = screen.getByTestId(`header-search-slot-${TAB_A}`);
+    const slotB = screen.getByTestId(`header-search-slot-${TAB_B}`);
+    const inputA = within(slotA).getByLabelText("Search artifacts");
+    const inputB = within(slotB).getByLabelText("Search artifacts");
+
+    expect(inputA).not.toBe(inputB);
+    expect(slotA.contains(inputA)).toBe(true);
+    expect(slotB.contains(inputB)).toBe(true);
+    expect(slotA.contains(inputB)).toBe(false);
+    expect(slotB.contains(inputA)).toBe(false);
+    expect(screen.getAllByLabelText("Search artifacts")).toHaveLength(2);
+    expect((inputA as HTMLInputElement).value).toBe("a");
+    expect((inputB as HTMLInputElement).value).toBe("b");
+  });
+
+  it("unregistering A's slot cannot clear B's registered slot", () => {
+    openArtifactsSearch(TAB_A, "a");
+    openArtifactsSearch(TAB_B, "b");
+    const { rerender } = render(<DualSurfaceHarness mountA mountB />);
+
+    const slotBBefore = searchSlotInStore(TAB_B);
+    expect(searchSlotInStore(TAB_A)).toBeTruthy();
+    expect(slotBBefore).toBeTruthy();
+
+    // Unmount only A: production-equivalent unregister of A's element.
+    rerender(<DualSurfaceHarness mountA={false} mountB />);
+
+    expect(searchSlotInStore(TAB_A)).toBeUndefined();
+    expect(searchSlotInStore(TAB_B)).toBe(slotBBefore);
+    expect(searchOpenInStore(TAB_B)).toBe(true);
+    expect(searchQueryInStore(TAB_B)).toBe("b");
+    expect(
+      within(screen.getByTestId(`header-search-slot-${TAB_B}`)).getByLabelText(
+        "Search artifacts",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("closing search on A does not close B", () => {
+    openArtifactsSearch(TAB_A, "auth");
+    openArtifactsSearch(TAB_B, "other");
+    render(<DualSurfaceHarness mountA mountB />);
+
+    const surfaceA = screen.getByTestId("surface-a");
+    fireEvent.click(within(surfaceA).getByTestId("epic-artifact-search-close"));
+
+    expect(searchOpenInStore(TAB_A)).toBe(false);
+    expect(searchQueryInStore(TAB_A)).toBe("");
+    expect(searchOpenInStore(TAB_B)).toBe(true);
+    expect(searchQueryInStore(TAB_B)).toBe("other");
+    expect(within(surfaceA).queryByLabelText("Search artifacts")).toBeNull();
+    expect(
+      within(screen.getByTestId("surface-b")).getByLabelText(
+        "Search artifacts",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("opening a hit from A is bound to A's tabId", () => {
+    openArtifactsSearch(TAB_A, "auth");
+    openArtifactsSearch(TAB_B, "auth");
+    render(<DualSurfaceHarness mountA mountB />);
+
+    const surfaceA = screen.getByTestId("surface-a");
+    const surfaceB = screen.getByTestId("surface-b");
+    typeAndSettle(within(surfaceA).getByLabelText("Search artifacts"), "auth");
+    typeAndSettle(within(surfaceB).getByLabelText("Search artifacts"), "auth");
+
+    fireEvent.click(
+      within(surfaceA).getByTestId("epic-artifact-search-result-a1"),
+    );
+    expect(harness.openMock).toHaveBeenCalledTimes(1);
+    expect(harness.openMock).toHaveBeenCalledWith(TAB_A, {
+      id: "a1",
+      type: "ticket",
+    });
   });
 });
