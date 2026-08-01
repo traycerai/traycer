@@ -610,7 +610,7 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
       message:
         "Traycer Host requires an update. Host health: host unknown, compat incompatible.",
       code: "HOST_INCOMPATIBLE",
-      source: "Host startup",
+      source: "Host compatibility",
     });
   });
 
@@ -655,7 +655,7 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
       message:
         "The app could not reach Traycer Host. Host health: host ready, compat unreachable, busy.",
       code: "HOST_UNREACHABLE",
-      source: "Host startup",
+      source: "Host connection",
     });
   });
 
@@ -694,7 +694,7 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
       message:
         "Traycer Host rejected the compatibility handshake. Host health: host ready, compat rejected.",
       code: "HOST_COMPAT_PROBE_REJECTED",
-      source: "Host startup",
+      source: "Host connection",
     });
   });
 });

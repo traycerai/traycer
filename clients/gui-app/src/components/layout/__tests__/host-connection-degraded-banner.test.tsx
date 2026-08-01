@@ -14,6 +14,15 @@ function renderBanner(compatibility: HostCompatibility | null): void {
   );
 }
 
+// Queried by role, not by test id: the role carries the accessible name, so
+// these also fail if the `aria-label` or the button label is dropped - which is
+// what a user relying on a screen reader would actually notice.
+function queryBanner(): HTMLElement | null {
+  return screen.queryByRole("status", {
+    name: "Traycer Host connection degraded",
+  });
+}
+
 describe("<HostConnectionDegradedBanner />", () => {
   afterEach(() => cleanup());
 
@@ -21,8 +30,8 @@ describe("<HostConnectionDegradedBanner />", () => {
     const retry = vi.fn();
     renderBanner({ status: "compatible", degraded: true, retry });
 
-    expect(screen.getByTestId("host-connection-degraded-banner")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("host-connection-degraded-retry"));
+    expect(queryBanner()).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
@@ -33,17 +42,17 @@ describe("<HostConnectionDegradedBanner />", () => {
       retry: () => undefined,
     });
 
-    expect(screen.queryByTestId("host-connection-degraded-banner")).toBeNull();
+    expect(queryBanner()).toBeNull();
   });
 
   it("renders nothing while the probe is still checking, and outside the provider", () => {
     renderBanner({ status: "checking", retry: () => undefined });
-    expect(screen.queryByTestId("host-connection-degraded-banner")).toBeNull();
+    expect(queryBanner()).toBeNull();
 
     cleanup();
     // No provider: the dev preview and unit harnesses mount surfaces without
     // one, and a banner is never worth throwing over.
     renderBanner(null);
-    expect(screen.queryByTestId("host-connection-degraded-banner")).toBeNull();
+    expect(queryBanner()).toBeNull();
   });
 });

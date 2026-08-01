@@ -349,6 +349,7 @@ function SlowHostFallback(props: {
           title: "Traycer Host is unavailable",
           message: "Traycer Host did not become available.",
           code: "HOST_UNAVAILABLE",
+          source: "Host startup",
           presentation: props.presentation,
         }),
         actions: [],
@@ -598,11 +599,19 @@ function fallbackContent(
  * So the pre-filled report now names its own failure family (`title`/`code`)
  * and carries a one-line health snapshot. The snapshot is categorical state
  * only - never paths, error text or anything the user has to redact.
+ *
+ * `source` is part of that discrimination, not decoration: it is the phase the
+ * failure belongs to. Only two of these four fallbacks are startup failures.
+ * A compatibility probe that stops answering is a host that already ran and
+ * later went quiet - the traycer#860 shape - and filing that under "Host
+ * startup" sends triage down the provisioning path, which is the exact wrong
+ * place to look.
  */
 function hostFailureReportIssueAction(args: {
   readonly title: string;
   readonly message: string;
   readonly code: string;
+  readonly source: string;
   readonly presentation: DefaultHostReadinessPresentation;
 }): ReactNode {
   return (
@@ -611,7 +620,7 @@ function hostFailureReportIssueAction(args: {
         title: args.title,
         message: `${args.message} ${describeHostHealth(args.presentation)}`,
         code: args.code,
-        source: "Host startup",
+        source: args.source,
       })}
       presentation="text"
       className={undefined}
@@ -712,6 +721,7 @@ function provisioningErrorFallback(
       title: "Could not start Traycer Host",
       message: "Traycer Host could not start.",
       code: "HOST_PROVISIONING_FAILED",
+      source: "Host startup",
       presentation,
     }),
     actions: [
@@ -760,6 +770,9 @@ function compatibilityErrorFallback(
         ? "The app could not reach Traycer Host."
         : "Traycer Host rejected the compatibility handshake.",
       code: unreachable ? "HOST_UNREACHABLE" : "HOST_COMPAT_PROBE_REJECTED",
+      // Not a startup failure: this fallback is reached when a host that was
+      // already serving stops answering the probe (traycer#860).
+      source: "Host connection",
       presentation,
     }),
     actions: [
@@ -782,6 +795,9 @@ function incompatibleFallback(
     title: "Host update required",
     message: "Traycer Host requires an update.",
     code: "HOST_INCOMPATIBLE",
+    // Neither startup nor connection: this host came up and answered the
+    // handshake, and the two sides simply disagree on the version.
+    source: "Host compatibility",
     presentation,
   });
   const shared = {
