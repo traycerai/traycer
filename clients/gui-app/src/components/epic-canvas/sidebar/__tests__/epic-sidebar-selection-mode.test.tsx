@@ -884,6 +884,46 @@ describe("epic sidebar selection mode", () => {
     ).toBeNull();
   });
 
+  it("exits selection after projection prunes archived rows before the batch settles", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+
+    testState.archivedIds = ["chat-root"];
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Cancel selection" }),
+      ).toBeTruthy();
+    });
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+  });
+
   it("preserves agents selected while an archive batch is pending", async () => {
     let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
       throw new Error("Archive resolver is unavailable");

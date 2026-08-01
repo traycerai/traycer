@@ -372,11 +372,17 @@ function clearSelectedIds(
     },
     new Set(),
   );
-  if (nextSelectedIds.size === state.selectedIds.size) return state;
+  const nextSelectionMode = nextSelectedIds.size > 0;
+  if (
+    nextSelectedIds.size === state.selectedIds.size &&
+    state.selectionMode === nextSelectionMode
+  ) {
+    return state;
+  }
   return {
     ...state,
     selectedIds: nextSelectedIds,
-    selectionMode: nextSelectedIds.size > 0,
+    selectionMode: nextSelectionMode,
     pendingDeleteIds: null,
   };
 }
