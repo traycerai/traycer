@@ -25,6 +25,12 @@ describe("agent.activity.subscribe@1.0", () => {
         hasBinaryPayload: false,
       });
     }
+    expect(
+      agentActivitySubscribeServerFrameSchema.parse({
+        kind: "pong",
+        hasBinaryPayload: false,
+      }),
+    ).toEqual({ kind: "pong", hasBinaryPayload: false });
   });
 
   it("rejects malformed buckets and binary activity frames", () => {
