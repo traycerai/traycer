@@ -218,15 +218,40 @@ vi.mock("@/components/epic-canvas/add-node-options", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-filter-menu", () => ({
-  ChatFilterMenu: (props: { readonly disabled: boolean }) => (
-    <button type="button" disabled={props.disabled}>
-      Chat filter
-    </button>
+  ChatFilterMenu: (props: { readonly onCollapseAll: () => void }) => (
+    <>
+      <button type="button">Chat filter</button>
+      <button
+        type="button"
+        data-testid="epic-sidebar-collapse-all-chats"
+        onClick={props.onCollapseAll}
+      >
+        Collapse all agents
+      </button>
+    </>
   ),
-  ArtifactFilterMenu: (props: { readonly disabled: boolean }) => (
-    <button type="button" disabled={props.disabled}>
-      Artifact filter
-    </button>
+  ArtifactFilterMenu: (props: {
+    readonly onCollapseAll: () => void;
+    readonly onMarkAllRead: () => void;
+    readonly markAllReadDisabled: boolean;
+  }) => (
+    <>
+      <button type="button">Artifact filter</button>
+      <button
+        type="button"
+        data-testid="epic-sidebar-collapse-all-artifacts"
+        onClick={props.onCollapseAll}
+      >
+        Collapse all artifacts
+      </button>
+      <button
+        type="button"
+        disabled={props.markAllReadDisabled}
+        onClick={props.onMarkAllRead}
+      >
+        Mark all unread artifacts as read
+      </button>
+    </>
   ),
 }));
 
@@ -744,7 +769,7 @@ describe("epic sidebar selection mode", () => {
     const startSelectionButton = screen.getByRole("button", {
       name: "Select agents",
     });
-    expect(startSelectionButton.textContent).toBe("");
+    expect(startSelectionButton.textContent).toBe("Select agents");
     expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
 
     fireEvent.click(startSelectionButton);
@@ -848,7 +873,7 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByText("Agents")).not.toBeNull();
   });
 
-  it("uses container-aware overflow before header actions can squeeze the artifact title", () => {
+  it("keeps artifact header actions in stable create, more, filter order", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
 
@@ -856,19 +881,16 @@ describe("epic sidebar selection mode", () => {
 
     const section = screen.getByTestId("epic-left-panel-section-artifacts");
     expect(section.firstElementChild?.className).toContain("@container");
-    expect(
-      screen.getByRole("button", { name: "Select artifacts" }).className,
-    ).toContain("@max-[21rem]:hidden");
-    expect(
-      screen.getByTestId("epic-sidebar-collapse-all-artifacts").className,
-    ).toContain("@max-[21rem]:hidden");
-    expect(
-      screen.getByTestId("epic-sidebar-mark-all-artifacts-read").className,
-    ).toContain("@max-[21rem]:hidden");
-
+    const add = screen.getByRole("button", { name: "Add artifact" });
     const more = screen.getByTestId("epic-sidebar-more-artifacts");
-    expect(more.className).toContain("hidden");
-    expect(more.className).toContain("@max-[21rem]:inline-flex");
+    const filter = screen.getByRole("button", { name: "Artifact filter" });
+    expect(add.compareDocumentPosition(more)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(more.compareDocumentPosition(filter)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(more.className).not.toContain("hidden");
 
     fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
     expect(
@@ -921,7 +943,12 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).not.toBeNull();
     // The Task HAS agents - they just use the other interface. The empty state
     // must not read as "this Task has no agents".
-    expect(screen.getByText("No agents use this interface.")).not.toBeNull();
+    expect(
+      screen.getByText("No matches for the current filters."),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("The Interface filter is hiding the other agents."),
+    ).not.toBeNull();
     expect(screen.queryByText("No agents yet.")).toBeNull();
   });
 
@@ -945,7 +972,9 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.getByTestId("epic-artifact-sidebar-filter-empty"),
     ).not.toBeNull();
-    expect(screen.getByText("No artifacts match the filter.")).not.toBeNull();
+    expect(
+      screen.getByText("No matches for the current filters."),
+    ).not.toBeNull();
     expect(screen.queryByText("No artifacts yet.")).toBeNull();
   });
 
@@ -1108,7 +1137,7 @@ describe("epic sidebar selection mode", () => {
     ).toBe(true);
   });
 
-  it("disables collapsed chat header tools except add", () => {
+  it("keeps collapsed chat header entry points available", () => {
     seedChatTree();
     testState.collapsedPanelIds = new Set(["chats"]);
 
@@ -1116,23 +1145,18 @@ describe("epic sidebar selection mode", () => {
 
     expect(
       screen.getByRole("button", { name: "Chat filter" }).matches(":disabled"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       screen
-        .getByRole("button", { name: "Select agents" })
+        .getByRole("button", { name: "More agent actions" })
         .matches(":disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByTestId("epic-sidebar-collapse-all-chats")
-        .matches(":disabled"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       screen.getByRole("button", { name: "Add agent" }).matches(":disabled"),
     ).toBe(false);
   });
 
-  it("disables collapsed artifact header tools except add", () => {
+  it("keeps collapsed artifact header entry points available", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
     testState.collapsedPanelIds = new Set(["artifacts"]);
@@ -1144,22 +1168,12 @@ describe("epic sidebar selection mode", () => {
       screen
         .getByRole("button", { name: "Artifact filter" })
         .matches(":disabled"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       screen
-        .getByRole("button", { name: "Select artifacts" })
+        .getByRole("button", { name: "More artifact actions" })
         .matches(":disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByTestId("epic-sidebar-collapse-all-artifacts")
-        .matches(":disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByRole("button", { name: "Mark all unread artifacts as read" })
-        .matches(":disabled"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       screen.getByRole("button", { name: "Add artifact" }).matches(":disabled"),
     ).toBe(false);
@@ -1171,14 +1185,16 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(
-      screen.queryByRole("button", { name: "Select artifacts" }),
-    ).toBeNull();
+      screen
+        .getByRole("button", { name: "Select artifacts" })
+        .matches(":disabled"),
+    ).toBe(true);
     expect(
       screen.queryByRole("button", { name: "Add artifact" }),
     ).not.toBeNull();
   });
 
-  it("keeps mark-all-read hidden at rest and disables it when no artifacts are unread", () => {
+  it("disables mark-all-read when no artifacts are unread", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
 
@@ -1191,13 +1207,6 @@ describe("epic sidebar selection mode", () => {
     });
 
     expect(markAllReadButton.matches(":disabled")).toBe(true);
-    expect(markAllReadButton.className).toContain("disabled:opacity-0");
-    expect(markAllReadButton.className).toContain(
-      "disabled:group-hover/panel-section:opacity-50",
-    );
-    expect(markAllReadButton.className).toContain(
-      "disabled:group-focus-within/panel-section:opacity-50",
-    );
 
     testState.unreadArtifactIds = new Set(["ticket-child"]);
     rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);

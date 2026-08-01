@@ -112,7 +112,11 @@ function openPicker(): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
   render(
     <TooltipProvider>
-      <NewTerminalPicker epicId="epic-1" tabId={tabId} />
+      <NewTerminalPicker
+        epicId="epic-1"
+        tabId={tabId}
+        onBeforeOpen={undefined}
+      />
     </TooltipProvider>,
   );
   fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
@@ -457,7 +461,11 @@ describe("<NewTerminalPicker /> focus-loss dismissal (MED4)", () => {
       <PaneSurfaceActivityContext.Provider value={{ visible: true, focused }}>
         <PaneVisibilityContext.Provider value>
           <TooltipProvider>
-            <NewTerminalPicker epicId="epic-1" tabId={tabId} />
+            <NewTerminalPicker
+              epicId="epic-1"
+              tabId={tabId}
+              onBeforeOpen={undefined}
+            />
           </TooltipProvider>
         </PaneVisibilityContext.Provider>
       </PaneSurfaceActivityContext.Provider>

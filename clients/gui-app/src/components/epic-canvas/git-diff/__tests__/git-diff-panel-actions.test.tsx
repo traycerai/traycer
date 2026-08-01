@@ -38,6 +38,13 @@ function setup() {
   return { wrapper };
 }
 
+function openMoreMenu(): void {
+  fireEvent.pointerDown(
+    screen.getByRole("button", { name: "More Git Diff actions" }),
+    { button: 0 },
+  );
+}
+
 describe("<GitDiffPanelActions />", () => {
   beforeEach(() => {
     cleanup();
@@ -55,18 +62,36 @@ describe("<GitDiffPanelActions />", () => {
     });
   });
 
-  it("renders layout toggle and refresh in the panel header", () => {
+  it("renders layout toggle and refresh in the stable overflow menu", () => {
     const { wrapper } = setup();
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
+    render(
+      <GitDiffPanelActions
+        epicId="epic-1"
+        tabId="tab-1"
+        collapsed={false}
+        mode="normal"
+      />,
+      { wrapper },
+    );
 
+    openMoreMenu();
     expect(screen.getByTestId("git-diff-panel-layout-toggle")).toBeDefined();
     expect(screen.getByTestId("git-diff-panel-refresh")).toBeDefined();
   });
 
   it("toggles list layout from the header action", () => {
     const { wrapper } = setup();
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
+    render(
+      <GitDiffPanelActions
+        epicId="epic-1"
+        tabId="tab-1"
+        collapsed={false}
+        mode="normal"
+      />,
+      { wrapper },
+    );
 
+    openMoreMenu();
     fireEvent.click(screen.getByTestId("git-diff-panel-layout-toggle"));
 
     expect(useGitPanelStore.getState().stateByEpicId["epic-1"].listLayout).toBe(
@@ -74,35 +99,41 @@ describe("<GitDiffPanelActions />", () => {
     );
   });
 
-  it("explains the layout switch action in a keyboard-accessible tooltip", async () => {
+  it("explains the stable overflow trigger in a keyboard-accessible tooltip", async () => {
     const { wrapper } = setup();
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
-
-    const toggle = screen.getByRole("button", {
-      name: "Switch to tree view",
-    });
-    fireEvent.focus(toggle);
-
-    expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Switch to tree view",
+    render(
+      <GitDiffPanelActions
+        epicId="epic-1"
+        tabId="tab-1"
+        collapsed={false}
+        mode="normal"
+      />,
+      { wrapper },
     );
 
-    fireEvent.blur(toggle);
-    fireEvent.click(toggle);
-
-    const nextToggle = screen.getByRole("button", {
-      name: "Switch to list view",
+    const trigger = screen.getByRole("button", {
+      name: "More Git Diff actions",
     });
-    fireEvent.focus(nextToggle);
+    fireEvent.focus(trigger);
+
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Switch to list view",
+      "More Git Diff actions",
     );
   });
 
   it("refreshes the active root's nested snapshot slot", () => {
     const { wrapper } = setup();
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
+    render(
+      <GitDiffPanelActions
+        epicId="epic-1"
+        tabId="tab-1"
+        collapsed={false}
+        mode="normal"
+      />,
+      { wrapper },
+    );
 
+    openMoreMenu();
     fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
 
     expect(testState.refresh).toHaveBeenCalledTimes(1);
@@ -114,8 +145,17 @@ describe("<GitDiffPanelActions />", () => {
       ignoreWhitespace: true,
     });
     const { wrapper } = setup();
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
+    render(
+      <GitDiffPanelActions
+        epicId="epic-1"
+        tabId="tab-1"
+        collapsed={false}
+        mode="normal"
+      />,
+      { wrapper },
+    );
 
+    openMoreMenu();
     fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
 
     expect(testState.refresh).toHaveBeenCalledTimes(1);

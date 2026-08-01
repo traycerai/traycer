@@ -270,6 +270,9 @@ function sidebarBulkSelectionReducer(
   state: SidebarBulkSelectionState,
   action: SidebarBulkSelectionAction,
 ): SidebarBulkSelectionState {
+  if (action.type === "setSelectable") {
+    return setSelectableSidebarIds(state, action.ids);
+  }
   switch (action.type) {
     case "enter":
       return enterSidebarBulkSelection(state);
@@ -298,13 +301,6 @@ function sidebarBulkSelectionReducer(
       // pure toggle back to "Select all" without dropping the user out.
       if (state.selectedIds.size === 0) return state;
       return { ...state, selectedIds: new Set() };
-    case "setSelectable":
-      if (sameStringArray(state.selectableIds, action.ids)) return state;
-      return {
-        ...state,
-        selectableIds: action.ids,
-        selectedIds: selectedIdsVisibleIn(action.ids, state.selectedIds),
-      };
     case "requestDelete":
       if (action.ids.length === 0) return state;
       return { ...state, pendingDeleteIds: [...action.ids] };
@@ -317,6 +313,23 @@ function sidebarBulkSelectionReducer(
     case "reset":
       return INITIAL_SELECTION_STATE;
   }
+}
+
+function setSelectableSidebarIds(
+  state: SidebarBulkSelectionState,
+  ids: readonly string[],
+): SidebarBulkSelectionState {
+  // Selection captures the visible set at entry. View filters are shared per
+  // Epic, so another tab may change them while this tab is selecting; freezing
+  // here prevents rows from disappearing or reordering mid-operation.
+  if (state.selectionMode || sameStringArray(state.selectableIds, ids)) {
+    return state;
+  }
+  return {
+    ...state,
+    selectableIds: ids,
+    selectedIds: selectedIdsVisibleIn(ids, state.selectedIds),
+  };
 }
 
 function enterSidebarBulkSelection(

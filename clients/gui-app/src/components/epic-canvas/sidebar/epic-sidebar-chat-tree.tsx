@@ -749,8 +749,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         // Names the INTERFACE as the thing with no matches. "No agents match"
         // would imply the Task has none at all, when the filter is only hiding
         // the other interface.
-        title="No agents use this interface."
-        description={null}
+        title="No matches for the current filters."
+        description="The Interface filter is hiding the other agents."
         testId="epic-chat-sidebar-filter-empty"
       />
     );

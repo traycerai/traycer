@@ -56,6 +56,7 @@ export interface AddArtifactDropdownProps {
   children: ReactNode;
   open: boolean | undefined;
   onOpenChange: ((open: boolean) => void) | undefined;
+  menuPlacement: "header" | "row";
   menuTestId: string;
   itemTestId: (type: EpicNodeKind) => string;
   onAdd: (type: EpicNodeKind) => void;
@@ -121,6 +122,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     children,
     open,
     onOpenChange,
+    menuPlacement,
     menuTestId,
     itemTestId,
     onAdd,
@@ -180,7 +182,10 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
       <DropdownMenuContent
-        align="end"
+        side={menuPlacement === "header" ? "right" : "bottom"}
+        align={menuPlacement === "header" ? "start" : "end"}
+        sideOffset={menuPlacement === "header" ? 8 : 4}
+        avoidCollisions={menuPlacement !== "header"}
         className="w-[min(90vw,11rem)]"
         data-testid={menuTestId}
       >
