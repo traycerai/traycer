@@ -1200,8 +1200,15 @@ export class RemoteSession<
         UNAUTHORIZED_REVALIDATE_TIMEOUT_MS,
       );
     });
-    const revalidation = auth
-      .revalidateForReconnect()
+    // Invoke inside a promise chain, never bare: `revalidateForReconnect` is
+    // typed to RETURN a promise, but an implementation may still throw
+    // synchronously before it returns one — and a bare call would throw past
+    // this `.catch`, past the `finally` that clears the budget timer, and out
+    // of the `void`-discarded caller as an unhandled rejection, stranding the
+    // session in "reconnecting" with nothing armed. Wrapping makes a sync throw
+    // reach the same `.catch` an async rejection does.
+    const revalidation = Promise.resolve()
+      .then(() => auth.revalidateForReconnect())
       .catch((): RevalidateOutcome => "network-error");
     try {
       return await Promise.race([revalidation, budget]);

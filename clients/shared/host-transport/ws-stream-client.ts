@@ -1493,8 +1493,13 @@ class StreamSession<
     const budget = new Promise<RevalidateOutcome>((resolve) => {
       timer = setTimeout(() => resolve("network-error"), REVALIDATE_TIMEOUT_MS);
     });
-    const revalidation = auth
-      .revalidateForReconnect()
+    // Invoke inside a promise chain, never bare — see the twin in
+    // `remote-session.ts`. A `revalidateForReconnect` that throws synchronously
+    // would otherwise skip this `.catch` and the `finally` that clears the
+    // budget timer, and surface as an unhandled rejection instead of the
+    // "network-error" this method promises for a thrown revalidation.
+    const revalidation = Promise.resolve()
+      .then(() => auth.revalidateForReconnect())
       .catch((): RevalidateOutcome => "network-error");
     try {
       return await Promise.race([revalidation, budget]);

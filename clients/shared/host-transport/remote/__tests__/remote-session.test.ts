@@ -443,6 +443,57 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
   );
 
   it(
+    "treats a SYNCHRONOUSLY thrown revalidation as transient, not an unhandled rejection",
+    async () => {
+      // `revalidateForReconnect` is typed to RETURN a promise, but nothing stops
+      // an implementation throwing before it returns one. Called bare, that
+      // throw skips the `.catch` that maps a failed revalidation to
+      // "network-error" and the `finally` that clears the budget timer, then
+      // escapes the `void`-discarded recovery task — an unhandled rejection,
+      // with the session parked in "reconnecting" and no redial armed.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("stale-token", "user-1");
+      let opens = 0;
+      relay.decideOpen = () => {
+        opens += 1;
+        return opens === 1
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      };
+      let revalidateCalls = 0;
+      const auth: StreamAuthRevalidator = {
+        revalidateForReconnect: () => {
+          revalidateCalls += 1;
+          throw new Error("revalidation threw before returning a promise");
+        },
+      };
+      const rejections: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        rejections.push(reason);
+      };
+      process.on("unhandledRejection", onUnhandled);
+
+      const session = buildSession(relay, lease, auth);
+      try {
+        session.start();
+        // Recovers: the throw is transient, so the normal backoff redials.
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(revalidateCalls).toBe(1);
+        // "network-error" leaves the bearer untouched - the redial presents the
+        // same one, and this never counts toward the give-up bound.
+        expect(relay.openBearers).toEqual(["stale-token", "stale-token"]);
+        expect(session.isClosed()).toBe(false);
+        await Promise.resolve();
+        expect(rejections).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "closes cleanly when the consumer wired NO revalidator at all (not just null)",
     async () => {
       // `auth` is required by the type, but untyped consumers (the connect-path
