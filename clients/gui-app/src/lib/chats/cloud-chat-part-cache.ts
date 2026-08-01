@@ -135,6 +135,22 @@ export function resolveChatPartCache(
 }
 
 /**
+ * The `CacheStorage` this renderer actually has, or `undefined`.
+ *
+ * One spelling of the `typeof` probe, because there are now two callers with
+ * opposite jobs - the reader that opens the store and the sign-out that drops it
+ * - and two copies of "which storage" is how one of them ends up looking at a
+ * different one. `undefined` outside a secure context (and in jsdom), which both
+ * callers already handle: the reader falls back to a session-scoped store, and
+ * the clear has nothing to do.
+ */
+export function browserChatPartCacheStorage(): ChatPartCacheStorage | undefined {
+  return typeof globalThis.caches === "undefined"
+    ? undefined
+    : globalThis.caches;
+}
+
+/**
  * Drops every cached part.
  *
  * For sign-out. Deliberately a plain function rather than a method on the cache:

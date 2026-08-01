@@ -20,7 +20,10 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { createHostCloudChatReadPort } from "@/lib/chats/cloud-chat-read-port";
-import { resolveChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
+import {
+  browserChatPartCacheStorage,
+  resolveChatPartCache,
+} from "@/lib/chats/cloud-chat-part-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -41,9 +44,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  */
 
 /** The store every read in this renderer shares. Immutable entries, so one is enough. */
-const partCache = resolveChatPartCache(
-  typeof globalThis.caches === "undefined" ? undefined : globalThis.caches,
-);
+const partCache = resolveChatPartCache(browserChatPartCacheStorage());
 
 /**
  * The signed-in viewer's id, as the key component these reads must carry.
