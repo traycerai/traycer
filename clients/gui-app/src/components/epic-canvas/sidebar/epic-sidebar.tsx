@@ -1368,9 +1368,12 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
       }),
     [selection.selectedVisibleIds, tree],
   );
-  const selectedHasActiveAgent = selectedRootIds.some((id) =>
-    activeAgentIds.has(id),
-  );
+  const selectedHasActiveAgent =
+    sidebarIdsWithinRoots({
+      ids: [...activeAgentIds],
+      rootIds: selectedRootIds,
+      tree,
+    }).length > 0;
   const archiveSelected = useCallback(() => {
     if (
       selection.panelId !== "chats" ||
@@ -1397,10 +1400,6 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
         tree,
       });
       setPending(false);
-      if (successfulRootIds.length === selectedRootIds.length) {
-        selection.cancelSelection();
-        return;
-      }
       selection.clearSelectedIds(successfulSelectedIds);
     });
   }, [
