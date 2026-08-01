@@ -560,22 +560,28 @@ export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
  * is one: worktree bindings cascade on epic delete but not on chat delete) name
  * ids this epic can no longer resolve to a title or a tile.
  *
- * A sorted array rather than a `Set` for the same reason as
- * {@link useEpicArchivedNodeIds}: `useShallow` can then bail the subscriber's
- * re-render across the constant churn of chat projections (titles, `updatedAt`,
- * streaming settings), which a freshly-allocated `Set` never could.
+ * Two plain reads plus a memo, NOT one `useShallow` selector that rebuilds the
+ * combined array. `useShallow` bails the subscriber's re-render but not the
+ * selector RUN: zustand executes it once per subscriber on every notification,
+ * and the PR panel mounts one subscriber per row, so combining in there costs
+ * O(rows x agents) on every projection tick - including the title/`updatedAt`
+ * churn this membership list does not care about.
+ *
+ * Memoising on array IDENTITY is safe because the projector guarantees it:
+ * `pickStableIds` hands back the PREVIOUS array whenever the ids are
+ * shallow-equal, so these references change only when a node is really added or
+ * removed. Unordered, because every caller asks it membership questions.
  */
 export function useEpicAgentNodeIds(): ReadonlyArray<string> {
   const handle = useOpenEpicHandle();
-  return useStore(
-    handle.store,
-    useShallow((s): ReadonlyArray<string> => {
-      if (s.chats.allIds.length === 0 && s.tuiAgents.allIds.length === 0) {
-        return EMPTY_TREE_ID_ARRAY;
-      }
-      return [...s.chats.allIds, ...s.tuiAgents.allIds].sort();
-    }),
-  );
+  const chatIds = useStore(handle.store, (s) => s.chats.allIds);
+  const terminalAgentIds = useStore(handle.store, (s) => s.tuiAgents.allIds);
+  return useMemo(() => {
+    if (chatIds.length === 0 && terminalAgentIds.length === 0) {
+      return EMPTY_TREE_ID_ARRAY;
+    }
+    return [...chatIds, ...terminalAgentIds];
+  }, [chatIds, terminalAgentIds]);
 }
 
 export function useEpicTerminalAgentRecords(): ReadonlyArray<TuiAgentProjection> {

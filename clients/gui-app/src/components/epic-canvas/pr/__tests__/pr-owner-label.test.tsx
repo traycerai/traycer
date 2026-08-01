@@ -345,6 +345,35 @@ describe("PrOwnerBadges overflow hierarchy", () => {
     ).toHaveLength(1);
   });
 
+  /**
+   * jsdom has no layout engine, so this pins the CLASS CONTRACT the scrolling
+   * depends on rather than observing a scroll. The original bug was a
+   * `ScrollArea` under a `max-h` with no definite height, whose viewport
+   * resolved to `auto` - it never scrolled and the rows painted outside the
+   * popover.
+   */
+  it("caps the popover against measured space and viewport, never a fixed rem", () => {
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    const list = screen.getByTestId("pr-owner-overflow-list");
+    // The list is the scroller, and may shrink under its content so a cap bites.
+    expect(list.className).toContain("overflow-y-auto");
+    expect(list.className).toContain("min-h-0");
+
+    const content = list.parentElement;
+    expect(content).not.toBeNull();
+    // Without this the rows paint straight past the popover's own box.
+    expect(content?.className).toContain("overflow-hidden");
+    const heightCap = /max-h-\[[^\]]*\]/.exec(content?.className ?? "")?.[0];
+    expect(heightCap).toBeDefined();
+    expect(heightCap).toContain("--radix-popover-content-available-height");
+    // A fixed rem would hold a long list to the same few rows on a display with
+    // room for twice as many - layout surfaces here size fluidly.
+    expect(heightCap).toContain("vh");
+    expect(heightCap).not.toContain("rem");
+  });
+
   it("lists every owner exactly once however the tree nests them", () => {
     parentByNodeId = Object.fromEntries(
       Array.from({ length: 12 }, (_unused, index) => [

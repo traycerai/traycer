@@ -306,9 +306,12 @@ function PrOwnerOverflow(props: {
         // Capped by the space Radix measured between the trigger and the
         // viewport edge, not by a row count: the same popover serves the narrow
         // sidebar row and the wider detail card, and a PR on a large epic can
-        // list dozens of owners. `overflow-hidden` is what makes the cap bite -
-        // without it the list paints straight past the popover's own box.
-        className="max-h-[min(var(--radix-popover-content-available-height,60vh),24rem)] w-[min(80vw,20rem)] max-w-[var(--radix-popover-content-available-width)] gap-0 overflow-hidden p-0"
+        // list dozens of owners. The second term is `60vh`, not a rem: a fixed
+        // height would hold a long list to the same few rows on a display with
+        // room for twice as many, and layout surfaces here size fluidly
+        // (clients/gui-app/AGENTS.md). `overflow-hidden` is what makes the cap
+        // bite - without it the list paints straight past the popover's box.
+        className="max-h-[min(var(--radix-popover-content-available-height,100vh),60vh)] w-[min(80vw,20rem)] max-w-[var(--radix-popover-content-available-width)] gap-0 overflow-hidden p-0"
       >
         <p className="shrink-0 border-b px-3 py-2 text-ui-xs text-muted-foreground">
           {`${nouns.capitalized} this PR came from`}
