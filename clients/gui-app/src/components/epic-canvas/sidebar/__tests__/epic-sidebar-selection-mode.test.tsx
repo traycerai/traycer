@@ -283,6 +283,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   }) => (
     <button
       type="button"
+      role="menuitem"
       data-testid={props["data-testid"]}
       disabled={props.disabled}
       onClick={props.onSelect}
@@ -883,11 +884,12 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(
-      screen.getByTestId("epic-sidebar-open-comm-graph").className,
+      screen.getByRole("button", { name: "Open communication graph" })
+        .className,
     ).toContain("@max-[21rem]:hidden");
     expect(
-      screen.getByTestId("epic-sidebar-more-open-comm-graph").textContent,
-    ).toContain("Open communication graph");
+      screen.getByRole("menuitem", { name: "Open communication graph" }),
+    ).not.toBeNull();
   });
 
   it("renders loading chat and artifact panels before the epic session handle exists", () => {

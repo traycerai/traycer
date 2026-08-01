@@ -36,7 +36,9 @@ describe("CommGraphOpenButton", () => {
       <CommGraphOpenButton epicId={EPIC_ID} disabled={false} className="" />,
     );
 
-    fireEvent.click(screen.getByTestId("epic-sidebar-open-comm-graph"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open communication graph" }),
+    );
 
     expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
       EPIC_ID,
@@ -61,7 +63,9 @@ describe("CommGraphOpenButton", () => {
       <CommGraphOpenButton epicId={EPIC_ID} disabled={false} className="" />,
     );
 
-    const button = screen.getByTestId("epic-sidebar-open-comm-graph");
+    const button = screen.getByRole("button", {
+      name: "Open communication graph",
+    });
     fireEvent.click(button);
     fireEvent.click(button);
 
@@ -84,7 +88,9 @@ describe("CommGraphOpenButton", () => {
   it("does not open while the panel is collapsed", () => {
     render(<CommGraphOpenButton epicId={EPIC_ID} disabled className="" />);
 
-    fireEvent.click(screen.getByTestId("epic-sidebar-open-comm-graph"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open communication graph" }),
+    );
 
     expect(tileNavigationMocks.openTileInEpic).not.toHaveBeenCalled();
   });
@@ -100,7 +106,9 @@ describe("CommGraphOpenMenuItem", () => {
       </DropdownMenu>,
     );
 
-    fireEvent.click(screen.getByTestId("epic-sidebar-more-open-comm-graph"));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Open communication graph" }),
+    );
 
     expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
       EPIC_ID,
