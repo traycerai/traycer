@@ -90,6 +90,18 @@ import {
   epicSubscribeV10,
   epicSubscribeV11,
 } from "@traycer/protocol/host/epic/subscribe";
+import {
+  listCloudChatPayloadsRequestSchema,
+  listCloudChatPayloadsResponseSchema,
+  listCloudChatsRequestSchema,
+  listCloudChatsResponseSchema,
+  readCloudChatPartRequestSchema,
+  readCloudChatPartResponseSchema,
+  readCloudChatPayloadRequestSchema,
+  readCloudChatPayloadResponseSchema,
+  resolveCloudChatHeadRequestSchema,
+  resolveCloudChatHeadResponseSchema,
+} from "@traycer/protocol/host/epic/cloud-chat";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -493,6 +505,62 @@ export const epicSearchArtifactsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: searchArtifactsRequestSchema,
   responseSchema: searchArtifactsResponseSchema,
+});
+
+// ---- Cloud chat reads (host as byte pipe) ------------------------------ //
+//
+// Five brand-new v1.0 methods, none on `RELEASED_FLOOR_METHOD_NAMES`, all
+// registered with `degrade: { kind: "unsupported" }` in `registry.ts` - a new
+// method NAME is handshake-fatal against a released peer, so the whole surface
+// rides the optional-capability channel.
+//
+// Missing-peer behavior is a designed state rather than a backstop: a host
+// without these answers `E_HOST_UNSUPPORTED`, and the client's contract is to
+// HIDE the cloud-chat surface (an absent list section, a dialog that states the
+// refusal in place) instead of rendering a failure. "This host cannot reach
+// cloud chats" is not an error a user can act on except by updating the host,
+// which is what the surface says.
+//
+// The split into five is the read pipeline itself, and each call is one step a
+// client cannot do for itself: list the rows, get the opaque head, pull ONE part
+// by digest, learn which payloads are fetchable, pull one payload. Everything
+// between those steps - gating on the head's version, checking each part's
+// length and digest, assembling in head order, presenting - happens in the
+// client, on bytes the host moved without reading. See `cloud-chat.ts`.
+
+export const epicListCloudChatsV10 = defineRpcContract({
+  method: "epic.listCloudChats",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listCloudChatsRequestSchema,
+  responseSchema: listCloudChatsResponseSchema,
+});
+
+export const epicResolveCloudChatHeadV10 = defineRpcContract({
+  method: "epic.resolveCloudChatHead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: resolveCloudChatHeadRequestSchema,
+  responseSchema: resolveCloudChatHeadResponseSchema,
+});
+
+export const epicReadCloudChatPartV10 = defineRpcContract({
+  method: "epic.readCloudChatPart",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readCloudChatPartRequestSchema,
+  responseSchema: readCloudChatPartResponseSchema,
+});
+
+export const epicListCloudChatPayloadsV10 = defineRpcContract({
+  method: "epic.listCloudChatPayloads",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listCloudChatPayloadsRequestSchema,
+  responseSchema: listCloudChatPayloadsResponseSchema,
+});
+
+export const epicReadCloudChatPayloadV10 = defineRpcContract({
+  method: "epic.readCloudChatPayload",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readCloudChatPayloadRequestSchema,
+  responseSchema: readCloudChatPayloadResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };

@@ -192,8 +192,13 @@ import {
   epicEditCommentV10,
   epicGetTaskContextsV10,
   epicGrantAccessV10,
+  epicListCloudChatPayloadsV10,
+  epicListCloudChatsV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
+  epicReadCloudChatPartV10,
+  epicReadCloudChatPayloadV10,
+  epicResolveCloudChatHeadV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -4439,6 +4444,77 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: epicSearchArtifactsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) cloud-chat READ surface: the host is a byte pipe and
+  // the client does every interpretation. See `epic/cloud-chat.ts` for the whole
+  // argument; the short version is that the head is opaque to the server AND to
+  // the host, so gating, digest verification, assembly and caching all belong to
+  // the only party that parses it.
+  //
+  // All five degrade `unsupported` together, and the client hides the cloud-chat
+  // surface rather than rendering a failure - a host that predates the surface
+  // has nothing a user can do about except update it.
+  "epic.listCloudChats": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicListCloudChatsV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.resolveCloudChatHead": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicResolveCloudChatHeadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.readCloudChatPart": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadCloudChatPartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.listCloudChatPayloads": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListCloudChatPayloadsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.readCloudChatPayload": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadCloudChatPayloadV10,
           upgradeFromPreviousVersion: null,
         },
       },
