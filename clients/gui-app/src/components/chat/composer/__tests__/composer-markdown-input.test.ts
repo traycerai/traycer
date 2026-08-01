@@ -1,6 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import { fireEvent, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import { jsonContentToMarkdown } from "@traycer/protocol/common/json-content-serializer";
 
@@ -41,6 +41,7 @@ function makeFixture(): {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   editors.splice(0).forEach((editor) => editor.destroy());
   elements.splice(0).forEach((element) => element.remove());
 });
@@ -144,6 +145,51 @@ describe("composer Markdown-style input", () => {
     ]);
     expect(editor.state.doc.firstChild?.textContent).toBe("");
     expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+  });
+
+  it("keeps a closing fence literal when text follows it on the same line", () => {
+    const { editor } = makeFixture();
+
+    typeText(editor, "```");
+    typeText(editor, "before");
+    fireEvent.keyDown(editor.view.dom, { key: "Enter", shiftKey: true });
+    typeText(editor, "suffix");
+    const codeBlockStart = editor.state.selection.$from.start();
+    editor.commands.setTextSelection(codeBlockStart + "before\n".length);
+
+    typeText(editor, "```");
+
+    expect(editor.state.doc.firstChild?.textContent).toBe("before\n```suffix");
+    expect(editor.state.selection.$from.parent.type.name).toBe("codeBlock");
+  });
+
+  it("restores the complete closing fence when undoing an automatic close", () => {
+    vi.useFakeTimers();
+    const { editor } = makeFixture();
+
+    typeText(editor, "```");
+    typeText(editor, "before");
+    fireEvent.keyDown(editor.view.dom, { key: "Enter", shiftKey: true });
+    typeText(editor, "``");
+    vi.advanceTimersByTime(1_000);
+    typeText(editor, "`");
+    expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+
+    fireEvent.keyDown(editor.view.dom, { key: "z", ctrlKey: true });
+
+    expect(editor.state.doc.firstChild?.textContent).toBe("before\n```");
+    expect(editor.state.selection.$from.parent.type.name).toBe("codeBlock");
+  });
+
+  it("keeps an opening fence literal before existing paragraph content", () => {
+    const { editor } = makeFixture();
+
+    typeText(editor, "suffix");
+    editor.commands.setTextSelection(editor.state.selection.$from.start());
+    typeText(editor, "```");
+
+    expect(editor.state.doc.firstChild?.type.name).toBe("paragraph");
+    expect(editor.state.doc.firstChild?.textContent).toBe("```suffix");
   });
 
   it("keeps a language suffix when Shift-Enter opens the code block", () => {

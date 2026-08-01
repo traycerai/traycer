@@ -1,6 +1,8 @@
 import { Extension, InputRule } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
+import { closeHistory } from "@tiptap/pm/history";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
+import type { EditorView } from "@tiptap/pm/view";
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
@@ -79,6 +81,8 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
         find: /^```$/,
         handler: ({ state, range }) => {
           const $start = state.doc.resolve(range.from);
+          if (range.to !== $start.end()) return null;
+
           const parent = $start.node(-1);
           if (
             !parent.canReplaceWith(
@@ -106,12 +110,11 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
   },
 
   addProseMirrorPlugins() {
-    const editor = this.editor;
     return [
       new Plugin({
         props: {
-          handleTextInput: (_view, from, to, text) =>
-            handleClosingCodeFence(editor, from, to, text),
+          handleTextInput: (view, from, to, text) =>
+            handleClosingCodeFence(view, from, to, text),
         },
       }),
     ];
@@ -143,42 +146,47 @@ function handleOpeningCodeFence(editor: Editor): boolean {
 }
 
 // A closing fence typed on its own line exits the rich code block immediately:
-// the incoming third backtick is absorbed, the preceding newline + two typed
-// backticks are removed, and the caret moves into the following paragraph.
+// the full fence (and preceding newline on later lines) is removed, and the
+// caret moves into the following paragraph.
 function handleClosingCodeFence(
-  editor: Editor,
+  view: EditorView,
   from: number,
   to: number,
   text: string,
 ): boolean {
   if (text !== "`" || from !== to) return false;
 
-  const { selection } = editor.state;
+  const { selection } = view.state;
   if (!selection.empty || selection.from !== from) return false;
   const { $from } = selection;
   if ($from.parent.type.name !== "codeBlock") return false;
   const textBeforeCaret = $from.parent.textContent.slice(0, $from.parentOffset);
+  const isAtCodeBlockEnd = $from.parentOffset === $from.parent.content.size;
   const isFirstLineFence =
-    $from.parentOffset === 2 &&
-    textBeforeCaret === "``" &&
-    $from.parent.content.size === $from.parentOffset;
-  if (!isFirstLineFence && !textBeforeCaret.endsWith("\n``")) return false;
+    isAtCodeBlockEnd && $from.parentOffset === 2 && textBeforeCaret === "``";
+  const isLaterLineFence = isAtCodeBlockEnd && textBeforeCaret.endsWith("\n``");
+  if (!isFirstLineFence && !isLaterLineFence) return false;
 
   const closingFenceFrom = from - (isFirstLineFence ? 2 : 3);
-  const codeBlockEnd = $from.after();
-  const paragraphType = editor.schema.nodes.paragraph;
+  // Record the incoming third backtick before closing the block. Isolating the
+  // close in its own history event means undo restores the complete literal
+  // fence, even when the first two backticks belong to an older history group.
+  view.dispatch(view.state.tr.insertText(text, from, to));
+  const closingFenceTo = from + text.length;
+  const codeBlockEnd = view.state.selection.$from.after();
+  const paragraphType = view.state.schema.nodes.paragraph;
+  const tr = closeHistory(view.state.tr);
 
-  return editor.commands.command(({ tr }) => {
-    tr.delete(closingFenceFrom, to);
-    const afterCodeBlock = tr.mapping.map(codeBlockEnd);
-    const nextNode = tr.doc.nodeAt(afterCodeBlock);
-    if (nextNode?.type !== paragraphType) {
-      tr.insert(afterCodeBlock, paragraphType.create());
-    }
-    tr.setSelection(TextSelection.create(tr.doc, afterCodeBlock + 1));
-    tr.scrollIntoView();
-    return true;
-  });
+  tr.delete(closingFenceFrom, closingFenceTo);
+  const afterCodeBlock = tr.mapping.map(codeBlockEnd);
+  const nextNode = tr.doc.nodeAt(afterCodeBlock);
+  if (nextNode?.type !== paragraphType) {
+    tr.insert(afterCodeBlock, paragraphType.create());
+  }
+  tr.setSelection(TextSelection.create(tr.doc, afterCodeBlock + 1));
+  tr.scrollIntoView();
+  view.dispatch(tr);
+  return true;
 }
 
 function handlePickerEnter(pickerStore: ComposerPickerStore | null): boolean {
