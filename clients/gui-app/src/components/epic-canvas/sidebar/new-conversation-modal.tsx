@@ -164,6 +164,7 @@ interface NewConversationModalActionProps {
   readonly triggerLabel: string;
   readonly triggerTestId: string;
   readonly actionRevealClassName: string;
+  readonly onBeforeOpen: (() => void) | undefined;
 }
 
 /**
@@ -176,16 +177,18 @@ interface NewConversationModalActionProps {
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
 ) {
+  const { disabled, epicId, onBeforeOpen, parentId, tabId } = props;
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const handleOpen = useCallback((): void => {
-    if (props.disabled) return;
+    if (disabled) return;
+    onBeforeOpen?.();
     openModal({
-      epicId: props.epicId,
-      tabId: props.tabId,
+      epicId,
+      tabId,
       placement: ACTIVE_TILE_PLACEMENT,
-      parentId: props.parentId,
+      parentId,
     });
-  }, [openModal, props.disabled, props.epicId, props.parentId, props.tabId]);
+  }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
   // Activation while aria-disabled stays blocked via `handleOpen`'s early
   // return; see `disabled-presentation.ts` for why native `disabled` can't
   // carry the tooltip.

@@ -555,8 +555,8 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={FileText}
-        title="No artifacts match the filter."
-        description={null}
+        title="No matches for the current filters."
+        description="Status, Type, or Read state may be hiding artifacts."
         testId="epic-artifact-sidebar-filter-empty"
       />
     );
@@ -1801,6 +1801,7 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
     <AddNodeDropdown
       open={undefined}
       onOpenChange={undefined}
+      menuPlacement="row"
       epicId={epicId}
       menuTestId={`epic-sidebar-add-menu-${nodeId}`}
       itemTestId={(t) => `epic-sidebar-add-${t}-${nodeId}`}

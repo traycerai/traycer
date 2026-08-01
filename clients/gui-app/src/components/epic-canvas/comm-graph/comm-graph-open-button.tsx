@@ -12,12 +12,11 @@
  * the content id (the graph's persisted viewport) would otherwise be written by
  * two tabs at once, so panning one would move the other.
  */
-import { useCallback } from "react";
 import { Waypoints } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { useOpenCommunicationGraph } from "./use-open-communication-graph";
 
 export interface CommGraphOpenButtonProps {
   readonly epicId: string;
@@ -28,11 +27,7 @@ export interface CommGraphOpenButtonProps {
 
 export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
   const { className, disabled, epicId } = props;
-  const tileNavigation = useEpicTileNavigation();
-
-  const openGraph = useCallback(() => {
-    tileNavigation.openTileInEpic(epicId, makeCommGraphTileRef(epicId));
-  }, [epicId, tileNavigation]);
+  const openGraph = useOpenCommunicationGraph(epicId);
 
   return (
     <Button
@@ -47,5 +42,23 @@ export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
     >
       <Waypoints className="size-4" />
     </Button>
+  );
+}
+
+export function CommGraphOpenMenuItem(props: {
+  readonly epicId: string;
+  readonly disabled: boolean;
+}) {
+  const openGraph = useOpenCommunicationGraph(props.epicId);
+
+  return (
+    <DropdownMenuItem
+      disabled={props.disabled}
+      onSelect={openGraph}
+      data-testid="epic-sidebar-more-open-comm-graph"
+    >
+      <Waypoints className="size-4" />
+      Open communication graph
+    </DropdownMenuItem>
   );
 }

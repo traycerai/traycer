@@ -586,8 +586,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // Two independent narrowings, kept separate on purpose. `originRootIds` is
   // the origin filter's result and feeds the "no matches" empty state and
   // forced expansion; `rootIds` additionally drops archived roots and is what
-  // actually renders. Collapsing them would make an all-archived tree claim
-  // "No agents use this interface", which is false.
+  // actually renders. Collapsing them would make an all-archived tree show the
+  // Interface-filter empty state instead of the archived one, blaming a filter
+  // that is not hiding anything.
   const originRootIds = useMemo(
     () => applyVisibleFilter(allRootIds, originVisibleIds),
     [allRootIds, originVisibleIds],
@@ -749,8 +750,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         // Names the INTERFACE as the thing with no matches. "No agents match"
         // would imply the Task has none at all, when the filter is only hiding
         // the other interface.
-        title="No agents use this interface."
-        description={null}
+        title="No matches for the current filters."
+        description="The Interface filter is hiding the other agents."
         testId="epic-chat-sidebar-filter-empty"
       />
     );

@@ -564,6 +564,11 @@ export class TabNavigationController {
     const replace =
       options?.replace === true ||
       activeItemContainsRef(layoutBefore, focusedRef);
+    const search = this.activationSearch(
+      canonical,
+      focusedRef,
+      options?.search,
+    );
     this.supersedeAll();
     const envelope = this.createAuthorityEnvelope(
       destinationForRef(focusedRef),
@@ -571,7 +576,7 @@ export class TabNavigationController {
     );
     const routeOptions = {
       ...tabRouteOptions(canonical),
-      ...(options?.search === undefined ? {} : { search: options.search }),
+      ...(search === undefined ? {} : { search }),
       replace,
     } satisfies NavigateOptions;
     const pending: PendingNavigation = {
@@ -807,6 +812,11 @@ export class TabNavigationController {
     const replace =
       options?.replace === true ||
       activeItemContainsRef(layoutBefore, activation.ref);
+    const search = this.activationSearch(
+      intent,
+      activation.ref,
+      options?.search,
+    );
     this.supersedeAll();
     const envelope = this.createAuthorityEnvelope(
       destinationForRef(activation.ref),
@@ -814,7 +824,7 @@ export class TabNavigationController {
     );
     const routeOptions = {
       ...tabRouteOptions(intent),
-      ...(options?.search === undefined ? {} : { search: options.search }),
+      ...(search === undefined ? {} : { search }),
       replace,
     } satisfies NavigateOptions;
     const pending: PendingNavigation = {
@@ -917,6 +927,30 @@ export class TabNavigationController {
       });
     }
     return requested;
+  }
+
+  /**
+   * History is the only top-level tab whose view state is carried in route
+   * search. Reactivating it must start from its last committed search, not the
+   * unrelated route we are leaving. A caller reducer (for example, clearing a
+   * modal overlay) is therefore applied to that committed snapshot.
+   */
+  private activationSearch(
+    intent: TabNavigationIntent,
+    ref: TabRef,
+    requestedSearch: TabNavigationOptions["search"],
+  ): TabNavigationOptions["search"] {
+    const rememberedHistorySearch =
+      intent.kind === "history"
+        ? this.latestRouteByRef.get(tabRefKey(ref))?.committedSearch
+        : undefined;
+    if (
+      typeof requestedSearch === "function" &&
+      rememberedHistorySearch !== undefined
+    ) {
+      return requestedSearch(rememberedHistorySearch);
+    }
+    return requestedSearch ?? rememberedHistorySearch;
   }
 
   private prepareEpicTarget(
