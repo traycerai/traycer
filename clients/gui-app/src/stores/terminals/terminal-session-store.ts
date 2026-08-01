@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
 import type {
   CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
   TerminalSessionExitReason,
   TerminalSessionInfo,
   TerminalSessionKind,
@@ -116,6 +117,7 @@ export interface TerminalSessionState {
   readonly lastOutputPreview: string | null;
   readonly title: string | null;
   readonly activeProcessName: string | null;
+  readonly currentCwd: string | null;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */
   setWriter: (writer: TerminalDataWriter | null) => void;
@@ -235,6 +237,16 @@ function activeProcessNameFromSession(
   if (name === undefined || name === null) return null;
   const trimmed = name.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function currentCwdFromSession(
+  session:
+    | CanonicalTerminalSessionInfoWithCurrentCwd
+    | CanonicalTerminalSessionInfo
+    | TerminalSessionInfo,
+): string | null {
+  if (!("currentCwd" in session)) return null;
+  return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
 export function createTerminalSessionStore(
@@ -452,6 +464,7 @@ export function createTerminalSessionStore(
           lastOutputPreview,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwdFromSession(frame.session) ?? get().currentCwd,
         });
         flushRequestedResize();
       },
@@ -511,6 +524,7 @@ export function createTerminalSessionStore(
           exitCode: frame.session.exitCode,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwdFromSession(frame.session) ?? get().currentCwd,
         });
       },
       onConnectionStatus: (
@@ -566,6 +580,7 @@ export function createTerminalSessionStore(
       lastOutputPreview: null,
       title: null,
       activeProcessName: null,
+      currentCwd: null,
 
       setWriter: (next) => {
         writer = next;

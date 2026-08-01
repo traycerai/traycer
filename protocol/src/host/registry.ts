@@ -249,18 +249,21 @@ import {
   terminalCreateV20,
   terminalCreateUpgradeV10ToV20,
   terminalKillV10,
-  terminalListDowngradeV21ToV10,
+  terminalListDowngradeV22ToV10,
   terminalListV10,
   terminalListV20,
   terminalListV21,
+  terminalListV22,
   terminalListUpgradeV10ToV20,
   terminalListUpgradeV20ToV21,
+  terminalListUpgradeV21ToV22,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
   terminalSubscribeV13,
   terminalSubscribeV14,
+  terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   hostNotificationHooksSave,
@@ -4575,7 +4578,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: terminalListV20,
@@ -4585,8 +4588,12 @@ const HOST_RPC_REGISTRY_DEFINITION = {
           contract: terminalListV21,
           upgradeFromPreviousVersion: terminalListUpgradeV20ToV21,
         },
+        2: {
+          contract: terminalListV22,
+          upgradeFromPreviousVersion: terminalListUpgradeV21ToV22,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalListDowngradeV21ToV10 },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV22ToV10 },
     },
   },
   "terminal.rename": {
@@ -5615,7 +5622,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -5631,6 +5638,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         4: {
           contract: terminalSubscribeV14,
+        },
+        5: {
+          contract: terminalSubscribeV15,
         },
       },
     },

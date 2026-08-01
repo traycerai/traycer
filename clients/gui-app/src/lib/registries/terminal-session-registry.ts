@@ -15,7 +15,7 @@ import {
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalSessionRegistry } from "@/stores/terminals/terminal-session-registry";
 import type {
-  ListTerminalsResponseV21,
+  ListTerminalsResponseV22,
   TerminalSessionKind,
   TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -217,14 +217,17 @@ export function useTerminalSessionHandle(
     let previousStatus = initialState.status;
     let previousTitle = initialState.title;
     let previousActiveProcessName = initialState.activeProcessName;
+    let previousCurrentCwd = initialState.currentCwd;
     return handle.store.subscribe((state) => {
       const statusChanged = state.status !== previousStatus;
       const metadataChanged =
         state.title !== previousTitle ||
-        state.activeProcessName !== previousActiveProcessName;
+        state.activeProcessName !== previousActiveProcessName ||
+        state.currentCwd !== previousCurrentCwd;
       previousStatus = state.status;
       previousTitle = state.title;
       previousActiveProcessName = state.activeProcessName;
+      previousCurrentCwd = state.currentCwd;
       if (metadataChanged) {
         // Patch the cached `terminal.list` rows in place - NEVER invalidate
         // here. The stream is the authoritative source for these fields
@@ -235,17 +238,19 @@ export function useTerminalSessionHandle(
         // looped forever, bouncing the PTY stream and leaving reattached
         // terminals blank. (An explicitly justified `setQueriesData`:
         // stream-pushed state IS the response state.)
-        queryClient.setQueriesData<ListTerminalsResponseV21>(
+        queryClient.setQueriesData<ListTerminalsResponseV22>(
           { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
           (data) => {
             if (data === undefined) return undefined;
             const target = data.sessions.find(
               (session) => session.sessionId === args.sessionId,
             );
+            if (target === undefined) return data;
+            const currentCwd = state.currentCwd ?? target.currentCwd;
             if (
-              target === undefined ||
-              (target.title === state.title &&
-                (target.activeProcessName ?? null) === state.activeProcessName)
+              target.title === state.title &&
+              (target.activeProcessName ?? null) === state.activeProcessName &&
+              target.currentCwd === currentCwd
             ) {
               return data;
             }
@@ -259,6 +264,7 @@ export function useTerminalSessionHandle(
                       ...session,
                       title: state.title,
                       activeProcessName: state.activeProcessName,
+                      currentCwd,
                     }
                   : session,
               ),

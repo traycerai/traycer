@@ -7,24 +7,47 @@ describe("terminalSessionTitle", () => {
       terminalSessionTitle({
         title: "Manual name",
         activeProcessName: "vim",
+        currentCwd: "/work/very-long-directory-name",
       }),
     ).toBe("Manual name");
   });
 
-  it("uses the active process name before the default title", () => {
+  it("prefixes an active process with the directory basename", () => {
     expect(
       terminalSessionTitle({
         title: null,
-        activeProcessName: "npm",
+        activeProcessName: "vim",
+        currentCwd: "/work/repo",
       }),
-    ).toBe("npm");
+    ).toBe("repo · vim");
   });
 
-  it("falls back when both title sources are blank", () => {
+  it("uses the process name alone when no directory is available", () => {
+    expect(
+      terminalSessionTitle({
+        title: null,
+        activeProcessName: "vim",
+        currentCwd: null,
+      }),
+    ).toBe("vim");
+  });
+
+  it("adds the directory name for an idle shell", () => {
     expect(
       terminalSessionTitle({
         title: null,
         activeProcessName: "  ",
+        currentCwd: "/work/repo/",
+      }),
+    ).toBe("repo · New Terminal");
+  });
+
+  it("falls back to the plain default when no directory is available", () => {
+    expect(
+      terminalSessionTitle({
+        title: null,
+        activeProcessName: null,
+        currentCwd: null,
       }),
     ).toBe("New Terminal");
   });
