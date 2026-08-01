@@ -192,6 +192,69 @@ describe("composer Markdown-style input", () => {
     expect(editor.state.doc.firstChild?.textContent).toBe("```suffix");
   });
 
+  it("preserves an inline atom in an Enter fence-looking paragraph", () => {
+    const { editor, submitCalls } = makeFixture();
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "slashCommand", attrs: { commandName: "plan" } },
+            { type: "text", text: "```" },
+          ],
+        },
+      ],
+    });
+    setSelectionAfterText(editor, "```");
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+
+    expect(submitCalls.count).toBe(1);
+    expect(editor.getJSON()).toMatchObject({
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "slashCommand", attrs: { commandName: "plan" } },
+            { type: "text", text: "```" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not delete an Enter fence when a list item cannot become code", () => {
+    const { editor, submitCalls } = makeFixture();
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "bulletList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "```" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    setSelectionAfterText(editor, "```");
+    expect(editor.can().setCodeBlock()).toBe(false);
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+
+    expect(submitCalls.count).toBe(1);
+    expect(editor.state.doc.firstChild?.type.name).toBe("bulletList");
+    expect(editor.state.doc.textContent).toBe("```");
+  });
+
   it("keeps a language suffix when Shift-Enter opens the code block", () => {
     const { editor, submitCalls } = makeFixture();
 
@@ -260,6 +323,15 @@ describe("composer Markdown-style input", () => {
 
 function typeText(editor: Editor, value: string): void {
   Array.from(value).forEach((char) => typeChar(editor, char));
+}
+
+function setSelectionAfterText(editor: Editor, text: string): void {
+  let textEnd = -1;
+  editor.state.doc.descendants((node, position) => {
+    if (node.isText && node.text === text) textEnd = position + node.nodeSize;
+    return true;
+  });
+  editor.commands.setTextSelection(textEnd);
 }
 
 function typeChar(editor: Editor, char: string): void {

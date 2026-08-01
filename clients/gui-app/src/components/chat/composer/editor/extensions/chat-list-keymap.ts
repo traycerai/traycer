@@ -1,6 +1,7 @@
 import { Extension, InputRule } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
@@ -133,16 +134,26 @@ function handleOpeningCodeFence(editor: Editor): boolean {
 
   const fenceText = $from.parent.textContent;
   if (!/^```(?:[a-z]+)?$/.test(fenceText)) return false;
+  if (!hasOnlyTextChildren($from.parent)) return false;
 
   const fenceRange = { from: $from.start(), to: $from.end() };
   const language = fenceText.slice(3);
   const codeBlockAttrs = language.length === 0 ? undefined : { language };
+  if (!editor.can().setCodeBlock(codeBlockAttrs)) return false;
+
   return editor
     .chain()
     .setCodeBlock(codeBlockAttrs)
     .deleteRange(fenceRange)
     .scrollIntoView()
     .run();
+}
+
+function hasOnlyTextChildren(node: ProseMirrorNode): boolean {
+  for (let index = 0; index < node.childCount; index += 1) {
+    if (!node.child(index).isText) return false;
+  }
+  return true;
 }
 
 // A closing fence typed on its own line exits the rich code block immediately:
