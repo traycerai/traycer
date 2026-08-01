@@ -3102,6 +3102,15 @@ describe("RunnerIpcBridge", () => {
     expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
       false,
     );
+
+    const destroyedFocusedWindow = buildWindowWithDestroyed(true);
+    destroyedFocusedWindow.setFocused(true);
+    registry.add("window-destroyed", 303, destroyedFocusedWindow);
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      false,
+    );
+    expect(destroyedFocusedWindow.sentMessages).toEqual([]);
     bridge.dispose();
   });
 

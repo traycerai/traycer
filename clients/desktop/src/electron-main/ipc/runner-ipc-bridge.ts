@@ -609,12 +609,8 @@ export class RunnerIpcBridge {
     senderWebContentsId: number | null,
     display: DesktopNotificationForegroundDisplay,
   ): boolean {
-    const focused = this.windowRegistry
-      .records()
-      .find(
-        (record) => !record.window.isDestroyed() && record.window.isFocused(),
-      );
-    if (focused === undefined) return false;
+    const focused = this.findFocusedLiveRecord();
+    if (focused === null) return false;
     if (focused.webContentsId === senderWebContentsId) return true;
     const delivered = this.safeSendToWindow(
       focused.windowId,
@@ -1063,18 +1059,24 @@ export class RunnerIpcBridge {
   private resolveRendererHostedCommandTarget(
     command: MenuCommandId,
   ): IpcWindowRecord | null {
-    const focused = this.windowRegistry
-      .records()
-      .find(
-        (record) => record.window.isFocused() && !record.window.isDestroyed(),
-      );
-    if (focused !== undefined) {
+    const focused = this.findFocusedLiveRecord();
+    if (focused !== null) {
       return focused;
     }
     if (isMruFallbackMenuCommand(command)) {
       return this.windowRegistry.getMruRecord();
     }
     return null;
+  }
+
+  private findFocusedLiveRecord(): IpcWindowRecord | null {
+    return (
+      this.windowRegistry
+        .records()
+        .find(
+          (record) => !record.window.isDestroyed() && record.window.isFocused(),
+        ) ?? null
+    );
   }
 
   pruneClosedWindowState(): void {

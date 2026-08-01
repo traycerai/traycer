@@ -46,7 +46,11 @@ function createForegroundNotificationDisplayChannel(): ForegroundNotificationDis
       const display = payload as DesktopNotificationForegroundDisplay;
       if (handlers.size === 0) {
         if (buffered.length >= MAX_BUFFERED_FOREGROUND_NOTIFICATION_DISPLAYS) {
-          buffered.shift();
+          const dropped = buffered.shift();
+          console.warn(
+            "[preload] dropped buffered foreground notification display",
+            { deliveryKey: dropped?.deliveryKey ?? null },
+          );
         }
         buffered.push(display);
         return;

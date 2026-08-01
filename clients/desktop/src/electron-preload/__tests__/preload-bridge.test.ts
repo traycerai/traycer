@@ -377,6 +377,42 @@ describe("preload foreground-notification buffering", () => {
     expect(observed).toEqual([display, display]);
     second.dispose();
   });
+
+  it("logs each oldest display dropped when the preload buffer is full", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    for (let index = 0; index < 21; index++) {
+      fakeElectron.emit(RunnerHostEvent.notificationForegroundDisplay, {
+        title: "Traycer",
+        body: `Background agent ${index} failed`,
+        payload: null,
+        replaceKey: null,
+        deliveryKey: `user-1:failure-${index}`,
+        foregroundAppLocal: null,
+      });
+    }
+
+    expect(warn).toHaveBeenCalledWith(
+      "[preload] dropped buffered foreground notification display",
+      { deliveryKey: "user-1:failure-0" },
+    );
+    warn.mockRestore();
+
+    const observed: DesktopNotificationForegroundDisplay[] = [];
+    const subscription = bridge.notifications.onForegroundDisplay((display) => {
+      observed.push(display);
+    });
+    expect(observed).toHaveLength(20);
+    expect(observed[0]?.deliveryKey).toBe("user-1:failure-1");
+    subscription.dispose();
+  });
 });
 
 describe("preload host-management mutation invokes", () => {
