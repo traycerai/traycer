@@ -54,6 +54,11 @@ export class MockStreamSession<
   }
 
   close(): void {
+    // Idempotent, because `IStreamSession.close()` is. Emitting a second
+    // "closed" on a repeat call would let this fixture drive a lifecycle the
+    // real transport cannot produce - and a hook that mishandled it would
+    // fail here while working in the app, or pass here while broken in it.
+    if (this.closed) return;
     this.closed = true;
     this.statusChangeHandler?.("closed", { kind: "caller" });
   }
