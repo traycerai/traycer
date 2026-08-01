@@ -252,6 +252,7 @@ export function ProviderProfileScopedSection(
           contentContainer={null}
           onCloseAutoFocus={null}
           usagePresentation={null}
+          admissionByProfileId={null}
         />
         <div
           data-slot="profile-summary-actions"

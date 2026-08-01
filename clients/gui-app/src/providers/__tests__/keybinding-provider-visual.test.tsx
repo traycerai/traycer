@@ -186,6 +186,7 @@ function PickerReasoningScopeProbe(props: {
     reasoningActionable: props.reasoningActionable,
     activeProviderId: "codex",
     activeProviderProfiles: [],
+    activeProviderProfileAdmission: null,
     onProfileChange: NOOP_PROFILE_CHANGE,
   });
   return null;
@@ -217,6 +218,7 @@ function PickerBadgeProbe(props: {
     reasoningActionable: props.reasoningActionable,
     activeProviderId: "codex",
     activeProviderProfiles: props.profiles,
+    activeProviderProfileAdmission: null,
     onProfileChange: props.onProfileChange,
   });
   const providerLeader = usePickerProviderLeaderForIndex(0);
