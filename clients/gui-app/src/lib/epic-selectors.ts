@@ -551,6 +551,33 @@ export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
   );
 }
 
+/**
+ * Ids of every chat + terminal agent this epic's projection currently holds.
+ *
+ * PRESENCE, not liveness or visibility: an archived or idle node is still here;
+ * only a DELETED one is absent. Callers use it to drop references to nodes that
+ * no longer exist - host-side records that outlive their node (a PR's owner set
+ * is one: worktree bindings cascade on epic delete but not on chat delete) name
+ * ids this epic can no longer resolve to a title or a tile.
+ *
+ * A sorted array rather than a `Set` for the same reason as
+ * {@link useEpicArchivedNodeIds}: `useShallow` can then bail the subscriber's
+ * re-render across the constant churn of chat projections (titles, `updatedAt`,
+ * streaming settings), which a freshly-allocated `Set` never could.
+ */
+export function useEpicAgentNodeIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<string> => {
+      if (s.chats.allIds.length === 0 && s.tuiAgents.allIds.length === 0) {
+        return EMPTY_TREE_ID_ARRAY;
+      }
+      return [...s.chats.allIds, ...s.tuiAgents.allIds].sort();
+    }),
+  );
+}
+
 export function useEpicTerminalAgentRecords(): ReadonlyArray<TuiAgentProjection> {
   const handle = useOpenEpicHandle();
   return useStore(

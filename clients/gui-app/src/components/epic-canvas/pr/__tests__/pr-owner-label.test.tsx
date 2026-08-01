@@ -1,7 +1,14 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { EpicTreeIndex, EpicTreeNode } from "@/lib/epic-selectors";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
 
@@ -10,20 +17,87 @@ import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
 const openTileInEpic =
   vi.fn<(epicId: string, node: EpicCanvasTileRef) => null>();
 
+/**
+ * Parent links the epic tree reports, rewritten per test. Empty means every
+ * owner is a root - the flat shape the pre-tree expectations below assume.
+ */
+let parentByNodeId: Readonly<Record<string, string | null>> = {};
+
+function treeIndexFromParents(): EpicTreeIndex {
+  const nodeById: Record<string, EpicTreeNode> = {};
+  const childrenByParent: Record<string, string[]> = {};
+  const rootIds: string[] = [];
+  for (const [id, parentId] of Object.entries(parentByNodeId)) {
+    nodeById[id] = {
+      id,
+      parentId,
+      title: id,
+      type: "chat",
+      status: null,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    if (parentId === null) {
+      rootIds.push(id);
+      continue;
+    }
+    if (Object.hasOwn(childrenByParent, parentId)) {
+      childrenByParent[parentId].push(id);
+    } else {
+      childrenByParent[parentId] = [id];
+    }
+  }
+  return { rootIds, childrenByParent, nodeById };
+}
+
+/**
+ * Owner ids whose node has been DELETED from the epic. The projection no longer
+ * holds them, so they resolve to no title - the orphaned-binding case.
+ */
+let deletedNodeIds: ReadonlySet<string> = new Set<string>();
+
 // Both lookup hooks run unconditionally (rules-of-hooks) with the id gated to
 // `null` for the kind that doesn't apply, so each owner resolves through
 // exactly one of them. Titled from the id so every chip is distinguishable.
+//
+// `useEpicAgentNodeIds` and the two lookups are driven by ONE fixture: a real
+// projection cannot hold a node in its id list and fail to resolve its title,
+// and a mock that let those disagree would test a state the app cannot reach.
 vi.mock("@/lib/epic-selectors", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/epic-selectors")>()),
   useChatById: (id: string | null) =>
-    id === null ? null : { title: `Chat ${id}` },
+    id === null || deletedNodeIds.has(id) ? null : { title: `Chat ${id}` },
   useEpicTerminalAgent: (id: string | null) =>
-    id === null ? null : { title: `Agent ${id}` },
+    id === null || deletedNodeIds.has(id) ? null : { title: `Agent ${id}` },
   useEpicNodeHostId: () => "host-1",
+  useEpicTreeIndex: () => treeIndexFromParents(),
+  useEpicAgentNodeIds: () => presentNodeIds,
 }));
+
+/**
+ * Every id the tests hand out, minus the deleted ones. Broad on purpose: the
+ * component filters by membership, so the set only has to CONTAIN the owners a
+ * test renders.
+ */
+let presentNodeIds: readonly string[] = [];
+
+function seedPresentNodeIds(owners: readonly PrOwnerRef[]): void {
+  presentNodeIds = owners
+    .map((owner) => owner.ownerId)
+    .filter((id) => !deletedNodeIds.has(id))
+    .sort();
+}
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTileInEpic }),
+}));
+
+// A session HANDLE has to exist for `EpicSessionGate` to render the owner row
+// at all - the projection hooks above are mocked, but the gate reads the raw
+// context. Only its presence matters here; every projection read this component
+// makes is intercepted above, so the handle is never dereferenced.
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({ epicId: "epic-1" }),
 }));
 
 function chatOwners(count: number): readonly PrOwnerRef[] {
@@ -41,6 +115,7 @@ function terminalAgentOwners(count: number): readonly PrOwnerRef[] {
 }
 
 function renderBadges(owners: readonly PrOwnerRef[]) {
+  seedPresentNodeIds(owners);
   return render(
     <TooltipProvider>
       <PrOwnerBadges
@@ -56,7 +131,21 @@ function renderBadges(owners: readonly PrOwnerRef[]) {
 afterEach(() => {
   cleanup();
   openTileInEpic.mockReset();
+  parentByNodeId = {};
+  deletedNodeIds = new Set<string>();
+  presentNodeIds = [];
 });
+
+/**
+ * The popover row for an owner, by the label `useChatById` is mocked to give.
+ * Scoped to the list: an inline badge carries the same `Open <title>` name, so
+ * an unscoped query matches twice for any owner that is also a visible chip.
+ */
+function ownerRow(ownerId: string): HTMLElement {
+  return within(screen.getByTestId("pr-owner-overflow-list")).getByLabelText(
+    `Open Chat ${ownerId}`,
+  );
+}
 
 describe("PrOwnerBadges overflow", () => {
   it("renders every owner inline while the set is small", () => {
@@ -131,5 +220,160 @@ describe("PrOwnerBadges overflow", () => {
     expect(screen.getByLabelText("Show all 12 owners")).toBeTruthy();
     fireEvent.click(screen.getByTestId("pr-owner-overflow"));
     expect(screen.getByText("Owners this PR came from")).toBeTruthy();
+  });
+});
+
+/**
+ * Worktree bindings cascade on epic delete but not on chat delete, so a PR
+ * keeps naming owners whose chat is gone. They used to render as bare "Removed
+ * chat" text in a row of pills - no title, no tile, nothing to click.
+ */
+describe("PrOwnerBadges deleted owners", () => {
+  it("renders nothing for an owner whose chat has been deleted", () => {
+    deletedNodeIds = new Set(["chat-2"]);
+    renderBadges(chatOwners(3));
+
+    expect(screen.getAllByTestId("pr-owner-badge")).toHaveLength(2);
+    expect(screen.queryByText("Removed chat")).toBeNull();
+  });
+
+  it("counts only surviving owners in the +N chip and its accessible name", () => {
+    deletedNodeIds = new Set(["chat-4", "chat-9"]);
+    renderBadges(chatOwners(12));
+
+    // 12 owners, 2 deleted: the chip must promise the 10 the popover can list,
+    // not the 12 the host still has bindings for.
+    expect(screen.getByTestId("pr-owner-overflow").textContent).toBe("+7");
+    expect(screen.getByLabelText("Show all 10 chats")).toBeTruthy();
+  });
+
+  it("keeps the visible chips full when an early owner is deleted", () => {
+    // Without upstream filtering, slicing the first three off the RAW list
+    // would render two chips and a hole where chat-1 used to be.
+    deletedNodeIds = new Set(["chat-1"]);
+    renderBadges(chatOwners(12));
+
+    expect(screen.getAllByTestId("pr-owner-badge")).toHaveLength(3);
+    expect(screen.getByLabelText("Open Chat chat-4")).toBeTruthy();
+  });
+
+  it("omits deleted owners from the overflow list too", () => {
+    deletedNodeIds = new Set(["chat-5"]);
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    expect(screen.getAllByTestId("pr-owner-row")).toHaveLength(11);
+    expect(screen.queryByText("Removed chat")).toBeNull();
+  });
+
+  it("renders nothing at all when every owner has been deleted", () => {
+    deletedNodeIds = new Set(["chat-1", "chat-2", "chat-3"]);
+    renderBadges(chatOwners(3));
+
+    expect(screen.queryByTestId("pr-owner-badges")).toBeNull();
+  });
+
+  it("re-parents a survivor whose own parent was deleted", () => {
+    // The lineage's root is gone, so its children cannot nest under a row that
+    // is not there - they become roots rather than vanishing with it.
+    deletedNodeIds = new Set(["chat-1"]);
+    parentByNodeId = {
+      "chat-1": null,
+      "chat-2": "chat-1",
+      "chat-3": "chat-2",
+    };
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    expect(ownerRow("chat-2").style.paddingLeft).toBe("8px");
+    expect(ownerRow("chat-3").style.paddingLeft).toBe("24px");
+  });
+});
+
+/**
+ * The reported bug: a PR derived from a chat AND the sub-agents it spawned
+ * listed them flat, and since a spawned agent inherits its parent's title the
+ * popover read as the same chat repeated once per child.
+ *
+ * Indent values are the sidebar's own arithmetic (`BASE_PAD_LEFT` 8 +
+ * `INDENT_PX` 16 per level), asserted as literals so a change to either
+ * constant has to be a deliberate change to this expectation too.
+ */
+describe("PrOwnerBadges overflow hierarchy", () => {
+  it("nests a spawned sub-agent under the owner it was spawned from", () => {
+    parentByNodeId = {
+      "chat-1": null,
+      "chat-2": "chat-1",
+      "chat-3": "chat-2",
+      "chat-4": null,
+    };
+    // chats 5-12 have no tree node at all - a deleted node is a root too.
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    expect(ownerRow("chat-1").style.paddingLeft).toBe("8px");
+    expect(ownerRow("chat-2").style.paddingLeft).toBe("24px");
+    expect(ownerRow("chat-3").style.paddingLeft).toBe("40px");
+    // Its own root, not a child of the lineage it happens to follow.
+    expect(ownerRow("chat-4").style.paddingLeft).toBe("8px");
+    // One `<ul role="group">` per level that actually has children.
+    expect(document.querySelectorAll('ul[role="group"]')).toHaveLength(2);
+  });
+
+  it("lists every owner exactly once however the tree nests them", () => {
+    parentByNodeId = Object.fromEntries(
+      Array.from({ length: 12 }, (_unused, index) => [
+        `chat-${index + 1}`,
+        index === 0 ? null : `chat-${index}`,
+      ]),
+    );
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    expect(screen.getAllByTestId("pr-owner-row")).toHaveLength(12);
+  });
+
+  it("stops indenting past the popover's depth cap so a deep row keeps its title", () => {
+    parentByNodeId = Object.fromEntries(
+      Array.from({ length: 12 }, (_unused, index) => [
+        `chat-${index + 1}`,
+        index === 0 ? null : `chat-${index}`,
+      ]),
+    );
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    // Depth 5 is the cap: 5 * 16 + 8. Everything deeper shares that column.
+    expect(ownerRow("chat-6").style.paddingLeft).toBe("88px");
+    expect(ownerRow("chat-12").style.paddingLeft).toBe("88px");
+  });
+
+  it("keeps an owner at the top level when its parent is not itself an owner", () => {
+    // `chat-2`'s parent is a chat the PR did NOT come from - promoting it to a
+    // root beats inventing a row for a chat that is not in the set.
+    parentByNodeId = {
+      "chat-1": null,
+      "chat-2": "chat-outside-the-set",
+      "chat-outside-the-set": null,
+    };
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    expect(ownerRow("chat-2").style.paddingLeft).toBe("8px");
+    expect(
+      screen.queryByLabelText("Open Chat chat-outside-the-set"),
+    ).toBeNull();
+  });
+
+  it("still lists every owner when the tree holds a parent cycle", () => {
+    // Concurrent reparents on two peers can leave a cycle in the CRDT tree.
+    // Neither member is reachable from a root, so a naive walk drops both.
+    parentByNodeId = { "chat-1": "chat-2", "chat-2": "chat-1" };
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    expect(screen.getAllByTestId("pr-owner-row")).toHaveLength(12);
+    expect(ownerRow("chat-1")).toBeTruthy();
+    expect(ownerRow("chat-2")).toBeTruthy();
   });
 });
