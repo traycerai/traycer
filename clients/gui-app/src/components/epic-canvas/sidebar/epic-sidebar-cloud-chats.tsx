@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Globe, Lock } from "lucide-react";
-import type {
-  CloudChatIdentity,
-  CloudChatSummary,
-} from "@traycer/protocol/host/epic/cloud-chat";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostClient } from "@/lib/host/runtime";
 import { cn } from "@/lib/utils";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  cloudChatRowKey,
+  composeCloudChatSectionState,
+} from "@/lib/chats/cloud-chat-section-state";
 import { CloudChatDialog } from "@/components/epic-canvas/sidebar/cloud-chat-dialog";
 
 /**
@@ -16,13 +17,10 @@ import { CloudChatDialog } from "@/components/epic-canvas/sidebar/cloud-chat-dia
  *
  * ## It HIDES rather than fails
  *
- * Three states collapse to rendering nothing: a host that predates the
- * cloud-chat methods, an unauthenticated viewer, and a task with no published
- * chats. None of them is an error a user can act on from here, and a section
- * announcing "cloud chats unavailable" would be a permanent notice on every
- * older host. The distinction that matters - "your other devices' chats are
- * here" versus "there is nothing to show" - is carried by the section's
- * presence, not by a message inside it.
+ Four states collapse to rendering nothing - an older host, any other failure,
+ * a signed-out viewer, and a task whose cloud chats are all already local. The
+ * rule lives in `composeCloudChatSectionState`, which is where the argument for
+ * it is written down and where it is tested.
  *
  * ## What a row can and cannot say
  *
@@ -36,9 +34,21 @@ import { CloudChatDialog } from "@/components/epic-canvas/sidebar/cloud-chat-dia
  */
 
 export interface EpicSidebarCloudChatsProps {
+  /**
+   * The cloud row's task. In the 3.0 model an epic id IS the task id - the
+   * publisher's own cloud calls pass `taskId: epicId` - so there is no mapping
+   * layer here and there should not be one.
+   */
   readonly taskId: string;
-  /** Chat ids this device already has locally, which the section skips. */
-  readonly localChatIds: ReadonlySet<string>;
+  /**
+   * Chat ids the local tree already renders, SORTED.
+   *
+   * An array rather than a `Set` because it comes from `useEpicChatIds`, which
+   * returns a stable sorted array so `useShallow` can bail a re-render on the
+   * projection churn that does not change the id set. Membership is a linear
+   * scan over a handful of ids, once per cloud row.
+   */
+  readonly localChatIds: readonly string[];
 }
 
 export function EpicSidebarCloudChats(
@@ -53,11 +63,16 @@ export function EpicSidebarCloudChats(
     enabled: props.taskId.length > 0,
   });
 
-  // An older host, or any other failure: the section is simply not there. Both
-  // collapse deliberately - see the note above on why neither is a notice.
-  if (list.isError) return null;
+  const state = composeCloudChatSectionState({
+    chats: list.data?.chats,
+    isError: list.isError,
+    isFetching: list.isFetching,
+    localChatIds: props.localChatIds,
+  });
 
-  if (list.isPending) {
+  if (state.kind === "hidden") return null;
+
+  if (state.kind === "loading") {
     return (
       <div className="flex w-full items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
         <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
@@ -66,21 +81,14 @@ export function EpicSidebarCloudChats(
     );
   }
 
-  // A chat this device already holds locally is shown by the local tree, and
-  // showing it twice would read as two chats.
-  const rows = list.data.chats.filter(
-    (chat) => !props.localChatIds.has(chat.identity.chatId),
-  );
-  if (rows.length === 0) return null;
-
   return (
     <div className="flex w-full flex-col gap-0.5">
       <p className="px-2 py-1 text-xs font-medium text-muted-foreground">
         On your other devices
       </p>
-      {rows.map((chat) => (
+      {state.rows.map((chat) => (
         <CloudChatRow
-          key={rowKeyOf(chat.identity)}
+          key={cloudChatRowKey(chat.identity)}
           chat={chat}
           onOpen={() => setOpenChat(chat)}
         />
@@ -123,15 +131,4 @@ function CloudChatRow(props: {
       )}
     </button>
   );
-}
-
-/**
- * A row key over the whole identity triple.
- *
- * `chatId` alone is host-minted and two hosts can mint the same one under a
- * task, so keying on it would collapse two genuinely different chats into one
- * React element - and swap their content when the list reorders.
- */
-function rowKeyOf(identity: CloudChatIdentity): string {
-  return `${identity.taskId}:${identity.ownerUserId}:${identity.chatId}`;
 }

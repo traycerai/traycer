@@ -111,6 +111,7 @@ import {
   type AgentActivityTier,
   useEpicArchivedNodeIds,
   useEpicArtifactRecords,
+  useEpicChatIds,
   useEpicConnectionStatus,
   useEpicNodeArchived,
   useEpicNodeUpdatedAt,
@@ -121,6 +122,7 @@ import {
   useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
+import { EpicSidebarCloudChats } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chats";
 import { AgentRoleBadges } from "./agent-role-badges";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -603,6 +605,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => combineVisibleIds(originVisibleIds, archiveHiddenIds, tree),
     [originVisibleIds, archiveHiddenIds, tree],
   );
+  // Resolved once here and threaded down, matching how this body already
+  // handles every other epic-level fact: the section is a pure function of its
+  // props, so it stays testable without an open-epic store.
+  const localChatIds = useEpicChatIds();
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -815,6 +821,18 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                 <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
                   <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
                     {panelContent}
+                    {/* Below the local tree, and OUTSIDE the empty-state
+                        branches on purpose: "no agents yet" is a statement
+                        about this device, and the case where it is true while
+                        another device has published chats is exactly the one
+                        this section exists for. It renders nothing at all when
+                        there is nothing to add - an older host, no viewer, or
+                        no cloud-only chats - so the ordinary sidebar is
+                        unchanged. */}
+                    <EpicSidebarCloudChats
+                      taskId={epicId}
+                      localChatIds={localChatIds}
+                    />
                   </SidebarGroupContent>
                 </SidebarGroup>
               </SidebarContent>

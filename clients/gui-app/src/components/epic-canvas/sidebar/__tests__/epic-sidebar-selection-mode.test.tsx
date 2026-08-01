@@ -371,6 +371,26 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   }),
 }));
 
+/**
+ * The cloud-chat section's LIST, stubbed to "nothing to add".
+ *
+ * The chat panel mounts that section, and its list is an ordinary host query -
+ * so leaving it real would need this suite to supply a `QueryClientProvider`
+ * and a host-client stub complete enough for `useReactiveHostReadiness`, for a
+ * section that renders nothing here either way. The component itself stays
+ * real, so its hidden path is still exercised; its rules are asserted in
+ * `cloud-chat-section-state.test.ts`.
+ */
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatList: () => ({
+    data: undefined,
+    isError: false,
+    isPending: true,
+    isFetching: false,
+  }),
+  useCloudChatPayload: () => ({ data: undefined, isError: false }),
+}));
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
 }));
@@ -529,6 +549,10 @@ vi.mock("@/lib/epic-selectors", () => ({
   },
   useEpicArchivedNodeIds: () => testState.archivedIds,
   useEpicArtifactRecords: () => testState.records,
+  // Dedup input for the cloud-chat section. Empty: this suite is about the
+  // LOCAL tree, and the section hides itself when the cloud list has nothing
+  // to add - which, with no host client bound here, it never does.
+  useEpicChatIds: () => [],
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicChatHarnessId: (nodeId: string) =>
