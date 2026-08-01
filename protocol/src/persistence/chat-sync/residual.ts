@@ -27,6 +27,12 @@ import { z } from "zod";
  * keep precise types, and the bag is something a reader has to reach for on
  * purpose rather than something it can confuse with modeled state.
  *
+ * The "mechanically lossless" claim above holds per LEVEL, and one level is an
+ * exception a minor author has to know about: the `shard` bag never reaches a
+ * re-publishing reader at all, because assembly folds shards into one chat and
+ * keeps only the head's. See the COMPAT section in `captured-levels.ts` for
+ * what a same-major minor may and may not put on a shard record.
+ *
  * ## Why `z.preprocess`
  *
  * Capture has to see the ORIGINAL input. Zod's object parser rebuilds its

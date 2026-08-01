@@ -19,6 +19,43 @@
  * The declared-key table below is what pins that: a restructure fails here
  * rather than in a clone.
  *
+ * ## COMPAT: the `shard` level does not survive re-publication
+ *
+ * Residual capture makes a newer minor's unmodeled fields survive an older
+ * READER. It does not, at the `shard` level, make them survive an older
+ * READER THAT RE-PUBLISHES - and a clone target is exactly that.
+ *
+ * Assembly folds a publication's shards into one chat and retains only the
+ * HEAD's residual, so a shard record's own top-level bag never reaches a
+ * caller at all. That is not an oversight to fix: cohort boundaries are a
+ * deterministic re-cut over the CURRENT projection, so a clone re-shards from
+ * its own state and the source's shards do not exist on the other side. There
+ * is no coherent object left to attach a per-shard bag to.
+ *
+ * The rule that follows, and it binds every SAME-MAJOR minor of `chat-shard`:
+ *
+ * > A minor may add a top-level `chat-shard` field for a reader to display or
+ * > a writer to emit. It must NOT put load-bearing CHAT-LEVEL data there -
+ * > anything the chat is still true without on the other side of a clone.
+ * > Durable additions go head-level (one per publication, carried) or
+ * > message-level (inside the entries, which assembly concatenates).
+ *
+ * The distinction is between per-PUBLICATION bookkeeping, which is what the
+ * shard record is for and which a re-publication legitimately re-derives, and
+ * chat state, which the shard record is the wrong home for at any minor.
+ *
+ * A same-major minor that gets this wrong loses data silently: an older client
+ * clones the chat, the field is simply absent from the re-published shards, and
+ * nothing anywhere reports a loss. The client surface states the gap explicitly
+ * for that reason - see `chatCloneResidualsOf`, where `shard` is recorded
+ * `{ kind: "unavailable" }` rather than `dropped`, because the difference
+ * between "we chose not to carry it" and "it never reached us" is the whole
+ * content of that table.
+ *
+ * `hostPrivate` under a GRADUATED shard is not an exception to this: it is one
+ * schema instance and one level, and a clone blanks it deliberately (origin-host
+ * session state must not follow a chat onto a new machine).
+ *
  * ## Why there are no extract/replace accessors yet
  *
  * The v1 design carried typed accessors per level so a host could persist

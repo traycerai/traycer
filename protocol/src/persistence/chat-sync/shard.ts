@@ -61,6 +61,16 @@ import { z } from "zod";
  * prefix, and readers never parse keys. A shard also carries no watermark: the
  * head owns `throughRecordSeq` for the publication as a whole, and duplicating
  * it per part would invent a second thing to disagree.
+ *
+ * ## COMPAT: what a same-major minor may add HERE
+ *
+ * The `shard` residual bag does not survive a clone's re-publication - assembly
+ * keeps only the head's, and a clone re-shards from its own projection, so
+ * there is nothing left to attach a per-shard bag to. A minor may therefore add
+ * a top-level field here for per-PUBLICATION bookkeeping, but must not put
+ * load-bearing chat-level data on this record: durable additions go head-level
+ * or message-level. `captured-levels.ts` states the rule and why it is not an
+ * oversight to fix.
  */
 
 export const chatShardSectionSchema = z.enum([
