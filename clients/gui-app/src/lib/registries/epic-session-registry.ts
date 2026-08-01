@@ -8,11 +8,21 @@ import type {
   EpicStreamClientFactory,
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { releaseDesktopEpicOwnershipForEpic } from "@/lib/windows/desktop-epic-ownership";
 
 export const EpicSessionContext = createContext<OpenEpicStoreHandle | null>(
   null,
 );
+
+/**
+ * The RPC client resolved for the same host that owns `EpicSessionContext`.
+ * Session-level provisioning prevents sidebar rows from independently mounting
+ * host-directory subscriptions just to address the same Epic host.
+ */
+export const EpicSessionHostClientContext =
+  createContext<HostClient<HostRpcRegistry> | null>(null);
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
 

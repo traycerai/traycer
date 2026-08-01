@@ -25,8 +25,7 @@ import {
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
@@ -307,9 +306,7 @@ function useEpicArchiveChatMutation(
   HostRpcError,
   SetChatArchivedRequest
 > {
-  const epicHostId = useEpicSessionHostId();
-  const resolvedClient = useHostClientForHostId(epicHostId);
-  const client = epicHostId === null ? null : resolvedClient;
+  const client = useEpicSessionHostClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.setChatArchived",

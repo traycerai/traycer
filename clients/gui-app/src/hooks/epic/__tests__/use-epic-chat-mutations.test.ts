@@ -41,12 +41,8 @@ const {
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ request: vi.fn() }),
 }));
-vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
-  useEpicSessionHostId: () => "epic-session-host-test",
-}));
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) =>
-    hostId === "epic-session-host-test" ? epicSessionHostClient : null,
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => epicSessionHostClient,
 }));
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
