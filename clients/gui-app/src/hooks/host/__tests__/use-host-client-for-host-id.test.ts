@@ -44,15 +44,25 @@ const TARGET_B: HostDirectoryEntry = {
   websocketUrl: "ws://127.0.0.1:59999/stream",
 };
 
-function buildGlobalClient(): HostClient<HostRpcRegistry> {
+function buildGlobalClient(
+  listDirectory: () => readonly HostDirectoryEntry[],
+): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+} {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers: {
+      "terminal.kill": () => ({ killed: true }),
+    },
+  });
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {},
-    }),
+    messenger,
+    findHostById: (hostId) =>
+      listDirectory().find((entry) => entry.hostId === hostId) ?? null,
   });
   client.bind(mockLocalHostEntry);
   client.setRequestContext(
@@ -61,7 +71,7 @@ function buildGlobalClient(): HostClient<HostRpcRegistry> {
       bearerToken: "tok-1",
     }),
   );
-  return client;
+  return { client, messenger };
 }
 
 describe("useHostClientForHostId", () => {
@@ -71,19 +81,25 @@ describe("useHostClientForHostId", () => {
     directoryState.data = undefined;
   });
 
-  it("keeps the bound default client while its directory snapshot hydrates", () => {
-    const globalClient = buildGlobalClient();
+  it("pins the bound default host while its Query snapshot hydrates", () => {
+    const { client: globalClient } = buildGlobalClient(() => [
+      mockLocalHostEntry,
+    ]);
     globalClientRef.value = globalClient;
 
     const { result } = renderHook(() =>
       useHostClientForHostId(mockLocalHostEntry.hostId),
     );
 
-    expect(result.current).toBe(globalClient);
+    expect(result.current).not.toBe(globalClient);
+    expect(result.current?.getActiveHostId()).toBe(mockLocalHostEntry.hostId);
   });
 
   it("builds a transient client for a different hydrated host", () => {
-    const globalClient = buildGlobalClient();
+    const { client: globalClient } = buildGlobalClient(() => [
+      mockLocalHostEntry,
+      TARGET_B,
+    ]);
     globalClientRef.value = globalClient;
     directoryState.data = [TARGET_B];
 
@@ -91,5 +107,39 @@ describe("useHostClientForHostId", () => {
 
     expect(result.current).not.toBe(globalClient);
     expect(result.current?.getActiveHostId()).toBe("host-b");
+  });
+
+  it("keeps an explicit requester pinned when the default host switches", async () => {
+    const { client: globalClient, messenger } = buildGlobalClient(() => [
+      mockLocalHostEntry,
+      TARGET_B,
+    ]);
+    globalClientRef.value = globalClient;
+
+    const { result } = renderHook(() =>
+      useHostClientForHostId(mockLocalHostEntry.hostId),
+    );
+    const pinnedClient = result.current;
+    expect(pinnedClient).not.toBeNull();
+    expect(pinnedClient).not.toBe(globalClient);
+    if (pinnedClient === null) {
+      throw new Error("Expected an explicit-host requester");
+    }
+
+    // The switch happens without a React re-render, matching the vulnerable
+    // window between a HostClient change event and React consuming that event.
+    globalClient.bind(TARGET_B);
+    await expect(
+      pinnedClient.request("terminal.kill", { sessionId: "session-a" }),
+    ).resolves.toEqual({ killed: true });
+
+    expect(globalClient.getActiveHostId()).toBe("host-b");
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]?.authority.endpoint.hostId).toBe(
+      mockLocalHostEntry.hostId,
+    );
+    expect(messenger.calls[0]?.authority.endpoint.websocketUrl).toBe(
+      mockLocalHostEntry.websocketUrl,
+    );
   });
 });
