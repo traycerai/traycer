@@ -109,73 +109,112 @@ describe("chat activity grouping", () => {
     ]);
   });
 
-  it("promotes reasoning to its own segment before operational activity", () => {
+  it("folds a completed reasoning block into the following activity group", () => {
     const timeline = buildCompleteTimeline([
-      reasoningSegment("reasoning-1", false),
+      reasoningSegment("reasoning-1", false, 2000),
       commandSegment("command-1", "bun test", false),
     ]);
 
-    expect(timeline.map((item) => item.kind)).toEqual([
-      "segment",
-      "activity_group",
-    ]);
-    if (timeline[0]?.kind !== "segment") {
-      throw new Error("Expected promoted reasoning segment");
+    expect(timeline.map((item) => item.kind)).toEqual(["activity_group"]);
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected a single merged activity group");
     }
-    expect(timeline[0].segment.kind).toBe("reasoning");
-    if (timeline[1]?.kind !== "activity_group") {
-      throw new Error("Expected operational activity group");
-    }
-    expect(timeline[1].group.summary).toBe("Ran 1 command");
-    expect(timeline[1].group.segments.map((segment) => segment.kind)).toEqual([
+    expect(timeline[0].group.summary).toBe("Thought for 2s, ran 1 command");
+    expect(timeline[0].group.segments.map((segment) => segment.kind)).toEqual([
+      "reasoning",
       "command",
     ]);
   });
 
-  it("promotes each reasoning block between operational phases", () => {
+  it("accumulates duration across every reasoning block in the run", () => {
     const timeline = buildCompleteTimeline([
-      reasoningSegment("reasoning-1", false),
+      reasoningSegment("reasoning-1", false, 2000),
       commandSegment("command-1", "pwd", false),
-      reasoningSegment("reasoning-2", false),
+      reasoningSegment("reasoning-2", false, 4000),
       toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
     ]);
 
-    expect(timeline.map((item) => item.kind)).toEqual([
-      "segment",
-      "activity_group",
-      "segment",
-      "activity_group",
-    ]);
-    if (timeline[1]?.kind !== "activity_group") {
-      throw new Error("Expected first activity group");
+    expect(timeline.map((item) => item.kind)).toEqual(["activity_group"]);
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected a single merged activity group");
     }
-    expect(timeline[1].group.summary).toBe("Ran 1 command");
-    if (timeline[3]?.kind !== "activity_group") {
-      throw new Error("Expected second activity group");
-    }
-    expect(timeline[3].group.summary).toBe("Read 1 file");
-    expect(timeline[3].group.segments.map((segment) => segment.kind)).toEqual([
+    expect(timeline[0].group.summary).toBe(
+      "Thought for 6s, read 1 file, ran 1 command",
+    );
+    expect(timeline[0].group.segments.map((segment) => segment.kind)).toEqual([
+      "reasoning",
+      "command",
+      "reasoning",
       "tool",
     ]);
   });
 
-  it("renders consecutive reasoning blocks as standalone segments", () => {
+  it("merges consecutive completed reasoning blocks and still breaks on text", () => {
     const timeline = buildCompleteTimeline([
-      reasoningSegment("reasoning-1", false),
-      reasoningSegment("reasoning-2", false),
+      reasoningSegment("reasoning-1", false, 1000),
+      reasoningSegment("reasoning-2", false, 1000),
       textSegment("text-1", "Done"),
     ]);
 
     expect(timeline.map((item) => item.kind)).toEqual([
-      "segment",
-      "segment",
+      "activity_group",
       "segment",
     ]);
-    expect(
-      timeline.map((item) =>
-        item.kind === "segment" ? item.segment.kind : item.kind,
-      ),
-    ).toEqual(["reasoning", "reasoning", "text"]);
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected a single merged activity group");
+    }
+    expect(timeline[0].group.summary).toBe("Thought for 2s");
+    expect(timeline[0].group.segments.map((segment) => segment.kind)).toEqual([
+      "reasoning",
+      "reasoning",
+    ]);
+    if (timeline[1]?.kind !== "segment") {
+      throw new Error("Expected the trailing text segment");
+    }
+    expect(timeline[1].segment.kind).toBe("text");
+  });
+
+  it("keeps a still-streaming reasoning block standalone, then folds it in once complete", () => {
+    const streamingTimeline = buildCompleteTimeline([
+      commandSegment("command-1", "pwd", false),
+      reasoningSegment("reasoning-1", true, null),
+    ]);
+
+    expect(streamingTimeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+    ]);
+    if (streamingTimeline[1]?.kind !== "segment") {
+      throw new Error("Expected the streaming reasoning block to stand alone");
+    }
+    expect(streamingTimeline[1].segment.kind).toBe("reasoning");
+
+    const completedTimeline = buildCompleteTimeline([
+      commandSegment("command-1", "pwd", false),
+      reasoningSegment("reasoning-1", false, 3000),
+    ]);
+
+    expect(completedTimeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+    ]);
+    if (completedTimeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected the completed reasoning to fold in");
+    }
+    expect(completedTimeline[0].group.summary).toBe(
+      "Thought for 3s, ran 1 command",
+    );
+  });
+
+  it("renders a lone completed reasoning block as a plain segment, not a group", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 3000),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual(["segment"]);
+    if (timeline[0]?.kind !== "segment") {
+      throw new Error("Expected a plain reasoning segment, not a group");
+    }
+    expect(timeline[0].segment.kind).toBe("reasoning");
   });
 
   it("keeps streaming activity active with a stable summary label", () => {
@@ -904,13 +943,17 @@ function subagentSegment(
   };
 }
 
-function reasoningSegment(id: string, isStreaming: boolean): MessageSegment {
+function reasoningSegment(
+  id: string,
+  isStreaming: boolean,
+  durationMs: number | null,
+): MessageSegment {
   return {
     id,
     kind: "reasoning",
     markdown: "Thinking",
     isStreaming,
-    durationMs: null,
+    durationMs,
   };
 }
 

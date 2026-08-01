@@ -7,6 +7,7 @@ import {
   toolUseIdFromInterviewBlockId,
 } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { filePathFromInputDetail } from "@/lib/segment-summary";
+import { formatClockDuration } from "@/lib/format-duration";
 import { formatSingleLine } from "@/lib/utils";
 import type {
   ApprovalSegment,
@@ -14,6 +15,7 @@ import type {
   FileChangeSegment,
   InterviewSegment,
   MessageSegment,
+  ReasoningSegment,
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
@@ -29,9 +31,11 @@ export type ActivitySegment =
   | SubagentSegment
   | ApprovalSegment;
 
-// Reasoning is promoted to its own inline segment; activity groups carry only
-// operational activity.
-export type ActivityGroupDetailSegment = ActivitySegment;
+// A completed reasoning block folds into the surrounding activity group (its
+// duration accumulates into the "Thought for Xm Ys" summary clause). A
+// still-streaming one is excluded here - it stands on its own with the live
+// "Thinking" UI until it completes, then the next timeline build absorbs it.
+export type ActivityGroupDetailSegment = ActivitySegment | ReasoningSegment;
 
 export interface ActivityGroupModel {
   readonly id: string;
@@ -73,6 +77,8 @@ export type ChatActivityTimelineItem =
     };
 
 interface ActivitySummaryCounts {
+  // Summed duration of every completed reasoning block folded into the group.
+  thinkingDurationMs: number;
   exploredFiles: number;
   readFiles: number;
   searched: number;
@@ -160,6 +166,7 @@ const RUN_TOOL_NAMES = new Set(["bash", "shell", "run_command", "command"]);
 
 function createEmptyCounts(): ActivitySummaryCounts {
   return {
+    thinkingDurationMs: 0,
     exploredFiles: 0,
     readFiles: 0,
     searched: 0,
@@ -220,6 +227,17 @@ function buildChatActivityTimelineImpl(
 
   const flushRun = (): void => {
     if (run.length === 0) return;
+    // A lone reasoning block has nothing to summarize alongside it - wrapping
+    // it in a group would render its "Thought for Xs" header twice (once as
+    // the group summary, once as the child's own header). Render it as the
+    // plain standalone reasoning segment instead, same as before it could
+    // join a group.
+    if (run.length === 1 && run[0].kind === "reasoning") {
+      const only = run[0];
+      out.push({ kind: "segment", id: only.id, segment: only });
+      run = [];
+      return;
+    }
     const group = activityGroupFromRun(run);
     out.push({ kind: "activity_group", id: group.id, group });
     run = [];
@@ -274,9 +292,10 @@ function buildChatActivityTimelineImpl(
       run.push(segment);
       continue;
     }
-    // Everything else - reasoning (now a first-class inline segment), text,
-    // etc. - stands on its own in chronological position rather than folding
-    // into the operational activity group.
+    // Everything else - a still-streaming reasoning block, text, etc. -
+    // stands on its own in chronological position rather than folding into
+    // the activity group. A streaming reasoning block joins the next group
+    // once it completes (isActivitySegment admits completed reasoning).
     flushRun();
     out.push({ kind: "segment", id: segment.id, segment });
   }
@@ -318,6 +337,7 @@ export function activityGroupSummary(
   const counts = createEmptyCounts();
   segments.forEach((segment) => countActivitySegment(counts, segment));
   const parts = [
+    thinkingPhrase(counts.thinkingDurationMs),
     countPhrase(counts.exploredFiles, "explored", "file", "files"),
     countPhrase(counts.readFiles, "read", "file", "files"),
     countPhrase(counts.searched, "searched", "place", "places"),
@@ -504,7 +524,7 @@ function markTrailingActivityGroupActive(
 
 function isActivitySegment(
   segment: MessageSegment,
-): segment is ActivitySegment {
+): segment is ActivityGroupDetailSegment {
   if (
     segment.kind === "tool" ||
     segment.kind === "command" ||
@@ -513,10 +533,16 @@ function isActivitySegment(
   ) {
     return true;
   }
-  return segment.kind === "approval" && segment.decision !== null;
+  if (segment.kind === "approval") return segment.decision !== null;
+  // A streaming reasoning block stays standalone with its live "Thinking" UI;
+  // only a completed one folds into the group.
+  if (segment.kind === "reasoning") return !segment.isStreaming;
+  return false;
 }
 
-function isStreamingActivitySegment(segment: ActivitySegment): boolean {
+function isStreamingActivitySegment(
+  segment: ActivityGroupDetailSegment,
+): boolean {
   if (segment.kind === "approval") return false;
   return segment.isStreaming;
 }
@@ -556,8 +582,14 @@ function isSuppressedQuestionTool(
 
 function countActivitySegment(
   counts: ActivitySummaryCounts,
-  segment: ActivitySegment,
+  segment: ActivityGroupDetailSegment,
 ): void {
+  if (segment.kind === "reasoning") {
+    if (segment.durationMs !== null) {
+      counts.thinkingDurationMs += segment.durationMs;
+    }
+    return;
+  }
   if (segment.kind === "command") {
     counts.ranCommands += 1;
     return;
@@ -629,6 +661,12 @@ function countPhrase(
 ): string | null {
   if (count === 0) return null;
   return `${verb} ${count} ${count === 1 ? singular : plural}`;
+}
+
+function thinkingPhrase(thinkingDurationMs: number): string | null {
+  if (thinkingDurationMs <= 0) return null;
+  const seconds = Math.max(1, Math.round(thinkingDurationMs / 1000));
+  return `thought for ${formatClockDuration(seconds)}`;
 }
 
 function capitalizeFirst(value: string): string {

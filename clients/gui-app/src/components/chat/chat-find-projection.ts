@@ -432,6 +432,8 @@ function activityGroupChildHeaderSearchText(
       return approvalHeaderSearchText(segment);
     case "subagent":
       return [];
+    case "reasoning":
+      return reasoningSegmentSearchText(segment);
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;
