@@ -79,7 +79,10 @@ import {
 } from "@/hooks/epic/use-epic-chat-mutations";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
-import type { SetChatArchivedResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  SetChatArchivedRequest,
+  SetChatArchivedResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -316,5 +319,39 @@ describe("useEpicArchiveChats", () => {
         "fulfilled",
       ]);
     });
+  });
+
+  it("keeps mixed outcomes ordered and reports one batch failure", async () => {
+    archiveChatMutateAsync.mockImplementation(
+      (input: SetChatArchivedRequest) =>
+        input.chatId === "chat-1"
+          ? Promise.resolve({ updated: true })
+          : Promise.reject(makeError("RPC_ERROR")),
+    );
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+    const childOptions = getCapturedMutation("epic.setChatArchived")
+      .options as { readonly onError: unknown };
+    expect(childOptions.onError).toBeUndefined();
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chatIds: ["chat-1", "chat-2"],
+        archived: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.data?.map((entry) => entry.status)).toEqual([
+        "fulfilled",
+        "rejected",
+      ]);
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't archive some selected agents.",
+    );
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 });

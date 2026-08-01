@@ -18,7 +18,10 @@ import type {
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  toHostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -291,6 +294,16 @@ export function useEpicArchiveChat(): UseMutationResult<
   HostRpcError,
   SetChatArchivedRequest
 > {
+  return useEpicArchiveChatMutation("individual");
+}
+
+function useEpicArchiveChatMutation(
+  failurePresentation: "individual" | "aggregate",
+): UseMutationResult<
+  SetChatArchivedResponse,
+  HostRpcError,
+  SetChatArchivedRequest
+> {
   const client = useHostClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -303,27 +316,32 @@ export function useEpicArchiveChat(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.setChatArchived(),
-      onError: (error) => {
-        // EVERY failure mode gets the same generic toast, including
-        // `E_HOST_UNSUPPORTED`. The renderer cannot discriminate them anyway:
-        // the wire error envelope is `{ code, message }` only - there is no
-        // status field on `HostRpcError` - and the specific reason travels in
-        // the message, which must not be parsed.
-        //
-        // Archive is USER-INITIATED, so it follows the foreground convention
-        // (`toastFromHostError`) rather than the background one
-        // (`toastFromBackgroundHostError`, the only helper that swallows
-        // `E_HOST_UNSUPPORTED` - it exists for work nobody asked for, where
-        // there is no one to inform). Someone clicked this control and expects
-        // an outcome; staying silent would read as a broken button.
-        //
-        // The capability gate keeps this path cold: the affordance is hidden
-        // unless that host advertised the method, so reaching it means the host
-        // changed under a live session - an anomaly worth surfacing. A missing
-        // record likewise surfaces as an ordinary failure, which is right since
-        // the row is about to leave the tree.
-        toastFromHostError(error, "Couldn't archive agent.");
-      },
+      onError:
+        failurePresentation === "individual"
+          ? (error) => {
+              // EVERY failure mode gets the same generic toast, including
+              // `E_HOST_UNSUPPORTED`. The renderer cannot discriminate them
+              // anyway: the wire error envelope is `{ code, message }` only -
+              // there is no status field on `HostRpcError` - and the specific
+              // reason travels in the message, which must not be parsed.
+              //
+              // Archive is USER-INITIATED, so it follows the foreground
+              // convention (`toastFromHostError`) rather than the background
+              // one (`toastFromBackgroundHostError`, the only helper that
+              // swallows `E_HOST_UNSUPPORTED` - it exists for work nobody asked
+              // for, where there is no one to inform). Someone clicked this
+              // control and expects an outcome; staying silent would read as a
+              // broken button.
+              //
+              // The capability gate keeps this path cold: the affordance is
+              // hidden unless that host advertised the method, so reaching it
+              // means the host changed under a live session - an anomaly worth
+              // surfacing. A missing record likewise surfaces as an ordinary
+              // failure, which is right since the row is about to leave the
+              // tree.
+              toastFromHostError(error, "Couldn't archive agent.");
+            }
+          : undefined,
     },
   });
 }
@@ -340,9 +358,9 @@ export type ArchiveChatsMutationResult =
 /**
  * Query-owned lifecycle for a user-initiated archive batch.
  *
- * Each record still travels through `useEpicArchiveChat`, preserving the host
- * RPC gate and per-record error handling. This aggregate mutation owns the
- * batch pending state and returns every outcome so the caller can reconcile
+ * Each record still travels through the archive host mutation, preserving the
+ * RPC gate. This aggregate mutation owns pending state and failure
+ * presentation, and returns every outcome so the caller can reconcile
  * successful selections without discarding failures.
  */
 export function useEpicArchiveChats(): UseMutationResult<
@@ -350,7 +368,7 @@ export function useEpicArchiveChats(): UseMutationResult<
   Error,
   ArchiveChatsMutationInput
 > {
-  const archiveChat = useEpicArchiveChat();
+  const archiveChat = useEpicArchiveChatMutation("aggregate");
   return useMutation<
     ArchiveChatsMutationResult,
     Error,
@@ -367,6 +385,18 @@ export function useEpicArchiveChats(): UseMutationResult<
           }),
         ),
       ),
+    onSuccess: (results) => {
+      const firstFailure = results.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (firstFailure === undefined) return;
+      const reason: unknown = firstFailure.reason;
+      toastFromHostError(
+        toHostRpcError(reason, "epic.setChatArchived"),
+        "Couldn't archive some selected agents.",
+      );
+    },
   });
 }
 

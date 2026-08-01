@@ -112,6 +112,7 @@ interface TestState {
   /** Ids whose record carries a non-null `archivedAt`. */
   archivedIds: readonly string[];
   archiveMutate: Mock;
+  archiveBatchPending: boolean;
   archiveMutateAsync: Mock<
     (input: {
       readonly epicId: string;
@@ -170,6 +171,7 @@ const testState = vi.hoisted<TestState>(() => ({
   showArchived: false,
   archivedIds: [],
   archiveMutate: vi.fn(),
+  archiveBatchPending: false,
   archiveMutateAsync: vi.fn(),
   rowHostId: "host-1",
   rowHostEntry: { hostId: "host-1" },
@@ -379,7 +381,7 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicArchiveChats: () => ({
-    isPending: false,
+    isPending: testState.archiveBatchPending,
     mutate: (
       variables: {
         readonly epicId: string;
@@ -392,6 +394,7 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
         ) => void;
       },
     ) => {
+      testState.archiveBatchPending = true;
       void Promise.allSettled(
         variables.chatIds.map((chatId) =>
           testState.archiveMutateAsync({
@@ -400,7 +403,10 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
             archived: variables.archived,
           }),
         ),
-      ).then(options.onSuccess);
+      ).then((results) => {
+        testState.archiveBatchPending = false;
+        options.onSuccess(results);
+      });
     },
   }),
   useEpicArchiveChat: () => ({
@@ -789,6 +795,7 @@ describe("epic sidebar selection mode", () => {
     testState.showArchived = false;
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
+    testState.archiveBatchPending = false;
     testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
@@ -936,11 +943,29 @@ describe("epic sidebar selection mode", () => {
     testState.archiveMutateAsync.mockReturnValue(archivePromise);
     seedChatTree();
 
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
     fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
     fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Select all" }).matches(":disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Cancel selection" })
+        .matches(":disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-chats")
+        .matches(":disabled"),
+    ).toBe(true);
     fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-root"));
 
     resolveArchive({ updated: true });
@@ -2962,6 +2987,7 @@ describe("chat row archive", () => {
     testState.showArchived = false;
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
+    testState.archiveBatchPending = false;
     testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
