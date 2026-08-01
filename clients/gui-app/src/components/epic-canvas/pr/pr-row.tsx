@@ -422,16 +422,25 @@ function PrChecksBadge(props: {
         variant="outline"
         className={cn(
           BADGE_CLASS,
+          // Same `min-w-0 shrink` contract as the review badge, and for the
+          // same reason. Left at the variant's `shrink-0` this badge could not
+          // give a pixel back, so between the width that drops the review badge
+          // and the one that drops this one, "N running" simply outgrew the
+          // flex-1 column - and since that column is `min-w-0` (so it MAY be
+          // narrower than its content) with overflow visible, the surplus
+          // painted straight over the comment count and timestamp pinned right.
           // Dropped only at the extreme, after the review badge has already
           // gone: its label is short, so it stays readable far longer.
-          "shrink-0 tabular-nums @max-[13rem]:hidden",
+          "min-w-0 shrink tabular-nums @max-[13rem]:hidden",
           tone.surface,
         )}
         data-testid="pr-row-checks"
         data-tone={props.summary.tone}
       >
         <tone.Icon className={cn("size-3 shrink-0", tone.glyph)} aria-hidden />
-        {props.summary.label}
+        {/* Truncation needs its own box: the badge is the flex CONTAINER, so a
+            bare text node here would overflow instead of ellipsing. */}
+        <span className="truncate">{props.summary.label}</span>
       </Badge>
     </TooltipWrapper>
   );

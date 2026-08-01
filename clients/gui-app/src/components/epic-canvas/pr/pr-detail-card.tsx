@@ -23,6 +23,8 @@ import {
   prReviewDecisionTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
+import { usePresentPrOwners } from "@/hooks/pr/use-present-pr-owners";
+import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { cn } from "@/lib/utils";
 
@@ -192,16 +194,48 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
           a reader returns to, which is why they sit in the always-visible card
           rather than in a header that scrolls past. */}
       {props.core.owners.length > 0 ? (
-        <PrCardSection heading="Chats">
-          <PrOwnerBadges
+        <EpicSessionGate fallback={null}>
+          <PrOwnerCardSection
             owners={props.core.owners}
             epicId={props.epicId}
             fallbackHostId={tabHostId}
-            className={undefined}
           />
-        </PrCardSection>
+        </EpicSessionGate>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The "Chats" section, present only when an owner survives to fill it.
+ *
+ * The raw owner array cannot decide that. A PR keeps naming chats the user
+ * deleted (worktree bindings cascade on epic delete, not on chat delete), and
+ * `PrOwnerBadges` drops those - so gating the section on `core.owners` would
+ * leave a bordered heading standing over nothing for exactly the all-deleted
+ * case the dropping exists to clean up. The heading has to answer to the same
+ * surviving set its contents do.
+ *
+ * Re-filtering inside `PrOwnerBadges` is free: `usePresentPrOwners` returns the
+ * caller's own array when it drops nothing, so the second pass is identity-
+ * stable and re-renders no chip.
+ */
+function PrOwnerCardSection(props: {
+  readonly owners: PrDetailCore["owners"];
+  readonly epicId: string;
+  readonly fallbackHostId: string | null;
+}): ReactNode {
+  const owners = usePresentPrOwners(props.owners);
+  if (owners.length === 0) return null;
+  return (
+    <PrCardSection heading="Chats">
+      <PrOwnerBadges
+        owners={owners}
+        epicId={props.epicId}
+        fallbackHostId={props.fallbackHostId}
+        className={undefined}
+      />
+    </PrCardSection>
   );
 }
 
