@@ -36,6 +36,7 @@ import type {
   SupportSubmitReportResult,
   WindowSummary,
 } from "../../ipc-contracts/window-types";
+import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 import type {
   CredentialsMigrationOutcome,
   StoredAuthTokens,
@@ -597,6 +598,35 @@ export class RunnerIpcBridge {
       RunnerHostEvent.notificationClick,
       payload,
     );
+  }
+
+  /**
+   * Relays a renderer-owned notification to the focused renderer when the
+   * emitter lives in another window. The originating renderer already drew
+   * its own toast, so same-window focus needs no duplicate delivery.
+   */
+  deliverForegroundNotificationDisplay(
+    senderWebContentsId: number | null,
+    display: DesktopNotificationForegroundDisplay,
+  ): boolean {
+    const focused = this.windowRegistry
+      .records()
+      .find(
+        (record) => !record.window.isDestroyed() && record.window.isFocused(),
+      );
+    if (focused === undefined) return false;
+    if (focused.webContentsId === senderWebContentsId) return true;
+    const delivered = this.safeSendToWindow(
+      focused.windowId,
+      RunnerHostEvent.notificationForegroundDisplay,
+      display,
+    );
+    if (!delivered) {
+      log.warn("[runner-ipc] foreground notification relay failed", {
+        windowId: focused.windowId,
+      });
+    }
+    return delivered;
   }
 
   /**

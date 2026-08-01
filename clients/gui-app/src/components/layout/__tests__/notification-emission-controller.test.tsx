@@ -343,6 +343,113 @@ describe("NotificationEmissionController", () => {
     expect(runnerHost.notificationsSent[0]?.body).toBe("Details");
   });
 
+  it("displays and records a background renderer notification relayed to this focused renderer", async () => {
+    const runnerHost = createRunnerHost();
+    renderController(runnerHost);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const backgroundEntry = {
+      ...persistedAppLocalEntry(null),
+      id: "host.error:background-renderer",
+      sourceRef: "background-renderer",
+      message: "Background renderer failed",
+      detail: "Terminal stream ended unexpectedly",
+    };
+    const version = {
+      userId: "user-1",
+      notificationId: backgroundEntry.id,
+      updatedAt: backgroundEntry.updatedAt,
+    };
+
+    act(() => {
+      runnerHost.emitForegroundNotificationDisplay({
+        title: backgroundEntry.message,
+        body: backgroundEntry.detail,
+        payload: null,
+        replaceKey: `app-local:${backgroundEntry.id}`,
+        deliveryKey: `${version.userId}:${version.notificationId}:${version.updatedAt}`,
+        foregroundAppLocal: {
+          userId: version.userId,
+          entry: backgroundEntry,
+        },
+      });
+    });
+
+    expect(toastCalls).toHaveLength(1);
+    expect(toastCalls[0]?.title).toBe(backgroundEntry.message);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[backgroundEntry.id]
+        .displayedUpdatedAt,
+    ).toBe(backgroundEntry.updatedAt);
+    expect(hasAppLocalDisplayReceipt(version)).toBe(true);
+    expect(runnerHost.notificationsSent).toEqual([]);
+
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert(backgroundEntry);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(runnerHost.notificationsSent).toEqual([]);
+    expect(toastCalls).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "another user is active",
+      () => useAppLocalNotificationsStore.getState().activateIdentity("user-2"),
+    ],
+    [
+      "no user is active",
+      () => useAppLocalNotificationsStore.getState().deactivateIdentity(),
+    ],
+  ])(
+    "rejects a relayed app-local notification when %s",
+    async (_scenario, setIdentity) => {
+      setIdentity();
+      const runnerHost = createRunnerHost();
+      renderController(runnerHost);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const foreignEntry = {
+        ...persistedAppLocalEntry(null),
+        id: "host.error:foreign-user",
+        sourceRef: "foreign-user",
+      };
+      const version = {
+        userId: "user-1",
+        notificationId: foreignEntry.id,
+        updatedAt: foreignEntry.updatedAt,
+      };
+
+      act(() => {
+        runnerHost.emitForegroundNotificationDisplay({
+          title: foreignEntry.message,
+          body: foreignEntry.detail ?? "",
+          payload: null,
+          replaceKey: `app-local:${foreignEntry.id}`,
+          deliveryKey: `${version.userId}:${version.notificationId}:${version.updatedAt}`,
+          foregroundAppLocal: {
+            userId: version.userId,
+            entry: foreignEntry,
+          },
+        });
+      });
+
+      expect(toastCalls).toEqual([]);
+      expect(hasAppLocalDisplayReceipt(version)).toBe(false);
+      expect(
+        Object.hasOwn(
+          useAppLocalNotificationsStore.getState().byId,
+          foreignEntry.id,
+        ),
+      ).toBe(false);
+      expect(runnerHost.notificationsSent).toEqual([]);
+    },
+  );
+
   it("does not replay persisted unread notifications during reload hydration", async () => {
     const persisted = persistedAppLocalEntry(undefined);
     const runnerHost = renderPersistedController([persisted]);
