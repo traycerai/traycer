@@ -896,6 +896,9 @@ describe("epic sidebar selection mode", () => {
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
     expect(
+      screen.getByTestId("epic-sidebar-artifact-selection-count").className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
       section.querySelector('[data-panel-header-mode="selection"]'),
     ).not.toBeNull();
   });

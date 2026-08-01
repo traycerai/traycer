@@ -1829,7 +1829,7 @@ function ChatHeaderMoreMenu(props: {
         align="start"
         sideOffset={8}
         avoidCollisions={false}
-        className="min-w-56"
+        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
       >
         <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
         {isEditableRole(permissionRole) ? (
@@ -1870,7 +1870,7 @@ function ArtifactHeaderMoreMenu(props: {
         align="start"
         sideOffset={8}
         avoidCollisions={false}
-        className="min-w-52"
+        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
       >
         {searchAvailable ? (
           <DropdownMenuItem
@@ -1966,7 +1966,8 @@ function SidebarBulkSelectionActions() {
   return (
     <div className="flex items-center gap-0.5">
       <span
-        className="mr-1 whitespace-nowrap text-ui-xs font-medium text-foreground"
+        className="mr-1 whitespace-nowrap text-ui-xs font-medium text-foreground @max-[21rem]:hidden"
+        data-testid="epic-sidebar-artifact-selection-count"
         aria-live="polite"
       >
         {selection.selectedCount} selected
