@@ -115,7 +115,8 @@ export async function decodeCloudChatPayload(
   }
   if (outcome.status === "unavailable") return UNAVAILABLE;
   if (outcome.byteLength > MAX_RENDERED_PAYLOAD_BYTES) return UNAVAILABLE;
-  if (outcome.bytesBase64.length > MAX_ENCODED_PAYLOAD_CHARS) return UNAVAILABLE;
+  if (outcome.bytesBase64.length > MAX_ENCODED_PAYLOAD_CHARS)
+    return UNAVAILABLE;
 
   const bytes = decodeBase64(outcome.bytesBase64);
   if (bytes === null || bytes.byteLength !== outcome.byteLength) {

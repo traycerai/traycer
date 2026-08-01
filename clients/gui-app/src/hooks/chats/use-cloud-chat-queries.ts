@@ -10,7 +10,10 @@ import {
   type HostRpcError,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { readCloudChat, type CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
+import {
+  readCloudChat,
+  type CloudChatRead,
+} from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
 import {
   decodeCloudChatPayload,

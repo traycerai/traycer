@@ -165,8 +165,8 @@ describe("the incremental read", () => {
   it("ABLATION - with no cache, reopening refetches every part", async () => {
     const first = await publishCloudChat(DEFAULT_PUBLISH);
     expect(
-      (await read(recordingPort(servingBehaviour(first)), NO_PART_CACHE)).outcome
-        .kind,
+      (await read(recordingPort(servingBehaviour(first)), NO_PART_CACHE))
+        .outcome.kind,
     ).toBe("ok");
 
     const second = await publishOneMoreTurn();

@@ -208,9 +208,7 @@ describe("reopening a cloud chat", () => {
     await screen.findByText("here is the change");
 
     expect(log.resolves).toHaveLength(1);
-    expect(log.parts).toEqual(
-      first.parts.map((part) => part.address.sha256),
-    );
+    expect(log.parts).toEqual(first.parts.map((part) => part.address.sha256));
 
     // Close. The dialog's content unmounts with it.
     view.rerender(
@@ -249,9 +247,7 @@ describe("reopening a cloud chat", () => {
     // filled, which is the whole incremental-read property.
     expect(log.resolves).toHaveLength(2);
     expect(log.parts).toEqual([second.parts[1].address.sha256]);
-    expect(second.parts[0].address.sha256).toBe(
-      first.parts[0].address.sha256,
-    );
+    expect(second.parts[0].address.sha256).toBe(first.parts[0].address.sha256);
   });
 
   it("does NOT re-read while the dialog stays open", async () => {

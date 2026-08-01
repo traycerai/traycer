@@ -10,7 +10,11 @@ import {
   serializeChatShard,
   type ChatShardRecord,
 } from "@traycer/protocol/persistence/chat-sync/shard";
-import { webCryptoSha256Hex, utf8Bytes, utf8Text } from "@traycer-clients/shared/cloud-chat/bytes";
+import {
+  webCryptoSha256Hex,
+  utf8Bytes,
+  utf8Text,
+} from "@traycer-clients/shared/cloud-chat/bytes";
 import { readCloudChat } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import {
   buildChatCloneSeed,
@@ -41,9 +45,7 @@ import {
  * silent data loss discovered by whoever opens the clone.
  */
 
-async function readPublished(
-  options: PublishOptions,
-): Promise<{
+async function readPublished(options: PublishOptions): Promise<{
   readonly published: PublishedCloudChat;
   readonly chat: AssembledChat;
 }> {
@@ -68,7 +70,9 @@ describe("an unknown block type", () => {
       resolvePayload: NO_PAYLOADS_RESOLVABLE,
     });
     const assistant = presented.messages[1];
-    const future = assistant.blocks.find((block) => block.variant === "holodeck");
+    const future = assistant.blocks.find(
+      (block) => block.variant === "holodeck",
+    );
 
     // Present, not dropped: a dropped block is indistinguishable from a chat
     // that never had one.
@@ -168,7 +172,9 @@ describe("residual lifting", () => {
     if (clone.status !== "ok") throw new Error("expected a clone");
 
     expect(clone.seed.residuals.hostPrivate.kind).toBe("dropped");
-    expect(carriedCloneResiduals(clone.seed.residuals).hostPrivate).toBeUndefined();
+    expect(
+      carriedCloneResiduals(clone.seed.residuals).hostPrivate,
+    ).toBeUndefined();
     expect(clone.seed.unpreservedKeys).toEqual([
       `hostPrivate.${FUTURE_FIELDS.hostPrivate}`,
     ]);

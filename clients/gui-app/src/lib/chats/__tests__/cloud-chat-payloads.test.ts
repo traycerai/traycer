@@ -142,7 +142,13 @@ describe("bounding the work before doing it", () => {
 
   it("refuses base64 it cannot decode", async () => {
     const result = await decodeCloudChatPayload(
-      { outcome: { status: "ok", bytesBase64: "!!!not base64!!!", byteLength: 4 } },
+      {
+        outcome: {
+          status: "ok",
+          bytesBase64: "!!!not base64!!!",
+          byteLength: 4,
+        },
+      },
       { sha256: "unused" },
       webCryptoSha256Hex,
     );
@@ -178,9 +184,9 @@ describe("the preview bound", () => {
     expect(result.kind).toBe("text");
     if (result.kind !== "text") return;
     expect(result.isTruncated).toBe(true);
-    expect(new TextEncoder().encode(result.text).byteLength).toBeLessThanOrEqual(
-      PAYLOAD_PREVIEW_BYTES,
-    );
+    expect(
+      new TextEncoder().encode(result.text).byteLength,
+    ).toBeLessThanOrEqual(PAYLOAD_PREVIEW_BYTES);
   });
 
   it("never ends a preview on a replacement character", async () => {

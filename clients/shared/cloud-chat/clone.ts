@@ -60,7 +60,11 @@ export type ChatCloneResidualDisposition =
   /** Lifted into the clone. */
   | { readonly kind: "carried"; readonly bag: JsonObject }
   /** Deliberately not carried, with the reason a human needs. */
-  | { readonly kind: "dropped"; readonly reason: string; readonly bag: JsonObject }
+  | {
+      readonly kind: "dropped";
+      readonly reason: string;
+      readonly bag: JsonObject;
+    }
   /** Never reached this client - see the `shard` entry. */
   | { readonly kind: "unavailable"; readonly reason: string };
 
@@ -142,7 +146,10 @@ export function unpreservedCloneKeys(
 
 function entriesOf(
   residuals: ChatCloneResiduals,
-): readonly (readonly [CapturedResidualLevelId, ChatCloneResidualDisposition])[] {
+): readonly (readonly [
+  CapturedResidualLevelId,
+  ChatCloneResidualDisposition,
+])[] {
   return Object.entries(residuals) as (readonly [
     CapturedResidualLevelId,
     ChatCloneResidualDisposition,

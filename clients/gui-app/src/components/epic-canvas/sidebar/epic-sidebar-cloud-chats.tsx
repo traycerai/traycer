@@ -75,7 +75,11 @@ export function EpicSidebarCloudChats(
   if (state.kind === "loading") {
     return (
       <div className="flex w-full items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
-        <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
         <span>Checking your other devices…</span>
       </div>
     );

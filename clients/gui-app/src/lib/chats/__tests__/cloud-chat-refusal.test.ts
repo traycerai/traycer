@@ -112,7 +112,8 @@ describe("the other refusals", () => {
     const outcome: CloudChatReadOutcome = {
       kind: "needs-newer-app",
       reason: "reader-below-minimum",
-      message: "This chat requires a reader on 1.4 or newer; this reader is 1.0",
+      message:
+        "This chat requires a reader on 1.4 or newer; this reader is 1.0",
     };
 
     // Not re-worded here: two surfaces describing the same refusal differently

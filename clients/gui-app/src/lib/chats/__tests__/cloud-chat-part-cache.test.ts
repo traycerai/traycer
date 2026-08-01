@@ -80,10 +80,7 @@ describe("round trip", () => {
 
   it("keys on the digest under a name that cannot leave the machine", async () => {
     const fake = new FakeCacheStorage();
-    await createCacheApiChatPartCache(fake).put(
-      DIGEST,
-      new Uint8Array([1]),
-    );
+    await createCacheApiChatPartCache(fake).put(DIGEST, new Uint8Array([1]));
 
     const store = fake.caches.get("traycer-chat-parts-v1");
     expect(store).toBeDefined();
@@ -108,9 +105,7 @@ describe("round trip", () => {
 
   it("answers null for a digest it does not hold", async () => {
     const fake = new FakeCacheStorage();
-    expect(
-      await createCacheApiChatPartCache(fake).get(DIGEST),
-    ).toBeNull();
+    expect(await createCacheApiChatPartCache(fake).get(DIGEST)).toBeNull();
   });
 
   it("opens the store once across a burst of reads", async () => {
@@ -172,10 +167,7 @@ describe("choosing a store", () => {
 describe("clearing", () => {
   it("drops the whole store, and is a no-op without one", async () => {
     const fake = new FakeCacheStorage();
-    await createCacheApiChatPartCache(fake).put(
-      DIGEST,
-      new Uint8Array([1]),
-    );
+    await createCacheApiChatPartCache(fake).put(DIGEST, new Uint8Array([1]));
 
     await clearChatPartCache(fake);
 

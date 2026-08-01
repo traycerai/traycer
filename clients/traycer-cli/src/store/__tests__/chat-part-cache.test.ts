@@ -101,7 +101,10 @@ describe("failing softly", () => {
 describe("the digest is a key, never a path", () => {
   it.each([
     ["a traversal", "../../../../etc/passwd"],
-    ["a separator", "00/000000000000000000000000000000000000000000000000000000000001"],
+    [
+      "a separator",
+      "00/000000000000000000000000000000000000000000000000000000000001",
+    ],
     // DIGEST_B, not DIGEST_A: the latter is all digits, so upper-casing it is
     // the identity and the case would silently test nothing.
     ["upper case", DIGEST_B.toUpperCase()],

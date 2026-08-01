@@ -129,7 +129,9 @@ describe("payload markers", () => {
 
 describe("the fidelity line", () => {
   it("counts what could not be rendered, once, at the top", async () => {
-    const notice = describeTranscriptFidelity(await present({ resolvable: null }));
+    const notice = describeTranscriptFidelity(
+      await present({ resolvable: null }),
+    );
 
     expect(notice).toBe(
       "1 item needs a newer version of Traycer · 2 attachments are stored on the originating device",

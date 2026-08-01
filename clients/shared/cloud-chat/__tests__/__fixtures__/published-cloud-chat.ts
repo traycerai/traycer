@@ -164,7 +164,9 @@ export const knownEvent: JsonObject = {
 
 export const persistedHostPrivate: JsonObject = {
   revision: 3,
-  data: { activeSessionChain: { harnessId: "starfleet-cli", sessionId: "s-1" } },
+  data: {
+    activeSessionChain: { harnessId: "starfleet-cli", sessionId: "s-1" },
+  },
 };
 
 /** The cohorts a plain fixture chat publishes: two, so order can go wrong. */
@@ -459,9 +461,7 @@ export function recordingPort(behaviour: PortBehaviour): RecordingPort {
 }
 
 /** The ordinary healthy behaviour: serve the published chat. */
-export function servingBehaviour(
-  published: PublishedCloudChat,
-): PortBehaviour {
+export function servingBehaviour(published: PublishedCloudChat): PortBehaviour {
   return {
     resolve: () => ({
       chat: published.summary,

@@ -51,14 +51,17 @@ export interface CloudChatDialogProps {
   readonly onOpenChange: (open: boolean) => void;
 }
 
-export function CloudChatDialog(props: CloudChatDialogProps): React.JSX.Element {
+export function CloudChatDialog(
+  props: CloudChatDialogProps,
+): React.JSX.Element {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="w-full max-w-3xl">
         <DialogHeader>
           <DialogTitle>{props.summary?.title ?? "Published chat"}</DialogTitle>
           <DialogDescription>
-            A read-only copy, as it was when the owning device last published it.
+            A read-only copy, as it was when the owning device last published
+            it.
           </DialogDescription>
         </DialogHeader>
         {/* Keyed on the identity so switching rows remounts rather than
@@ -89,7 +92,11 @@ function CloudChatDialogBody(props: {
   if (state.kind === "loading") {
     return (
       <div className="flex w-full items-center gap-2 py-8 text-sm text-muted-foreground">
-        <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
         <span>Loading the published copy…</span>
       </div>
     );
@@ -299,7 +306,11 @@ function PayloadRow(props: {
   if (query.data === undefined) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
         <span>{props.payload.label}</span>
       </div>
     );

@@ -28,7 +28,8 @@ export function createHostCloudChatReadPort(
   client: HostRequester<HostRpcRegistry>,
 ): CloudChatReadPort {
   return {
-    resolveHead: (identity) => client.request("epic.resolveCloudChatHead", identity),
+    resolveHead: (identity) =>
+      client.request("epic.resolveCloudChatHead", identity),
     readPart: (request) =>
       client.request("epic.readCloudChatPart", {
         ...request.identity,

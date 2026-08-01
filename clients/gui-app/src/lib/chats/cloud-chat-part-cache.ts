@@ -144,7 +144,8 @@ export function resolveChatPartCache(
  * callers already handle: the reader falls back to a session-scoped store, and
  * the clear has nothing to do.
  */
-export function browserChatPartCacheStorage(): ChatPartCacheStorage | undefined {
+export function browserChatPartCacheStorage():
+  ChatPartCacheStorage | undefined {
   return typeof globalThis.caches === "undefined"
     ? undefined
     : globalThis.caches;
