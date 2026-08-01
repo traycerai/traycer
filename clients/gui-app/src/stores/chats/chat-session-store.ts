@@ -368,6 +368,17 @@ export interface ChatSessionState {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  /**
+   * Message ids THIS client minted locally (composer send, same-turn steer,
+   * inline edit) and successfully dispatched - the single source of truth
+   * the chat transcript's anchor classifier uses to tell a local action
+   * apart from an identically-shaped row arriving from elsewhere (another
+   * window's edit reaching this one via the host's `broadcastSnapshot`, a
+   * queued auto-flush, an A2A row). Bounded FIFO (see
+   * `MAX_LOCAL_PROVENANCE_MESSAGE_IDS`); an id is removed once the consumer
+   * acts on it (`consumeLocalProvenance`) or ages out.
+   */
+  readonly localProvenanceMessageIds: ReadonlySet<string>;
   readonly errorNotices: ReadonlyArray<ChatErrorNotice>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly currentComposerSettings: ChatRunSettings | null;
@@ -547,6 +558,14 @@ export interface ChatSessionState {
    * downstream ack/accept reconciliation continues to work.
    */
   takeSetupFailedRestoration: (messageId: string) => JsonContent | null;
+  /**
+   * Removes `messageId` from {@link localProvenanceMessageIds} - the chat
+   * transcript's anchor classifier calls this once it has acted on a local-
+   * provenance match, so a coincidental later reappearance of the same id
+   * (a stale re-render, a reconciled dedupe) is not treated as fresh
+   * local-action evidence a second time. A no-op if the id is not present.
+   */
+  consumeLocalProvenance: (messageId: string) => void;
   setCurrentComposerSettings: (settings: ChatRunSettings) => void;
   dispose: () => void;
 }
@@ -603,6 +622,12 @@ export interface ChatSessionStoreHandle {
   readonly store: UseBoundStore<StoreApi<ChatSessionState>>;
   readonly deliveredNotices: DeliveredNoticeTracker;
   /**
+   * Completed restores already surfaced as toasts. Completion state remains in
+   * the store for the dialog, so delivery lives on the handle to survive task-
+   * tab focus changes and component remounts without replaying the result.
+   */
+  readonly deliveredRestoreCompletionKeys: Set<string>;
+  /**
    * Per-surface visibility report feeding the stream-flush coordinator's
    * tiered flush rate. The same chat can render in several surfaces (split
    * panes, keep-alive tabs); the chat counts as visible when ANY reporting
@@ -619,6 +644,29 @@ export function isChatRunInProgress(runStatus: ChatRunStatus): boolean {
 }
 
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
+
+const EMPTY_LOCAL_PROVENANCE_MESSAGE_IDS: ReadonlySet<string> = new Set();
+/**
+ * Small and dumb by design (per the chat-scroller-refactor review): a local
+ * action is consumed by the classifier almost immediately after landing, so
+ * this only needs to absorb a burst of in-flight sends/edits/steers, not
+ * accumulate indefinitely.
+ */
+const MAX_LOCAL_PROVENANCE_MESSAGE_IDS = 32;
+
+function withLocalProvenanceMessageId(
+  current: ReadonlySet<string>,
+  messageId: string,
+): ReadonlySet<string> {
+  const next = new Set(current);
+  next.add(messageId);
+  while (next.size > MAX_LOCAL_PROVENANCE_MESSAGE_IDS) {
+    const oldest = next.values().next().value;
+    if (oldest === undefined) break;
+    next.delete(oldest);
+  }
+  return next;
+}
 
 function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
   // Keyed by every `ChatRunSettings` field via `satisfies`: adding a field to
@@ -668,6 +716,8 @@ export const MAX_ERROR_NOTICE_RECORDS = 32;
  * memory bounded.
  */
 export const MAX_DELIVERED_CLIENT_ACTION_IDS = MAX_ERROR_NOTICE_RECORDS * 4;
+/** Bounds string-key retention while comfortably covering recent restores. */
+export const MAX_DELIVERED_RESTORE_COMPLETIONS = 32;
 
 function appendErrorNotice(
   notices: ReadonlyArray<ChatErrorNotice>,
@@ -788,8 +838,9 @@ export function createChatSessionStore(
     // `blockDelta` coalescing. Deltas accumulate here and are folded into a
     // single `set()` per coordinator tick (one animation frame in production)
     // instead of one `set()` per token. Every non-delta frame that consumes
-    // message/turn state (`onSnapshot`, `onTurnStateChanged`, `onMessageAccepted`)
-    // flushes the buffer first, so observable ordering matches arrival order.
+    // message/turn state (`onSnapshot`, `onTurnStateChanged`, `onMessageAccepted`,
+    // `onInterviewRequested`) flushes the buffer first, so observable ordering
+    // matches arrival order.
     let bufferedDeltas: RuntimeEvent[] = [];
 
     // `providers.list` nudge driven by the DURABLE auth-failure signal: an
@@ -1358,6 +1409,13 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // Consuming frame: the host emits this interview's `blockDelta` first,
+        // but that delta is still buffered until the next coordinator tick.
+        // Publishing the pending id ahead of its block would expose a
+        // host-pending interview with no `streaming` segment - which
+        // `findUnanswerableInterviews` reads as permanently stuck and answers
+        // with the destructive dismiss affordance, mid-normal-Q&A.
+        flushBlockDeltas();
         set((state) => ({
           pendingInterviews: upsertPendingInterview(state.pendingInterviews, {
             blockId: frame.blockId,
@@ -1671,6 +1729,7 @@ export function createChatSessionStore(
       pendingActions: {},
       acceptedActions: {},
       pendingUserMessages: [],
+      localProvenanceMessageIds: EMPTY_LOCAL_PROVENANCE_MESSAGE_IDS,
       errorNotices: [],
       failedSendRestoration: null,
       currentComposerSettings: null,
@@ -1762,6 +1821,17 @@ export function createChatSessionStore(
           restoreWorktreeStagingRevision =
             stagedWorktreeIntentRevision(stagedKey);
         }
+        // Captured once, before dispatch, and reused for BOTH the optimistic
+        // echo below AND the local-provenance registration after it - a
+        // queued send (this false) gets NO optimistic transcript row today,
+        // and per decision #9 its eventual flush must ride the ordinary
+        // gated-arrival path (anchor only if already following-end), not an
+        // unconditional one. Re-deriving this condition after dispatch
+        // instead of reusing it would risk it reading post-dispatch state
+        // (e.g. the just-appended optimistic queue item) and disagreeing
+        // with what `pendingUserMessage` below actually decided.
+        const rendersAsPendingUserMessage =
+          shouldRenderSendAsPendingUserMessage(get());
         const sentClientActionId = sendAction({
           set,
           get,
@@ -1788,7 +1858,7 @@ export function createChatSessionStore(
           // rendered-messages.ts. The persisted message later replaces this echo
           // by shared `messageId` (the `dedupedPending` guard), and the card stays
           // pinned immediately above it throughout.
-          pendingUserMessage: shouldRenderSendAsPendingUserMessage(get())
+          pendingUserMessage: rendersAsPendingUserMessage
             ? {
                 clientActionId,
                 messageId,
@@ -1804,6 +1874,20 @@ export function createChatSessionStore(
             stagingStore.setIntent(stagedKey, worktreeIntent);
           }
           return null;
+        }
+        // Local provenance ONLY for the idle-send shape that actually paints
+        // an optimistic row same-frame - a queued send (send-while-running)
+        // has no transcript row until the host drains it, and that drain is
+        // a passive arrival gated on `isFollowingEnd` like any other queued
+        // flush (decision #9), never unconditional (chat-scroller-refactor
+        // review round 3).
+        if (rendersAsPendingUserMessage) {
+          set((state) => ({
+            localProvenanceMessageIds: withLocalProvenanceMessageId(
+              state.localProvenanceMessageIds,
+              messageId,
+            ),
+          }));
         }
         const optimisticQueuedItem = optimisticQueuedItemForSend({
           state: get(),
@@ -1893,6 +1977,12 @@ export function createChatSessionStore(
           },
         });
         if (sentClientActionId === null) return null;
+        set((state) => ({
+          localProvenanceMessageIds: withLocalProvenanceMessageId(
+            state.localProvenanceMessageIds,
+            input.messageId,
+          ),
+        }));
         return {
           clientActionId: sentClientActionId,
           messageId: input.messageId,
@@ -1987,6 +2077,16 @@ export function createChatSessionStore(
             .setEpicIntent(options.epicId, worktreeIntent, Date.now());
           get().refreshMissingWorktreePaths([]);
         }
+        // Same-turn steer and inline edit both mint their id here - local
+        // provenance regardless of whether this lands as a branch reset
+        // (rewriting an earlier turn) or ahead of a still-continuing live
+        // assistant turn (same-turn steer).
+        set((state) => ({
+          localProvenanceMessageIds: withLocalProvenanceMessageId(
+            state.localProvenanceMessageIds,
+            messageId,
+          ),
+        }));
         return { clientActionId: sentClientActionId, messageId };
       },
       revertFileChanges: (fromMessageId, filePaths, revertArtifacts) => {
@@ -2506,6 +2606,14 @@ export function createChatSessionStore(
         });
         return restored;
       },
+      consumeLocalProvenance: (messageId) => {
+        set((state) => {
+          if (!state.localProvenanceMessageIds.has(messageId)) return state;
+          const next = new Set(state.localProvenanceMessageIds);
+          next.delete(messageId);
+          return { localProvenanceMessageIds: next };
+        });
+      },
       dispose: () => {
         if (disposed) return;
         disposed = true;
@@ -2525,6 +2633,7 @@ export function createChatSessionStore(
       notices: new WeakSet<ChatErrorNotice>(),
       clientActionIds: new Set<string>(),
     },
+    deliveredRestoreCompletionKeys: new Set<string>(),
     setSurfaceVisibility: (surfaceId, visible) => {
       if (surfaceVisibility.get(surfaceId) === visible) return;
       surfaceVisibility.set(surfaceId, visible);

@@ -10,8 +10,9 @@ export type ChatScrollCardKind = "subagent" | "tool";
 /**
  * Scrolls the chat transcript to the card that owns `blockId` and expands it.
  * Canvas-owned: the chat package only declares the intent; the tile renderer
- * resolves the owning message and drives Virtuoso + the open-stores. Mirrors
- * the background-panel row → card jump so both navigations behave identically.
+ * resolves the owning message and drives the transcript list (LegendList) +
+ * the open-stores. Mirrors the background-panel row → card jump so both
+ * navigations behave identically.
  */
 export type ScrollToChatBlock = (
   blockId: string,

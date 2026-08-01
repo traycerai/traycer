@@ -78,6 +78,8 @@ function setupCardRow(): ChatMessageModel {
         kind: "setup-card",
         model: SETUP_MODEL,
         viewTabId: "tab-1",
+        anchorMessageId: null,
+        isGenesisPin: false,
       },
     ],
     structuredContent: null,

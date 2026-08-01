@@ -405,6 +405,7 @@ function renderPickerWithFixture(
             registerActivation={false}
             createProfileHostId={null}
             runTargetHostId={null}
+            profileAdmission={null}
           />
         </TooltipProvider>
       </SurfaceActivityProvider>
