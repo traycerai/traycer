@@ -3,8 +3,10 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type {
   ListTasksRequest,
   ListTasksResponse,
+  TaskOwnershipScope,
   TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { formatRepoIdentifier } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   CURRENT_EPIC_VERSION,
   CURRENT_PHASE_VERSION,
@@ -13,6 +15,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
 import type { HistorySearchState } from "@/lib/history-search";
+import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
 
 const PAGE_LIMIT = 20;
 
@@ -39,6 +42,13 @@ export function cloudEpicTasksQueryKey(
   request: ListCloudTasksRequest,
 ): readonly unknown[] {
   return queryKeys.cloudEpicTasks(hostId, fingerprint, request);
+}
+
+export function cloudEpicTasksLastKnownQueryKey(
+  hostId: string,
+  fingerprint: string,
+): readonly unknown[] {
+  return queryKeys.cloudEpicTasksLastKnown(hostId, fingerprint);
 }
 
 export async function fetchCloudEpicTasksPage(
@@ -89,7 +99,15 @@ export function cloudEpicTasksFirstPageQueryOptions(
 export function listCloudTasksRequestForHistorySearch(
   search: HistorySearchState,
 ): ListCloudTasksRequest {
-  const repoIdentifiers = search.repos.flatMap(parseRepoLabel);
+  // Selection order in `search` reflects toggle order, not display order (the
+  // ambient modal state is never re-sorted the way a URL round-trip through
+  // `parseHistorySearch` sorts it). Canonicalize every set-like member here so
+  // two semantically identical filter selections - regardless of the order the
+  // user picked them in - always produce the same request, and therefore the
+  // same query key / accumulated-page identity.
+  const repoIdentifiers = sortRepoIdentifiers(
+    search.repos.flatMap(parseRepoLabel),
+  );
   const query = search.query.trim();
   const filters: NonNullable<ListTasksRequest["filters"]> = {};
   if (query.length > 0) filters.query = query;
@@ -98,17 +116,37 @@ export function listCloudTasksRequestForHistorySearch(
     filters.repoMatchMode = search.repoMode;
   }
   if (search.workspaces.length > 0) {
-    filters.workspaceIdentifiers = [...search.workspaces];
+    filters.workspaceIdentifiers = [...dedupSortWorkspaces(search.workspaces)];
     filters.workspaceMatchMode = search.workspaceMode;
   }
   if (search.ownershipScopes.length > 0) {
-    filters.ownershipScopes = [...search.ownershipScopes];
+    filters.ownershipScopes = sortOwnershipScopes(search.ownershipScopes);
   }
   return {
     ...LIST_CLOUD_TASKS_REQUEST,
     filters: Object.keys(filters).length > 0 ? filters : null,
     sort: search.sort,
   };
+}
+
+function sortRepoIdentifiers(
+  identifiers: ReadonlyArray<TaskRepoIdentifier>,
+): TaskRepoIdentifier[] {
+  const unique = new Map<string, TaskRepoIdentifier>();
+  for (const identifier of identifiers) {
+    unique.set(formatRepoIdentifier(identifier), identifier);
+  }
+  return Array.from(unique.values()).sort((left, right) =>
+    formatRepoIdentifier(left).localeCompare(formatRepoIdentifier(right)),
+  );
+}
+
+function sortOwnershipScopes(
+  scopes: ReadonlyArray<TaskOwnershipScope>,
+): TaskOwnershipScope[] {
+  return Array.from(new Set(scopes)).sort((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function buildListTasksRequest(
