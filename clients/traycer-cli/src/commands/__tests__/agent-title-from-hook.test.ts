@@ -469,7 +469,7 @@ describe("buildAgentTitleFromHookCommand", () => {
     expect(stderrSpy).not.toHaveBeenCalled();
   });
 
-  it("prefers --epic-id and --agent-id flags over the env defaults", async () => {
+  it("allows explicit command context to override the env defaults", async () => {
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ prompt: "rename module" })],

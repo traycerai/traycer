@@ -79,7 +79,7 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
     expect(result.data).toEqual({ accepted: true, reason: null });
   });
 
-  it("prefers --epic-id and --agent-id flags over env", async () => {
+  it("allows explicit command context to override env", async () => {
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ session_id: "sess-flag" })],
