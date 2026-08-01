@@ -2,7 +2,7 @@ import {
   useHostMethodSupport,
   useHostSupportsMethod,
 } from "@/hooks/host/use-host-supports-method";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 
 /**
  * The archive RPC's method name, shared by the capability gate and the mutation
@@ -19,19 +19,17 @@ export const SET_CHAT_ARCHIVED_METHOD = "epic.setChatArchived";
  * (row hover button, row-menu entry, "Show archived") has to disappear on such
  * a host instead of offering an action that cannot work.
  *
- * Scoped to the DEFAULT host, because that is the host the archive mutation
- * actually targets: `useEpicArchiveChat` uses `useHostClient()`, matching
- * `useEpicRenameChat` / `useEpicDeleteChat`. Gate and target therefore always
- * name the same host. (A row bound to a different host is already outside what
- * the sidebar's other row mutations handle; archive does not diverge from them
- * here.)
+ * Scoped to the tab's lifetime-bound host, matching `useEpicArchiveChat`'s
+ * `useTabHostClient()`. The app-wide active host can change while the tab stays
+ * open, so reading its manifest here could expose an action that the actual tab
+ * host does not support (or hide one that it does).
  *
  * Fails closed while the host's manifest is still unknown - see
  * {@link useHostSupportsMethod}.
  */
 export function useChatArchiveSupported(): boolean {
-  const activeHostId = useReactiveActiveHostId();
-  return useHostSupportsMethod(activeHostId, SET_CHAT_ARCHIVED_METHOD);
+  const tabHostId = useTabHostId();
+  return useHostSupportsMethod(tabHostId, SET_CHAT_ARCHIVED_METHOD);
 }
 
 /**
@@ -52,6 +50,6 @@ export function useChatArchiveSupported(): boolean {
  * moment later, which is worse than the toggle appearing late.
  */
 export function useChatArchiveSupportState(): boolean | null {
-  const activeHostId = useReactiveActiveHostId();
-  return useHostMethodSupport(activeHostId, SET_CHAT_ARCHIVED_METHOD);
+  const tabHostId = useTabHostId();
+  return useHostMethodSupport(tabHostId, SET_CHAT_ARCHIVED_METHOD);
 }

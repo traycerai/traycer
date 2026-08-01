@@ -276,9 +276,9 @@ export function useEpicRenameChat() {
  * both the `chats` and `tuiAgents` maps, so a separate TUI variant would be the
  * same call with the same arguments under a second name.
  *
- * Default-host scoped via `useHostClient()`, matching `useEpicRenameChat` /
- * `useEpicDeleteChat` - the sidebar's other row mutations - so all four agree
- * on which host owns a row's writes.
+ * Tab-host scoped via `useTabHostClient()`. A tab keeps its `hostId` for life,
+ * even when the app-wide active host changes, so archive writes must follow the
+ * tab binding rather than whichever host is currently selected elsewhere.
  *
  * No optimistic write and no cache invalidation, also matching rename: the
  * archive flag lives in the epic Y.Doc, so the host's write replicates back
@@ -304,7 +304,7 @@ function useEpicArchiveChatMutation(
   HostRpcError,
   SetChatArchivedRequest
 > {
-  const client = useHostClient();
+  const client = useTabHostClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.setChatArchived",

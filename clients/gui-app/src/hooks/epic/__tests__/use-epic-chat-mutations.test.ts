@@ -29,9 +29,14 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
-const { archiveChatMutateAsync, forceReleaseChatSession } = vi.hoisted(() => ({
-  archiveChatMutateAsync: vi.fn(),
-  forceReleaseChatSession: vi.fn(),
+const { archiveChatMutateAsync, forceReleaseChatSession, tabHostClient } =
+  vi.hoisted(() => ({
+    archiveChatMutateAsync: vi.fn(),
+    forceReleaseChatSession: vi.fn(),
+    tabHostClient: { request: vi.fn() },
+  }));
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => tabHostClient,
 }));
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
@@ -46,6 +51,7 @@ import type {
 } from "@/hooks/epic/use-epic-chat-mutations";
 
 interface CapturedMutationArgs {
+  readonly client: unknown;
   readonly method: string;
   readonly options: unknown;
   readonly mapVariables: ((variables: never) => unknown) | undefined;
@@ -204,6 +210,7 @@ describe("useEpicArchiveChat", () => {
     renderHook(() => useEpicArchiveChat());
 
     const mutation = getCapturedMutation("epic.setChatArchived");
+    expect(mutation.client).toBe(tabHostClient);
     expect(mutation.method).toBe("epic.setChatArchived");
     // mapVariables is identity - chats and terminal-agents share one RPC keyed
     // by record id; there is no separate TUI method.
