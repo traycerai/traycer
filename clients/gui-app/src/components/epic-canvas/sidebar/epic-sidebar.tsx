@@ -1391,12 +1391,16 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
           const successfulRootIds = selectedRootIds.filter(
             (_id, index) => results[index].status === "fulfilled",
           );
-          const successfulSelectedIds = sidebarIdsWithinRoots({
-            ids: selection.selectedVisibleIds,
+          // Checkboxes stay interactive while the batch is pending. Clear the
+          // whole successful subtree, not only the request-era selection, so a
+          // descendant selected before the response cannot survive until the
+          // later archive projection hides it and leave selection mode at 0.
+          const successfulSubtreeIds = sidebarIdsWithinRoots({
+            ids: Object.keys(tree.nodeById),
             rootIds: successfulRootIds,
             tree,
           });
-          selection.clearSelectedIds(successfulSelectedIds);
+          selection.clearSelectedIds(successfulSubtreeIds);
         },
       },
     );
