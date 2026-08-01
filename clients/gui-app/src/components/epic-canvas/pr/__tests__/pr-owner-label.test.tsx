@@ -70,9 +70,18 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
   useEpicTerminalAgent: (id: string | null) =>
     id === null || deletedNodeIds.has(id) ? null : { title: `Agent ${id}` },
   useEpicNodeHostId: () => "host-1",
-  useEpicTreeIndex: () => treeIndexFromParents(),
+  useEpicTreeIndex: () => {
+    treeIndexReads += 1;
+    return treeIndexFromParents();
+  },
   useEpicAgentNodeIds: () => presentNodeIds,
 }));
+
+/**
+ * How many times the agent tree was subscribed to. A collapsed `+N` chip must
+ * not read it at all - see the deferred-subscription test.
+ */
+let treeIndexReads = 0;
 
 /**
  * Every id the tests hand out, minus the deleted ones. Broad on purpose: the
@@ -134,6 +143,7 @@ afterEach(() => {
   parentByNodeId = {};
   deletedNodeIds = new Set<string>();
   presentNodeIds = [];
+  treeIndexReads = 0;
 });
 
 /**
@@ -300,6 +310,26 @@ describe("PrOwnerBadges deleted owners", () => {
  * constant has to be a deliberate change to this expectation too.
  */
 describe("PrOwnerBadges overflow hierarchy", () => {
+  /**
+   * The forest is only ever LOOKED at through an open popover, but the tree it
+   * is built from churns on every rename, reparent and agent create/delete.
+   * Subscribing from the collapsed chip would put that rebuild on every `+N`
+   * on the surface - once per PR row - for a list nobody has asked to see.
+   */
+  it("does not read the agent tree until the overflow is opened", () => {
+    parentByNodeId = { "chat-1": null, "chat-2": "chat-1" };
+    renderBadges(chatOwners(12));
+
+    expect(screen.getByTestId("pr-owner-overflow")).not.toBeNull();
+    expect(treeIndexReads).toBe(0);
+
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    // Read once the reader asks for it, and the nesting still arrives.
+    expect(treeIndexReads).toBeGreaterThan(0);
+    expect(ownerRow("chat-2").style.paddingLeft).toBe("24px");
+  });
+
   it("nests a spawned sub-agent under the owner it was spawned from", () => {
     parentByNodeId = {
       "chat-1": null,

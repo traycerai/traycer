@@ -270,12 +270,6 @@ function PrOwnerOverflow(props: {
   const [open, setOpen] = useState(false);
   const close = useCallback((): void => setOpen(false), []);
   const nouns = prOwnerCollectionNouns(props.owners);
-  // The same `parentId` links the sidebar's agent tree nests by, so a chat and
-  // the sub-agents it spawned read as one lineage here too instead of as the
-  // same title repeated once per child.
-  const tree = useEpicTreeIndex();
-  const { owners } = props;
-  const forest = useMemo(() => buildPrOwnerTree(owners, tree), [owners, tree]);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -316,32 +310,68 @@ function PrOwnerOverflow(props: {
         <p className="shrink-0 border-b px-3 py-2 text-ui-xs text-muted-foreground">
           {`${nouns.capitalized} this PR came from`}
         </p>
-        {/* `min-h-0` so this flex child may shrink below its content height -
-            the default `min-height: auto` would push the list back out to full
-            height and defeat the cap above. */}
-        {/* A plain nested list, NOT `role="tree"`. That role advertises a
-            composite widget - roving focus, arrow-key navigation, selection -
-            and this list has none of it: every row is a plain button, the
-            forest is permanently expanded, and nothing is ever selected. The
-            nesting is the whole message, and `<ul>`/`<li>` already carry it. */}
-        <ul
-          aria-label={`${nouns.capitalized} this PR came from`}
-          className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-1"
-          data-testid="pr-owner-overflow-list"
-        >
-          {forest.map((node) => (
-            <PrOwnerTreeItem
-              key={prOwnerKey(node.owner)}
-              node={node}
-              depth={0}
-              epicId={props.epicId}
-              fallbackHostId={props.fallbackHostId}
-              onOpened={close}
-            />
-          ))}
-        </ul>
+        {/* Rendered as its own component so the agent-tree read below happens
+            only while the popover is OPEN. Radix mounts content on open and
+            unmounts it on close, so a hook placed here costs nothing until a
+            reader asks for the list - whereas the same hook in the parent
+            subscribes every collapsed `+N` chip on the surface to the tree and
+            rebuilds its forest on every rename, reparent and agent
+            create/delete, for a list nobody is looking at. */}
+        <PrOwnerOverflowList
+          owners={props.owners}
+          label={`${nouns.capitalized} this PR came from`}
+          epicId={props.epicId}
+          fallbackHostId={props.fallbackHostId}
+          onOpened={close}
+        />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The owner forest itself. Split from `PrOwnerOverflow` purely so its tree
+ * subscription is scoped to the open popover - see the call site.
+ */
+function PrOwnerOverflowList(props: {
+  readonly owners: readonly PrOwnerRef[];
+  readonly label: string;
+  readonly epicId: string;
+  readonly fallbackHostId: string | null;
+  readonly onOpened: () => void;
+}): ReactNode {
+  // The same `parentId` links the sidebar's agent tree nests by, so a chat and
+  // the sub-agents it spawned read as one lineage here too instead of as the
+  // same title repeated once per child.
+  const tree = useEpicTreeIndex();
+  const { owners } = props;
+  const forest = useMemo(() => buildPrOwnerTree(owners, tree), [owners, tree]);
+  return (
+    // `min-h-0` so this flex child may shrink below its content height - the
+    // default `min-height: auto` would push the list back out to full height
+    // and defeat the popover's cap.
+    //
+    // A plain nested list, NOT `role="tree"`. That role advertises a composite
+    // widget - roving focus, arrow-key navigation, selection - and this list
+    // has none of it: every row is a plain button, the forest is permanently
+    // expanded, and nothing is ever selected. The nesting is the whole
+    // message, and `<ul>`/`<li>` already carry it.
+    <ul
+      aria-label={props.label}
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-1"
+      data-testid="pr-owner-overflow-list"
+    >
+      {forest.map((node) => (
+        <PrOwnerTreeItem
+          key={prOwnerKey(node.owner)}
+          node={node}
+          depth={0}
+          epicId={props.epicId}
+          fallbackHostId={props.fallbackHostId}
+          onOpened={props.onOpened}
+        />
+      ))}
+    </ul>
   );
 }
 
