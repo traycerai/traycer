@@ -119,7 +119,11 @@ export function shouldYieldPaneActivationRouteFocus(
 ): boolean {
   const origin = paneActivationControlFocusOrigin;
   if (origin === null) return false;
-  if (Date.now() > origin.expiresAt || !origin.scope.isConnected) {
+  if (
+    Date.now() > origin.expiresAt ||
+    !origin.element.isConnected ||
+    !origin.scope.isConnected
+  ) {
     clearPaneActivationControlFocusOrigin();
     return false;
   }
@@ -249,6 +253,7 @@ export function usePaneActivationOwnership(input: {
   const activateRef = useRef(activate);
   const parentFocusIntent = usePaneActivationFocusIntent();
   const localFocusIntentExpiresAtRef = useRef(0);
+  const localFocusIntentElementRef = useRef<Element | null>(null);
   const gestureEpochRef = useRef(0);
   const deferredGestureRef = useRef<number | null>(null);
 
@@ -260,12 +265,20 @@ export function usePaneActivationOwnership(input: {
     (target: EventTarget | null, scope: EventTarget | null) => {
       const expiresAt = Date.now() + PANE_ACTIVATION_FOCUS_INTENT_TTL_MS;
       localFocusIntentExpiresAtRef.current = expiresAt;
+      localFocusIntentElementRef.current =
+        target instanceof Element ? target : null;
       markPaneActivationControlFocusOrigin(target, scope, expiresAt);
     },
     [],
   );
   const shouldYieldAutoFocus = useCallback(() => {
-    const localIntent = Date.now() <= localFocusIntentExpiresAtRef.current;
+    const localIntent =
+      Date.now() <= localFocusIntentExpiresAtRef.current &&
+      localFocusIntentElementRef.current?.isConnected === true;
+    if (!localIntent) {
+      localFocusIntentExpiresAtRef.current = 0;
+      localFocusIntentElementRef.current = null;
+    }
     const parentIntent = parentFocusIntent.shouldYieldAutoFocus();
     return localIntent || parentIntent;
   }, [parentFocusIntent]);

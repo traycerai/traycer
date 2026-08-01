@@ -99,6 +99,31 @@ function FocusIntentHarness(props: {
   );
 }
 
+function SelfRemovingFocusIntentHarness(props: {
+  readonly onDecision: (yieldFocus: boolean) => void;
+}) {
+  const [active, setActive] = useState(false);
+  const [visible, setVisible] = useState(true);
+  return (
+    <ActivationBoundary
+      active={active}
+      id="self-removing"
+      onActivate={() => setActive(true)}
+    >
+      {visible ? (
+        <button
+          type="button"
+          {...paneActivationDeferProps}
+          onClick={() => setVisible(false)}
+        >
+          Remove and activate
+        </button>
+      ) : null}
+      <AutoFocusProbe active={active} onDecision={props.onDecision} />
+    </ActivationBoundary>
+  );
+}
+
 describe("pane activation ownership", () => {
   it("completes a deferred action whose click stops propagation", async () => {
     const activate = vi.fn();
@@ -143,6 +168,20 @@ describe("pane activation ownership", () => {
     expect(action).toHaveBeenCalledTimes(1);
     expect(button.isConnected).toBe(false);
     await waitFor(() => expect(activate).toHaveBeenCalledTimes(1));
+  });
+
+  it("stops yielding autofocus when the initiating control removes itself", async () => {
+    const decision = vi.fn();
+    render(<SelfRemovingFocusIntentHarness onDecision={decision} />);
+
+    const button = screen.getByRole("button", {
+      name: "Remove and activate",
+    });
+    fireEvent.pointerDown(button);
+    fireEvent.click(button);
+
+    expect(button.isConnected).toBe(false);
+    await waitFor(() => expect(decision).toHaveBeenCalledWith(false));
   });
 
   it("does not complete a stale pane token after a sibling gesture starts", async () => {
