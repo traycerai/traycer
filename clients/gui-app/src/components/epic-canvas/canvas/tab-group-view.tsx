@@ -1,14 +1,9 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  type PointerEvent,
-  type ReactNode,
-} from "react";
+import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { isPaneActivationDeferred } from "@/components/epic-canvas/pane-activation";
+import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
 import { cn } from "@/lib/utils";
 import {
   useEpicCanvasStore,
@@ -30,7 +25,11 @@ import {
   isPersistentTerminalSurface,
   useMountedPaneTabs,
 } from "@/components/epic-canvas/canvas/use-mounted-pane-tabs";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  PaneFocusProbeContext,
+  usePaneFocusProbe,
+  usePaneVisible,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import type {
   EpicCanvasTileRef,
@@ -222,44 +221,17 @@ export const TabGroupView = memo(function TabGroupView(
     prepareSetActiveTilePaneFocusTarget,
     tabId,
   ]);
-  const deferredPaneActivationRef = useRef(false);
   const paneRootRef = useRef<HTMLDivElement | null>(null);
-
-  const handlePointerDownCapture = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      if (isPaneActivationDeferred(event.target)) {
-        deferredPaneActivationRef.current = true;
-        return;
-      }
-      deferredPaneActivationRef.current = false;
-      activatePane();
-    },
-    [activatePane],
+  const paneActivation = usePaneActivationOwnership({
+    active: globallyActive,
+    activate: activatePane,
+  });
+  const parentPaneFocusProbe = usePaneFocusProbe();
+  const isPaneFocused = useCallback(
+    () =>
+      parentPaneFocusProbe() && paneRootRef.current?.dataset.active === "true",
+    [parentPaneFocusProbe],
   );
-
-  useEffect(() => {
-    const handleDocumentClick = (event: globalThis.MouseEvent): void => {
-      if (!deferredPaneActivationRef.current) return;
-      deferredPaneActivationRef.current = false;
-      // The listener is document-level, so a deferred click in a SIBLING split
-      // pane reaches here too. Only complete the activation when the click
-      // lands inside THIS pane's subtree - otherwise a stale flag could
-      // activate the wrong pane on a deferred click elsewhere.
-      const { target } = event;
-      if (!(target instanceof Element)) return;
-      if (paneRootRef.current?.contains(target) !== true) return;
-      if (!isPaneActivationDeferred(target)) return;
-      activatePane();
-    };
-    document.addEventListener("click", handleDocumentClick);
-    return () => {
-      document.removeEventListener("click", handleDocumentClick);
-    };
-  }, [activatePane]);
-
-  const handlePointerCancelCapture = useCallback(() => {
-    deferredPaneActivationRef.current = false;
-  }, []);
 
   const handleSplitFromMenu = useCallback(
     (
@@ -325,106 +297,115 @@ export const TabGroupView = memo(function TabGroupView(
 
   return (
     <div className="relative h-full min-h-0 w-full bg-canvas">
-      <div
-        ref={paneRootRef}
-        data-testid="tab-group"
-        data-group-id={pane.id}
-        data-active={globallyActive ? "true" : "false"}
-        tabIndex={-1}
-        className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-canvas"
-        onPointerDownCapture={handlePointerDownCapture}
-        onPointerCancelCapture={handlePointerCancelCapture}
+      <PaneActivationFocusIntentContext.Provider
+        value={paneActivation.focusIntent}
       >
-        {showTabStrip ? (
-          <TabStrip
-            epicId={epicId}
-            tabId={tabId}
-            groupId={pane.id}
-            tabs={tabs}
-            activeTabId={pane.activeTabId}
-            onSelectTab={handleSelectTab}
-            onCloseTab={handleCloseTab}
-            onPromotePreview={handlePromotePreview}
-            onSplit={handleSplit}
-            onCloseGroup={handleCloseGroup}
-            onOpenBlankTab={handleOpenBlankTab}
-            canRenameTabs={canRenameTabs}
-            menuHandlers={{
-              onClose: handleCloseTab,
-              onCloseOthers: (gid, tid) =>
-                navigateNested(epicId, tabId, () =>
-                  prepareCloseOtherCanvasTabsFocusTarget(tabId, gid, tid),
-                ),
-              onCloseRight: (gid, tid) =>
-                navigateNested(epicId, tabId, () =>
-                  prepareCloseRightCanvasTabsFocusTarget(tabId, gid, tid),
-                ),
-              onCloseAll: (gid) =>
-                navigateNested(epicId, tabId, () =>
-                  prepareCloseAllCanvasTabsFocusTarget(tabId, gid),
-                ),
-              onSplit: handleSplitFromMenu,
-              onRevealInSidebar: handleRevealInSidebar,
-              onRename: handleRename,
-            }}
-          />
-        ) : null}
-        <div
-          data-testid="tab-group-body"
-          className="relative flex min-h-0 flex-1 flex-col"
-        >
-          {activeTab === null ? (
-            <PaneOpener
-              epicId={epicId}
-              tabId={tabId}
-              groupId={pane.id}
-              active={globallyActive}
-            />
-          ) : null}
-          {activeTab !== null
-            ? mountedTabs.map((tab) => {
-                const selected = activeTab.instanceId === tab.instanceId;
-                // Hidden terminals conceal via `visibility` so xterm keeps
-                // its box dimensions; hidden LRU keep-alives use
-                // `display:none` so concealed heavy bodies cost no layout
-                // or paint.
-                const terminal = isPersistentTerminalSurface(tab);
-                return (
-                  <div
-                    key={tab.instanceId}
-                    data-testid="pane-tab-layer"
-                    data-tab-instance-id={tab.instanceId}
-                    data-selected={selected ? "true" : "false"}
-                    tabIndex={-1}
-                    className={cn(
-                      "absolute inset-0 min-h-0",
-                      selected && "visible pointer-events-auto",
-                      !selected && terminal && "invisible pointer-events-none",
-                      !selected && !terminal && "hidden",
-                    )}
-                    aria-hidden={selected ? undefined : true}
-                  >
-                    <TabBodySelectedContext.Provider value={selected}>
-                      <ActiveTabBody
-                        activeTab={tab}
-                        epicId={epicId}
-                        groupId={pane.id}
-                        tabId={tabId}
-                        selected={selected}
-                        globallyActive={globallyActive}
-                      />
-                    </TabBodySelectedContext.Provider>
-                  </div>
-                );
-              })
-            : null}
-          <PaneDropZone
-            paneId={pane.id}
-            viewTabId={tabId}
-            tabCount={pane.tabInstanceIds.length}
-          />
-        </div>
-      </div>
+        <PaneFocusProbeContext.Provider value={isPaneFocused}>
+          <div
+            ref={paneRootRef}
+            data-testid="tab-group"
+            data-group-id={pane.id}
+            data-active={globallyActive ? "true" : "false"}
+            tabIndex={-1}
+            className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-canvas"
+            onFocusCapture={paneActivation.onFocusCapture}
+            onPointerDownCapture={paneActivation.onPointerDownCapture}
+            onPointerCancelCapture={paneActivation.onPointerCancelCapture}
+          >
+            {showTabStrip ? (
+              <TabStrip
+                epicId={epicId}
+                tabId={tabId}
+                groupId={pane.id}
+                tabs={tabs}
+                activeTabId={pane.activeTabId}
+                onSelectTab={handleSelectTab}
+                onCloseTab={handleCloseTab}
+                onPromotePreview={handlePromotePreview}
+                onSplit={handleSplit}
+                onCloseGroup={handleCloseGroup}
+                onOpenBlankTab={handleOpenBlankTab}
+                canRenameTabs={canRenameTabs}
+                menuHandlers={{
+                  onClose: handleCloseTab,
+                  onCloseOthers: (gid, tid) =>
+                    navigateNested(epicId, tabId, () =>
+                      prepareCloseOtherCanvasTabsFocusTarget(tabId, gid, tid),
+                    ),
+                  onCloseRight: (gid, tid) =>
+                    navigateNested(epicId, tabId, () =>
+                      prepareCloseRightCanvasTabsFocusTarget(tabId, gid, tid),
+                    ),
+                  onCloseAll: (gid) =>
+                    navigateNested(epicId, tabId, () =>
+                      prepareCloseAllCanvasTabsFocusTarget(tabId, gid),
+                    ),
+                  onSplit: handleSplitFromMenu,
+                  onRevealInSidebar: handleRevealInSidebar,
+                  onRename: handleRename,
+                }}
+              />
+            ) : null}
+            <div
+              data-testid="tab-group-body"
+              className="relative flex min-h-0 flex-1 flex-col"
+            >
+              {activeTab === null ? (
+                <PaneOpener
+                  epicId={epicId}
+                  tabId={tabId}
+                  groupId={pane.id}
+                  active={globallyActive}
+                />
+              ) : null}
+              {activeTab !== null
+                ? mountedTabs.map((tab) => {
+                    const selected = activeTab.instanceId === tab.instanceId;
+                    // Hidden terminals conceal via `visibility` so xterm keeps
+                    // its box dimensions; hidden LRU keep-alives use
+                    // `display:none` so concealed heavy bodies cost no layout
+                    // or paint.
+                    const terminal = isPersistentTerminalSurface(tab);
+                    return (
+                      <div
+                        key={tab.instanceId}
+                        data-testid="pane-tab-layer"
+                        data-tab-instance-id={tab.instanceId}
+                        data-selected={selected ? "true" : "false"}
+                        tabIndex={-1}
+                        className={cn(
+                          "absolute inset-0 min-h-0",
+                          selected && "visible pointer-events-auto",
+                          !selected &&
+                            terminal &&
+                            "invisible pointer-events-none",
+                          !selected && !terminal && "hidden",
+                        )}
+                        aria-hidden={selected ? undefined : true}
+                      >
+                        <TabBodySelectedContext.Provider value={selected}>
+                          <ActiveTabBody
+                            activeTab={tab}
+                            epicId={epicId}
+                            groupId={pane.id}
+                            tabId={tabId}
+                            selected={selected}
+                            globallyActive={globallyActive}
+                          />
+                        </TabBodySelectedContext.Provider>
+                      </div>
+                    );
+                  })
+                : null}
+              <PaneDropZone
+                paneId={pane.id}
+                viewTabId={tabId}
+                tabCount={pane.tabInstanceIds.length}
+              />
+            </div>
+          </div>
+        </PaneFocusProbeContext.Provider>
+      </PaneActivationFocusIntentContext.Provider>
     </div>
   );
 });

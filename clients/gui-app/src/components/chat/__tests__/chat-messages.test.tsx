@@ -882,6 +882,7 @@ describe("ChatMessages scroll policy", () => {
     tileLiveness.live = false;
     installLegendListViewportMetrics();
     vi.useRealTimers();
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
   });
 
   afterEach(() => {
@@ -891,6 +892,7 @@ describe("ChatMessages scroll policy", () => {
     platformMock.isMac = true;
     tileLiveness.live = false;
     setLegendListScrollContainerScrollHeightOverride(null);
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
     // Ticket 15: dual-key durable entries survive tab-key cleanup - clear the
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
@@ -2607,12 +2609,7 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  describe("M3b minimap hit-strip is fully inert at zero gutter budget, not just visually collapsed", () => {
-    // The rail sizes its hit-strip off the PANE'S WIDTH (side gutter around
-    // the centered content column), not the composer dock height the old
-    // top-right overlay clamped against - a materially different geometry
-    // axis, so this pin targets the transcript container's own measured width
-    // instead of `composerOverlayHeight`.
+  describe("minimap rail remains available in constrained panes", () => {
     function mockNarrowTranscriptWidth(widthPx: number): void {
       const container = screen.getByTestId("chat-transcript-container");
       vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
@@ -2634,50 +2631,28 @@ describe("ChatMessages scroll policy", () => {
     // used here (see the outer `afterEach`'s own comment: it would clear the
     // file's `vi.mock` module mocks for isMac / activity store).
 
-    it("goes fully inert when the pane leaves no usable hit-strip width", async () => {
+    it("stays visible and interactive when an epic canvas tile is narrow", async () => {
       const messages = makeTranscript(20);
-      renderChatMessages({ messages, scrollStateKey: "m3b-inert-hit-strip" });
-      // 780px pane, 768px content column -> 6px side gutter, below the
-      // 12px hit-strip left offset: hitStripWidth clamps to 0.
-      mockNarrowTranscriptWidth(780);
+      renderChatMessages({ messages, scrollStateKey: "always-on-minimap" });
+      // Retain the narrow rect as a regression guard against reintroducing
+      // width-based minimap gating; current assertions do not derive from it.
+      mockNarrowTranscriptWidth(420);
       await settleLegendList();
 
+      const rail = screen.getByTestId("chat-turn-minimap");
       const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
-      await waitFor(() => {
-        // jsdom does not implement the `inert` IDL property/behavior, only
-        // reflects the attribute React sets - assert on that instead of
-        // `.inert` (which reads back `undefined` here regardless of value).
-        expect(hitStrip.hasAttribute("inert")).toBe(true);
-      });
-      expect(hitStrip.getAttribute("aria-hidden")).toBe("true");
-      expect(hitStrip.classList.contains("pointer-events-none")).toBe(true);
-      expect(hitStrip.tabIndex).toBe(-1);
-      // aria-hidden removes the whole subtree from the accessibility tree -
-      // Testing Library's own role computation confirms it is unreachable,
-      // not just that we intended to hide it.
-      expect(
-        screen.queryByRole("button", { name: /Jump to message/ }),
-      ).toBeNull();
-
-      // Park in free-scrolling (a stable, non-drifting position - unlike the
-      // default following-end mode, whose own reveal-pass keeps chasing the
-      // jsdom shim's fixed large scrollHeight) so a leaking select is
-      // unambiguous: jsdom does not enforce real `inert` event-dispatch
-      // blocking, so this pins the component's OWN belt-and-suspenders guard
-      // (onClick/onKeyDown early-return on `isInert`) rather than relying
-      // solely on the browser to refuse dispatch into the subtree.
-      act(() => {
-        enterFreeScrollingAwayFromEnd();
-      });
-      await waitForPillVisible();
-      const scrollNode = getScrollNode();
-      const parkedScrollTop = scrollNode.scrollTop;
-      await selectLastChatTurnMinimapItem();
-      expect(scrollNode.scrollTop).toBe(parkedScrollTop);
-      expect(isJumpPillVisible()).toBe(true);
+      expect(rail.classList).toContain("opacity-100");
+      expect(rail.classList).not.toContain("opacity-0");
+      expect(hitStrip.hasAttribute("inert")).toBe(false);
+      expect(hitStrip.getAttribute("aria-hidden")).toBeNull();
+      expect(hitStrip.classList.contains("pointer-events-auto")).toBe(true);
+      expect(hitStrip.tabIndex).toBe(0);
+      expect(screen.getByRole("button", { name: "Message minimap" })).toBe(
+        hitStrip,
+      );
     });
 
-    it("stays interactive at the harness's default (usable) pane width", async () => {
+    it("stays interactive at the harness's default pane width", async () => {
       const messages = makeTranscript(20);
       renderChatMessages({ messages, scrollStateKey: "m3b-usable-hit-strip" });
       await settleLegendList();
@@ -2686,9 +2661,21 @@ describe("ChatMessages scroll policy", () => {
       expect(hitStrip.hasAttribute("inert")).toBe(false);
       expect(hitStrip.getAttribute("aria-hidden")).toBeNull();
       expect(hitStrip.classList.contains("pointer-events-auto")).toBe(true);
-      expect(screen.getByRole("button", { name: /Jump to message/ })).toBe(
+      expect(screen.getByRole("button", { name: "Message minimap" })).toBe(
         hitStrip,
       );
+    });
+
+    it("does not mount the minimap when its placement is hidden", async () => {
+      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "hidden-minimap",
+      });
+      await settleLegendList();
+
+      expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+      expect(screen.queryByTestId("chat-turn-minimap-hit-strip")).toBeNull();
     });
   });
 

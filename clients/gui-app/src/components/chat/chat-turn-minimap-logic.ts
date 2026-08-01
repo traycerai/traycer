@@ -16,19 +16,20 @@ export const CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE =
 export const CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR = `[${CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE}]`;
 
 export const CHAT_TURN_MINIMAP_ITEM_SPACING = 8;
-export const CHAT_TURN_MINIMAP_MIN_ITEMS = 2;
+/** Extra invisible pointer room above the first strip and below the last. */
+export const CHAT_TURN_MINIMAP_END_HIT_PADDING = 12;
+export const CHAT_TURN_MINIMAP_MIN_ITEMS = 1;
 export const CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS =
   "max(1px, calc(100% - 1rem))";
-/** Matches `chat-timeline.tsx`'s row `max-w-3xl` (48rem = 768px). */
-export const CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH = 768;
-export const CHAT_TURN_MINIMAP_PERSISTENT_GUTTER = 48;
 
 export function resolveChatTurnMinimapHeightStyle(itemCount: number): string {
-  const naturalHeight = Math.max(
+  const naturalTrackHeight = Math.max(
     1,
     (itemCount - 1) * CHAT_TURN_MINIMAP_ITEM_SPACING,
   );
+  const naturalHeight =
+    naturalTrackHeight + CHAT_TURN_MINIMAP_END_HIT_PADDING * 2;
   return `min(${naturalHeight}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`;
 }
 
@@ -40,6 +41,22 @@ export function resolveChatTurnMinimapTopPercent(
     return 0;
   }
   return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
+}
+
+/**
+ * Keeps the visible strips on their original evenly spaced track while the
+ * button extends beyond both ends to make the endpoint targets easier to hit.
+ */
+export function resolveChatTurnMinimapTopStyle(
+  index: number,
+  itemCount: number,
+): string {
+  const percent = resolveChatTurnMinimapTopPercent(index, itemCount);
+  const pixelOffset =
+    CHAT_TURN_MINIMAP_END_HIT_PADDING * (1 - (percent * 2) / 100);
+  if (pixelOffset === 0) return `${percent}%`;
+  const operator = pixelOffset > 0 ? "+" : "-";
+  return `calc(${percent}% ${operator} ${Math.abs(pixelOffset)}px)`;
 }
 
 export function resolveChatTurnMinimapIndexFromPointer(input: {
@@ -55,9 +72,15 @@ export function resolveChatTurnMinimapIndexFromPointer(input: {
     return 0;
   }
 
+  const endPadding = Math.min(
+    CHAT_TURN_MINIMAP_END_HIT_PADDING,
+    Math.max(0, (input.railHeight - 1) / 2),
+  );
+  const trackTop = input.railTop + endPadding;
+  const trackHeight = input.railHeight - endPadding * 2;
   const progress = Math.max(
     0,
-    Math.min(1, (input.pointerY - input.railTop) / input.railHeight),
+    Math.min(1, (input.pointerY - trackTop) / trackHeight),
   );
   return Math.max(
     0,
@@ -65,58 +88,15 @@ export function resolveChatTurnMinimapIndexFromPointer(input: {
   );
 }
 
-export function resolveChatTurnMinimapHasPersistentGutter(
-  viewportWidth: number,
-): boolean {
-  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) {
-    return false;
-  }
-
-  const contentWidth = Math.min(
-    viewportWidth,
-    CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH,
-  );
-  const sideGutter = Math.max(0, (viewportWidth - contentWidth) / 2);
-  return sideGutter >= CHAT_TURN_MINIMAP_PERSISTENT_GUTTER;
-}
-
-export const CHAT_TURN_MINIMAP_HIT_STRIP_LEFT = 12;
+/** Always-on edge hit target, including narrow and tiled transcript panes. */
 export const CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
 export const CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH =
   "min(22rem, calc(100vw - 1rem))";
 
 /**
- * The minimap overlays the viewport's left edge while the content column is
- * centered, so the side gutter between them shrinks under browser zoom or a
- * narrow pane. A fixed-width hover strip would then sit on top of the message
- * text and swallow its pointer events. Cap the strip's width so it never
- * extends past the gutter into the content column; 0 disables the strip.
- */
-export function resolveChatTurnMinimapHitStripWidth(
-  viewportWidth: number,
-): number {
-  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) {
-    return 0;
-  }
-
-  const contentWidth = Math.min(
-    viewportWidth,
-    CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH,
-  );
-  const sideGutter = Math.max(0, (viewportWidth - contentWidth) / 2);
-  return Math.max(
-    0,
-    Math.min(
-      CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-      Math.floor(sideGutter) - CHAT_TURN_MINIMAP_HIT_STRIP_LEFT,
-    ),
-  );
-}
-
-/**
  * Once the preview is open, keep the full preview and the space leading to it
- * interactive. The collapsed strip remains gutter-capped so it cannot block
- * selecting message text.
+ * interactive. The collapsed rail keeps a compact fixed edge target so it
+ * remains usable in narrow and tiled panes.
  */
 export function resolveChatTurnMinimapInteractiveWidth(
   collapsedWidth: number,
@@ -125,7 +105,7 @@ export function resolveChatTurnMinimapInteractiveWidth(
   return expanded ? CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH : collapsedWidth;
 }
 
-interface ChatTurnMinimapListState {
+export interface ChatTurnMinimapListState {
   readonly scroll?: number;
   readonly scrollLength?: number;
   readonly positionAtIndex?: (index: number) => number | undefined;
@@ -168,17 +148,34 @@ export function resolveChatTurnMinimapRowInView(
   state: ChatTurnMinimapListState,
   rowIndex: number,
 ): boolean {
+  const distance = resolveChatTurnMinimapRowViewportDistance(state, rowIndex);
+  return distance !== null && distance < 0;
+}
+
+/**
+ * Distance between a measured row and the usable viewport band. A negative
+ * value marks an intersection, zero marks a touching edge, and a positive
+ * value is the pixel gap. `null` means the row has no usable position.
+ *
+ * Encoding both visibility and proximity in one number lets the scroll path
+ * resolve every marker with one geometry pass and no per-row object churn.
+ */
+export function resolveChatTurnMinimapRowViewportDistance(
+  state: ChatTurnMinimapListState,
+  rowIndex: number,
+): number | null {
   const topOffset =
     typeof state.topOffsetAdjustment === "number" &&
     Number.isFinite(state.topOffsetAdjustment)
       ? state.topOffsetAdjustment
       : 0;
   const scrollTop = (state.scroll ?? 0) - topOffset;
-  const scrollBottom = scrollTop + (state.scrollLength ?? 0);
+  const scrollBottom = scrollTop + Math.max(0, state.scrollLength ?? 0);
   const rowTop = resolveChatTurnMinimapRowTop(state, rowIndex);
-  if (rowTop === null) return false;
+  if (rowTop === null) return null;
   const rowHeight = resolveChatTurnMinimapRowHeight(state, rowIndex);
-  return (
-    rowTop < scrollBottom && rowTop + Math.max(1, rowHeight ?? 1) > scrollTop
-  );
+  const rowBottom = rowTop + Math.max(1, rowHeight ?? 1);
+  if (rowTop < scrollBottom && rowBottom > scrollTop) return -1;
+  if (rowBottom <= scrollTop) return scrollTop - rowBottom;
+  return Math.max(0, rowTop - scrollBottom);
 }
