@@ -1,5 +1,6 @@
 import {
   QueryClient,
+  useMutation,
   useQueryClient,
   type UseMutationOptions,
   type UseMutationResult,
@@ -324,6 +325,48 @@ export function useEpicArchiveChat(): UseMutationResult<
         toastFromHostError(error, "Couldn't archive agent.");
       },
     },
+  });
+}
+
+export interface ArchiveChatsMutationInput {
+  readonly epicId: string;
+  readonly chatIds: readonly string[];
+  readonly archived: boolean;
+}
+
+export type ArchiveChatsMutationResult =
+  readonly PromiseSettledResult<SetChatArchivedResponse>[];
+
+/**
+ * Query-owned lifecycle for a user-initiated archive batch.
+ *
+ * Each record still travels through `useEpicArchiveChat`, preserving the host
+ * RPC gate and per-record error handling. This aggregate mutation owns the
+ * batch pending state and returns every outcome so the caller can reconcile
+ * successful selections without discarding failures.
+ */
+export function useEpicArchiveChats(): UseMutationResult<
+  ArchiveChatsMutationResult,
+  Error,
+  ArchiveChatsMutationInput
+> {
+  const archiveChat = useEpicArchiveChat();
+  return useMutation<
+    ArchiveChatsMutationResult,
+    Error,
+    ArchiveChatsMutationInput
+  >({
+    mutationKey: epicMutationKeys.archiveChats(),
+    mutationFn: (variables) =>
+      Promise.allSettled(
+        variables.chatIds.map((chatId) =>
+          archiveChat.mutateAsync({
+            epicId: variables.epicId,
+            chatId,
+            archived: variables.archived,
+          }),
+        ),
+      ),
   });
 }
 

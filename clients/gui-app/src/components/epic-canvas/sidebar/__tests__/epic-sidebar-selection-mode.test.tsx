@@ -112,7 +112,13 @@ interface TestState {
   /** Ids whose record carries a non-null `archivedAt`. */
   archivedIds: readonly string[];
   archiveMutate: Mock;
-  archiveMutateAsync: Mock;
+  archiveMutateAsync: Mock<
+    (input: {
+      readonly epicId: string;
+      readonly chatId: string;
+      readonly archived: boolean;
+    }) => Promise<unknown>
+  >;
   rowHostId: string | null;
   rowHostEntry: unknown;
   rowHostClient: unknown;
@@ -372,6 +378,31 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicArchiveChats: () => ({
+    isPending: false,
+    mutate: (
+      variables: {
+        readonly epicId: string;
+        readonly chatIds: readonly string[];
+        readonly archived: boolean;
+      },
+      options: {
+        readonly onSuccess: (
+          results: readonly PromiseSettledResult<unknown>[],
+        ) => void;
+      },
+    ) => {
+      void Promise.allSettled(
+        variables.chatIds.map((chatId) =>
+          testState.archiveMutateAsync({
+            epicId: variables.epicId,
+            chatId,
+            archived: variables.archived,
+          }),
+        ),
+      ).then(options.onSuccess);
+    },
+  }),
   useEpicArchiveChat: () => ({
     mutate: testState.archiveMutate,
     mutateAsync: testState.archiveMutateAsync,

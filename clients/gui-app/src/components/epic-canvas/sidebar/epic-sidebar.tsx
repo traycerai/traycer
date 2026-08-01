@@ -130,7 +130,7 @@ import {
 } from "@/lib/disabled-presentation";
 import { displayTitle } from "@/lib/display-title";
 import {
-  useEpicArchiveChat,
+  useEpicArchiveChats,
   useEpicDeleteChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
@@ -1355,11 +1355,10 @@ interface SelectedChatArchiveAction {
 function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
   const selection = useSidebarBulkSelection();
   const supported = useChatArchiveSupported();
-  const archiveChat = useEpicArchiveChat();
+  const archiveChats = useEpicArchiveChats();
   const activeAgentIds = useEpicActiveAgentIds();
   const tree = useEpicTreeIndex();
   const epicId = useOpenEpicHandle().epicId;
-  const [pending, setPending] = useState(false);
   const selectedRootIds = useMemo(
     () =>
       rootmostSelectedSidebarIds({
@@ -1379,41 +1378,44 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
       selection.panelId !== "chats" ||
       !supported ||
       !canMutate ||
-      pending ||
+      archiveChats.isPending ||
       selectedRootIds.length === 0 ||
       selectedHasActiveAgent
     ) {
       return;
     }
-    setPending(true);
-    void Promise.allSettled(
-      selectedRootIds.map((chatId) =>
-        archiveChat.mutateAsync({ epicId, chatId, archived: true }),
-      ),
-    ).then((results) => {
-      const successfulRootIds = selectedRootIds.filter(
-        (_id, index) => results[index].status === "fulfilled",
-      );
-      const successfulSelectedIds = sidebarIdsWithinRoots({
-        ids: selection.selectedVisibleIds,
-        rootIds: successfulRootIds,
-        tree,
-      });
-      setPending(false);
-      selection.clearSelectedIds(successfulSelectedIds);
-    });
+    archiveChats.mutate(
+      { epicId, chatIds: selectedRootIds, archived: true },
+      {
+        onSuccess: (results) => {
+          const successfulRootIds = selectedRootIds.filter(
+            (_id, index) => results[index].status === "fulfilled",
+          );
+          const successfulSelectedIds = sidebarIdsWithinRoots({
+            ids: selection.selectedVisibleIds,
+            rootIds: successfulRootIds,
+            tree,
+          });
+          selection.clearSelectedIds(successfulSelectedIds);
+        },
+      },
+    );
   }, [
-    archiveChat,
+    archiveChats,
     canMutate,
     epicId,
-    pending,
     selectedHasActiveAgent,
     selectedRootIds,
     selection,
     supported,
     tree,
   ]);
-  return { supported, pending, selectedHasActiveAgent, archiveSelected };
+  return {
+    supported,
+    pending: archiveChats.isPending,
+    selectedHasActiveAgent,
+    archiveSelected,
+  };
 }
 
 function describeSidebarBulkDeleteTitle(

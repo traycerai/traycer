@@ -29,7 +29,8 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
-const { forceReleaseChatSession } = vi.hoisted(() => ({
+const { archiveChatMutateAsync, forceReleaseChatSession } = vi.hoisted(() => ({
+  archiveChatMutateAsync: vi.fn(),
   forceReleaseChatSession: vi.fn(),
 }));
 vi.mock("@/lib/registries/chat-session-registry", () => ({
@@ -54,12 +55,16 @@ const capturedMutations: Partial<Record<string, CapturedMutationArgs>> = {};
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: (args: CapturedMutationArgs) => {
     capturedMutations[args.method] = args;
-    return { mutate: vi.fn(), isPending: false };
+    return {
+      mutate: vi.fn(),
+      mutateAsync: archiveChatMutateAsync,
+      isPending: false,
+    };
   },
 }));
 
 import { toast } from "sonner";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -67,6 +72,7 @@ import {
 } from "@tanstack/react-query";
 import {
   useEpicArchiveChat,
+  useEpicArchiveChats,
   useEpicCreateChat,
   useEpicRenameChat,
   useEpicDeleteChat,
@@ -262,5 +268,53 @@ describe("useEpicArchiveChat", () => {
     expect(toast.error).toHaveBeenCalledWith(
       "This needs a newer Traycer host. Update the host to continue.",
     );
+  });
+});
+
+describe("useEpicArchiveChats", () => {
+  it("tracks the aggregate archive batch with a Query mutation", async () => {
+    let resolveArchive: (value: SetChatArchivedResponse) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const pendingArchive = new Promise<SetChatArchivedResponse>((resolve) => {
+      resolveArchive = resolve;
+    });
+    archiveChatMutateAsync.mockReturnValue(pendingArchive);
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chatIds: ["chat-1", "chat-2"],
+        archived: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+    });
+    expect(archiveChatMutateAsync).toHaveBeenCalledTimes(2);
+    expect(archiveChatMutateAsync).toHaveBeenNthCalledWith(1, {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      archived: true,
+    });
+    expect(archiveChatMutateAsync).toHaveBeenNthCalledWith(2, {
+      epicId: "epic-1",
+      chatId: "chat-2",
+      archived: true,
+    });
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+      expect(result.current.data?.map((entry) => entry.status)).toEqual([
+        "fulfilled",
+        "fulfilled",
+      ]);
+    });
   });
 });
