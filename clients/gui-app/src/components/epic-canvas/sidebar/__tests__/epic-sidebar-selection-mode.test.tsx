@@ -16,6 +16,8 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 
 interface TestTreeNode {
   readonly id: string;
@@ -75,6 +77,27 @@ interface TestState {
   activityTierById: Map<string, "turn" | "background">;
   chatHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   tuiHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
+  /**
+   * Optional TUI agent projection fields for the leading harness mark. When a
+   * node is missing here, the row still renders the harness (via
+   * `tuiHarnessIds`) but without a managed-profile accent.
+   */
+  tuiAgentById: Readonly<
+    Partial<
+      Record<
+        string,
+        {
+          readonly hostId: string;
+          readonly profileId: string | null;
+        }
+      >
+    >
+  >;
+  tuiProviderProfiles: ReadonlyArray<{
+    readonly profileId: string;
+    readonly kind: "ambient" | "managed";
+    readonly label: string;
+  }>;
   permissionRole: "owner" | "editor" | "viewer" | null;
   /**
    * The host's `epic.setChatArchived` support, as the registry reports it:
@@ -133,6 +156,8 @@ const testState = vi.hoisted<TestState>(() => ({
   activityTierById: new Map<string, "turn" | "background">(),
   chatHarnessIds: {},
   tuiHarnessIds: {},
+  tuiAgentById: {},
+  tuiProviderProfiles: [],
   permissionRole: "owner",
   archiveSupport: true,
   showArchived: false,
@@ -552,7 +577,62 @@ vi.mock("@/hooks/use-epic-store", () => ({
           ]),
         ),
       },
+      tuiAgents: {
+        byId: Object.fromEntries(
+          Object.entries(testState.tuiAgentById).flatMap(([id, agent]) => {
+            if (agent === undefined) return [];
+            return [
+              [
+                id,
+                {
+                  id,
+                  hostId: agent.hostId,
+                  profileId: agent.profileId,
+                },
+              ],
+            ];
+          }),
+        ),
+      },
     }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => testState.rowHostClient,
+}));
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: {
+      providers: [
+        {
+          // Wire id for the `claude` / `codex` harnesses used in identity tests.
+          // Codex is not multi-profile here; claude-code carries the profiles
+          // the managed-badge case resolves against.
+          providerId: "claude-code",
+          profiles: testState.tuiProviderProfiles.map((entry) => ({
+            profileId: entry.profileId,
+            kind: entry.kind,
+            authType: "oauth",
+            label: entry.label,
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          })),
+        },
+      ],
+    },
+  }),
 }));
 
 const seedEpicArtifacts = vi.hoisted(() => vi.fn());
@@ -652,6 +732,8 @@ describe("epic sidebar selection mode", () => {
     testState.rowHostClient = { getActiveHostId: () => "host-1" };
     testState.activeHostClient = { getActiveHostId: () => "host-1" };
     testState.sessionHandleByChatId = {};
+    useNewConversationModalStore.getState().resetForTests();
+    useNewConversationModalOpenStore.getState().close();
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
@@ -916,6 +998,9 @@ describe("epic sidebar selection mode", () => {
 
   it("consolidates row actions into one menu with 'New child agent' first, reachable from both the ⋯ dropdown and right-click", async () => {
     seedChatTree();
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode(EPIC_ID, "terminal");
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -935,13 +1020,25 @@ describe("epic sidebar selection mode", () => {
     expect(
       await screen.findByTestId("epic-sidebar-context-new-child-chat-root"),
     ).not.toBeNull();
-    expect(
-      screen.getByRole("menuitem", { name: "New child agent" }),
-    ).not.toBeNull();
+    const newChildAgent = screen.getByRole("menuitem", {
+      name: "New child agent",
+    });
     expect(
       await screen.findByRole("menuitem", { name: "Rename" }),
     ).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
+
+    fireEvent.click(newChildAgent);
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.composerMode,
+    ).toBe("terminal");
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      parentId: "chat-root",
+    });
   });
 
   it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {
@@ -2341,6 +2438,8 @@ describe("sidebar leading identity icon", () => {
     testState.activityTierById = new Map();
     testState.chatHarnessIds = {};
     testState.tuiHarnessIds = {};
+    testState.tuiAgentById = {};
+    testState.tuiProviderProfiles = [];
     testState.permissionRole = "owner";
   });
 
@@ -2423,6 +2522,63 @@ describe("sidebar leading identity icon", () => {
       screen.getByTestId("epic-sidebar-rename-input-agent-root"),
     ).toBeTruthy();
     expectTuiHarness("agent-root");
+  });
+
+  it("badges a managed-profile TUI row while keeping the terminal surface glyph", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "claude" };
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: "profile-1" },
+    };
+    testState.tuiProviderProfiles = [
+      {
+        profileId: "ambient",
+        kind: "ambient",
+        label: "Terminal account",
+      },
+      {
+        profileId: "profile-1",
+        kind: "managed",
+        label: "Work account",
+      },
+    ];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expectTuiHarness("agent-root");
+    expect(
+      screen.getByTestId("sidebar-agent-profile-mark-agent-root"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "claude, Work account" }),
+    ).toBeTruthy();
+    // Terminal surface mark still marks the row as a TUI agent.
+    expect(screen.getByTestId("sidebar-agent-surface-agent-root")).toBeTruthy();
+  });
+
+  it("keeps ambient TUI rows unbadged (bare harness + terminal glyph)", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "claude" };
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: null },
+    };
+    testState.tuiProviderProfiles = [
+      {
+        profileId: "ambient",
+        kind: "ambient",
+        label: "Terminal account",
+      },
+      {
+        profileId: "profile-1",
+        kind: "managed",
+        label: "Work account",
+      },
+    ];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expectTuiHarness("agent-root");
+    expect(screen.getByRole("img", { name: "claude" })).toBeTruthy();
+    const mark = screen.getByTestId("sidebar-agent-profile-mark-agent-root");
+    expect(mark.querySelector('span[style*="background-color"]')).toBeNull();
   });
 
   it("falls back to the bot glyph when a TUI row has no harness id", () => {

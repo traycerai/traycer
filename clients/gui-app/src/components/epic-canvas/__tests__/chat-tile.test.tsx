@@ -10,7 +10,10 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
+import {
+  installLegendListViewportMetrics,
+  settleLegendList,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -706,39 +709,35 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
   return (
     <TestRouterProvider>
-      <VirtuosoMessageListTestingContext.Provider
-        value={{ itemHeight: 120, viewportHeight: 900 }}
-      >
-        <QueryClientProvider client={queryClient}>
-          <RunnerHostProvider
-            runnerHost={
-              new MockRunnerHost({
-                signInUrl: "https://example.com",
-                authnBaseUrl: "https://auth.example.com",
-                localHost: null,
-                hosts: [],
-                workspaceFolderPickerPaths: undefined,
-                hasLocalHost: undefined,
-                traycerCli: undefined,
-              })
-            }
-          >
-            <TooltipProvider>
-              <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {chatVisible ? (
-                    <ChatTile
-                      node={CHAT_ARTIFACT}
-                      viewTabId="tab-test"
-                      isActive
-                    />
-                  ) : null}
-                </TabHostProvider>
-              </TestEpicSessionWrapper>
-            </TooltipProvider>
-          </RunnerHostProvider>
-        </QueryClientProvider>
-      </VirtuosoMessageListTestingContext.Provider>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider
+          runnerHost={
+            new MockRunnerHost({
+              signInUrl: "https://example.com",
+              authnBaseUrl: "https://auth.example.com",
+              localHost: null,
+              hosts: [],
+              workspaceFolderPickerPaths: undefined,
+              hasLocalHost: undefined,
+              traycerCli: undefined,
+            })
+          }
+        >
+          <TooltipProvider>
+            <TestEpicSessionWrapper epicId={EPIC_ID}>
+              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                {chatVisible ? (
+                  <ChatTile
+                    node={CHAT_ARTIFACT}
+                    viewTabId="tab-test"
+                    isActive
+                  />
+                ) : null}
+              </TabHostProvider>
+            </TestEpicSessionWrapper>
+          </TooltipProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
     </TestRouterProvider>
   );
 }
@@ -747,6 +746,10 @@ async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
     expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
   });
+  // LegendList needs a few frames (plus its scroll-finish fallback) to
+  // bootstrap its initial scroll position and measure rows in jsdom before
+  // any message content actually mounts - see legend-list-test-environment.ts.
+  await settleLegendList();
   await waitFor(() => {
     expect(screen.getByText("Host chat content")).not.toBeNull();
   });
@@ -801,6 +804,7 @@ function registerWaitingChatHandoff(): void {
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    installLegendListViewportMetrics();
     window.localStorage.clear();
     useAuthStore.setState({
       status: "signed-in",
@@ -845,6 +849,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();

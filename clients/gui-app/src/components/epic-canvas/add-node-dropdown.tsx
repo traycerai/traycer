@@ -403,6 +403,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             // dropdown's own `useProvidersList()` read below.
             createProfileHostId={null}
             runTargetHostId={null}
+            profileAdmission={null}
           />
           <div className="shrink-0">
             <AgentModeToggle

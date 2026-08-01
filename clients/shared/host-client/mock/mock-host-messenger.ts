@@ -2,6 +2,8 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
   HostRequestAbortedError,
+  HostTransportFailureError,
+  RetryableTransportError,
   type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
@@ -205,13 +207,7 @@ export class MockHostMessenger<
         throw cause;
       }
       if (cause instanceof HostRpcError) {
-        const error = new HostRpcError({
-          code: cause.code,
-          message: cause.message,
-          requestId,
-          method,
-          fatalDetails: cause.fatalDetails,
-        });
+        const error = restampHostRpcError(cause, requestId, method);
         this.emit({
           kind: "response",
           method,
@@ -259,6 +255,38 @@ export class MockHostMessenger<
       listener(event);
     }
   }
+}
+
+/**
+ * Re-stamp a handler-thrown `HostRpcError` with THIS request's id/method while
+ * preserving its class.
+ *
+ * The class is part of the contract, not decoration: `HostTransportFailureError`
+ * is what tells a caller the host never answered, and `RetryableTransportError`
+ * is what the retrying messenger and the compat gate branch on. Rebuilding
+ * every throw as a plain `HostRpcError` silently downgraded those to
+ * "the host answered with an error", so no test could reach the code paths that
+ * exist precisely to tell the two apart.
+ */
+function restampHostRpcError(
+  cause: HostRpcError,
+  requestId: string,
+  method: string,
+): HostRpcError {
+  const details = {
+    code: cause.code,
+    message: cause.message,
+    requestId,
+    method,
+    fatalDetails: cause.fatalDetails,
+  };
+  if (cause instanceof RetryableTransportError) {
+    return new RetryableTransportError(details);
+  }
+  if (cause instanceof HostTransportFailureError) {
+    return new HostTransportFailureError(details);
+  }
+  return new HostRpcError(details);
 }
 
 function awaitAbortableHandler<Response>(

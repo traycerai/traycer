@@ -1,4 +1,7 @@
 #!/usr/bin/env -S bun
+// Must stay the first import: it installs the proxy dispatcher every later
+// module's outbound request depends on, Sentry's transport included.
+import "./net/install-env-proxy";
 import "./sentry";
 import * as Sentry from "@sentry/node";
 import {

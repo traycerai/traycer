@@ -89,6 +89,9 @@ function baseInput(
     chatSettings: BASE_CHAT_SETTINGS,
     tuiHarnessId: null,
     tuiModel: null,
+    tuiReasoningEffort: null,
+    tuiAgentMode: null,
+    tuiProfileId: null,
     harnesses: [claudeHarnessEntry()],
     profiles: [],
     ...overrides,
@@ -124,7 +127,37 @@ describe("deriveOwnerSettingsHeader", () => {
         label: "Work account",
       },
       permissionMode: "supervised",
+      agentMode: null,
     });
+  });
+
+  it("resolves a read-only model label through resolvedModel alias drift", () => {
+    const entry = claudeHarnessEntry();
+    const decoratedModel = entry.models[0];
+
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        chatSettings: {
+          ...BASE_CHAT_SETTINGS,
+          model: "claude-fable-5",
+        },
+        harnesses: [
+          {
+            ...entry,
+            models: [
+              {
+                ...decoratedModel,
+                slug: "claude-fable-5[1m]",
+                label: "Fable 5 (1M)",
+                metadata: { resolvedModel: "claude-fable-5" },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(view?.modelLabel).toBe("Fable 5 (1M)");
   });
 
   it.each([
@@ -253,7 +286,110 @@ describe("deriveOwnerSettingsHeader", () => {
       fastMode: false,
       profileAccentDot: null,
       permissionMode: null,
+      agentMode: null,
     });
+  });
+
+  it("resolves managed-profile TUI identity: badge, model, effort, and agent mode", () => {
+    const profileId = "profile-1";
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        ownerKind: "terminal-agent",
+        chatSettings: null,
+        tuiHarnessId: "claude",
+        tuiModel: "sonnet-4.5",
+        tuiReasoningEffort: "high",
+        tuiAgentMode: "epic",
+        tuiProfileId: profileId,
+        profiles: [
+          providerProfile("ambient", "ambient", "Terminal account"),
+          providerProfile(profileId, "managed", "Work account"),
+        ],
+      }),
+    );
+
+    expect(view).toEqual({
+      harnessId: "claude",
+      harnessName: "Claude Code",
+      modelLabel: "Claude Sonnet 4.5",
+      reasoningLabel: "High",
+      fastMode: false,
+      profileAccentDot: {
+        profileId,
+        accentColor: null,
+        label: "Work account",
+      },
+      permissionMode: null,
+      agentMode: "epic",
+    });
+  });
+
+  it("keeps ambient TUI agents unbadged even when the provider has multiple profiles", () => {
+    // Terminal ambient is the bare harness mark - unlike chats, which badge the
+    // ambient Terminal account once 2+ profiles exist.
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        ownerKind: "terminal-agent",
+        chatSettings: null,
+        tuiHarnessId: "claude",
+        tuiModel: "sonnet-4.5",
+        tuiReasoningEffort: "medium",
+        tuiAgentMode: "regular",
+        tuiProfileId: null,
+        profiles: [
+          providerProfile("ambient", "ambient", "Terminal account"),
+          providerProfile("profile-1", "managed", "Work account"),
+        ],
+      }),
+    );
+
+    expect(view?.profileAccentDot).toBeNull();
+    expect(view?.reasoningLabel).toBe("Medium");
+    expect(view?.agentMode).toBe("regular");
+    expect(view?.fastMode).toBe(false);
+  });
+
+  it("degrades a tombstoned/unknown TUI profile to bare harness with no badge", () => {
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        ownerKind: "terminal-agent",
+        chatSettings: null,
+        tuiHarnessId: "claude",
+        tuiModel: "sonnet-4.5",
+        tuiReasoningEffort: "high",
+        tuiAgentMode: "regular",
+        tuiProfileId: "deleted-profile",
+        profiles: [
+          providerProfile("ambient", "ambient", "Terminal account"),
+          providerProfile("profile-1", "managed", "Work account"),
+        ],
+      }),
+    );
+
+    expect(view?.profileAccentDot).toBeNull();
+    expect(view?.modelLabel).toBe("Claude Sonnet 4.5");
+    expect(view?.reasoningLabel).toBe("High");
+    expect(view?.agentMode).toBe("regular");
+  });
+
+  it("never enables fast mode for TUI agents (no serviceTier on the record)", () => {
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        ownerKind: "terminal-agent",
+        chatSettings: null,
+        tuiHarnessId: "claude",
+        tuiModel: "sonnet-4.5",
+        tuiReasoningEffort: "high",
+        tuiAgentMode: "regular",
+        tuiProfileId: "profile-1",
+        profiles: [
+          providerProfile("ambient", "ambient", "Terminal account"),
+          providerProfile("profile-1", "managed", "Work account"),
+        ],
+      }),
+    );
+
+    expect(view?.fastMode).toBe(false);
   });
 
   it("falls back to the raw slug for a TUI agent when the catalog is empty", () => {
