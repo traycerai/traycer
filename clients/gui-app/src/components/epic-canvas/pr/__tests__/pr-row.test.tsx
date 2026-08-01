@@ -1,8 +1,16 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { makePrDetailTile, prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -106,6 +114,35 @@ function renderRow(overrides: Partial<PrLightItem>) {
   );
 }
 
+function createRunnerHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.traycer.test/sign-in",
+    authnBaseUrl: "https://auth.traycer.test",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
+/** As {@link renderRow}, but with a RunnerHost bound so the bridge is live. */
+function renderRowWithRunnerHost(runnerHost: MockRunnerHost) {
+  return render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+      }
+    >
+      <RunnerHostContext.Provider value={runnerHost}>
+        <TooltipProvider>
+          <PrRow entry={entry({}, () => {})} epicId="epic-1" tabId={TAB_ID} />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>
+    </QueryClientProvider>,
+  );
+}
+
 beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
@@ -142,6 +179,44 @@ describe("PrRow band 1: identity badges", () => {
       screen.queryByRole("link", { name: "Open #4226 on GitHub" }),
     ).toBeNull();
     expect(screen.getByTestId("pr-row-number").tagName).not.toBe("A");
+  });
+
+  it("drops a second badge click fired while the first bridge request is in flight", async () => {
+    // `mutate` fires a fresh RunnerHost request per call, so an unguarded
+    // double click opens the user's browser twice. Same guard, same reason, as
+    // `PrDetailGitHubLink` and `PrExternalGitHubLink`.
+    const host = createRunnerHost();
+    let resolveOpen: (() => void) | undefined;
+    const openExternalLink = vi
+      .spyOn(host, "openExternalLink")
+      .mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveOpen = resolve;
+          }),
+      );
+    renderRowWithRunnerHost(host);
+
+    const badge = screen.getByTestId("pr-row-number");
+    fireEvent.click(badge);
+
+    // Wait until the first request is genuinely in flight (`isPending` true)
+    // before the second click, so its handler closure observes the pending
+    // mutation rather than racing the first dispatch.
+    await waitFor(() => {
+      expect(openExternalLink).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(badge);
+
+    // `mutate` dispatches through a microtask, so a second, unwanted call
+    // would not appear in a synchronous assertion - flush first.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(openExternalLink).toHaveBeenCalledTimes(1);
+    expect(openExternalLink).toHaveBeenCalledWith(
+      "https://github.com/traycerai/traycer-internal/pull/4226",
+    );
+
+    resolveOpen?.();
   });
 });
 
