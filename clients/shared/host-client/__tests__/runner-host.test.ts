@@ -181,6 +181,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
       { kind: "info" },
       null,
       "delivery-1",
+      null,
     );
 
     expect(host.tray.indicator).toBe("attention");
@@ -192,6 +193,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
         payload: { kind: "info" },
         replaceKey: null,
         deliveryKey: "delivery-1",
+        foregroundAppLocal: null,
       },
     ]);
     expect(traySelection).not.toHaveBeenCalled();
