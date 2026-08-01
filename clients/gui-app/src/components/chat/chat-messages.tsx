@@ -3052,7 +3052,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               data-testid="chat-messages-scroll"
               data-scroll-mode={scrollMode}
             />
-            {hasContent ? (
+            {hasContent && chatTurnMinimapSide !== "hide" ? (
               <ChatTurnMinimap
                 messages={messages}
                 inViewRefreshRef={minimapInViewRefreshRef}

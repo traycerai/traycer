@@ -882,6 +882,7 @@ describe("ChatMessages scroll policy", () => {
     tileLiveness.live = false;
     installLegendListViewportMetrics();
     vi.useRealTimers();
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
   });
 
   afterEach(() => {
@@ -891,6 +892,7 @@ describe("ChatMessages scroll policy", () => {
     platformMock.isMac = true;
     tileLiveness.live = false;
     setLegendListScrollContainerScrollHeightOverride(null);
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
     // Ticket 15: dual-key durable entries survive tab-key cleanup - clear the
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
@@ -2662,6 +2664,18 @@ describe("ChatMessages scroll policy", () => {
       expect(screen.getByRole("button", { name: "Message minimap" })).toBe(
         hitStrip,
       );
+    });
+
+    it("does not mount the minimap when its placement is hidden", async () => {
+      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "hidden-minimap",
+      });
+      await settleLegendList();
+
+      expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+      expect(screen.queryByTestId("chat-turn-minimap-hit-strip")).toBeNull();
     });
   });
 

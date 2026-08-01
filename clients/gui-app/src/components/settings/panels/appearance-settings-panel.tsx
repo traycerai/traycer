@@ -188,12 +188,18 @@ export function AppearanceSettingsPanel() {
           />
           <SettingsRow
             label="Message minimap side"
-            description="Place the chat turn minimap on the left or right edge of the transcript."
+            description="Place the chat turn minimap on either transcript edge, or hide it entirely."
             control={
               <Select
                 value={chatTurnMinimapSide}
                 onValueChange={(value) => {
-                  if (value !== "left" && value !== "right") return;
+                  if (
+                    value !== "left" &&
+                    value !== "right" &&
+                    value !== "hide"
+                  ) {
+                    return;
+                  }
                   trackAppearanceSetting("chatTurnMinimapSide");
                   setChatTurnMinimapSide(value);
                 }}
@@ -208,6 +214,7 @@ export function AppearanceSettingsPanel() {
                 <SelectContent>
                   <SelectItem value="right">Right</SelectItem>
                   <SelectItem value="left">Left</SelectItem>
+                  <SelectItem value="hide">Hide</SelectItem>
                 </SelectContent>
               </Select>
             }
