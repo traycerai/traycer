@@ -35,7 +35,10 @@ import {
   ArtifactFilterMenu,
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
-import { CommGraphOpenButton } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
+import {
+  CommGraphOpenButton,
+  CommGraphOpenMenuItem,
+} from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -1793,6 +1796,7 @@ function CompactPanelHeaderMoreMenu(props: {
   }
   return (
     <CompactChatHeaderMoreMenu
+      epicId={props.epicId}
       tabId={props.tabId}
       collapsed={props.collapsed}
     />
@@ -1839,6 +1843,7 @@ function CompactMoreMenuTrigger(props: {
 }
 
 function CompactChatHeaderMoreMenu(props: {
+  readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
 }) {
@@ -1861,6 +1866,10 @@ function CompactChatHeaderMoreMenu(props: {
           <CopyMinus className="size-4" />
           Collapse all
         </DropdownMenuItem>
+        <CommGraphOpenMenuItem
+          epicId={props.epicId}
+          disabled={props.collapsed}
+        />
         {isEditableRole(permissionRole) ? (
           <DropdownMenuItem
             disabled={!selectionEnabled}

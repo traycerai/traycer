@@ -1225,6 +1225,57 @@ describe("NotificationsPopover", () => {
     ).toBeTypeOf("number");
   });
 
+  it("navigates a TUI completion row to its terminal agent", async () => {
+    applyHostSnapshot(
+      [
+        {
+          id: "agent.stopped:tui-1",
+          updatedAt: 10,
+          readAt: null,
+          kind: "agent.stopped",
+          sourceRef: "tui-1",
+          severity: "done",
+          outcome: "completed",
+          epicId: "epic-tui",
+          chatId: "tui-1",
+          payload: {
+            kind: "epic",
+            epicId: "epic-tui",
+            tuiAgentId: "tui-1",
+            agentName: "Terminal agent",
+            taskTitle: "TUI task",
+            outcome: "completed",
+          },
+        },
+      ],
+      { unreadCount: 1, attentionCount: 0 },
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const onNavigate = vi.fn();
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const entry = await screen.findByTestId("notification-entry");
+    const trigger = within(entry).getByRole<HTMLButtonElement>("button", {
+      name: /TUI task/,
+    });
+
+    await act(async () => {
+      fireEvent.click(trigger);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(captured.epicId).toBe("epic-tui");
+    expect(captured.focusArtifactId).toBe("tui-1");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+  });
+
   it("marks every notification as read when Mark all read is clicked", async () => {
     const captured: TargetCapture = {
       epicId: null,

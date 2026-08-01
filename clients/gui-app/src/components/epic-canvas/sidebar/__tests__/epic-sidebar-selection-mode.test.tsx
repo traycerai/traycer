@@ -283,6 +283,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   }) => (
     <button
       type="button"
+      role="menuitem"
       data-testid={props["data-testid"]}
       disabled={props.disabled}
       onClick={props.onSelect}
@@ -874,6 +875,20 @@ describe("epic sidebar selection mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
     expect(
       section.querySelector('[data-panel-header-mode="selection"]'),
+    ).not.toBeNull();
+  });
+
+  it("keeps the communication graph available in the compact Agents overflow", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen.getByRole("button", { name: "Open communication graph" })
+        .className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
+      screen.getByRole("menuitem", { name: "Open communication graph" }),
     ).not.toBeNull();
   });
 

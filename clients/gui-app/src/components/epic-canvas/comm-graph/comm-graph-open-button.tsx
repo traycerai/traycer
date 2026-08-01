@@ -16,6 +16,7 @@ import { useCallback } from "react";
 import { Waypoints } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 
@@ -26,13 +27,17 @@ export interface CommGraphOpenButtonProps {
   readonly className: string;
 }
 
-export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
-  const { className, disabled, epicId } = props;
+function useOpenCommGraph(epicId: string): () => void {
   const tileNavigation = useEpicTileNavigation();
 
-  const openGraph = useCallback(() => {
+  return useCallback(() => {
     tileNavigation.openTileInEpic(epicId, makeCommGraphTileRef(epicId));
   }, [epicId, tileNavigation]);
+}
+
+export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
+  const { className, disabled, epicId } = props;
+  const openGraph = useOpenCommGraph(epicId);
 
   return (
     <Button
@@ -47,5 +52,23 @@ export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
     >
       <Waypoints className="size-4" />
     </Button>
+  );
+}
+
+export function CommGraphOpenMenuItem(props: {
+  readonly epicId: string;
+  readonly disabled: boolean;
+}) {
+  const openGraph = useOpenCommGraph(props.epicId);
+
+  return (
+    <DropdownMenuItem
+      disabled={props.disabled}
+      onSelect={openGraph}
+      data-testid="epic-sidebar-more-open-comm-graph"
+    >
+      <Waypoints className="size-4" />
+      Open communication graph
+    </DropdownMenuItem>
   );
 }
