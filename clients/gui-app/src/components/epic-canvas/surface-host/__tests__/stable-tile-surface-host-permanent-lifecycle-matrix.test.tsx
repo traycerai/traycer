@@ -6,7 +6,13 @@ import {
   type ReactNode,
 } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
@@ -62,6 +68,7 @@ import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snap
 import { getChatsMap } from "@/stores/epics/open-epic/projection-helpers";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
+import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 
 /**
  * Ticket 21 slice 5 (jsdom half): the PERMANENT lifecycle-matrix gate for the
@@ -1083,6 +1090,75 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
         .getState()
         .resizeSplitInTab(VIEW_TAB_ID, "root-g", [0.3, 0.7]);
     });
+
+    expect(currentCanvas().sizesByGroupId["root-g"]).toEqual([0.3, 0.7]);
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+    expect(mountCount(CHAT_SIBLING.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_SIBLING.instanceId)).toBe(0);
+    expectRefsStable(container, CHAT_TRACKED.instanceId, trackedBefore);
+    expectRefsStable(container, CHAT_SIBLING.instanceId, siblingBefore);
+  });
+
+  it("row 8b - divider-drag REAL pointer sequence (switch ON): the drag actually commits through usePointerDragCommit, not just the store action", async () => {
+    seedCanvas(
+      group("root-g", "horizontal", [
+        pane("p1", [CHAT_TRACKED.instanceId]),
+        pane("p2", [CHAT_SIBLING.instanceId]),
+      ]),
+      [CHAT_TRACKED, CHAT_SIBLING],
+      "p1",
+    );
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
+    const trackedBefore = captureRefs(container, CHAT_TRACKED.instanceId);
+    const siblingBefore = captureRefs(container, CHAT_SIBLING.instanceId);
+
+    const split = container.querySelector('[data-testid="tile-split"]');
+    if (split === null) throw new Error("expected the root split container");
+    vi.spyOn(split, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 1000, 600),
+    );
+    const handle = container.querySelector(
+      '[data-testid="split-resize-handle"]',
+    );
+    if (handle === null) throw new Error("expected the split resize handle");
+
+    // Row 1's live-pass fix: move/up are delivered via window listeners once
+    // a drag starts, so they no longer need to target the handle itself.
+    // Dispatching them on a stand-in element proves the REAL production
+    // wiring (not just the isolated hook) tolerates that.
+    const decoy = document.createElement("div");
+    document.body.appendChild(decoy);
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 7,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      decoy,
+      pointerEvent("pointermove", {
+        pointerId: 7,
+        clientX: 300,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      decoy,
+      pointerEvent("pointerup", {
+        pointerId: 7,
+        clientX: 300,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    document.body.removeChild(decoy);
 
     expect(currentCanvas().sizesByGroupId["root-g"]).toEqual([0.3, 0.7]);
     expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
