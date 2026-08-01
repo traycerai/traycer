@@ -100,6 +100,8 @@ interface RenderTimelineOptions {
   readonly topFadeEnabled?: boolean;
   readonly followEnabled?: boolean;
   readonly onItemSizeChanged?: () => void;
+  /** Ticket 22: forwarded to LegendList for viewport-length changes. */
+  readonly onLayout?: () => void;
   readonly navigationHighlightedMessageId?: string | null;
 }
 
@@ -133,6 +135,7 @@ function renderTimeline(options: RenderTimelineOptions) {
         topFadeEnabled={options.topFadeEnabled}
         followEnabled={options.followEnabled}
         onItemSizeChanged={options.onItemSizeChanged}
+        onLayout={options.onLayout}
         navigationHighlightedMessageId={navigationHighlightedMessageId}
       />
     </div>
@@ -431,6 +434,26 @@ describe("ChatTimeline", () => {
     });
 
     expect(onItemSizeChanged).toHaveBeenCalled();
+  });
+
+  // Ticket 22: ChatTimeline forwards `onLayout` to LegendList so a
+  // viewport-length change (divider/pane resize) can schedule geometry
+  // repair under the same messages array. Lower-level than the
+  // chat-messages integration pins - just the prop wiring + library
+  // callback. Initial mount layout is enough; no controllable
+  // ResizeObserver needed here.
+  it("onLayout fires when LegendList reports a layout change", async () => {
+    const messages: ChatMessageModel[] = [
+      makeMessage(0, "user"),
+      makeMessage(1, "assistant"),
+    ];
+    const onLayout = vi.fn();
+    renderTimeline({ messages, onLayout });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(onLayout).toHaveBeenCalled();
+    });
   });
 
   // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both` reserves the

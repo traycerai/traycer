@@ -235,10 +235,12 @@ export interface ChatTimelineProps {
    * when a later measurement pass corrects an earlier row's position from
    * under them). `false` in `following-end` (end-stick governs via
    * `maintainScrollAtEnd`) and `anchoring-new-turn` (the anchor engine owns
-   * motion; its own reveal-pass drift re-assert already handles above-anchor
-   * growth under `size:false` - enabling this too would double-correct the
-   * same shift). `false` by default so ticket-2/3-era callers keep today's
-   * `size:false` semantics unless they opt in.
+   * motion; its own drift re-assert - the reveal pass for a `messages`
+   * change, ticket 22's coalesced scheduler for a geometry-only change under
+   * the same `messages` - already handles above-anchor growth under
+   * `size:false`; enabling this too would double-correct the same shift).
+   * `false` by default so ticket-2/3-era callers keep today's `size:false`
+   * semantics unless they opt in.
    */
   readonly sizePreservationEnabled?: boolean;
   /** Message row receiving the temporary external-navigation highlight. */
@@ -256,6 +258,14 @@ export interface ChatTimelineProps {
     readonly headerSize: number;
     readonly footerSize: number;
   }) => void;
+  /**
+   * Ticket 22: the scroll container's own layout (width/height) changing -
+   * a divider drag/pane resize. Unlike `onItemSizeChanged`, LegendList never
+   * routes this through a data/scroll/item-size callback; it is the ONLY
+   * signal for a viewport-length change that leaves every row's own
+   * measured size untouched.
+   */
+  readonly onLayout?: () => void;
 }
 
 /**
@@ -287,6 +297,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   navigationHighlightedMessageId,
   onItemSizeChanged,
   onListMetricsChange,
+  onLayout,
   ...rest
 }: ChatTimelineProps) {
   const rows = useStableChatTimelineRows(listRef, messages);
@@ -417,6 +428,7 @@ export const ChatTimeline = memo(function ChatTimeline({
         maintainVisibleContentPosition={maintainVisibleContentPosition}
         onItemSizeChanged={onItemSizeChanged}
         onScroll={handleScroll}
+        onLayout={onLayout}
         {...(onListMetricsChange !== undefined
           ? { onMetricsChange: onListMetricsChange }
           : {})}

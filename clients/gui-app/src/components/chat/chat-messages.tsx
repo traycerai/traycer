@@ -9,6 +9,7 @@ import {
 } from "@/components/chat/chat-timeline";
 import {
   anchorMoverShouldYieldToReader,
+  applyChatAnchorDriftRepair,
   buildMessageIdToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
   chatTimelineAnchorShouldAnimateInitialIssue,
@@ -968,6 +969,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // comparing against both prevents either geometry change from looking like
   // user intent.
   const expectedAnchorScrollTopRef = useRef<number | null>(null);
+  // Ticket 22: coalesces item-size/viewport-layout triggers into ONE pending
+  // two-rAF geometry-repair pass at a time - `scheduleChatAnchorGeometryRepair`'s
+  // own doc comment covers why.
+  const pendingGeometryRepairCancelRef = useRef<(() => void) | null>(null);
   const pendingAnchorScrollRestoreRef = useRef<{
     readonly offset: number;
     readonly userScrollGeneration: number;
@@ -2038,30 +2043,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // callback above already guards against: a content-above change
           // can update LegendList's internal tracked position ahead of (or
           // independent of) the real DOM value actually moving.
-          const currentScrollTop = list.getScrollableNode().scrollTop;
-          const currentExpectedScrollTop =
-            metrics.anchorTop +
-            listTopOffsetAdjustmentRef.current -
-            anchorOffsetRef.current;
-          if (
-            anchorMoverShouldYieldToReader(
-              currentScrollTop,
-              expectedAnchorScrollTopRef.current,
-              currentExpectedScrollTop,
-            )
-          ) {
-            // A scroll-only upward departure leaves mode ownership intact,
-            // but the corrective mover must not pull the reader back.
-            return;
-          }
-          expectedAnchorScrollTopRef.current = currentExpectedScrollTop;
-          const anchorPositionDrift =
-            currentExpectedScrollTop - currentScrollTop;
-          if (Math.abs(anchorPositionDrift) > 1) {
-            void list.scrollToOffset({
-              offset: currentScrollTop + anchorPositionDrift,
-              animated: false,
-            });
+          //
+          // Ticket 22: this repair is shared with the geometry-only
+          // scheduler below (`scheduleChatAnchorGeometryRepair`) - same
+          // computation, same generation/departure guards, invoked here
+          // unchanged for a `messages` change and there for a coalesced
+          // item-size/viewport-length change under the SAME `messages`.
+          const repairOutcome = applyChatAnchorDriftRepair({
+            list,
+            anchorTop: metrics.anchorTop,
+            listTopOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            anchorOffset: anchorOffsetRef.current,
+            expectedAnchorScrollTopRef,
+          });
+          if (repairOutcome !== "settled") {
+            // A scroll-only upward departure ("yielded") leaves mode
+            // ownership intact, but the corrective mover must not pull the
+            // reader back; a "corrected" pass already issued this frame's
+            // scroll write.
             return;
           }
           // Deliberate live-E2E merge-blocker fix: revealing the minimum delta
@@ -2418,6 +2417,77 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [],
   );
+  // Ticket 22 (painted-chat lifecycle audit, finding 3): the two-rAF reveal
+  // pass's anchor-drift repair only re-runs on a `messages` change - a
+  // divider drag/pane split-join/header resize/disclosure toggle can rewrap
+  // rows under the SAME `messages` array, and nothing schedules a repair for
+  // that today. Reuses `applyChatAnchorDriftRepair` (the same computation the
+  // reveal pass calls) behind an independent two-rAF coalescing window, so
+  // several item-size/viewport-layout notifications inside one resize/toggle
+  // collapse into a single repair pass instead of one per notification.
+  //
+  // Guarded exactly like the reveal pass's own anchoring-new-turn branch:
+  // mode, generation ownership, "no anchor navigation currently mid-flight",
+  // then the shared repair's own departure (`anchorMoverShouldYieldToReader`)
+  // check - a departed/cancelled session gets no correction (base rule:
+  // never move the reader against their intent). Re-checked fresh INSIDE the
+  // deferred frame (not just at schedule time), same convention as
+  // `onTimelineAnchorSizeChanged` above - either can change between the
+  // triggering call and the frame actually running.
+  const scheduleChatAnchorGeometryRepair = useCallback((): void => {
+    if (timelineScrollModeRef.current !== "anchoring-new-turn") return;
+    if (pendingGeometryRepairCancelRef.current !== null) return;
+    pendingGeometryRepairCancelRef.current = scheduleChatTimelineDoubleRaf(
+      () => {
+        pendingGeometryRepairCancelRef.current = null;
+        if (timelineScrollModeRef.current !== "anchoring-new-turn") return;
+        if (
+          liveFollowUserScrollGenerationRef.current !==
+          anchorUserScrollGenerationRef.current
+        ) {
+          return;
+        }
+        if (pendingTimelineAnchorRef.current !== null) return;
+        if (
+          positionedTimelineAnchorRef.current !== null &&
+          settledTimelineAnchorRef.current !==
+            positionedTimelineAnchorRef.current
+        ) {
+          return;
+        }
+        const list = chatTimelineRef.current;
+        if (!list) return;
+        const metrics = getActiveTimelineTurnMetrics(list);
+        if (!metrics) return;
+        applyChatAnchorDriftRepair({
+          list,
+          anchorTop: metrics.anchorTop,
+          listTopOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+          anchorOffset: anchorOffsetRef.current,
+          expectedAnchorScrollTopRef,
+        });
+      },
+    );
+  }, [getActiveTimelineTurnMetrics]);
+
+  useEffect(() => {
+    return () => {
+      // Review round 1 (finding 1, CONFIRMED HIGH): cancelling without
+      // clearing the sentinel leaves it permanently non-null after a
+      // StrictMode setup->cleanup->setup replay (the deferred callback that
+      // would have cleared it never runs, since `cancel()` cancels the rAFs
+      // it was scheduled in) - every later trigger then exits at the
+      // `!== null` guard above for the rest of the mount's lifetime. Read
+      // once and clear before invoking, so a schedule call made from the
+      // replayed setup (or any later mount) is never blocked by a dead
+      // cancel function from a cleanup that already ran.
+      const cancel = pendingGeometryRepairCancelRef.current;
+      if (cancel === null) return;
+      pendingGeometryRepairCancelRef.current = null;
+      cancel();
+    };
+  }, []);
+
   const onTimelineItemSizeChanged = useCallback((): void => {
     minimapInViewRefreshRef.current();
     // Ticket 17 (review round 2, finding 2 residual, CONFIRMED HIGH): a row's
@@ -2429,7 +2499,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // whose geometry may have shifted underneath it; unknown -> case (b), the
     // same safe default as an un-observed snapshot.
     viewportLastVisibleSnapshotRef.current = null;
-  }, []);
+    // Ticket 22: the same real, no-scroll size change can also move an
+    // anchoring-new-turn session's already-settled anchor.
+    scheduleChatAnchorGeometryRepair();
+  }, [scheduleChatAnchorGeometryRepair]);
+
+  // Ticket 22: viewport-length changes (divider drag/pane resize) - unlike
+  // item-size changes, LegendList never reports these as a scroll, a data
+  // change, or an item resize; nothing else in this file observes them.
+  const onTimelineViewportLayoutChanged = useCallback((): void => {
+    scheduleChatAnchorGeometryRepair();
+  }, [scheduleChatAnchorGeometryRepair]);
 
   // Quote-to-composer: track selections inside the transcript wrapper below and
   // surface the floating quote button. The hook attaches no listeners while the
@@ -3109,6 +3189,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               navigationHighlightedMessageId={navigationHighlightedMessageId}
               onItemSizeChanged={onTimelineItemSizeChanged}
               onListMetricsChange={onListMetricsChange}
+              onLayout={onTimelineViewportLayoutChanged}
               data-testid="chat-messages-scroll"
               data-scroll-mode={scrollMode}
             />

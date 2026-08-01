@@ -153,6 +153,42 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
   return { ...actual, LegendList: TeedLegendList };
 });
 
+// Ticket 22 (review round 1, finding 4): a thin, behavior-preserving
+// pass-through around the REAL `applyChatAnchorDriftRepair` - re-exports
+// everything else unchanged, wraps only this one function to tee its call
+// count into a module-scope counter. Zero production delta; the wrapped
+// function still does exactly what the real one does, including its return
+// value. This exists because "one `scrollToOffset` call" is not the same
+// invariant as "one scheduled repair pass" - a missing coalescing guard lets
+// several independent two-rAF chains run, but only the FIRST observes
+// non-zero drift and writes, so a write-count oracle alone survives the
+// guard's removal (review round 1, finding 4). Counting actual invocations
+// of the shared repair function is deterministic (no rAF-timing noise,
+// unlike spying on `window.requestAnimationFrame`, which also picks up
+// LegendList's own unrelated internal rAF usage).
+const applyChatAnchorDriftRepairCallCountRef = vi.hoisted(() => ({
+  current: 0,
+}));
+
+vi.mock(
+  "@/components/chat/chat-messages-scroll-helpers",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/chat-messages-scroll-helpers")
+      >();
+    return {
+      ...actual,
+      applyChatAnchorDriftRepair: (
+        ...args: Parameters<typeof actual.applyChatAnchorDriftRepair>
+      ): ReturnType<typeof actual.applyChatAnchorDriftRepair> => {
+        applyChatAnchorDriftRepairCallCountRef.current += 1;
+        return actual.applyChatAnchorDriftRepair(...args);
+      },
+    };
+  },
+);
+
 // Ticket 17 (review round 3, finding 2 residual): LegendList's per-element
 // size/layout notifications (row remeasure AND scroll-container resize) both
 // route through ONE module-cached `ResizeObserver` singleton
@@ -7769,6 +7805,932 @@ describe("ChatMessages scroll policy", () => {
       expect(
         callsOnScrollNode.every((call) => call.behavior === "smooth"),
       ).toBe(true);
+    });
+  });
+
+
+  // ---------------------------------------------------------------------
+  // Ticket 22 (painted-chat lifecycle audit, finding 3): the two-rAF anchor
+  // repair (ticket 18's drift re-assert) is keyed to `messages` - a
+  // divider/split/join/header/disclosure geometry change under the SAME
+  // `messages` array reports through `onItemSizeChanged`/`onLayout` but
+  // nothing schedules a repair for it. Row(s) above the anchor moving height
+  // shifts the anchored turn's content position with scrollTop unchanged.
+  //
+  // All four pins settle into an OVERFLOWING anchored turn first (same
+  // recipe as ticket 18's pin E) rather than a short, non-overflowing one:
+  // `anchoredEndSpace` pins a non-overflowing anchor at the maximum
+  // REACHABLE scroll, and LegendList's own internal reserve tracking for
+  // that config does not know about a raw `setItemSize` call on a row it
+  // isn't watching - it silently re-clamps scrollTop back to its own
+  // believed-correct position on the next settle, which would make a
+  // perfectly-landed real repair look like a no-op. Once the turn overflows,
+  // there is no such natural boundary to fight the repair's write.
+  // ---------------------------------------------------------------------
+  describe("ticket 22: geometry-only changes repair the anchored turn", () => {
+    const T22_GEOMETRY_DELTA_PX = 220;
+
+    /** Sends, then streams chunks until the turn genuinely overflows the
+     *  usable viewport (mirrors ticket 18 pin E's own recipe exactly). */
+    async function sendAndOverflowAnchor(
+      rerenderMessages: (
+        messages: ReadonlyArray<ChatMessageModel>,
+      ) => void,
+      history: ReadonlyArray<ChatMessageModel>,
+      sendId: string,
+      createdAt: number,
+    ): Promise<ReadonlyArray<ChatMessageModel>> {
+      const afterSend = appendOptimisticUserSend(history, sendId, createdAt);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      let current = afterSend;
+      let overflowed = false;
+      for (let chunkIndex = 0; chunkIndex < 20; chunkIndex += 1) {
+        current = appendOneStreamingChunk(current, chunkIndex, createdAt);
+        rerenderMessages(current);
+        await waitForRevealPassTick();
+        if (isJumpPillVisible()) {
+          overflowed = true;
+          break;
+        }
+      }
+      expect(overflowed).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      return current;
+    }
+
+    it("(pin 1) a same-messages row-remeasure above a settled anchor re-asserts the anchor offset", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-pin1-geometry-repair";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-pin1-geometry-repair",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 810_000);
+      const scrollBefore = getScrollNode().scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      // Grow a row strictly ABOVE the anchor - SAME `messages` array, no
+      // scroll, no rerender. Driven via the real LegendList `setItemSize`
+      // ref method (teed through the pass-through mock) - the one lever
+      // that fires a genuine, no-scroll `onItemSizeChanged`, matching how a
+      // disclosure collapse/expand or a rewrap from a divider/pane resize
+      // would move rows under the anchor in a real browser.
+      act(() => {
+        legendListRefHolder.current?.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+
+      await waitForRevealPassTick();
+
+      // The anchor must hold its EXACT offset from the viewport top - the
+      // grown row pushed content above it down by exactly this much, so
+      // scroll must grow by the same amount to compensate. A flat (zero)
+      // delta here is the ticket-22 defect: the anchor silently drifts.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollBefore).toBe(
+        T22_GEOMETRY_DELTA_PX,
+      );
+      // Review round 1 (finding 3, CONFIRMED MEDIUM): decision #31's
+      // non-animated departure classifier depends on every anchor
+      // correction being instant - assert the exact `scrollToOffset`
+      // params, not just the resulting position.
+      expect(scrollToOffsetSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ animated: false }),
+      );
+    });
+
+    it("(pin 2) a viewport resize coalesces with a coincident item-size change into exactly one repair", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-pin2-viewport-resize";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-pin2-viewport-resize",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 820_000);
+      const scrollBefore = getScrollNode().scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      // A pure viewport-length change alone (no row remeasure) never moves
+      // `positionAtIndex` for a single-column vertical list - it changes
+      // what's REVEALED, not the anchor's own content-relative position.
+      // Fired here to prove the new wiring is inert (no spurious
+      // correction) when there is genuinely nothing to repair.
+      act(() => {
+        triggerLegendListResizeObserverEntry(getScrollNode(), {
+          width: VIEWPORT_WIDTH_PX + 200,
+          height: VIEWPORT_HEIGHT_PX,
+        });
+      });
+      await waitForRevealPassTick();
+      expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      expect(getScrollNode().scrollTop).toBe(scrollBefore);
+
+      // Now pair the SAME resize signal with the real-browser consequence
+      // it would cause (a rewrapped row above the anchor growing) - jsdom's
+      // shim never rewraps text on its own, so the row-height change is
+      // driven explicitly alongside the resize event. Both signals land in
+      // the same coalescing window; the repair must fire exactly ONCE, not
+      // once per trigger. Review round 1 (finding 4): a single
+      // `scrollToOffset` call alone survives a missing coalescing guard (a
+      // second scheduled pass can settle at zero drift and never write), so
+      // also assert the shared repair function itself ran exactly once -
+      // two independent triggers (resize + item-size) collapsing to ONE
+      // scheduled pass, not two.
+      const repairCallsBefore = applyChatAnchorDriftRepairCallCountRef.current;
+      act(() => {
+        triggerLegendListResizeObserverEntry(getScrollNode(), {
+          width: VIEWPORT_WIDTH_PX + 400,
+          height: VIEWPORT_HEIGHT_PX,
+        });
+        legendListRefHolder.current?.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX + 400,
+        });
+      });
+      await waitForRevealPassTick();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollBefore).toBe(
+        T22_GEOMETRY_DELTA_PX,
+      );
+      expect(scrollToOffsetSpy).toHaveBeenCalledOnce();
+      expect(
+        applyChatAnchorDriftRepairCallCountRef.current - repairCallsBefore,
+      ).toBe(1);
+    });
+
+    it("(pin 3) no double-correction with the disclosure helper's own manual correction during anchoring", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-pin3-no-double-correction";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-pin3-no-double-correction",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 830_000);
+      const scrollBefore = getScrollNode().scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+
+      // Simulates a disclosure toggle whose own trigger row sits above the
+      // anchor and genuinely shifts on-screen by the SAME delta the real
+      // row growth below produces - `correctionOwnedByMvcp: false` matches
+      // production's own `timelineScrollModeRef.current === "free-scrolling"`
+      // computation while anchoring (M2, tickets 10-12): the disclosure
+      // helper owns and applies the correction synchronously.
+      const anchorElement = document.createElement("div");
+      const rectSpy = vi.spyOn(anchorElement, "getBoundingClientRect");
+      rectSpy.mockReturnValueOnce({
+        x: 0,
+        y: 100,
+        width: 100,
+        height: 20,
+        top: 100,
+        left: 0,
+        right: 100,
+        bottom: 120,
+        toJSON: () => ({}),
+      });
+      rectSpy.mockReturnValueOnce({
+        x: 0,
+        y: 100 + T22_GEOMETRY_DELTA_PX,
+        width: 100,
+        height: 20,
+        top: 100 + T22_GEOMETRY_DELTA_PX,
+        left: 0,
+        right: 100,
+        bottom: 120 + T22_GEOMETRY_DELTA_PX,
+        toJSON: () => ({}),
+      });
+
+      act(() => {
+        preserveChatScrollAcrossDisclosureChange({
+          list: legendListRefHolder.current,
+          anchorElement,
+          mutate: () => {
+            legendListRefHolder.current?.setItemSize("message-2", {
+              height: 90 + T22_GEOMETRY_DELTA_PX,
+              width: VIEWPORT_WIDTH_PX,
+            });
+          },
+          correctionOwnedByMvcp: false,
+        });
+      });
+
+      // The disclosure helper's own delta-based correction issues
+      // synchronously; the real `setItemSize` call inside `mutate` also
+      // fires a genuine `onItemSizeChanged` - ticket 22's new coalesced
+      // geometry scheduler reacts to it independently. Let BOTH settle
+      // (LegendList's own geometry bookkeeping is not guaranteed to reflect
+      // a `scrollToOffset` call within the same act() it was issued in, and
+      // the scheduler's own pass needs its two-rAF window) before checking
+      // where the anchor landed.
+      await waitForRevealPassTick();
+      await waitForRevealPassTick();
+
+      // Exactly the delta the row growth produced - not double-applied by
+      // two independent correctors racing the same shift.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollBefore).toBe(
+        T22_GEOMETRY_DELTA_PX,
+      );
+
+      // Idempotence: with both correctors already settled and drift at
+      // zero, a further settle window must not move it again - the
+      // regression this pin guards is a SECOND correction stacking a
+      // further +220 on top (landing at +440), not merely "some correction
+      // happened".
+      await waitForRevealPassTick();
+      expect(getScrollNode().scrollTop - scrollBefore).toBe(
+        T22_GEOMETRY_DELTA_PX,
+      );
+    });
+
+    it("(pin 4) a departed/cancelled session gets no geometry repair", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-pin4-departure-guard";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-pin4-departure-guard",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 840_000);
+
+      const scrollNode = getScrollNode();
+      // A real downward-wheel departure gesture cancels the anchoring
+      // session unconditionally (decision #14/ticket 14) - bumps the
+      // generation the same way any other real-gesture cancel does.
+      fireEvent.wheel(scrollNode, { deltaY: 40 });
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      const departedScrollTop = scrollNode.scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      // The exact same geometry change pin 1 proves DOES repair while
+      // still anchoring - here the session has already departed, so this
+      // must be a pure no-op.
+      act(() => {
+        legendListRefHolder.current?.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+
+      await waitForRevealPassTick();
+
+      expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      expect(scrollNode.scrollTop).toBe(departedScrollTop);
+    });
+
+    it("(pin 4b) departure DURING the deferred two-rAF window still blocks the repair", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-pin4b-mid-window-departure";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-pin4b-mid-window-departure",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 845_000);
+      const scrollNode = getScrollNode();
+      const scrollBefore = scrollNode.scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      // Review round 1 (finding 2, CONFIRMED MEDIUM): pin 4 departs BEFORE
+      // scheduling, so it only exercises the schedule-time mode guard - the
+      // deferred callback's OWN fire-time mode/generation checks never run
+      // in that pin at all. Schedule a real repair here (the same
+      // setItemSize trigger pin 1 uses), let only the FIRST of the two rAFs
+      // elapse - arms the second frame, does not run it yet, the
+      // scheduler's own pending window - THEN depart with a real
+      // downward-wheel gesture, THEN let the deferred frame actually fire.
+      act(() => {
+        list.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
+
+      await act(async () => {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      });
+
+      fireEvent.wheel(scrollNode, { deltaY: 40 });
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+      await waitForRevealPassTick();
+
+      // The already-scheduled pass must see the departure at fire time and
+      // yield - pin 1's repair signature (+T22_GEOMETRY_DELTA_PX via
+      // `scrollToOffset`) must never land for this departed session.
+      expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      expect(scrollNode.scrollTop).toBe(scrollBefore);
+    });
+
+    it("geometry repair does not fire while following-end", async () => {
+      // Pure following-end (never entered anchoring-new-turn). The scheduler
+      // mode-gates at schedule time and again inside the deferred frame -
+      // pin 1's +T22_GEOMETRY_DELTA_PX signature is the anchoring-only path.
+      const history = makeCompletedTranscript(12);
+      renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-mode-following-end",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      const scrollBefore = scrollNode.scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+
+      act(() => {
+        legendListRefHolder.current?.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      await waitForRevealPassTick();
+
+      // following-end may still move for maintainScrollAtEnd end-stick; the
+      // load-bearing contract is mode stays non-anchoring and we never see
+      // the anchor-hold repair signature from pin 1.
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      expect(scrollNode.scrollTop - scrollBefore).not.toBe(
+        T22_GEOMETRY_DELTA_PX,
+      );
+    });
+
+    it("geometry repair does not fire while free-scrolling", async () => {
+      // Pure free-scrolling seed (not a post-departure pin-4 shape): park
+      // away from the end, grow a history row, confirm the geometry
+      // scheduler does not apply the anchoring-new-turn repair signature.
+      // MVCP size-preservation may adjust scrollTop for reading stability -
+      // that is a different mechanism; pin 4 already pins zero
+      // scrollToOffset for a departed overflowing session.
+      const history = makeCompletedTranscript(12);
+      const scrollStateKey = "t22-mode-free-scrolling";
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(scrollStateKey),
+        mode: "free-scrolling",
+        anchorMessageId: history[0]?.id ?? null,
+        anchorIndex: 0,
+        offset: 0,
+      });
+      renderChatMessages({
+        messages: history,
+        scrollStateKey,
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      const scrollBefore = scrollNode.scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const freeScrollingList = legendListRefHolder.current;
+      if (!freeScrollingList) {
+        throw new Error("expected LegendListRef to be attached");
+      }
+      const scrollToOffsetSpy = vi.spyOn(freeScrollingList, "scrollToOffset");
+
+      act(() => {
+        legendListRefHolder.current?.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      await waitForRevealPassTick();
+
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      expect(scrollNode.scrollTop - scrollBefore).not.toBe(
+        T22_GEOMETRY_DELTA_PX,
+      );
+      // Mirror pin 4 when MVCP has nothing to compensate at scrollTop=0:
+      // the geometry scheduler itself must not have called scrollToOffset.
+      // If MVCP did compensate via another path, scrollTop would move but
+      // still must not land on the pure anchor-repair signature above.
+      if (scrollNode.scrollTop === scrollBefore) {
+        expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      }
+    });
+
+    it("a row growing BELOW the anchor produces no geometry correction", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-below-anchor-no-repair";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-below-anchor-no-repair",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const overflowing = await sendAndOverflowAnchor(
+        rerenderMessages,
+        history,
+        sendId,
+        850_000,
+      );
+      const scrollBefore = getScrollNode().scrollTop;
+
+      // Streaming reply rows sit AFTER the anchored user send - growing one
+      // of those changes content below the anchor only. positionAtIndex for
+      // the anchor is unchanged, so the repair must see zero drift.
+      const belowAnchorId = overflowing.find(
+        (message) => message.id === "incremental-chunk-0",
+      )?.id;
+      expect(belowAnchorId).toBe("incremental-chunk-0");
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const belowAnchorList = legendListRefHolder.current;
+      if (!belowAnchorList) {
+        throw new Error("expected LegendListRef to be attached");
+      }
+      const scrollToOffsetSpy = vi.spyOn(belowAnchorList, "scrollToOffset");
+
+      act(() => {
+        legendListRefHolder.current?.setItemSize("incremental-chunk-0", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      await waitForRevealPassTick();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop).toBe(scrollBefore);
+      expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+    });
+
+    it("multiple same-frame item-size changes above the anchor coalesce into one repair", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-coalesce-multi-item-size";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-coalesce-multi-item-size",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 860_000);
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const coalesceList = legendListRefHolder.current;
+      if (!coalesceList) {
+        throw new Error("expected LegendListRef to be attached");
+      }
+      const scrollToOffsetSpy = vi.spyOn(coalesceList, "scrollToOffset");
+      const scrollBefore = getScrollNode().scrollTop;
+
+      // Review round 1 (finding 4, CONFIRMED LOW): a single `scrollToOffset`
+      // call proves idempotence, not "one scheduled pass" - if the
+      // coalescing ref were missing, several independent two-rAF chains
+      // would run, but only the FIRST observes non-zero drift and writes;
+      // the rest settle at zero and never call `scrollToOffset`, so that
+      // oracle alone survives the guard's removal. Count invocations of the
+      // shared repair function itself instead (via the module-level
+      // call-count tee above) - deterministic, unlike spying on
+      // `window.requestAnimationFrame`, which also picks up LegendList's own
+      // unrelated internal rAF usage.
+      const repairCallsBefore = applyChatAnchorDriftRepairCallCountRef.current;
+
+      // Four separate setItemSize notifications in one act() - each would
+      // schedule its OWN two-rAF chain if the coalescing ref were missing;
+      // the scheduler must collapse them into a single repair pass.
+      const rowsAboveAnchor = [
+        "message-0",
+        "message-2",
+        "message-4",
+        "message-6",
+      ] as const;
+      act(() => {
+        for (const rowId of rowsAboveAnchor) {
+          legendListRefHolder.current?.setItemSize(rowId, {
+            height: 90 + T22_GEOMETRY_DELTA_PX,
+            width: VIEWPORT_WIDTH_PX,
+          });
+        }
+      });
+      await waitForRevealPassTick();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollBefore).toBe(
+        T22_GEOMETRY_DELTA_PX * rowsAboveAnchor.length,
+      );
+      expect(scrollToOffsetSpy).toHaveBeenCalledOnce();
+      expect(
+        applyChatAnchorDriftRepairCallCountRef.current - repairCallsBefore,
+      ).toBe(1);
+    });
+
+    it("unmount while a geometry repair is scheduled cancels cleanly (no throw, no late scrollToOffset)", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-unmount-mid-repair";
+      const { rerenderMessages, unmount } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-unmount-mid-repair",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 870_000);
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+      const consoleErrorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      const consoleWarnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
+
+      try {
+        // Schedule the two-rAF geometry repair, then unmount before the
+        // deferred frame runs - the cleanup effect must cancel the pending
+        // frame so the callback never touches an unmounted list.
+        act(() => {
+          list.setItemSize("message-2", {
+            height: 90 + T22_GEOMETRY_DELTA_PX,
+            width: VIEWPORT_WIDTH_PX,
+          });
+          unmount();
+        });
+
+        await waitForRevealPassTick();
+
+        expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+        expect(consoleErrorSpy).not.toHaveBeenCalled();
+        expect(consoleWarnSpy).not.toHaveBeenCalled();
+      } finally {
+        consoleErrorSpy.mockRestore();
+        consoleWarnSpy.mockRestore();
+      }
+    });
+
+    it("(pin 1b) survives a StrictMode setup->cleanup->setup replay while already anchoring at mount (finding 1)", async () => {
+      // Fresh-open (decision #15): no saved scroll state + a transcript
+      // ending in a user send, so this mounts DIRECTLY into
+      // `anchoring-new-turn` - the exact shape the review flagged (LegendList's
+      // initial `onLayout` arms the coalescing sentinel during the FIRST
+      // StrictMode setup; the dev-only cleanup->setup replay must not leave
+      // it poisoned).
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-strict-fresh-open-anchor";
+      const baseCreatedAt = 895_000;
+      const messages = appendOptimisticUserSend(history, sendId, baseCreatedAt);
+      const instanceId = `t22-strict-fresh-open-${Math.random().toString(36).slice(2)}`;
+      const epicId = "epic-1";
+      const taskId = "task-1";
+      const identity = makeTestIdentity(instanceId, epicId, taskId);
+      expect(hasSavedChatTabState(identity)).toBe(false);
+
+      const { unmount } = render(
+        <StrictMode>
+          <div
+            data-chat-keyboard-scroll-scope
+            data-active="true"
+            style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
+          >
+            <ChatMessages
+              taskTitle="Test chat"
+              taskId={taskId}
+              epicId={epicId}
+              messages={messages}
+              localProvenanceMessageIds={new Set()}
+              consumeLocalProvenance={() => undefined}
+              backgroundItems={undefined}
+              getMessageActions={() => null}
+              nextStepActions={null}
+              instanceId={instanceId}
+              visible
+              systemOverlayActive={false}
+              isChatStreaming={false}
+              scrollRequest={null}
+              composerOverlayHeight={80}
+            />
+          </div>
+        </StrictMode>,
+      );
+
+      // Mode seed is synchronous at construction (decision #15) - already
+      // anchoring before StrictMode's dev-only setup->cleanup->setup replay
+      // has even finished. This is the exact commit the review flagged:
+      // LegendList's initial `onLayout` arms the coalescing sentinel WHILE
+      // mode is already `anchoring-new-turn`, then StrictMode's replay
+      // cancels those frames.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await settleLegendList();
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+
+      // The replay is long over by now - this is an ORDINARY later trigger,
+      // identical to pin 1's own recipe. Pre-fix, the sentinel armed during
+      // the first StrictMode setup stays non-null forever (the cleanup
+      // cancels those frames without clearing it), so every later trigger
+      // for the lifetime of this mount silently no-ops here.
+      //
+      // Signal choice: neither `scrollTop` nor the `applyChatAnchorDriftRepair`
+      // call-count tee (finding 4's signal) work for THIS specific
+      // construction - a SEPARATE, pre-existing harness limitation (fresh-
+      // open's own `scrollToIndex` bootstrap never converges `scrollTop` for
+      // a raw-StrictMode mount in this jsdom setup, so the anchor reaches
+      // "positioned" but never "settled" - unrelated to ticket 22, flagged
+      // to the reviewer rather than worked around here) means the deferred
+      // callback's OWN unsettled-anchor guard always blocks it BEFORE
+      // reaching the repair function, on both healthy and poisoned code.
+      // Count synchronous `requestAnimationFrame` registrations instead,
+      // scoped tightly to this one `act()`: `scheduleChatAnchorGeometryRepair`
+      // returns at its entry guard (`pendingGeometryRepairCancelRef.current
+      // !== null`) BEFORE calling `scheduleChatTimelineDoubleRaf` - which
+      // itself always registers exactly one synchronous rAF per call - so a
+      // poisoned sentinel drops the count by exactly one relative to a
+      // healthy one. Mutation-verified directly against this exact test: 2
+      // calls with the cleanup fix in place, 1 with it reverted (the `1` is
+      // LegendList's own unrelated internal rAF usage for this `setItemSize`
+      // call, present either way).
+      const rafSpy = vi.spyOn(window, "requestAnimationFrame");
+      rafSpy.mockClear();
+      act(() => {
+        list.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(rafSpy.mock.calls.length).toBeGreaterThan(1);
+
+      unmount();
+    });
+
+    it("geometry repair does not run while a new anchor is still pending/positioning (not yet settled)", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-mid-flight-anchor-guard";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-mid-flight-anchor-guard",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+
+      // Hang the library's scroll promise so the engine stays in
+      // positioned-but-not-settled (pendingTimelineAnchorRef cleared on
+      // onAnchorReady, settledTimelineAnchorRef still null) - the same
+      // mid-flight window the scheduler's "no anchor navigation currently
+      // mid-flight" guard is meant to refuse.
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
+      const hangingScrollToIndex = vi
+        .spyOn(list, "scrollToIndex")
+        .mockImplementation((params) => {
+          void originalScrollToIndex(params);
+          return new Promise<void>(() => {});
+        });
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      try {
+        const afterSend = appendOptimisticUserSend(history, sendId, 880_000);
+        rerenderMessages(afterSend);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+        // Wait until the hang is engaged (positioning issued) but well
+        // before the settle watchdog fails safe out of anchoring-new-turn.
+        await waitFor(() => {
+          expect(hangingScrollToIndex).toHaveBeenCalled();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+        scrollToOffsetSpy.mockClear();
+        const scrollBefore = getScrollNode().scrollTop;
+
+        act(() => {
+          list.setItemSize("message-2", {
+            height: 90 + T22_GEOMETRY_DELTA_PX,
+            width: VIEWPORT_WIDTH_PX,
+          });
+        });
+        await waitForRevealPassTick();
+
+        // Still mid-flight - must not apply the settled-session repair
+        // signature (+T22_GEOMETRY_DELTA_PX via scrollToOffset).
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(getScrollNode().scrollTop - scrollBefore).not.toBe(
+          T22_GEOMETRY_DELTA_PX,
+        );
+        expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      } finally {
+        hangingScrollToIndex.mockRestore();
+      }
+    });
+
+    it("a genuine shrink of a row above the anchor repairs with negative drift", async () => {
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-shrink-above-anchor";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-shrink-above-anchor",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 890_000);
+      const scrollBefore = getScrollNode().scrollTop;
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+
+      // Shrink, not grow - all four required pins only exercise positive
+      // delta. The repair math is signed; a shorter row above the anchor
+      // must pull scrollTop down by the same amount.
+      const shrinkPx = 50;
+      act(() => {
+        legendListRefHolder.current?.setItemSize("message-2", {
+          height: 90 - shrinkPx,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      await waitForRevealPassTick();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollBefore).toBe(-shrinkPx);
+    });
+
+    it("(pin 4c) a scroll-only departure through following-end still blocks a pending repair (review round 2, finding 2 residual)", async () => {
+      // Review round 2 (finding 2 residual): pin 4b's wheel departure nulls
+      // `activeTimelineAnchorIndexRef` (via `cancelTimelineLiveFollowFor
+      // UserNavigation`), so `getActiveTimelineTurnMetrics` independently
+      // returns null there and backstops a deleted mode/generation check -
+      // pin 4b stays green even if those checks are removed. A REAL
+      // reachable route does not null that ref at all: a scroll-only
+      // reconcile (ticket 11 fix #1, `chat-messages.tsx` ~1915-1929) takes
+      // an overflowing anchoring session to `following-end` purely from
+      // reaching the true content edge - no wheel/touchmove/pointerdown ever
+      // fires - and a SUBSEQUENT native-OS-scrollbar-style decrease (the
+      // equality fast-path's else branch, ~1931-1941) then takes it to
+      // `free-scrolling`. Neither transition touches
+      // `activeTimelineAnchorIndexRef`/`positionedTimelineAnchorRef`/
+      // `settledTimelineAnchorRef` (only `cancelTimelineLiveFollowForUser
+      // Navigation` - the wheel/touch/pointerdown path - does). On this
+      // route the fire-time mode/generation checks are the SOLE barrier.
+      const history = makeCompletedTranscript(10);
+      const sendId = "t22-pin4c-scroll-only-departure";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t22-pin4c-scroll-only-departure",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      await sendAndOverflowAnchor(rerenderMessages, history, sendId, 900_000);
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      const scrollNode = getScrollNode();
+      // Learn the REAL "true end" offset from LegendList's own
+      // `getMaxScrollOffset()` via the public `scrollToEnd` imperative API -
+      // NOT jsdom's shimmed `scrollHeight - clientHeight` (memory:
+      // legendlist-jsdom-shim-scrollheight-trap - the fake scrollHeight sits
+      // nowhere near LegendList's own tracked content size, and any offset
+      // derived from it reads as permanently "past the end"). This call
+      // alone does not report through `onIsAtEndChange` in this harness (no
+      // synthetic 'scroll' event follows it), so mode stays untouched.
+      act(() => {
+        list.scrollToEnd({ animated: false });
+      });
+      const trueEnd = scrollNode.scrollTop;
+
+      // Schedule the two-rAF geometry repair while still anchoring (arms
+      // the entry guard's cancel function) - same trigger pin 1/4b use.
+      act(() => {
+        list.setItemSize("message-2", {
+          height: 90 + T22_GEOMETRY_DELTA_PX,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // First scroll-only report: reaching the true end reconciles mode to
+      // `following-end` (ticket 11 fix #1) without touching the anchor refs.
+      await act(async () => {
+        scrollNode.scrollTop = trueEnd;
+        fireEvent.scroll(scrollNode);
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+
+      // Second scroll-only report: a real decrease (an OS-scrollbar drag
+      // away from the tail, no gesture event) takes `following-end` to
+      // `free-scrolling` via the equality fast-path's else branch - nulling
+      // `liveFollowUserScrollGenerationRef` but NOT `activeTimelineAnchor
+      // IndexRef`. This is where the still-pending geometry repair's
+      // deferred frame actually fires (confirmed empirically: this second
+      // report flushes synchronously - `following-end`'s own MVCP-active
+      // state short-circuits the scroll coalescer - so the already-armed
+      // second rAF from the schedule above elapses after this transition
+      // has already landed, not before it).
+      await act(async () => {
+        scrollNode.scrollTop = trueEnd - 900;
+        fireEvent.scroll(scrollNode);
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+      await waitForRevealPassTick();
+
+      // The already-scheduled repair must see the departure at fire time and
+      // yield, exactly like pin 4b - but here `getActiveTimelineTurnMetrics`
+      // would NOT independently return null (the anchor refs were never
+      // cleared), so this is a genuine, isolated proof that the mode/
+      // generation checks alone are load-bearing on this route.
+      expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      expect(scrollNode.scrollTop).toBe(trueEnd - 900);
     });
   });
 });

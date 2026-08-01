@@ -1,3 +1,4 @@
+import type { LegendListRef } from "@legendapp/list/react";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 /**
@@ -27,6 +28,91 @@ export function anchorMoverShouldYieldToReader(
     Math.min(previousExpectedScrollTop, currentExpectedScrollTop) -
       CHAT_ANCHOR_MOVER_DEPARTURE_EPSILON_PX
   );
+}
+
+/**
+ * Ticket 22 (painted-chat lifecycle audit, finding 3): the anchoring-new-turn
+ * drift re-assert, pulled out of the two-rAF reveal-pass effect so it can
+ * also be invoked from a geometry-only trigger (row remeasure / viewport
+ * resize under the SAME `messages` array - the effect only re-runs on a
+ * `messages` change). Pure math only; the caller owns reading/writing
+ * `scrollTop` and `expectedAnchorScrollTopRef`.
+ */
+export type ChatAnchorDriftRepairOutcome =
+  | { readonly kind: "yielded" }
+  | { readonly kind: "corrected"; readonly nextScrollTop: number }
+  | { readonly kind: "settled" };
+
+export function computeChatAnchorDriftRepair(input: {
+  readonly currentScrollTop: number;
+  readonly currentExpectedScrollTop: number;
+  readonly previousExpectedScrollTop: number | null;
+}): ChatAnchorDriftRepairOutcome {
+  const {
+    currentScrollTop,
+    currentExpectedScrollTop,
+    previousExpectedScrollTop,
+  } = input;
+  if (
+    anchorMoverShouldYieldToReader(
+      currentScrollTop,
+      previousExpectedScrollTop,
+      currentExpectedScrollTop,
+    )
+  ) {
+    return { kind: "yielded" };
+  }
+  const anchorPositionDrift = currentExpectedScrollTop - currentScrollTop;
+  if (Math.abs(anchorPositionDrift) > 1) {
+    return {
+      kind: "corrected",
+      nextScrollTop: currentScrollTop + anchorPositionDrift,
+    };
+  }
+  return { kind: "settled" };
+}
+
+/**
+ * Imperative wrapper around `computeChatAnchorDriftRepair`: reads the live
+ * scroll position + anchor metrics, applies the correction (if any), and
+ * keeps `expectedAnchorScrollTopRef` in sync exactly as the reveal pass
+ * always has (updated on both "corrected" and "settled", left untouched on
+ * "yielded" - a departed reader's baseline must not be overwritten by the
+ * drift it declined).
+ */
+export function applyChatAnchorDriftRepair(input: {
+  readonly list: Pick<LegendListRef, "getScrollableNode" | "scrollToOffset">;
+  readonly anchorTop: number;
+  readonly listTopOffsetAdjustment: number;
+  readonly anchorOffset: number;
+  readonly expectedAnchorScrollTopRef: {
+    current: number | null;
+  };
+}): ChatAnchorDriftRepairOutcome["kind"] {
+  const {
+    list,
+    anchorTop,
+    listTopOffsetAdjustment,
+    anchorOffset,
+    expectedAnchorScrollTopRef,
+  } = input;
+  const currentScrollTop = list.getScrollableNode().scrollTop;
+  const currentExpectedScrollTop =
+    anchorTop + listTopOffsetAdjustment - anchorOffset;
+  const outcome = computeChatAnchorDriftRepair({
+    currentScrollTop,
+    currentExpectedScrollTop,
+    previousExpectedScrollTop: expectedAnchorScrollTopRef.current,
+  });
+  if (outcome.kind === "yielded") {
+    return "yielded";
+  }
+  expectedAnchorScrollTopRef.current = currentExpectedScrollTop;
+  if (outcome.kind === "corrected") {
+    void list.scrollToOffset({ offset: outcome.nextScrollTop, animated: false });
+    return "corrected";
+  }
+  return "settled";
 }
 
 export type ChatWheelVerticalDirection = "down" | "up" | "ambiguous";
