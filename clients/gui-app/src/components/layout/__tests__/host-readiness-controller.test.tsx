@@ -49,6 +49,8 @@ const DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
     errorMessage: null,
     retrying: false,
     retry: () => undefined,
+    degraded: false,
+    unreachable: false,
   },
 };
 
@@ -567,8 +569,9 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
       title: "Could not start Traycer Host",
-      message: "Traycer Host could not start.",
-      code: null,
+      message:
+        "Traycer Host could not start. Host health: host unknown, compat compatible.",
+      code: "HOST_PROVISIONING_FAILED",
       source: "Host startup",
     });
   });
@@ -604,9 +607,94 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
       title: "Host update required",
-      message: "Traycer Host requires an update.",
-      code: null,
-      source: "Host startup",
+      message:
+        "Traycer Host requires an update. Host health: host unknown, compat incompatible.",
+      code: "HOST_INCOMPATIBLE",
+      source: "Host compatibility",
+    });
+  });
+
+  // traycer#858 / #860 / #862: three field reports, one template, three
+  // unrelated causes. The pre-filled report must name the family it was filed
+  // from, and carry the state the shell already knew.
+  it("files an unreachable-host report, not a compatibility one, when the probe never reached the host", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const presentation: DefaultHostReadinessPresentation = {
+      ...DEFAULT_HOST_PRESENTATION,
+      localHostState: "ready",
+      hostBusy: true,
+      compatibility: {
+        ...DEFAULT_HOST_PRESENTATION.compatibility,
+        status: "failed",
+        errorMessage: "fetch failed",
+        unreachable: true,
+      },
+    };
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "compatibility-error" }),
+      defaultHostPresentation: presentation,
+    };
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="epic" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    expect(screen.getByText("Traycer Host is not responding.")).toBeTruthy();
+    expect(screen.getByText("fetch failed")).toBeTruthy();
+    expect(
+      screen.queryByText(/Could not verify host compatibility/),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Traycer Host is not responding",
+      message:
+        "The app could not reach Traycer Host. Host health: host ready, compat unreachable, busy.",
+      code: "HOST_UNREACHABLE",
+      source: "Host connection",
+    });
+  });
+
+  it("keeps compatibility wording when the host itself rejected the handshake", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const presentation: DefaultHostReadinessPresentation = {
+      ...DEFAULT_HOST_PRESENTATION,
+      localHostState: "ready",
+      compatibility: {
+        ...DEFAULT_HOST_PRESENTATION.compatibility,
+        status: "failed",
+        errorMessage: "status probe failed",
+        unreachable: false,
+      },
+    };
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "compatibility-error" }),
+      defaultHostPresentation: presentation,
+    };
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="epic" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    expect(
+      screen.getByText("Could not verify host compatibility."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Could not verify Traycer Host compatibility",
+      message:
+        "Traycer Host rejected the compatibility handshake. Host health: host ready, compat rejected.",
+      code: "HOST_COMPAT_PROBE_REJECTED",
+      source: "Host connection",
     });
   });
 });
