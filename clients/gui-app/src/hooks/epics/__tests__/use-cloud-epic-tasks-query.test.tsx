@@ -12,8 +12,10 @@ import {
   resetCloudEpicTasksPagesForScope,
   useCloudEpicTasksPagesStore,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
-import { useCloudEpicTasksLastKnownStore } from "@/stores/epics/cloud-epic-tasks-last-known-store";
-import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
+import {
+  LIST_CLOUD_TASKS_REQUEST,
+  cloudEpicTasksLastKnownQueryKey,
+} from "@/lib/cloud-epic-tasks-query";
 
 const HOST_ID = "host-test";
 const USER_ID = "user-test";
@@ -77,7 +79,6 @@ describe("useCloudEpicTasksQuery", () => {
       pagesByIdentity: {},
       generationByIdentity: {},
     });
-    useCloudEpicTasksLastKnownStore.setState({ firstPageByScope: {} });
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -254,6 +255,13 @@ describe("useCloudEpicTasksQuery", () => {
       expect(taskLightIds(modalRender.result.current.tasks)).toEqual([
         "epic-settled",
       ]);
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(
+          cloudEpicTasksLastKnownQueryKey(HOST_ID, USER_ID),
+        ),
+      ).toBe(settledFirstPage);
     });
 
     // Promote: the modal's observer unmounts, and a brand-new observer

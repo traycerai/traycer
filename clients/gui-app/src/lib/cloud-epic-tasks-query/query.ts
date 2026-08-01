@@ -44,6 +44,13 @@ export function cloudEpicTasksQueryKey(
   return queryKeys.cloudEpicTasks(hostId, fingerprint, request);
 }
 
+export function cloudEpicTasksLastKnownQueryKey(
+  hostId: string,
+  fingerprint: string,
+): readonly unknown[] {
+  return queryKeys.cloudEpicTasksLastKnown(hostId, fingerprint);
+}
+
 export async function fetchCloudEpicTasksPage(
   client: HostClient<HostRpcRegistry>,
   request: ListCloudTasksRequest,

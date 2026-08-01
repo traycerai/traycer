@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo } from "react";
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type {
   ListTasksResponse,
   ListTaskLight,
@@ -15,12 +19,9 @@ import {
   registerCloudEpicTasksPageIdentity,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
-  readLastKnownCloudEpicTasksFirstPage,
-  writeLastKnownCloudEpicTasksFirstPage,
-} from "@/stores/epics/cloud-epic-tasks-last-known-store";
-import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
+  cloudEpicTasksLastKnownQueryKey,
   cloudEpicTasksQueryKey,
   registerCloudEpicTasksClient,
   type ListCloudTasksRequest,
@@ -61,6 +62,7 @@ export function useCloudEpicTasksQuery(
   options: { readonly enabled: boolean },
 ): CloudEpicTasksQueryResult {
   const effectiveRequest = request ?? LIST_CLOUD_TASKS_REQUEST;
+  const queryClient = useQueryClient();
   const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
   const hostId = readiness.hostId;
@@ -103,7 +105,9 @@ export function useCloudEpicTasksQuery(
             // observer). Fall back to the last page that settled anywhere
             // for this host/user, so rows already known to be current don't
             // disappear across that remount.
-            return readLastKnownCloudEpicTasksFirstPage(hostId, userId);
+            return queryClient.getQueryData<ListTasksResponse>(
+              cloudEpicTasksLastKnownQueryKey(hostId, userId),
+            );
           },
         },
   );
@@ -119,8 +123,11 @@ export function useCloudEpicTasksQuery(
   useEffect(() => {
     if (hostId === null || userId === null) return;
     if (queryData === undefined || isPlaceholderData) return;
-    writeLastKnownCloudEpicTasksFirstPage(hostId, userId, queryData);
-  }, [hostId, userId, queryData, isPlaceholderData]);
+    queryClient.setQueryData<ListTasksResponse>(
+      cloudEpicTasksLastKnownQueryKey(hostId, userId),
+      queryData,
+    );
+  }, [hostId, userId, queryClient, queryData, isPlaceholderData]);
 
   // Identity (host | user | request scope) keys the accumulated "Show more"
   // pages in the ambient store. Holding them there (instead of this hook's own
