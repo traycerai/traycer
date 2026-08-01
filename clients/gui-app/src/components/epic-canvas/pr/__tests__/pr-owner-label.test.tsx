@@ -404,6 +404,35 @@ describe("PrOwnerBadges overflow hierarchy", () => {
     expect(heightCap).not.toContain("rem");
   });
 
+  /**
+   * Same jsdom caveat as the height cap above: this pins the class contract, not
+   * an observed layout. The width used to be SET (`w-[min(80vw,20rem)]`), so a
+   * two-row list painted a mostly-empty column and a deep lineage - whose indent
+   * eats the title column that IS the reason to open this list - got no more
+   * room on a display with plenty. It is now sized by content and only capped.
+   */
+  it("sizes the popover to its content and caps the width rather than setting it", () => {
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    const content = screen.getByTestId("pr-owner-overflow-list").parentElement;
+    expect(content).not.toBeNull();
+    const className = content?.className ?? "";
+    // Content-sized, not a fixed column: no `w-<size>` utility survives.
+    expect(className).toContain("w-max");
+    expect(/(?:^|\s)w-(?!max\b)[^\s]+/.test(className)).toBe(false);
+
+    const widthCap = /max-w-\[[^\]]*\]/.exec(className)?.[0];
+    expect(widthCap).toBeDefined();
+    // Never wider than the space Radix measured, nor than the viewport - and
+    // each var needs a fallback, since an unmeasured one invalidates `min()`
+    // and drops the cap entirely.
+    expect(widthCap).toContain(
+      "var(--radix-popover-content-available-width,100vw)",
+    );
+    expect(widthCap).toContain("vw");
+  });
+
   it("lists every owner exactly once however the tree nests them", () => {
     parentByNodeId = Object.fromEntries(
       Array.from({ length: 12 }, (_unused, index) => [
