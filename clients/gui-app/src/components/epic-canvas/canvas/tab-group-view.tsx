@@ -45,6 +45,7 @@ import {
   isPrDetailTileRef,
   isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
+import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
 import {
   TILE_KIND_GIT_DIFF,
   TILE_KIND_PR_DETAIL,
@@ -274,12 +275,16 @@ export const TabGroupView = memo(function TabGroupView(
 
   const activeTab = useMemo<EpicCanvasTileRef | null>(() => {
     if (tabs.length === 0) return null;
+    const activeInstanceId = resolveActivePaneTab(
+      pane.activeTabId,
+      pane.tabInstanceIds,
+    );
     const explicit =
-      pane.activeTabId === null
-        ? null
-        : tabs.find((t) => t.instanceId === pane.activeTabId);
+      activeInstanceId === null
+        ? undefined
+        : tabs.find((t) => t.instanceId === activeInstanceId);
     return explicit ?? tabs[0];
-  }, [pane.activeTabId, tabs]);
+  }, [pane.activeTabId, pane.tabInstanceIds, tabs]);
   // Keep-alive mounting policy: pinned terminals ∪ LRU(cap 3) of recently
   // active tabs, with the active tab as the LRU head (so at most 3
   // non-terminal bodies are mounted, INCLUDING the active one); a hidden

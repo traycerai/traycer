@@ -14,6 +14,7 @@ import {
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import { basePersistOptions, epicCanvasKey } from "@/lib/persist";
+import { appLogger } from "@/lib/logger";
 import {
   DEFAULT_EPIC_NODE_NAMES,
   type EpicNodeKind,
@@ -132,6 +133,10 @@ import {
   scheduleTitlePendingClear,
   type PendingTitleEntry,
 } from "@/stores/epics/canvas/canvas-title-timers";
+import {
+  collectTileIdentityRegistry,
+  enforceTileIdentityInvariant,
+} from "@/stores/epics/canvas/tile-identity-invariant";
 export { parseEpicNodeRef as parseArtifactRef } from "@/stores/epics/canvas/tile-schema/artifact-tile";
 
 function trackOpenedCanvasTile(
@@ -1154,9 +1159,74 @@ function appendArtifactRecord(args: AppendArtifactRecordArgs): {
   };
 }
 
+/**
+ * Options for `guardCanvasMutation`. This guard is always strict: the sole
+ * sanctioned epicId resolution (`resolveTabEpicIdentity`) does not call it at
+ * all - it commits through the module-private raw setter directly, so
+ * provenance is enforced by module privacy rather than a parameter every
+ * ingress has to thread and every caller of this function has to reason
+ * about.
+ */
+interface CanvasMutationGuardOptions {
+  readonly ingressContext: string;
+  readonly throwOnViolation: boolean;
+}
+
+/**
+ * Shared identity guard for every canvas-mutation ingress: the closure-local
+ * `set` below (which delegates to the guarded public `setState` wrapper) and
+ * persisted hydration. `epicId` lives on `tabsById`, not `canvasByTabId`, so
+ * a candidate must be checked whenever EITHER map changes - a
+ * `tabsById`-only patch can repoint every tile in a tab without ever
+ * touching `canvasByTabId`.
+ */
+function guardCanvasMutation(
+  state: EpicCanvasStore,
+  resolved: Partial<EpicCanvasStore>,
+  options: CanvasMutationGuardOptions,
+): boolean {
+  const { ingressContext, throwOnViolation } = options;
+  const nextCanvasByTabId = resolved.canvasByTabId ?? state.canvasByTabId;
+  const nextTabsById = resolved.tabsById ?? state.tabsById;
+  if (
+    nextCanvasByTabId === state.canvasByTabId &&
+    nextTabsById === state.tabsById
+  ) {
+    return true;
+  }
+  return enforceTileIdentityInvariant(
+    collectTileIdentityRegistry(
+      state.canvasByTabId,
+      (tabId) => state.tabsById[tabId]?.epicId ?? null,
+    ),
+    {
+      canvasByTabId: nextCanvasByTabId,
+      epicIdForTabId: (tabId) => nextTabsById[tabId]?.epicId ?? null,
+      ingressContext,
+    },
+    throwOnViolation,
+  );
+}
+
 export const useEpicCanvasStore = create<EpicCanvasStore>()(
   persist(
-    (set, get) => ({
+    (_rawSet, get) => {
+      // Single choke point for every internal canvas mutation (all ~60 call
+      // sites below funnel through this closure's `set`, including the ones
+      // that write `canvasByTabId` directly rather than via `updateTabCanvas`
+      // - e.g. `tearOffTabIntoNewHeaderTab`, `duplicateTab`). Delegates to
+      // the guarded public `setState` wrapper (defined after this store is
+      // created) rather than duplicating its guard logic - persisted
+      // hydration is the only other ingress point, since it runs through the
+      // `merge` option below instead of this closure.
+      const set = (
+        partial:
+          | Partial<EpicCanvasStore>
+          | ((state: EpicCanvasStore) => Partial<EpicCanvasStore>),
+      ): void => {
+        useEpicCanvasStore.setState(partial, undefined);
+      };
+      return {
       tabsById: {},
       canvasByTabId: {},
       closedTilePayloadsByTabId: {},
@@ -2684,7 +2754,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           pendingChatTitles: {},
         });
       },
-    }),
+      };
+    },
     {
       ...basePersistOptions(epicCanvasKey(null)),
       storage: createJSONStorage(() => epicCanvasStorage),
@@ -2698,22 +2769,164 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         mostRecentTabIdByEpicId: state.mostRecentTabIdByEpicId,
         artifactTreeByEpicId: state.artifactTreeByEpicId,
       }),
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        ...sanitizePersistedCanvasState(persistedState),
-      }),
+      merge: (persistedState, currentState) => {
+        const sanitized = sanitizePersistedCanvasState(persistedState);
+        // Never throw here, even in dev/test: zustand's `hydrate()` swallows
+        // a `merge()` throw internally and never rethrows, which also skips
+        // `set(stateFromStorage, true)` - so `hasHydrated`/`onFinishHydration`
+        // never fire and consumers waiting on hydration (history-prune-
+        // provider.tsx, epic-tab-existence-reconciler.tsx) hang forever. Fail
+        // closed by rejecting the candidate and returning normally instead;
+        // the diagnostic below is the surfaced signal in every mode.
+        const accepted = guardCanvasMutation(currentState, sanitized, {
+          ingressContext: "persisted-migration",
+          throwOnViolation: false,
+        });
+        if (!accepted) return currentState;
+        return {
+          ...currentState,
+          ...sanitized,
+        };
+      },
     },
   ),
 );
+
+const rawPublicSetState = useEpicCanvasStore.setState.bind(useEpicCanvasStore);
+/**
+ * Guards every PUBLIC-API canvas mutation. The closure-local `set` above
+ * delegates here; anything else reaching the store through the public API -
+ * `applyEpicCanvasDesktopProjection`, or a future caller - goes through this
+ * wrapper too. Reassigning `setState` itself - rather than adding a guard at
+ * each known call site - means a caller added later is covered too. This
+ * path is always strict: `resolveTabEpicIdentity` below is the one function
+ * that changes a tab's epicId, and it bypasses this wrapper entirely,
+ * committing straight through `rawPublicSetState` - provenance is enforced
+ * by that module privacy, not by a parameter threaded through this guard.
+ */
+useEpicCanvasStore.setState = (
+  partial:
+    | EpicCanvasStore
+    | Partial<EpicCanvasStore>
+    | ((state: EpicCanvasStore) => EpicCanvasStore | Partial<EpicCanvasStore>),
+  replace: boolean | undefined,
+): void => {
+  const state = useEpicCanvasStore.getState();
+  const resolved = typeof partial === "function" ? partial(state) : partial;
+  if (
+    resolved !== state &&
+    !guardCanvasMutation(state, resolved, {
+      ingressContext: "public-setstate",
+      throwOnViolation: import.meta.env.DEV,
+    })
+  ) {
+    return;
+  }
+  if (replace === true) {
+    // `replace: true` callers (store resets in tests) pass a full state by
+    // contract; the union param type above can't express that correlation to
+    // zustand's overloaded signature without this cast.
+    rawPublicSetState(resolved as EpicCanvasStore, true);
+  } else {
+    rawPublicSetState(resolved);
+  }
+};
+
+/**
+ * The ONLY function authorized to change a tab's `epicId` for an
+ * already-live tile set. It bypasses the guarded public `setState` wrapper
+ * above (which is always strict) and commits through `rawPublicSetState`
+ * directly - provenance is enforced by this function being the sole caller
+ * of that module-private raw setter, not by a parameter every guarded
+ * ingress has to understand. `tab-command-coordinator.ts`'s
+ * `resolveMigratedEpicActivation` and `completePhaseMigration` are its only
+ * two callers; both publish success from a POST-commit `getState()`
+ * read-back rather than trusting this function's return, because a
+ * synchronous subscriber can re-enter and move the same tab's epicId again
+ * before the outer caller regains control (see their own doc comments) - so
+ * this function reports nothing about outcome.
+ *
+ * Also owns the `mostRecentTabIdByEpicId` reindex (move the entry from the
+ * prior epicId to the resolved one) - both call sites needed the exact same
+ * bookkeeping, so it lives here once instead of twice.
+ *
+ * Preconditions, enforced here rather than trusted from the caller:
+ * - the tab exists;
+ * - `resolvedEpicId` actually differs from the tab's current epicId (a
+ *   same-value call is a silent no-op, not an error - safe for an
+ *   idempotent retry);
+ * - the tab's CURRENT epicId equals `expectedCurrentEpicId`. This is the
+ *   strongest precondition genuinely available to BOTH real callers today:
+ *   `resolveMigratedEpicActivation` already checks the tab's epicId against
+ *   `target.sourceEpicId` before calling, and `completePhaseMigration`
+ *   already checks it against `command.phaseId` (via `surfaceMode.phaseId`).
+ *   A tab-level `surfaceMode.kind === "phase-migration"` check was
+ *   considered and REJECTED as a UNIVERSAL precondition here:
+ *   `resolveMigratedEpicActivation`'s own existing check never examines
+ *   `surfaceMode` at all (its target is a more general "migrated-epic"
+ *   activation, not necessarily a phase-migration tab), so requiring it
+ *   would incorrectly narrow this action to serve only
+ *   `completePhaseMigration`. Each coordinator call site keeps its own
+ *   additional, shape-specific precondition (surfaceMode+phaseId, or
+ *   sourceEpicId-or-already-resolved) before ever calling this action - this
+ *   action's `expectedCurrentEpicId` check is a second, independent layer
+ *   against a stale/racing caller, not a replacement for those.
+ */
+export function resolveTabEpicIdentity(
+  tabId: string,
+  expectedCurrentEpicId: string,
+  resolvedEpicId: string,
+): void {
+  const state = useEpicCanvasStore.getState();
+  const current = state.tabsById[tabId];
+  if (current === undefined) return;
+  if (current.epicId === resolvedEpicId) return;
+  if (current.epicId !== expectedCurrentEpicId) {
+    appLogger.error(
+      "resolveTabEpicIdentity precondition failed: tab's current epicId does not match the caller's expectation",
+      {
+        tabId,
+        expectedCurrentEpicId,
+        actualCurrentEpicId: current.epicId,
+        resolvedEpicId,
+      },
+      new Error("resolveTabEpicIdentity precondition failed"),
+    );
+    return;
+  }
+  const nextMostRecentTabIdByEpicId = {
+    ...state.mostRecentTabIdByEpicId,
+    [resolvedEpicId]: tabId,
+  };
+  if (nextMostRecentTabIdByEpicId[expectedCurrentEpicId] === tabId) {
+    delete nextMostRecentTabIdByEpicId[expectedCurrentEpicId];
+  }
+  rawPublicSetState({
+    tabsById: {
+      ...state.tabsById,
+      [tabId]: { ...current, epicId: resolvedEpicId },
+    },
+    mostRecentTabIdByEpicId: nextMostRecentTabIdByEpicId,
+  });
+}
 
 export function applyEpicCanvasDesktopProjection(
   snapshot: DesktopPerWindowSnapshot,
 ): void {
   applyingDesktopProjection = true;
-  useEpicCanvasStore.setState((state) =>
-    buildDesktopProjectionPatch(state, snapshot),
-  );
-  applyingDesktopProjection = false;
+  try {
+    // The guarded public `setState` wrapper validates this patch itself -
+    // no separate guard call needed here, it would just re-check the
+    // identical patch a second time.
+    useEpicCanvasStore.setState((state) =>
+      buildDesktopProjectionPatch(state, snapshot),
+    );
+  } finally {
+    // Always release the suppression flag, even when the dev/test guard
+    // throws mid-`setState` - otherwise every later outbound projection is
+    // silently dropped by the subscriber below for the module's lifetime.
+    applyingDesktopProjection = false;
+  }
 }
 
 useEpicCanvasStore.subscribe((state) => {

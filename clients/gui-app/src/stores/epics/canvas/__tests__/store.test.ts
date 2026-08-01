@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { paneTabRefs, setActiveTab } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import {
@@ -708,15 +708,27 @@ describe("epic canvas store header tabs", () => {
       "epic-prepare-preview",
       "Prepare Preview",
     );
-    store.openTilePreviewInTab(previewTabId, SPEC_A);
+    // Same CONTENT id as `SPEC_A`, opened into a different epic tab - per the
+    // instanceId-per-tab contract (`EpicArtifactRef`'s doc comment), that
+    // gets its OWN instanceId. Reusing `SPEC_A`'s instanceId across two
+    // unrelated tabs would violate the canvas-wide immutable identity tuple
+    // (same instanceId, different epicId).
+    const specAInPreviewTab: EpicCanvasTileRef = {
+      ...SPEC_A,
+      instanceId: "inst-a-preview",
+    };
+    store.openTilePreviewInTab(previewTabId, specAInPreviewTab);
     const previewPaneId = requireCanvas(previewTabId).activePaneId;
     if (previewPaneId === null) throw new Error("expected preview pane");
     expect(
       requirePane(requireCanvas(previewTabId), previewPaneId).previewTabId,
-    ).toBe(SPEC_A.instanceId);
-    expect(store.prepareOpenTileInTabFocusTarget(previewTabId, SPEC_A)).toEqual(
-      { paneId: previewPaneId, tileInstanceId: SPEC_A.instanceId },
-    );
+    ).toBe(specAInPreviewTab.instanceId);
+    expect(
+      store.prepareOpenTileInTabFocusTarget(previewTabId, specAInPreviewTab),
+    ).toEqual({
+      paneId: previewPaneId,
+      tileInstanceId: specAInPreviewTab.instanceId,
+    });
     expect(
       requirePane(requireCanvas(previewTabId), previewPaneId).previewTabId,
     ).toBeNull();
@@ -1771,7 +1783,7 @@ function spyOnFlushChatTabViewportHandoff() {
 }
 
 describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
-  let flushSpy: ReturnType<typeof spyOnFlushChatTabViewportHandoff>;
+  let flushSpy: Mock<(instanceIds: ReadonlyArray<string>) => void>;
 
   beforeEach(() => {
     flushSpy = spyOnFlushChatTabViewportHandoff();
@@ -1781,7 +1793,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   function seedHeaderTab(
     tabId: string,
     canvas: EpicCanvasState,
-    epicId: string = "epic-t20",
+    epicId: string,
   ): void {
     useEpicCanvasStore.setState({
       tabsById: {
@@ -1932,9 +1944,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   }
 
   /** Bare single-pane root with one tile (tear-off / wrap targets). */
-  function singlePaneCanvas(
-    node: EpicCanvasTileRef = SPEC_A,
-  ): EpicCanvasState {
+  function singlePaneCanvas(node: EpicCanvasTileRef): EpicCanvasState {
     return {
       activePaneId: "pane-root",
       root: {
@@ -1970,7 +1980,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- moveTabOnTabStrip ------------------------------------------------
 
   it("moveTabOnTabStrip: cross-pane move flushes the dragged tab (and not a no-op sibling)", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-left");
 
     useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
@@ -1986,7 +1996,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("moveTabOnTabStrip: cross-pane move of a pane's last tab also flushes dissolve survivors", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-right");
 
     useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
@@ -2005,7 +2015,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("moveTabOnTabStrip: same-pane reorder does NOT flush (no remount)", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
 
     useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
       sourcePaneId: "pane-left",
@@ -2020,7 +2030,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- insertNodeOnTabStrip ---------------------------------------------
 
   it("insertNodeOnTabStrip: cross-pane re-insert of an already-open node flushes it", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-right");
 
     // SPEC_C is already open in pane-right; inserting it onto pane-left is a
@@ -2037,7 +2047,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("insertNodeOnTabStrip: brand-new node does NOT flush (no existing mount to move)", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
 
     useEpicCanvasStore
       .getState()
@@ -2049,7 +2059,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- splitPaneWithNode ------------------------------------------------
 
   it("splitPaneWithNode: flushes the target pane's active tab (wrap or flat)", () => {
-    seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A));
+    seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A), "epic-t20");
     withPreMutationCheck("tab-1", "pane-root");
 
     // Bare root + edge split always wraps the target.
@@ -2076,7 +2086,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     "splitPaneWithNode: existing-node edge split (already open elsewhere) " +
       "flushes the moved instance, target active, AND its source-pane dissolve survivor",
     () => {
-      seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas());
+      seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas(), "epic-t20");
       withPreMutationCheck("tab-1", "pane-keep-1");
 
       // SPEC_B is already open (as the only tab) in the nested pane-keep-1,
@@ -2098,7 +2108,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   );
 
   it("splitPaneWithNode: brand-new node does NOT trigger the existing-node move flush", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
 
     useEpicCanvasStore
       .getState()
@@ -2113,7 +2123,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- splitPaneWithTab -------------------------------------------------
 
   it("splitPaneWithTab: flushes the dragged tab + target active + dissolve survivors", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-right");
 
     // Drag SPEC_C (only tab in pane-right) onto an edge of pane-left →
@@ -2135,7 +2145,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   it("splitPaneWithTab: same-pane edge split still flushes the dragged tab", () => {
     // Dragging a non-last tab from pane-left onto an edge of the same pane:
     // still creates a brand-new pane for the dragged tab → remounts it.
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
 
     useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
       sourcePaneId: "pane-left",
@@ -2155,7 +2165,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- splitPaneEmptyInTab ----------------------------------------------
 
   it("splitPaneEmptyInTab: flushes the target pane's active tab", () => {
-    seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A));
+    seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A), "epic-t20");
     withPreMutationCheck("tab-1", "pane-root");
 
     useEpicCanvasStore
@@ -2169,7 +2179,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- closeCanvasTab ---------------------------------------------------
 
   it("closeCanvasTab: last-tab close that dissolves flushes survivor actives", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-right");
 
     useEpicCanvasStore
@@ -2181,7 +2191,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("closeCanvasTab: non-last-tab close does NOT flush (pane stays, no dissolve)", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
 
     useEpicCanvasStore
       .getState()
@@ -2191,7 +2201,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("closeCanvasTab: last-tab close with >2 siblings flushes [] (no dissolve remount)", () => {
-    seedHeaderTab("tab-1", threePaneFlatCanvas());
+    seedHeaderTab("tab-1", threePaneFlatCanvas(), "epic-t20");
 
     useEpicCanvasStore
       .getState()
@@ -2205,7 +2215,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- closeAllCanvasTabs -----------------------------------------------
 
   it("closeAllCanvasTabs: dissolve flushes survivor actives", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-right");
 
     useEpicCanvasStore.getState().closeAllCanvasTabs("tab-1", "pane-right");
@@ -2215,7 +2225,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("closeAllCanvasTabs: >2 siblings flushes [] (no dissolve)", () => {
-    seedHeaderTab("tab-1", threePaneFlatCanvas());
+    seedHeaderTab("tab-1", threePaneFlatCanvas(), "epic-t20");
 
     useEpicCanvasStore.getState().closeAllCanvasTabs("tab-1", "pane-a");
 
@@ -2226,7 +2236,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   // ---- closeCanvasPane --------------------------------------------------
 
   it("closeCanvasPane: dissolve flushes survivor actives", () => {
-    seedHeaderTab("tab-1", twoPaneSplitCanvas());
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-left");
 
     useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-left");
@@ -2236,7 +2246,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("closeCanvasPane: >2 siblings flushes [] (no dissolve remount)", () => {
-    seedHeaderTab("tab-1", threePaneFlatCanvas());
+    seedHeaderTab("tab-1", threePaneFlatCanvas(), "epic-t20");
 
     useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-b");
 
@@ -2247,7 +2257,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   it(
     "closeCanvasPane: multi-pane promoted survivor flushes EVERY descendant active tab",
     () => {
-      seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas());
+      seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas(), "epic-t20");
       withPreMutationCheck("tab-1", "pane-gone");
 
       useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-gone");
@@ -2280,7 +2290,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
       },
       sizesByGroupId: {},
     };
-    seedHeaderTab("tab-src", canvas);
+    seedHeaderTab("tab-src", canvas, "epic-t20");
     withPreMutationCheck("tab-src", "pane-root");
 
     const newTabId = useEpicCanvasStore.getState().tearOffTabIntoNewHeaderTab({
@@ -2296,7 +2306,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   it("tearOffTabIntoNewHeaderTab: only-tab tear-off also flushes dissolve survivors", () => {
-    seedHeaderTab("tab-src", twoPaneSplitCanvas());
+    seedHeaderTab("tab-src", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-src", "pane-right");
 
     const newTabId = useEpicCanvasStore.getState().tearOffTabIntoNewHeaderTab({

@@ -13,6 +13,7 @@ import {
   removePaneFromTree,
   replaceNodeAtPath,
   replacePane,
+  resolveActivePaneTab,
 } from "@/stores/epics/canvas/tile-tree";
 import type {
   SizesByGroupId,
@@ -152,6 +153,31 @@ describe("findPaneById", () => {
     const tree = group("g", "horizontal", [pane("a", []), leaf]);
     expect(findPaneById(tree, "b")).toBe(leaf);
     expect(findPaneById(tree, "missing")).toBeNull();
+  });
+});
+
+describe("resolveActivePaneTab", () => {
+  it("returns null for an empty pane regardless of activeTabId", () => {
+    expect(resolveActivePaneTab(null, [])).toBeNull();
+    expect(resolveActivePaneTab("t-a", [])).toBeNull();
+  });
+
+  it("returns activeTabId when it names a live tab", () => {
+    expect(resolveActivePaneTab("t-b", ["t-a", "t-b", "t-c"])).toBe("t-b");
+  });
+
+  it("falls back to the first tab when activeTabId is null", () => {
+    expect(resolveActivePaneTab(null, ["t-a", "t-b"])).toBe("t-a");
+  });
+
+  it("falls back to the first tab when activeTabId names a tab no longer in the pane", () => {
+    expect(resolveActivePaneTab("stale", ["t-a", "t-b"])).toBe("t-a");
+  });
+
+  it("returns the sole tab for a single-tab pane, matching or not matching activeTabId", () => {
+    expect(resolveActivePaneTab("t-a", ["t-a"])).toBe("t-a");
+    expect(resolveActivePaneTab("stale", ["t-a"])).toBe("t-a");
+    expect(resolveActivePaneTab(null, ["t-a"])).toBe("t-a");
   });
 });
 

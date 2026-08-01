@@ -198,6 +198,23 @@ export function findPaneById(
   return null;
 }
 
+/**
+ * The tab a pane actually shows: `activeTabId` when it names a live tab,
+ * otherwise the pane's first tab (matching `TabGroupView`'s inline fallback).
+ * Shared by the renderer and, from Ticket 21 slice 2 on, host membership -
+ * the two must agree or a chat the renderer paints can go unhosted. Returns
+ * `null` for an empty pane.
+ */
+export function resolveActivePaneTab(
+  activeTabId: string | null,
+  tabInstanceIds: ReadonlyArray<string>,
+): string | null {
+  if (activeTabId !== null && tabInstanceIds.includes(activeTabId)) {
+    return activeTabId;
+  }
+  return tabInstanceIds[0] ?? null;
+}
+
 export function getNodeAtPath(
   root: TileLayoutNode,
   path: NodePath,

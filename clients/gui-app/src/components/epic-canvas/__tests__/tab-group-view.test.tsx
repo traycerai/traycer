@@ -165,7 +165,7 @@ function specTab(n: number): EpicCanvasTileRef {
 
 function pane(
   tabs: ReadonlyArray<EpicCanvasTileRef>,
-  activeTabId: string,
+  activeTabId: string | null,
 ): TilePane {
   return {
     kind: "pane",
@@ -173,7 +173,7 @@ function pane(
     tabInstanceIds: tabs.map((tab) => tab.instanceId),
     activeTabId,
     previewTabId: null,
-    activationHistory: [activeTabId],
+    activationHistory: activeTabId === null ? [] : [activeTabId],
   };
 }
 
@@ -182,14 +182,14 @@ function pane(
 // instanceIds resolve to the given refs.
 function seedCanvas(
   tabs: ReadonlyArray<EpicCanvasTileRef>,
-  activeTabId: string,
+  activeTabId: string | null,
 ): void {
   seedCanvasWithActivePane(tabs, activeTabId, "group-1");
 }
 
 function seedCanvasWithActivePane(
   tabs: ReadonlyArray<EpicCanvasTileRef>,
-  activeTabId: string,
+  activeTabId: string | null,
   activePaneId: string,
 ): void {
   useEpicCanvasStore.setState({
@@ -211,7 +211,7 @@ function seedCanvasWithActivePane(
 
 function groupView(
   tabs: ReadonlyArray<EpicCanvasTileRef>,
-  activeTabId: string,
+  activeTabId: string | null,
   paneVisible: boolean,
 ): ReactNode {
   return (
@@ -419,5 +419,51 @@ describe("<TabGroupView />", () => {
     expect(testState.unmounts.get("spec-1")).toBe(1);
     expect(testState.unmounts.get("spec-2")).toBeUndefined();
     expect(testState.unmounts.get("agent-1")).toBeUndefined();
+  });
+
+  it("falls back to the first tab when pane.activeTabId is null (resolveActivePaneTab wiring)", async () => {
+    // Byte-equivalence pin for Ticket 21 slice 1: TabGroupView delegates
+    // body active-tab resolution to `resolveActivePaneTab`. A null
+    // activeTabId must still mount/select the first strip tab - same as the
+    // previous inline fallback. Inactive never-visited tabs stay unmounted
+    // under the keep-alive policy (not display:none).
+    const tabs = [specTab(1), specTab(2)];
+    seedCanvas(tabs, null);
+    const { container } = render(groupView(tabs, null, true));
+
+    await waitFor(() => {
+      expect(testState.mounts.get("spec-1")).toBe(1);
+    });
+    const firstLayer = container.querySelector(
+      '[data-tab-instance-id="inst-spec-1"]',
+    );
+    expect(firstLayer).not.toBeNull();
+    expect(firstLayer?.getAttribute("data-selected")).toBe("true");
+    expect(firstLayer?.classList.contains("hidden")).toBe(false);
+    expect(
+      container.querySelector('[data-tab-instance-id="inst-spec-2"]'),
+    ).toBeNull();
+    expect(testState.mounts.get("spec-2")).toBeUndefined();
+  });
+
+  it("falls back to the first tab when pane.activeTabId is stale (resolveActivePaneTab wiring)", async () => {
+    const tabs = [specTab(1), specTab(2)];
+    const staleActiveId = "inst-spec-gone";
+    seedCanvas(tabs, staleActiveId);
+    const { container } = render(groupView(tabs, staleActiveId, true));
+
+    await waitFor(() => {
+      expect(testState.mounts.get("spec-1")).toBe(1);
+    });
+    const firstLayer = container.querySelector(
+      '[data-tab-instance-id="inst-spec-1"]',
+    );
+    expect(firstLayer).not.toBeNull();
+    expect(firstLayer?.getAttribute("data-selected")).toBe("true");
+    expect(firstLayer?.classList.contains("hidden")).toBe(false);
+    expect(
+      container.querySelector('[data-tab-instance-id="inst-spec-2"]'),
+    ).toBeNull();
+    expect(testState.mounts.get("spec-2")).toBeUndefined();
   });
 });
