@@ -35,7 +35,7 @@ import {
   ArtifactFilterMenu,
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
-import { useOpenCommunicationGraph } from "@/components/epic-canvas/comm-graph/use-open-communication-graph";
+import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -1815,7 +1815,6 @@ function ChatHeaderMoreMenu(props: {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
-  const openCommunicationGraph = useOpenCommunicationGraph(props.epicId);
   const menu = useExpandableHeaderMenu(props.tabId, "chats", props.collapsed);
   const selectionEnabled = selection.canSelect && connectionStatus !== "closed";
 
@@ -1832,9 +1831,7 @@ function ChatHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="min-w-56"
       >
-        <DropdownMenuItem onSelect={openCommunicationGraph}>
-          Open communication graph
-        </DropdownMenuItem>
+        <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
         {isEditableRole(permissionRole) ? (
           <DropdownMenuItem
             disabled={!selectionEnabled}

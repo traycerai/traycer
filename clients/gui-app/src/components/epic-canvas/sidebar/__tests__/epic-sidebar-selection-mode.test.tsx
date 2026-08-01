@@ -308,6 +308,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   }) => (
     <button
       type="button"
+      role="menuitem"
       data-testid={props["data-testid"]}
       disabled={props.disabled}
       onClick={props.onSelect}
@@ -767,7 +768,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    const startSelectionButton = screen.getByRole("button", {
+    const startSelectionButton = screen.getByRole("menuitem", {
       name: "Select agents",
     });
     expect(startSelectionButton.textContent).toBe("Select agents");
@@ -821,7 +822,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
 
     // Nothing selected yet: the button offers "Select all".
     expect(screen.queryByRole("button", { name: "Deselect all" })).toBeNull();
@@ -856,7 +857,7 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     const section = screen.getByTestId("epic-left-panel-section-chats");
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
 
     const selectionHeader = section.querySelector(
       '[data-panel-header-mode="selection"]',
@@ -893,9 +894,19 @@ describe("epic sidebar selection mode", () => {
     );
     expect(more.className).not.toContain("hidden");
 
-    fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
     expect(
       section.querySelector('[data-panel-header-mode="selection"]'),
+    ).not.toBeNull();
+  });
+
+  it("keeps the communication graph available in the Agents overflow", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen.getByRole("menuitem", { name: "Open communication graph" }),
     ).not.toBeNull();
   });
 
@@ -985,7 +996,9 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(screen.queryByRole("button", { name: "Select agents" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Select agents" }),
+    ).toBeNull();
     expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
   });
 
@@ -1115,7 +1128,7 @@ describe("epic sidebar selection mode", () => {
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
     fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
     expect(
       screen
@@ -1133,7 +1146,7 @@ describe("epic sidebar selection mode", () => {
     });
     expect(
       screen
-        .getByRole("button", { name: "Select agents" })
+        .getByRole("menuitem", { name: "Select agents" })
         .matches(":disabled"),
     ).toBe(true);
   });
@@ -1187,7 +1200,7 @@ describe("epic sidebar selection mode", () => {
 
     expect(
       screen
-        .getByRole("button", { name: "Select artifacts" })
+        .getByRole("menuitem", { name: "Select artifacts" })
         .matches(":disabled"),
     ).toBe(true);
     expect(
@@ -1281,7 +1294,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
     fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-root"));
     expect(
       screen
@@ -1320,7 +1333,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
     expect(
       screen.getByTestId("epic-sidebar-item-ticket-child").style.paddingLeft,
     ).toBe(`${INDENT_PX + BASE_PAD_LEFT}px`);
@@ -2200,7 +2213,7 @@ describe("status survives selection mode and rename", () => {
       screen.getByTestId("chat-descendant-status-failure-chat-child"),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
 
     // Both signals survive the switch to the selection-mode <label> row, which
     // grows a checkbox between the chevron and the leading icon.
@@ -2496,7 +2509,7 @@ describe("sidebar leading identity icon", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
     expectChatGlyphWithoutHarness("chat-root");
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
     expectChatGlyphWithoutHarness("chat-root");
 
     cleanup();
@@ -2520,7 +2533,7 @@ describe("sidebar leading identity icon", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
     expectTuiHarness("agent-root");
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
     expectTuiHarness("agent-root");
 
     cleanup();
@@ -2985,7 +2998,7 @@ describe("chat row archive", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
     expect(screen.getByTestId("epic-sidebar-archive-chat-root")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
     expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
 
     // Leave selection mode via deselect all is still selection mode; re-render
@@ -3087,7 +3100,7 @@ describe("chat row archive", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
     expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
     expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
 
     cleanup();
@@ -3156,7 +3169,7 @@ describe("chat row archive", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
     fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
     fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
     fireEvent.click(screen.getByTestId("confirm-action"));
