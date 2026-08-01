@@ -203,9 +203,10 @@ export const terminalListUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
-// A v2.1 host cannot observe live directory changes, but every session still
-// has an authoritative launch directory. Use it as `currentCwd`, which is the
-// same fallback a current host starts with before seeing a cwd OSC sequence.
+// A v2.1 host cannot observe live directory changes. Use its launch `cwd` as
+// `currentCwd`, which is the same fallback a current host starts with before
+// seeing a cwd OSC sequence. The frozen v2.1 schema allowed an empty `cwd`, so
+// v2.2 accepts that compatibility value and clients treat it as unavailable.
 export const terminalListUpgradeV21ToV22 = defineUpgradePath<
   typeof terminalListV21,
   typeof terminalListV22

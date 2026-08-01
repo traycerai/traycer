@@ -39,11 +39,17 @@ function session(): CanonicalTerminalSessionInfo {
 }
 
 describe("terminal.list@2.2 currentCwd", () => {
-  it("requires a non-empty current directory", () => {
+  it("requires the current directory field", () => {
     const base = session();
     expect(
       listTerminalsResponseSchemaV22.safeParse({
         sessions: [{ ...base, currentCwd: "/work/live" }],
+        homeCwd: "/Users/dev",
+      }).success,
+    ).toBe(true);
+    expect(
+      listTerminalsResponseSchemaV22.safeParse({
+        sessions: [{ ...base, currentCwd: "" }],
         homeCwd: "/Users/dev",
       }).success,
     ).toBe(true);
@@ -71,6 +77,22 @@ describe("terminal.list@2.2 currentCwd", () => {
       sessions: [{ ...base, currentCwd: base.cwd }],
       homeCwd: "/Users/dev",
     });
+  });
+
+  it("preserves an empty launch cwd from a legacy v2.1 host", () => {
+    const base = { ...session(), cwd: "" };
+    const response = listTerminalsResponseSchemaV21.parse({
+      sessions: [base],
+      homeCwd: "/Users/dev",
+    });
+
+    const upgraded = upgradeResponseToVersion(listRegistry, V21, V22, response);
+
+    expect(upgraded).toEqual({
+      sessions: [{ ...base, currentCwd: "" }],
+      homeCwd: "/Users/dev",
+    });
+    expect(() => listTerminalsResponseSchemaV22.parse(upgraded)).not.toThrow();
   });
 
   it("strips currentCwd when downgrading to v1.0", () => {

@@ -111,8 +111,10 @@ export type CanonicalTerminalSessionInfo = z.infer<
 
 // Latest canonical session-info shape. `cwd` remains the immutable launch
 // directory; `currentCwd` tracks the shell's live working directory when the
-// terminal reports it via a supported OSC sequence. Hosts initialize it to
-// `cwd`, so it is also the explicit fallback when live discovery is absent.
+// terminal reports it via a supported OSC sequence. Current hosts initialize
+// it to `cwd`, so it is also the explicit fallback when live discovery is
+// absent. The wire schema accepts an empty compatibility value because the
+// frozen v2.1 `cwd` field did; clients treat it as unavailable.
 //
 // This is a parallel schema rather than an in-place edit of
 // `canonicalTerminalSessionInfoSchema`: the latter already shipped in
@@ -120,7 +122,7 @@ export type CanonicalTerminalSessionInfo = z.infer<
 // `terminal.subscribe@1.4` and must remain frozen.
 export const canonicalTerminalSessionInfoWithCurrentCwdSchema =
   canonicalTerminalSessionInfoSchema.extend({
-    currentCwd: z.string().min(1),
+    currentCwd: z.string(),
   });
 export type CanonicalTerminalSessionInfoWithCurrentCwd = z.infer<
   typeof canonicalTerminalSessionInfoWithCurrentCwdSchema
@@ -247,8 +249,9 @@ export type ListTerminalsResponseV21 = z.infer<
 >;
 
 // `terminal.list@2.2` - additive live `currentCwd` on every session. An older
-// host upgraded from v2.1 fills it from the immutable launch `cwd`, preserving
-// the required fallback when live shell integration is unavailable.
+// host upgraded from v2.1 fills it from the immutable launch `cwd`. That frozen
+// field allowed an empty compatibility value, which current clients interpret
+// as "directory unavailable" rather than inventing a path.
 export const listTerminalsResponseSchemaV22 = z.object({
   sessions: z.array(canonicalTerminalSessionInfoWithCurrentCwdSchema),
   homeCwd: z.string().min(1).nullable(),
