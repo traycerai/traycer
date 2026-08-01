@@ -461,6 +461,99 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
   });
 });
 
+describe("StableTileSurfaceHost presentation-loss blur (design-review finding 5)", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  function seedOneChat(): void {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChats("p1", ["chat-1"]) },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip(
+      [{ kind: "epic", id: "tab-1" }],
+      { kind: "epic", id: "tab-1" },
+    );
+  }
+
+  it("blurs a focused descendant of a record that goes top-level-hidden", () => {
+    seedOneChat();
+    render(
+      <StableTileSurfaceHost
+        renderRecordBody={() => (
+          <button type="button" data-testid="hosted-focus-target">
+            focus me
+          </button>
+        )}
+      />,
+    );
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: true, topLevelFocused: true },
+        }),
+      );
+    });
+    const target = screen.getByTestId("hosted-focus-target");
+    act(() => {
+      target.focus();
+    });
+    expect(document.activeElement).toBe(target);
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: false, topLevelFocused: false },
+        }),
+      );
+    });
+    expect(document.activeElement).not.toBe(target);
+  });
+
+  it("leaves focus alone when the newly-hidden record has no focused descendant", () => {
+    seedOneChat();
+    render(
+      <StableTileSurfaceHost
+        renderRecordBody={() => (
+          <button type="button" data-testid="hosted-focus-target">
+            focus me
+          </button>
+        )}
+      />,
+    );
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: true, topLevelFocused: true },
+        }),
+      );
+    });
+    const outside = document.createElement("input");
+    document.body.appendChild(outside);
+    act(() => {
+      outside.focus();
+    });
+    expect(document.activeElement).toBe(outside);
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: false, topLevelFocused: false },
+        }),
+      );
+    });
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+});
+
 describe("StableTileSurfaceHost hosted DOM identity", () => {
   beforeEach(() => resetAll());
   afterEach(() => {
@@ -565,7 +658,8 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
         buildSyntheticTileSurfaceEnvironment("chat-1", {
           services: {
             openEpicHandle: {} as never,
-            panePortalContainer: slot,
+            geometryAnchorElement: slot,
+            panePortalContainer: null,
             isPaneFocusedNow: () => false,
           },
         }),

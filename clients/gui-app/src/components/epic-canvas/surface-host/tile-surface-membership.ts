@@ -29,11 +29,18 @@
  *    coordinator's own settle notification.
  *
  * Membership is recomputed and diffed on every notification from
- * `useEpicCanvasStore`, `useTabsStore`, and `tabCommandCoordinator` -
- * deriving from observed state at each checkpoint rather than trusting any
- * one store's change to imply the others are consistent (the same
- * observation-over-claim lesson slice 1's identity machinery learned the
- * hard way).
+ * `useEpicCanvasStore`, `useTabsStore`, `tabCommandCoordinator`, and
+ * `remote-deleted-chat-registry.ts` - deriving from observed state at each
+ * checkpoint rather than trusting any one store's change to imply the others
+ * are consistent (the same observation-over-claim lesson slice 1's identity
+ * machinery learned the hard way).
+ *
+ * A selected chat also has to pass `isHostedSurfaceEligible` (shared with
+ * `surface-owner.ts`'s render-routing decision - design-review slice-4
+ * finding 2) - a remote-deleted chat leaves membership the same instant
+ * `ActiveTabBody` reports it, so the registry entry it's holding gets cleared
+ * by slice 2's existing membership-loss subscription instead of lingering
+ * alongside the inline `DeletedArtifactBody`.
  */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
@@ -47,6 +54,11 @@ import {
   advanceTopLevelSurfaceRecency,
   retainedTopLevelSurfaceKeys,
 } from "@/stores/tabs/top-level-surface-retention";
+import { isHostedSurfaceEligible } from "@/components/epic-canvas/surface-host/surface-owner";
+import {
+  isChatRemoteDeleted,
+  subscribeChatRemoteDeletion,
+} from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
 
 export type SurfaceMembershipListener = () => void;
 
@@ -68,7 +80,13 @@ export function collectCanvasWideSelectedChatMembership(
       );
       if (activeInstanceId === null) continue;
       const tile = canvas.tilesByInstanceId[activeInstanceId];
-      if (tile?.type === "chat") {
+      if (
+        tile !== undefined &&
+        isHostedSurfaceEligible({
+          node: tile,
+          isRemoteDeleted: isChatRemoteDeleted(activeInstanceId),
+        })
+      ) {
         instanceIdToTabId.set(activeInstanceId, tabId);
       }
     }
@@ -176,4 +194,5 @@ useEpicCanvasStore.subscribe(recomputeMembership);
 useTabsStore.subscribe(recomputeMembership);
 useLandingDraftStore.subscribe(recomputeMembership);
 tabCommandCoordinator.subscribe(recomputeMembership);
+subscribeChatRemoteDeletion(recomputeMembership);
 recomputeMembership();

@@ -17,10 +17,13 @@
  */
 export const HOSTED_TILE_INSTANCE_ID_ATTRIBUTE = "data-hosted-tile-instance-id";
 export const HOSTED_TILE_PANE_ID_ATTRIBUTE = "data-hosted-canvas-pane-id";
+export const HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE = "data-hosted-view-tab-id";
 
 export const HOSTED_TILE_RECORD_SELECTOR = `[${HOSTED_TILE_INSTANCE_ID_ATTRIBUTE}]`;
 
 export interface HostedTileOwnership {
   readonly instanceId: string;
   readonly paneId: string;
+  /** The owning top-level (`"epic"` kind) tab id. */
+  readonly viewTabId: string;
 }

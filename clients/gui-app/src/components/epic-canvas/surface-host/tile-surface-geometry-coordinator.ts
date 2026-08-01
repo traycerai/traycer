@@ -110,7 +110,7 @@ export function registerTileSurfaceGeometryHost(element: Element): () => void {
 }
 
 /**
- * Registers a slot element (a `ReadyTileSurfaceEnvironment.services.panePortalContainer`)
+ * Registers a slot element (a `ReadyTileSurfaceEnvironment.services.geometryAnchorElement`)
  * to report its host-relative rect to `onRect` - synchronously once on
  * registration, then on every subsequent layout change, directly in the RO
  * callback. `key` is the owning record's stable identity (its `instanceId`)

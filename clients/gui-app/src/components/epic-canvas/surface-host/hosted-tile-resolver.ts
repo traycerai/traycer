@@ -18,6 +18,7 @@ import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
   HOSTED_TILE_RECORD_SELECTOR,
+  HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
   type HostedTileOwnership,
 } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 
@@ -49,8 +50,11 @@ export function resolveHostedTileOwnership(
   if (record === null) return null;
   const instanceId = record.getAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE);
   const paneId = record.getAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE);
-  if (instanceId === null || paneId === null) return null;
-  return { instanceId, paneId };
+  const viewTabId = record.getAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE);
+  if (instanceId === null || paneId === null || viewTabId === null) {
+    return null;
+  }
+  return { instanceId, paneId, viewTabId };
 }
 
 /**

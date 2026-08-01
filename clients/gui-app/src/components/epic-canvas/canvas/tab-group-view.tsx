@@ -1,4 +1,12 @@
-import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { Button } from "@/components/ui/button";
 import {
   PaneActivationFocusIntentContext,
@@ -46,6 +54,11 @@ import {
   isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
+import { surfaceOwnerFor } from "@/components/epic-canvas/surface-host/surface-owner";
+import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
+import { reportChatRemoteDeletionState } from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
+import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
+import { HOSTED_TILE_RECORD_SELECTOR } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import {
   TILE_KIND_GIT_DIFF,
   TILE_KIND_PR_DETAIL,
@@ -227,6 +240,7 @@ export const TabGroupView = memo(function TabGroupView(
     active: globallyActive,
     activate: activatePane,
   });
+  const { claimFocus, claimPointerDown } = paneActivation;
   const parentPaneFocusProbe = usePaneFocusProbe();
   const isPaneFocused = useCallback(
     () =>
@@ -234,6 +248,41 @@ export const TabGroupView = memo(function TabGroupView(
     [parentPaneFocusProbe],
   );
 
+  useEffect(() => {
+    const claimHostedPointerDown = (event: globalThis.PointerEvent): void => {
+      const { target } = event;
+      if (!(target instanceof Element)) return;
+      const ownership = resolveHostedTileOwnership(target);
+      if (ownership?.paneId !== pane.id) return;
+      claimPointerDown({
+        defaultPrevented: event.defaultPrevented,
+        scope: target.closest(HOSTED_TILE_RECORD_SELECTOR),
+        target,
+      });
+    };
+    const claimHostedFocus = (event: globalThis.FocusEvent): void => {
+      const { target } = event;
+      if (!(target instanceof Element)) return;
+      const ownership = resolveHostedTileOwnership(target);
+      if (ownership?.paneId !== pane.id) return;
+      claimFocus({
+        defaultPrevented: event.defaultPrevented,
+        scope: target.closest(HOSTED_TILE_RECORD_SELECTOR),
+        target,
+      });
+    };
+    // Hosted records are physical siblings of the pane root, so its React
+    // capture handlers cannot see these gestures. Reuse the current pane
+    // activation owner instead of reviving the older parallel deferred-click
+    // state machine; its document gesture ledger retains stopped-propagation,
+    // pointer-cancel, focus-intent, and next-task completion behavior.
+    document.addEventListener("pointerdown", claimHostedPointerDown);
+    document.addEventListener("focusin", claimHostedFocus);
+    return () => {
+      document.removeEventListener("pointerdown", claimHostedPointerDown);
+      document.removeEventListener("focusin", claimHostedFocus);
+    };
+  }, [claimFocus, claimPointerDown, pane.id]);
   const handleSplitFromMenu = useCallback(
     (
       groupId: string,
@@ -464,6 +513,41 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
         });
   const isActive = role !== null && props.selected && props.globallyActive;
 
+  // Reports the SAME isRemoteDeleted value this render already uses for the
+  // inline DeletedArtifactBody branch below, into the outside-React registry
+  // `tile-surface-membership.ts`'s eligibility check reads - see
+  // `remote-deleted-chat-registry.ts`. Chat-only: membership only ever tracks
+  // chat instanceIds. Unregisters (reports false) on unmount so a closed
+  // tab's entry never lingers.
+  //
+  // A LAYOUT effect, not a passive one (design-review slice-4 F2 residual):
+  // this render already commits to the inline `DeletedArtifactBody` branch
+  // below for a remote-deleted chat, but that alone doesn't remove the
+  // hosted owner - `tile-surface-membership.ts`, `tile-surface-environment-
+  // registry.ts`, and `StableTileSurfaceHost`'s record all only react to
+  // THIS report. Every link in that reaction chain is synchronous
+  // (`remote-deleted-chat-registry.ts`'s listener notification and
+  // `tile-surface-membership.ts`'s `recomputeMembership` both call their
+  // listeners in the same synchronous call stack this layout effect runs
+  // in; the `useSyncExternalStore` reads in `StableTileSurfaceHost`/
+  // `TileSurfaceRecord` force a synchronous re-render on notification by
+  // React's own tearing-avoidance contract). That forced re-render is its
+  // own, LATER React commit - not interleaved into this commit's own layout-
+  // effect list - but it is still fully synchronous and still resolves
+  // strictly before the browser paints, so reporting from a layout effect
+  // still closes the gap: the hosted record is gone and membership has
+  // dropped the instance before anything is painted, never visible
+  // alongside the inline deleted body (verified with a raw non-`act()`
+  // macrotask probe - a same-commit sibling layout-effect probe cannot
+  // observe this because it necessarily samples before that later commit).
+  useLayoutEffect(() => {
+    if (activeTab.type !== "chat") return undefined;
+    reportChatRemoteDeletionState(activeTab.instanceId, isRemoteDeleted);
+    return () => {
+      reportChatRemoteDeletionState(activeTab.instanceId, false);
+    };
+  }, [activeTab.type, activeTab.instanceId, isRemoteDeleted]);
+
   if (isRemoteDeleted) {
     return (
       <DeletedArtifactBody
@@ -476,6 +560,19 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
             ),
           );
         }}
+      />
+    );
+  }
+
+  if (surfaceOwnerFor({ node: activeTab, isRemoteDeleted }) === "hosted") {
+    return (
+      <TileSurfaceSlot
+        node={activeTab}
+        epicId={epicId}
+        paneId={groupId}
+        viewTabId={tabId}
+        tabSelected={props.selected}
+        canvasPaneActive={props.globallyActive}
       />
     );
   }

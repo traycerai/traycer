@@ -34,8 +34,14 @@
  * the source slot last published - including its `services` handles, which
  * were only ever proven valid for the source slot:
  *
- * - `services.panePortalContainer` may already be a disconnected DOM node
- *   (the source slot unmounted it).
+ * - `services.geometryAnchorElement` may already be a disconnected DOM node
+ *   (the source slot unmounted it) - it is per-slot, unlike the shared
+ *   per-top-level-surface `panePortalContainer` below.
+ * - `services.panePortalContainer` is `SurfacePresentationBoundary`'s
+ *   container, shared by every pane of the source top-level tab, so it stays
+ *   attached across any canvas-only structural move; it goes stale only
+ *   across a header tear-off, where it is still the SOURCE tab's container
+ *   until the destination publish replaces it.
  * - `services.isPaneFocusedNow` is still the source pane's own focus probe;
  *   calling it during the gap answers "was the OLD pane focused", not
  *   "is the tile focused now".
@@ -88,10 +94,27 @@ export interface TileSurfaceCanvasActivity {
 export interface TileSurfaceServices {
   readonly openEpicHandle: OpenEpicStoreHandle;
   /**
-   * The publishing slot's portal container at publish time. During a
-   * transfer gap (see the module doc's "transfer-gap contract") this can be
-   * a disconnected node left behind by a since-unmounted source slot -
-   * verify current attachment before portal-mounting into it.
+   * The publishing slot's OWN plain placeholder element - the geometry
+   * coordinator's `ResizeObserver`-observed anchor, positioned/sized exactly
+   * where the hosted record should paint. During a transfer gap (see the
+   * module doc's "transfer-gap contract") this can be a disconnected node
+   * left behind by a since-unmounted source slot - verify current attachment
+   * before relying on its geometry. Distinct from `panePortalContainer`
+   * below (design-review slice-4 finding 5): this element exists purely to
+   * be measured, never to host portaled content.
+   */
+  readonly geometryAnchorElement: HTMLElement;
+  /**
+   * The REAL `PanePortalContainerContext` value ambient at the publishing
+   * slot's location - `SurfacePresentationBoundary`'s per-top-level-surface
+   * portal host, the same node every other pane-local kept-mounted portal
+   * (comment composer, artifact-link editor, mention/hover popovers) renders
+   * into. That boundary wraps one entire top-level surface (every pane of
+   * one Epic tab shares it), so this stays current across any canvas-only
+   * structural move; it only changes across a header tear-off, and during
+   * that gap it is still the SOURCE tab's container until the destination
+   * publish replaces it - the same retained-until-replaced caveat as every
+   * other service here.
    */
   readonly panePortalContainer: HTMLElement | null;
   /**

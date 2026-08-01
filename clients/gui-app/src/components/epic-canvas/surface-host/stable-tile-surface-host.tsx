@@ -39,6 +39,7 @@
  */
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useSyncExternalStore,
@@ -46,6 +47,7 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
+import { runPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
 import {
   getTileSurfaceMembership,
   subscribeTileSurfaceMembership,
@@ -63,6 +65,7 @@ import {
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
+  HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
 } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 
 export interface StableTileSurfaceHostProps {
@@ -125,7 +128,7 @@ function TileSurfaceRecord(props: {
   );
   const environment = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const elementRef = useRef<HTMLDivElement | null>(null);
-  const slotElement = environment?.services.panePortalContainer ?? null;
+  const slotElement = environment?.services.geometryAnchorElement ?? null;
 
   useLayoutEffect(() => {
     if (slotElement === null) return undefined;
@@ -137,6 +140,24 @@ function TileSurfaceRecord(props: {
   }, [instanceId, slotElement]);
 
   const visible = environment?.presentation.topLevelVisible ?? false;
+
+  // A hosted record going hidden is a physically distant sibling of
+  // `SurfacePresentationBoundary`'s own portal container, so that
+  // boundary's own presentation-loss blur (scoped to ITS container) never
+  // reaches a focused descendant here. Reuse the same protocol directly
+  // rather than reimplementing it - see design-review finding 5.
+  useEffect(() => {
+    if (visible) return;
+    const element = elementRef.current;
+    const active = document.activeElement;
+    if (
+      element !== null &&
+      active instanceof HTMLElement &&
+      element.contains(active)
+    ) {
+      runPresentationLossBlur(() => active.blur());
+    }
+  }, [visible]);
 
   return (
     <div
@@ -150,7 +171,10 @@ function TileSurfaceRecord(props: {
       data-testid={`stable-tile-surface-record-${instanceId}`}
       {...{ [HOSTED_TILE_INSTANCE_ID_ATTRIBUTE]: instanceId }}
       {...(environment !== null
-        ? { [HOSTED_TILE_PANE_ID_ATTRIBUTE]: environment.placement.paneId }
+        ? {
+            [HOSTED_TILE_PANE_ID_ATTRIBUTE]: environment.placement.paneId,
+            [HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE]: environment.placement.viewTabId,
+          }
         : {})}
     >
       {environment !== null ? (

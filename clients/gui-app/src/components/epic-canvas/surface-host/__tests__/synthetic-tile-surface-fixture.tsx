@@ -37,6 +37,7 @@ export function buildSyntheticTileSurfaceEnvironment(
     services: {
       openEpicHandle:
         {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
+      geometryAnchorElement: document.createElement("div"),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
     },

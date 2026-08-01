@@ -49,6 +49,11 @@ import {
 } from "@/stores/chats/chat-tab-state-cache";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+  HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import { evictChatTabPersistenceForEpic } from "@/stores/chats/chat-tab-persistence-eviction";
 import { getOrCreateActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import type { ActivityGroupOpenState } from "@/stores/chats/activity-group-open-store-context";
@@ -846,6 +851,15 @@ interface RenderChatMessagesOptions {
   readonly groupId?: string;
   readonly withSiblingChrome?: boolean;
   /**
+   * Ticket 21 slice 4: models a HOSTED chat's DOM shape - the tile's own
+   * wrapper carries the hosted-record identity attributes instead of a
+   * physical `data-group-id` ancestor, while `withSiblingChrome`'s sibling
+   * (the pane's own tab strip, which never moves) stays under a real
+   * `data-group-id={hostedPaneId}`, exactly mirroring `StableTileSurfaceHost`
+   * vs `TabGroupView`'s split DOM subtrees.
+   */
+  readonly hostedPaneId?: string;
+  /**
    * Opts into decision #15's fresh-open policy (anchor the last user message
    * near the top) by leaving the scroll-state cache empty for this key. Most
    * tests here exercise following/free-scrolling/edge-mutation behavior, not
@@ -931,15 +945,35 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     isChatStreaming: options.isChatStreaming ?? false,
   };
 
+  const hostedPaneId = options.hostedPaneId;
+  const scopeAttributes: Record<string, string> =
+    hostedPaneId === undefined
+      ? { "data-group-id": groupId }
+      : {
+          [HOSTED_TILE_INSTANCE_ID_ATTRIBUTE]: instanceId,
+          [HOSTED_TILE_PANE_ID_ATTRIBUTE]: hostedPaneId,
+          [HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE]: "tab-1",
+        };
+
+  function siblingChrome(): ReactNode {
+    const button = (
+      <button type="button" data-testid="pane-sibling-chrome">
+        Sibling chrome
+      </button>
+    );
+    if (hostedPaneId === undefined) return button;
+    return <div data-group-id={hostedPaneId}>{button}</div>;
+  }
+
   const jsx = (): ReactNode => (
     <div
-      data-group-id={groupId}
+      data-group-id={hostedPaneId === undefined ? groupId : undefined}
       style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
     >
       <div
         data-chat-keyboard-scroll-scope
         data-active={state.tileActive ? "true" : "false"}
-        data-group-id={groupId}
+        {...scopeAttributes}
         style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
       >
         <ChatMessages
@@ -966,11 +1000,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           composerOverlayHeight={state.composerOverlayHeight}
         />
       </div>
-      {options.withSiblingChrome === true ? (
-        <button type="button" data-testid="pane-sibling-chrome">
-          Sibling chrome
-        </button>
-      ) : null}
+      {options.withSiblingChrome === true ? siblingChrome() : null}
     </div>
   );
 
@@ -4328,6 +4358,58 @@ describe("ChatMessages scroll policy", () => {
       rerenderMessages(appendAssistant(messages, "sibling-stream", 130_000));
       await settleLegendList();
       expect(getScrollNode().scrollTop).toBe(parked);
+    });
+
+    it("ticket 21 slice 4: claims keys from a pane sibling even when the tile itself is hosted (no physical data-group-id ancestor)", async () => {
+      const messages = makeTranscript(16);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "kbd-hosted-sibling",
+        withSiblingChrome: true,
+        tileActive: true,
+        hostedPaneId: "pane-hosted-1",
+      });
+      await settleLegendList();
+
+      const sibling = screen.getByTestId("pane-sibling-chrome");
+      const event = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        sibling.dispatchEvent(event);
+      });
+      // `handleKeyDownCapture` synchronously `preventDefault`s only when it
+      // claims the key (`chat-messages.tsx`) - the direct, gesture-heuristic-
+      // free signal that the hosted-record pane-id fallback matched.
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("ticket 21 slice 4: does NOT claim keys from an unrelated pane's chrome when the tile is hosted", async () => {
+      const messages = makeTranscript(16);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "kbd-hosted-unrelated",
+        tileActive: true,
+        hostedPaneId: "pane-hosted-1",
+      });
+      await settleLegendList();
+
+      const unrelated = document.createElement("div");
+      unrelated.setAttribute("data-group-id", "pane-hosted-2");
+      document.body.appendChild(unrelated);
+
+      const event = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        unrelated.dispatchEvent(event);
+      });
+      expect(event.defaultPrevented).toBe(false);
+      unrelated.remove();
     });
 
     it("on macOS, plain Home is claimed even from an editable target", async () => {

@@ -17,6 +17,16 @@ import {
   subscribeTileSurfaceMembership,
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
+import {
+  getTileSurfaceEnvironment,
+  publishTileSurfaceEnvironment,
+  resetTileSurfaceEnvironmentRegistryForTesting,
+} from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
+import {
+  reportChatRemoteDeletionState,
+  resetChatRemoteDeletionRegistryForTesting,
+} from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
+import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 
 function chatRef(instanceId: string): EpicNodeRef {
   return {
@@ -65,10 +75,14 @@ function resetAll(): void {
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
   tabCommandCoordinator.resetReconciliationForTesting();
+  resetChatRemoteDeletionRegistryForTesting();
   resetTileSurfaceMembershipForTesting();
+  resetTileSurfaceEnvironmentRegistryForTesting();
 }
 
 describe("collectCanvasWideSelectedChatMembership (layer 1, pure)", () => {
+  afterEach(() => resetChatRemoteDeletionRegistryForTesting());
+
   it("includes a chat tile that is its pane's active tab", () => {
     const membership = collectCanvasWideSelectedChatMembership({
       "tab-1": canvasWithChat("chat-inst", "p1"),
@@ -130,6 +144,14 @@ describe("collectCanvasWideSelectedChatMembership (layer 1, pure)", () => {
     });
     expect(membership.get("chat-1")).toBe("tab-1");
     expect(membership.get("chat-2")).toBe("tab-2");
+  });
+
+  it("design-review F2: excludes a chat that is remote-deleted even though it is the active tab", () => {
+    reportChatRemoteDeletionState("chat-deleted", true);
+    const membership = collectCanvasWideSelectedChatMembership({
+      "tab-1": canvasWithChat("chat-deleted", "p1"),
+    });
+    expect(membership.size).toBe(0);
   });
 
   it("ignores a tab with a null (empty-shell) canvas root", () => {
@@ -749,5 +771,73 @@ describe("design-review F1: global MRU cap spans every top-level kind, not just 
     // its chat must leave membership with it.
     expect(getTileSurfaceMembership().has("chat-old")).toBe(false);
     expect(getTileSurfaceMembership().has("chat-new")).toBe(true);
+  });
+});
+
+describe("design-review F2: shared eligibility discriminator (remote-deletion)", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => resetAll());
+
+  it(
+    "pin: remote-delete while hosted -> membership drops the instance and its " +
+      "published environment is cleared - exactly one owner survives",
+    () => {
+      useEpicCanvasStore.setState({
+        tabsById: {
+          "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+        },
+        canvasByTabId: { "tab-1": canvasWithChat("chat-1", "p1") },
+        openTabOrder: ["tab-1"],
+        activeTabId: "tab-1",
+      });
+      seedSingleTabStrip(
+        [{ kind: "epic", id: "tab-1" }],
+        { kind: "epic", id: "tab-1" },
+      );
+      expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+
+      // Mirrors what `TileSurfaceSlot` does once mounted for a real hosted
+      // chat - a published environment is the thing that would otherwise
+      // linger as a second, orphaned owner alongside the inline
+      // `DeletedArtifactBody` (design-review slice-4 finding 2).
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          placement: {
+            epicId: "epic-1",
+            viewTabId: "tab-1",
+            paneId: "p1",
+            hostId: TEST_HOST_ID,
+          },
+        }),
+      );
+      expect(getTileSurfaceEnvironment("chat-1")).not.toBeNull();
+
+      // Mirrors what `ActiveTabBody`'s effect reports the instant
+      // `computeIsRemoteDeleted` flips true for this chat.
+      reportChatRemoteDeletionState("chat-1", true);
+
+      expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
+      expect(getTileSurfaceEnvironment("chat-1")).toBeNull();
+    },
+  );
+
+  it("re-admits the chat to membership once the deletion is reverted", () => {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChat("chat-1", "p1") },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip(
+      [{ kind: "epic", id: "tab-1" }],
+      { kind: "epic", id: "tab-1" },
+    );
+    reportChatRemoteDeletionState("chat-1", true);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
+
+    reportChatRemoteDeletionState("chat-1", false);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
   });
 });

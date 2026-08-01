@@ -93,6 +93,7 @@ import {
 } from "@/stores/chats/subagent-open-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
+import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -344,11 +345,23 @@ function ownsBoundaryKeys(target: EventTarget | null): boolean {
   return target.closest(CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR) !== null;
 }
 
+/**
+ * A hosted chat's own DOM lives in `StableTileSurfaceHost`'s plane, not
+ * inside its canvas pane's `[data-group-id]` subtree - the physical
+ * ancestry lookup misses for it (and for any target inside it), so a miss
+ * falls back to the hosted resolver, which walks the SAME node up to its
+ * hosted-record ancestor's stamped pane id instead.
+ */
 function canvasPaneIdOf(node: Node | null): string | null {
   const element = node instanceof Element ? node : node?.parentElement;
-  return (
-    element?.closest("[data-group-id]")?.getAttribute("data-group-id") ?? null
-  );
+  if (element === undefined || element === null) return null;
+  const physicalPaneId = element
+    .closest("[data-group-id]")
+    ?.getAttribute("data-group-id");
+  if (physicalPaneId !== undefined && physicalPaneId !== null) {
+    return physicalPaneId;
+  }
+  return resolveHostedTileOwnership(element)?.paneId ?? null;
 }
 
 /**
