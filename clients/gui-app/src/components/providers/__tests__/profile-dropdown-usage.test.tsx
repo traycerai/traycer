@@ -229,6 +229,7 @@ function renderDropdown(
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}
+      admissionByProfileId={null}
     />,
   );
 }

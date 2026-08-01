@@ -68,6 +68,8 @@ export function useTerminalAgentWorktreeGate(
         reasoningEffort: input.reasoningEffort,
         agentMode: input.agentMode,
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         worktreeIntent,
         workspaceMode: input.workspaceMode,

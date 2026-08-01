@@ -141,9 +141,12 @@ import {
   agentTuiTurnEndedV10,
   agentTuiListHarnessesV10,
   agentTuiPrepareLaunchV10,
+  agentTuiPrepareLaunchV11,
+  agentTuiPrepareLaunchUpgradeV10ToV11,
   agentTuiRecordActivityV10,
   agentTuiRecordActivityV11,
   agentTuiRecordActivityUpgradeV10ToV11,
+  agentTuiValidateForkProfileV10,
 } from "@traycer/protocol/host/agent/tui/contracts";
 import {
   commentsListThreadsV10,
@@ -3345,15 +3348,40 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "agent.tui.prepareLaunch": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentTuiPrepareLaunchV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: agentTuiPrepareLaunchV11,
+          upgradeFromPreviousVersion: agentTuiPrepareLaunchUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: read-only cross-profile fork-admission
+  // preflight (tech plan governing mechanism 2). The `degrade: unsupported`
+  // strategy EXCLUDES it from the released floor and the released-method-
+  // names snapshot - adding it to the floor would be handshake-fatal for
+  // existing clients. Old peers lack it in their optional manifest; the GUI's
+  // `useHostSupportsMethod` gate hides the cross-profile fork affordance
+  // rather than calling a method the host would reject. Mirrors
+  // `epic.setChatArchived`'s degrade strategy.
+  "agent.tui.validateForkProfile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentTuiValidateForkProfileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "agent.tui.generateTitle": {
     1: {

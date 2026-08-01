@@ -69,6 +69,8 @@ describe("useTerminalAgentWorktreeGate", () => {
       terminalAgentArgs: null,
       profileId: null,
       forkSourceHarnessSessionId: null,
+      sourceTuiAgentId: null,
+      sourceProfileId: null,
       onStatusChange: null,
       placement: { kind: "active-tile" },
     });
