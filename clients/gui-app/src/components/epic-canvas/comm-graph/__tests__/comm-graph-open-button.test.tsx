@@ -2,6 +2,10 @@ import "../../../../../__tests__/test-browser-apis";
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+} from "@/components/ui/dropdown-menu";
 
 const tileNavigationMocks = vi.hoisted(() => ({
   openTileInEpic: vi.fn(),
@@ -13,7 +17,10 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,
 }));
 
-import { CommGraphOpenButton } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
+import {
+  CommGraphOpenButton,
+  CommGraphOpenMenuItem,
+} from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 
 const EPIC_ID = "epic-open-button";
@@ -80,5 +87,28 @@ describe("CommGraphOpenButton", () => {
     fireEvent.click(screen.getByTestId("epic-sidebar-open-comm-graph"));
 
     expect(tileNavigationMocks.openTileInEpic).not.toHaveBeenCalled();
+  });
+});
+
+describe("CommGraphOpenMenuItem", () => {
+  it("opens the epic's graph tile from the compact overflow menu", () => {
+    render(
+      <DropdownMenu open>
+        <DropdownMenuContent>
+          <CommGraphOpenMenuItem epicId={EPIC_ID} disabled={false} />
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-more-open-comm-graph"));
+
+    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
+      EPIC_ID,
+      expect.objectContaining({
+        id: makeCommGraphTileRef(EPIC_ID).id,
+        type: "comm-graph",
+        epicId: EPIC_ID,
+      }),
+    );
   });
 });

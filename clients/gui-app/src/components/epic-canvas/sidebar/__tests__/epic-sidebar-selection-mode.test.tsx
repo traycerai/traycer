@@ -877,6 +877,19 @@ describe("epic sidebar selection mode", () => {
     ).not.toBeNull();
   });
 
+  it("keeps the communication graph available in the compact Agents overflow", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen.getByTestId("epic-sidebar-open-comm-graph").className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
+      screen.getByTestId("epic-sidebar-more-open-comm-graph").textContent,
+    ).toContain("Open communication graph");
+  });
+
   it("renders loading chat and artifact panels before the epic session handle exists", () => {
     testState.sessionReady = false;
 
