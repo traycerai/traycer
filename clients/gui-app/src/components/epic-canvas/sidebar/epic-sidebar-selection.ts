@@ -266,6 +266,24 @@ export function rootmostSelectedSidebarIds(args: {
   );
 }
 
+export function sidebarIdsWithinRoots(args: {
+  readonly ids: readonly string[];
+  readonly rootIds: readonly string[];
+  readonly tree: EpicTreeIndex;
+}): readonly string[] {
+  if (args.rootIds.length === 0) return [];
+  const rootIds = new Set(args.rootIds);
+  return args.ids.filter((id) => {
+    let currentId: string | null = id;
+    while (currentId !== null) {
+      if (rootIds.has(currentId)) return true;
+      if (!Object.hasOwn(args.tree.nodeById, currentId)) return false;
+      currentId = args.tree.nodeById[currentId].parentId;
+    }
+    return false;
+  });
+}
+
 function sidebarBulkSelectionReducer(
   state: SidebarBulkSelectionState,
   action: SidebarBulkSelectionAction,

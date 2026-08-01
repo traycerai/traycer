@@ -112,6 +112,7 @@ interface TestState {
   /** Ids whose record carries a non-null `archivedAt`. */
   archivedIds: readonly string[];
   archiveMutate: Mock;
+  archiveMutateAsync: Mock;
   rowHostId: string | null;
   rowHostEntry: unknown;
   rowHostClient: unknown;
@@ -163,6 +164,7 @@ const testState = vi.hoisted<TestState>(() => ({
   showArchived: false,
   archivedIds: [],
   archiveMutate: vi.fn(),
+  archiveMutateAsync: vi.fn(),
   rowHostId: "host-1",
   rowHostEntry: { hostId: "host-1" },
   rowHostClient: { getActiveHostId: () => "host-1" },
@@ -346,6 +348,7 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicArchiveChat: () => ({
     mutate: testState.archiveMutate,
+    mutateAsync: testState.archiveMutateAsync,
     isPending: false,
   }),
   useEpicCreateChat: () => ({
@@ -695,6 +698,7 @@ const EPIC_ID = "epic-1";
 
 describe("epic sidebar selection mode", () => {
   beforeEach(() => {
+    testState.archiveMutateAsync.mockResolvedValue({ updated: true });
     testState.deleteArtifactMutateAsync.mockResolvedValue({});
     testState.deleteChatMutateAsync.mockResolvedValue({});
     testState.deleteTuiAgentMutateAsync.mockResolvedValue({});
@@ -728,6 +732,7 @@ describe("epic sidebar selection mode", () => {
     testState.showArchived = false;
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
+    testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
     testState.rowHostClient = { getActiveHostId: () => "host-1" };
@@ -789,6 +794,67 @@ describe("epic sidebar selection mode", () => {
       epicId: EPIC_ID,
       tuiAgentId: "agent-root",
     });
+  });
+
+  it("archives the topmost selected agents and exits selection mode", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+
+    await waitFor(() => {
+      expect(testState.archiveMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-root",
+        archived: true,
+      });
+      expect(testState.archiveMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "agent-root",
+        archived: true,
+      });
+    });
+    expect(testState.archiveMutateAsync).not.toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-child",
+      archived: true,
+    });
+    expect(
+      screen.queryByRole("button", { name: "Cancel selection" }),
+    ).toBeNull();
+  });
+
+  it("hides the bulk archive action when the host lacks archive support", () => {
+    seedChatTree();
+    testState.archiveSupport = false;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-selected-chats"),
+    ).toBeNull();
+  });
+
+  it("keeps bulk archive disabled while a selected agent is working", () => {
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+
+    expect(
+      screen
+        .getByTestId("epic-sidebar-archive-selected-chats")
+        .matches(":disabled"),
+    ).toBe(true);
   });
 
   it("toggles the Select all button to Deselect all once everything is selected", () => {
@@ -2746,6 +2812,7 @@ describe("chat row archive", () => {
     testState.showArchived = false;
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
+    testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
     testState.rowHostClient = { getActiveHostId: () => "host-1" };
