@@ -312,7 +312,7 @@ describe("Commander registration (buildProgram)", () => {
     const role = findRoleCommand();
     const list = role?.commands.find((cmd) => cmd.name() === "list");
     const longs = (list?.options ?? []).map((option) => option.long);
-    expect(longs).toContain("--epic-id");
+    expect(longs).not.toContain("--epic-id");
     expect(longs).not.toContain("--agent-id");
   });
 

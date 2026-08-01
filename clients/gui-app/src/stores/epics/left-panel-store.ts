@@ -311,8 +311,10 @@ interface LeftPanelStore {
   readonly clearArtifactFilter: (epicId: string) => void;
   readonly setChatSortField: (epicId: string, field: SortField) => void;
   readonly toggleChatSortDirection: (epicId: string) => void;
+  readonly resetChatView: (epicId: string) => void;
   readonly setArtifactSortField: (epicId: string, field: SortField) => void;
   readonly toggleArtifactSortDirection: (epicId: string) => void;
+  readonly resetArtifactView: (epicId: string) => void;
 }
 
 const PERSIST_KEY = persistKey(STORE_KEYS.leftPanel);
@@ -1279,6 +1281,32 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
+      resetChatView: (epicId) => {
+        set((state) => {
+          const hasFilter = Object.hasOwn(state.chatFilterByEpicId, epicId);
+          const hasShowArchived = Object.hasOwn(
+            state.chatShowArchivedByEpicId,
+            epicId,
+          );
+          const hasSort = Object.hasOwn(state.chatSortByEpicId, epicId);
+          if (!hasFilter && !hasShowArchived && !hasSort) return state;
+
+          const chatFilterByEpicId = { ...state.chatFilterByEpicId };
+          const chatShowArchivedByEpicId = {
+            ...state.chatShowArchivedByEpicId,
+          };
+          const chatSortByEpicId = { ...state.chatSortByEpicId };
+          delete chatFilterByEpicId[epicId];
+          delete chatShowArchivedByEpicId[epicId];
+          delete chatSortByEpicId[epicId];
+          return {
+            chatFilterByEpicId,
+            chatShowArchivedByEpicId,
+            chatSortByEpicId,
+          };
+        });
+      },
+
       setArtifactSortField: (epicId, field) => {
         set((state) => {
           const current = getFilterOrEmpty(
@@ -1312,6 +1340,20 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
               },
             },
           };
+        });
+      },
+
+      resetArtifactView: (epicId) => {
+        set((state) => {
+          const hasFilter = Object.hasOwn(state.artifactFilterByEpicId, epicId);
+          const hasSort = Object.hasOwn(state.artifactSortByEpicId, epicId);
+          if (!hasFilter && !hasSort) return state;
+
+          const artifactFilterByEpicId = { ...state.artifactFilterByEpicId };
+          const artifactSortByEpicId = { ...state.artifactSortByEpicId };
+          delete artifactFilterByEpicId[epicId];
+          delete artifactSortByEpicId[epicId];
+          return { artifactFilterByEpicId, artifactSortByEpicId };
         });
       },
     }),

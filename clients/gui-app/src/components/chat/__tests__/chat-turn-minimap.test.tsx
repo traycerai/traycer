@@ -7,22 +7,24 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { createRef, type RefObject } from "react";
+import type { RefObject } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
 import {
-  CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH,
-  CHAT_TURN_MINIMAP_HIT_STRIP_LEFT,
+  CHAT_TURN_MINIMAP_END_HIT_PADDING,
+  CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
-  CHAT_TURN_MINIMAP_PERSISTENT_GUTTER,
 } from "@/components/chat/chat-turn-minimap-logic";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { ChatTurnMinimapSide } from "@/stores/settings/settings-store";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { isPaneActivationDeferred } from "@/components/epic-canvas/pane-activation";
 import {
   evictChatTurnMinimapActiveEntries,
   evictChatTurnMinimapActiveEntryForChat,
+  saveChatTurnMinimapActiveEntry,
 } from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import { makeMessage } from "./chat-message-fixtures";
 
@@ -86,7 +88,7 @@ function makeA2AUser(index: number, content: string): ChatMessageModel {
   };
 }
 
-/** Two human user turns (min rail) with assistant replies. */
+/** Two human user turns with assistant replies. */
 function makeTwoTurnTranscript(): ChatMessageModel[] {
   return [
     makeUser(0, "First user turn"),
@@ -209,17 +211,8 @@ function mockRailGeometry(
   });
 }
 
-/** Viewport wide enough for a non-zero hit-strip (and persistent gutter). */
-const WIDE_VIEWPORT_PX =
-  CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH +
-  (CHAT_TURN_MINIMAP_HIT_STRIP_LEFT + CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH) *
-    2;
-/** 780px pane → 6px side gutter → hitStripWidth 0 (M3b pin). */
-const ZERO_BUDGET_VIEWPORT_PX = 780;
-/** Side gutter just under the 48px persistent threshold, but > 12 so the strip is live. */
-const HOVER_ONLY_VIEWPORT_PX =
-  CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH +
-  (CHAT_TURN_MINIMAP_PERSISTENT_GUTTER - 1) * 2;
+const WIDE_VIEWPORT_PX = 1200;
+const CONSTRAINED_VIEWPORT_PX = 420;
 
 interface RenderOptions {
   readonly messages: ReadonlyArray<ChatMessageModel>;
@@ -228,6 +221,7 @@ interface RenderOptions {
   readonly listState?: FakeListState;
   readonly inViewRefreshRef?: RefObject<() => void>;
   readonly onSelect?: (messageId: string) => void;
+  readonly side?: ChatTurnMinimapSide;
   /** LegendList's live measured header size (decision #18's
    *  topOffsetAdjustment) - defaults to 0 (no header) unless a scenario
    *  specifically needs to pin header-present behavior. */
@@ -275,6 +269,7 @@ function renderMinimap(options: RenderOptions): {
       bottomInset={options.bottomInset ?? 0}
       onSelect={onSelect}
       identity={DEFAULT_MINIMAP_IDENTITY}
+      side={options.side ?? "right"}
     />
   );
   const result = render(tree);
@@ -298,6 +293,7 @@ function renderMinimap(options: RenderOptions): {
           bottomInset={next.bottomInset ?? 0}
           onSelect={next.onSelect ?? onSelect}
           identity={DEFAULT_MINIMAP_IDENTITY}
+          side={next.side ?? "right"}
         />,
       );
     },
@@ -305,34 +301,32 @@ function renderMinimap(options: RenderOptions): {
 }
 
 describe("ChatTurnMinimap item derivation / filtering", () => {
-  it("renders nothing with fewer than 2 human user turns", () => {
-    const { unmount } = render(
-      <ChatTurnMinimap
-        messages={[
-          makeUser(0, undefined),
-          makeAssistant(1, "only one human turn"),
-        ]}
-        inViewRefreshRef={{ current: () => undefined }}
-        listRef={createRef()}
-        topOffsetAdjustmentRef={{ current: 0 }}
-        viewportRef={createRef()}
-        bottomInset={0}
-        onSelect={vi.fn()}
-        identity={DEFAULT_MINIMAP_IDENTITY}
-      />,
-    );
-    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
-    unmount();
-
+  it("renders nothing when there are no human user queries", () => {
     renderMinimap({
       messages: [
-        makeUser(0, undefined),
-        makeAssistant(1, "a"),
-        makeA2AUser(2, "a2a"),
+        makeAssistant(0, "assistant-only transcript"),
+        makeA2AUser(1, "agent traffic is not a user query"),
+        makeMessage(2, "system"),
       ],
     });
-    // One human user + one A2A user → still below MIN_ITEMS
     expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+  });
+
+  it("renders a usable rail for exactly one human user query", async () => {
+    renderMinimap({
+      messages: [
+        makeUser(0, "Only human query"),
+        makeAssistant(1, "Only assistant response"),
+        makeA2AUser(2, "Agent traffic must not create another marker"),
+      ],
+    });
+    await flushMinimapFrames(2);
+
+    const rail = screen.getByTestId("chat-turn-minimap");
+    const strips = rail.querySelectorAll("[data-chat-turn-minimap-strip]");
+    expect(strips).toHaveLength(1);
+    expect(strips[0].getAttribute("data-message-id")).toBe("message-0");
+    expect(screen.getByTestId("chat-turn-minimap-hit-strip")).not.toBeNull();
   });
 
   it("only human user rows become strips; A2A, assistant, and system are excluded", async () => {
@@ -377,7 +371,10 @@ describe("ChatTurnMinimap preview content", () => {
     fireEvent.mouseMove(hitStrip, { clientY: 0 });
     const preview = await screen.findByText("Prompt A");
     expect(preview).toBeTruthy();
-    expect(screen.getByText("Final reply for A")).toBeTruthy();
+    const assistantPreview = screen.getByText("Final reply for A");
+    expect(assistantPreview).toBeTruthy();
+    expect(assistantPreview.classList).toContain("line-clamp-3");
+    expect(assistantPreview.classList).not.toContain("block");
     expect(screen.queryByText("Draft reply")).toBeNull();
 
     // Hover near the bottom → second human turn, no assistant line
@@ -394,7 +391,9 @@ describe("ChatTurnMinimap preview content", () => {
     );
     expect(previewPanel?.classList).not.toContain("w-80");
     expect(
-      (previewPanel as HTMLElement).querySelectorAll(".text-muted-foreground"),
+      (previewPanel as HTMLElement).querySelectorAll(
+        "[data-chat-turn-minimap-assistant]",
+      ),
     ).toHaveLength(0);
     // Exactly one text line (the user prompt) inside the card
     expect(
@@ -406,104 +405,80 @@ describe("ChatTurnMinimap preview content", () => {
     renderMinimap({ messages: makeTwoTurnTranscript() });
     await flushMinimapFrames(2);
     const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    const interactionRegion = document.querySelector<HTMLElement>(
+      "[data-chat-turn-minimap-interaction-region]",
+    );
     mockRailGeometry(hitStrip, { top: 0, height: 100 });
     fireEvent.mouseMove(hitStrip, { clientY: 0 });
     expect(await screen.findByText("First user turn")).toBeTruthy();
-    fireEvent.mouseLeave(hitStrip);
+    expect(interactionRegion).not.toBeNull();
+    fireEvent.mouseLeave(interactionRegion as HTMLElement);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
   });
 });
 
-describe("ChatTurnMinimap gutter gating", () => {
-  it("is fully inert at zero hit-strip budget (attribute + a11y + handlers no-op)", async () => {
+describe("ChatTurnMinimap always-on rail", () => {
+  it("stays visible and interactive in a constrained or tiled pane", async () => {
     const { onSelect } = renderMinimap({
       messages: makeTwoTurnTranscript(),
-      viewportWidth: ZERO_BUDGET_VIEWPORT_PX,
+      viewportWidth: CONSTRAINED_VIEWPORT_PX,
     });
     await flushMinimapFrames(2);
 
+    const rail = screen.getByTestId("chat-turn-minimap");
     const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
-    await waitFor(() => {
-      expect(hitStrip.hasAttribute("inert")).toBe(true);
-    });
-    expect(hitStrip.getAttribute("aria-hidden")).toBe("true");
-    expect(hitStrip.classList.contains("pointer-events-none")).toBe(true);
-    expect(hitStrip.tabIndex).toBe(-1);
-    // jsdom does not enforce real inert dispatch blocking - pin the
-    // component's own isInert early-return on click/keydown.
-    fireEvent.click(hitStrip);
-    fireEvent.keyDown(hitStrip, { key: "Enter" });
-    fireEvent.keyDown(hitStrip, { key: "ArrowDown" });
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it("is interactive (un-inert) above zero budget", async () => {
-    renderMinimap({
-      messages: makeTwoTurnTranscript(),
-      viewportWidth: WIDE_VIEWPORT_PX,
-    });
-    await flushMinimapFrames(2);
-
-    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
-    await waitFor(() => {
-      expect(hitStrip.hasAttribute("inert")).toBe(false);
-    });
+    expect(rail.classList).toContain("opacity-100");
+    expect(rail.classList).not.toContain("opacity-0");
+    expect(hitStrip.hasAttribute("inert")).toBe(false);
     expect(hitStrip.getAttribute("aria-hidden")).toBeNull();
     expect(hitStrip.classList.contains("pointer-events-auto")).toBe(true);
     expect(hitStrip.tabIndex).toBe(0);
+    expect(hitStrip.style.width).toBe(
+      `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
+    );
     expect(
       hitStrip.hasAttribute(CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE),
     ).toBe(true);
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.click(hitStrip, { clientY: 100 });
+    expect(onSelect).toHaveBeenCalledWith("message-2");
   });
 
-  it("marks persistent gutter above the 48px side-gutter threshold and hover-reveal below it", async () => {
-    renderMinimap({
-      messages: makeTwoTurnTranscript(),
-      viewportWidth: WIDE_VIEWPORT_PX,
-    });
-    await flushMinimapFrames(2);
-    const rail = screen.getByTestId("chat-turn-minimap");
-    await waitFor(() => {
-      expect(rail.getAttribute("data-persistent-gutter")).toBe("true");
-    });
-    expect(rail.className).toContain("opacity-100");
-
-    // Re-measure at a hover-only width by swapping the rect and forcing a
-    // remount of the measure effect via a prop that still keeps 2+ items.
-    // Trigger ResizeObserver? Mock is a no-op. Re-render alone won't re-run
-    // the effect (viewportRef identity is stable). Force a remount.
-    cleanup();
-    renderMinimap({
-      messages: makeTwoTurnTranscript(),
-      viewportWidth: HOVER_ONLY_VIEWPORT_PX,
-    });
-    await flushMinimapFrames(2);
-    const hoverRail = screen.getByTestId("chat-turn-minimap");
-    await waitFor(() => {
-      expect(hoverRail.getAttribute("data-persistent-gutter")).toBe("false");
-    });
-    expect(hoverRail.className).toContain("opacity-0");
-    expect(hoverRail.className).toContain("hover:opacity-100");
-    // Still interactive (non-zero strip) even without persistent gutter
-    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
-    expect(hitStrip.hasAttribute("inert")).toBe(false);
-  });
-
-  it("sizes the collapsed hit-strip width to the gutter-clamped budget", async () => {
-    // sideGutter = 52 → hit = min(40, 52-12) = 40
+  it("uses the same fixed edge hit target in a wide pane", async () => {
     renderMinimap({
       messages: makeTwoTurnTranscript(),
       viewportWidth: WIDE_VIEWPORT_PX,
     });
     await flushMinimapFrames(2);
     const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
-    await waitFor(() => {
-      expect(hitStrip.style.width).toBe(
-        `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
-      );
-    });
+    expect(hitStrip.style.width).toBe(
+      `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
+    );
+  });
+
+  it("keeps a restored active entry collapsed until interaction", async () => {
+    saveChatTurnMinimapActiveEntry(DEFAULT_MINIMAP_IDENTITY, "message-2");
+    renderMinimap({ messages: makeTwoTurnTranscript() });
+    await flushMinimapFrames(2);
+
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    expect(hitStrip.style.width).toBe(
+      `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
+    );
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).toBeNull();
+
+    fireEvent.focus(hitStrip);
+
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).not.toBeNull();
+    expect(
+      hitStrip.getAttribute("data-chat-turn-minimap-interactive-width"),
+    ).toBe(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH);
   });
 });
 
@@ -580,6 +555,38 @@ describe("ChatTurnMinimap keyboard navigation", () => {
 });
 
 describe("ChatTurnMinimap mouse interaction", () => {
+  it("adds invisible pointer room beyond the first and last visible strips", async () => {
+    renderMinimap({ messages: makeThreeTurnTranscript() });
+    await flushMinimapFrames(2);
+
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    const interactionRegion = document.querySelector<HTMLElement>(
+      "[data-chat-turn-minimap-interaction-region]",
+    );
+    const firstStrip = document.querySelector<HTMLElement>(
+      '[data-chat-turn-minimap-strip][data-message-id="message-0"]',
+    );
+    const lastStrip = document.querySelector<HTMLElement>(
+      '[data-chat-turn-minimap-strip][data-message-id="message-5"]',
+    );
+
+    expect(firstStrip?.style.top).toBe(
+      `calc(0% + ${CHAT_TURN_MINIMAP_END_HIT_PADDING}px)`,
+    );
+    expect(lastStrip?.style.top).toBe(
+      `calc(100% - ${CHAT_TURN_MINIMAP_END_HIT_PADDING}px)`,
+    );
+    expect(hitStrip.parentElement).toBe(interactionRegion);
+    expect(hitStrip.classList).toContain("h-full");
+    expect(hitStrip.style.height).toBe("");
+
+    mockRailGeometry(hitStrip, { top: 0, height: 40 });
+    fireEvent.mouseMove(hitStrip, { clientY: 15 });
+    expect(await screen.findByText("Turn alpha")).toBeTruthy();
+    fireEvent.mouseMove(hitStrip, { clientY: 25 });
+    expect(await screen.findByText("Turn gamma")).toBeTruthy();
+  });
+
   it("mousemove maps pointer Y to nearest index and opens the preview", async () => {
     renderMinimap({ messages: makeThreeTurnTranscript() });
     await flushMinimapFrames(2);
@@ -610,7 +617,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
     expect(blurSpy).toHaveBeenCalled();
   });
 
-  it("clicking inside the preview panel does NOT trigger selection", async () => {
+  it("clicking the preview card selects its message", async () => {
     const { onSelect } = renderMinimap({
       messages: makeTwoTurnTranscript(),
     });
@@ -619,11 +626,286 @@ describe("ChatTurnMinimap mouse interaction", () => {
     mockRailGeometry(hitStrip, { top: 0, height: 100 });
     fireEvent.mouseMove(hitStrip, { clientY: 0 });
 
-    const preview = await screen.findByText("First user turn");
-    const previewRoot = preview.closest("[data-chat-turn-minimap-preview]");
-    expect(previewRoot).not.toBeNull();
-    fireEvent.click(previewRoot as HTMLElement);
-    expect(onSelect).not.toHaveBeenCalled();
+    await screen.findByText("First user turn");
+    const previewCard = document.querySelector("[data-chat-turn-minimap-card]");
+    expect(previewCard).not.toBeNull();
+    fireEvent.click(previewCard as HTMLElement);
+    expect(onSelect).toHaveBeenCalledWith("message-0");
+  });
+
+  it("explains both expand and collapse controls in keyboard-accessible tooltips", async () => {
+    renderMinimap({ messages: makeThreeTurnTranscript() });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 50 });
+
+    const expandButton = await screen.findByRole("button", {
+      name: "Expand all messages",
+    });
+    fireEvent.focus(expandButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Expand all messages",
+    );
+    fireEvent.blur(expandButton, { relatedTarget: hitStrip });
+    fireEvent.click(expandButton);
+
+    const collapseButton = screen.getByRole("button", {
+      name: "Collapse message list",
+    });
+    fireEvent.focus(collapseButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Collapse message list",
+    );
+  });
+
+  it("finishes minimap actions before an inactive canvas pane activates on the same click", async () => {
+    const order: string[] = [];
+    const onSelect = vi.fn<(messageId: string) => void>((messageId) => {
+      order.push(`select:${messageId}`);
+    });
+    renderMinimap({
+      messages: makeThreeTurnTranscript(),
+      onSelect,
+    });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 50 });
+    const expandButton = await screen.findByRole("button", {
+      name: "Expand all messages",
+    });
+    expect(isPaneActivationDeferred(expandButton)).toBe(true);
+
+    const activatePaneAfterClick = (): void => {
+      order.push("activate");
+    };
+    document.addEventListener("click", activatePaneAfterClick);
+    try {
+      fireEvent.pointerDown(expandButton);
+      fireEvent.click(expandButton);
+      expect(order).toEqual(["activate"]);
+      expect(
+        screen.getByRole("button", { name: "Collapse message list" }),
+      ).toBeTruthy();
+
+      const lastMessage = screen.getByRole("button", {
+        name: "Jump to message: Turn gamma",
+      });
+      expect(isPaneActivationDeferred(lastMessage)).toBe(true);
+      order.length = 0;
+      fireEvent.pointerDown(lastMessage);
+      fireEvent.click(lastMessage);
+      expect(order).toEqual(["select:message-5", "activate"]);
+      expect(onSelect).toHaveBeenCalledWith("message-5");
+    } finally {
+      document.removeEventListener("click", activatePaneAfterClick);
+    }
+  });
+
+  it("expands in place to a scrollable serial list and keeps every card selectable", async () => {
+    const { onSelect } = renderMinimap({
+      messages: makeThreeTurnTranscript(),
+    });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 50 });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand all messages" }),
+    );
+
+    const collapseButton = screen.getByRole("button", {
+      name: "Collapse message list",
+    });
+    expect(collapseButton.getAttribute("data-variant")).toBe("ghost");
+    expect(
+      hitStrip.getAttribute("data-chat-turn-minimap-interactive-width"),
+    ).toBe(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH);
+    expect(
+      collapseButton.querySelector(".lucide-fold-vertical"),
+    ).not.toBeNull();
+    const messageCards = document.querySelectorAll(
+      "[data-chat-turn-minimap-list-item]",
+    );
+    expect(messageCards).toHaveLength(3);
+    expect(screen.queryByText("User messages · 3")).toBeNull();
+    expect(screen.queryByText("Message 1")).toBeNull();
+    expect(screen.getByText("Turn alpha")).toBeTruthy();
+    expect(screen.getByText("Turn beta")).toBeTruthy();
+    expect(screen.getByText("Turn gamma")).toBeTruthy();
+    expect(messageCards[0].textContent).toBe("Turn alpha");
+    expect(messageCards[1].textContent).toBe("Turn beta");
+    expect(messageCards[2].textContent).toBe("Turn gamma");
+    expect(messageCards[0].classList).toContain("hover:bg-foreground/[0.08]");
+    expect(messageCards[1].getAttribute("data-active")).toBe("true");
+    expect(messageCards[1].getAttribute("aria-current")).toBe("true");
+    expect(messageCards[1].classList).toContain("bg-foreground/[0.13]");
+    expect(messageCards[0].getAttribute("data-active")).toBe("false");
+    expect(screen.queryByText("Reply alpha")).toBeNull();
+    expect(screen.queryByText("Reply beta final")).toBeNull();
+    const expandedPanel = document.querySelector<HTMLElement>(
+      "[data-chat-turn-minimap-preview] > div",
+    );
+    const listScroller = document.querySelector<HTMLElement>(
+      "[data-chat-turn-minimap-list-scroll]",
+    );
+    expect(expandedPanel?.classList).toContain(
+      "max-h-[min(60vh,calc(100cqh_-_1rem))]",
+    );
+    expect(expandedPanel?.classList).toContain("overflow-hidden");
+    expect(listScroller?.classList).toContain("overflow-y-auto");
+
+    fireEvent.click(messageCards[2]);
+    expect(onSelect).toHaveBeenCalledWith("message-5");
+    expect(messageCards[2].getAttribute("data-active")).toBe("true");
+    expect(messageCards[1].getAttribute("data-active")).toBe("false");
+    expect(
+      screen.getByRole("button", { name: "Collapse message list" }),
+    ).toBeTruthy();
+  });
+
+  it("shows expanded user queries for up to three intrinsic lines", async () => {
+    const longQuery =
+      "Explain how the inactive pane activation contract should preserve a newly opened portalled control while route synchronization catches up";
+    renderMinimap({
+      messages: [
+        makeUser(0, longQuery),
+        makeAssistant(1, "Long query reply"),
+        makeUser(2, "Short query"),
+      ],
+    });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 0 });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand all messages" }),
+    );
+
+    const longText = screen
+      .getByRole("button", { name: `Jump to message: ${longQuery}` })
+      .querySelector<HTMLElement>("[data-chat-turn-minimap-user-text]");
+    const shortText = screen
+      .getByRole("button", { name: "Jump to message: Short query" })
+      .querySelector<HTMLElement>("[data-chat-turn-minimap-user-text]");
+
+    expect(longText?.classList).toContain("line-clamp-3");
+    expect(longText?.classList).toContain("whitespace-normal");
+    expect(longText?.classList).toContain("break-words");
+    expect(longText?.classList).not.toContain("whitespace-nowrap");
+    expect(shortText?.classList).toContain("line-clamp-3");
+    expect(shortText?.classList).not.toContain("min-h-[3.75rem]");
+  });
+
+  it("dismisses the expanded list when the pointer leaves the whole interaction region", async () => {
+    renderMinimap({ messages: makeThreeTurnTranscript() });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    const interactionRegion = document.querySelector<HTMLElement>(
+      "[data-chat-turn-minimap-interaction-region]",
+    );
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 50 });
+    const expandButton = await screen.findByRole("button", {
+      name: "Expand all messages",
+    });
+    expect(expandButton.getAttribute("data-variant")).toBe("ghost");
+    expect(
+      expandButton.querySelector(".lucide-unfold-vertical"),
+    ).not.toBeNull();
+    fireEvent.click(expandButton);
+
+    expect(interactionRegion).not.toBeNull();
+    fireEvent.mouseLeave(interactionRegion as HTMLElement);
+
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).toBeNull();
+    fireEvent.mouseMove(hitStrip, { clientY: 50 });
+    expect(
+      await screen.findByRole("button", { name: "Expand all messages" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps the panel open while focus moves within it, then closes when focus leaves", async () => {
+    renderMinimap({ messages: makeThreeTurnTranscript() });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    const outsideButton = document.createElement("button");
+    document.body.appendChild(outsideButton);
+
+    fireEvent.focus(hitStrip);
+    const expandButton = await screen.findByRole("button", {
+      name: "Expand all messages",
+    });
+    fireEvent.blur(hitStrip, { relatedTarget: expandButton });
+    fireEvent.focus(expandButton);
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).not.toBeNull();
+
+    fireEvent.click(expandButton);
+    const activeMessage = screen.getByRole("button", {
+      name: "Jump to message: Turn alpha",
+    });
+    fireEvent.focus(activeMessage);
+    fireEvent.blur(activeMessage, { relatedTarget: outsideButton });
+
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).toBeNull();
+  });
+
+  it("lets Escape collapse from any expanded-list item and dismiss the compact preview", async () => {
+    renderMinimap({ messages: makeThreeTurnTranscript() });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 50 });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand all messages" }),
+    );
+    const activeMessage = screen.getByRole("button", {
+      name: "Jump to message: Turn beta",
+    });
+
+    fireEvent.keyDown(activeMessage, { key: "Escape" });
+    expect(
+      screen.getByRole("button", { name: "Expand all messages" }),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(hitStrip);
+
+    fireEvent.keyDown(hitStrip, { key: "Escape" });
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).toBeNull();
+  });
+});
+
+describe("ChatTurnMinimap side placement", () => {
+  it("places the rail and inward-opening preview on the configured side", async () => {
+    renderMinimap({ messages: makeTwoTurnTranscript(), side: "left" });
+    await flushMinimapFrames(2);
+    const rail = screen.getByTestId("chat-turn-minimap");
+    expect(rail.dataset.side).toBe("left");
+    expect(rail.classList).toContain("left-0");
+
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    expect(hitStrip.parentElement?.classList).toContain("left-3");
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 0 });
+    const preview = document.querySelector("[data-chat-turn-minimap-preview]");
+    expect(preview?.classList).toContain("left-8");
+  });
+
+  it("places the rail on the right when configured with the default side", async () => {
+    renderMinimap({ messages: makeTwoTurnTranscript() });
+    await flushMinimapFrames(2);
+    const rail = screen.getByTestId("chat-turn-minimap");
+    expect(rail.dataset.side).toBe("right");
+    expect(rail.classList).toContain("right-0");
   });
 });
 
@@ -653,6 +935,130 @@ describe("ChatTurnMinimap in-view highlighting", () => {
       expect(strip0?.getAttribute("data-in-view")).toBe("false");
       expect(strip2?.getAttribute("data-in-view")).toBe("true");
     });
+  });
+
+  it("lights the nearest user-message strip when no query is in view", async () => {
+    const messages = makeTwoTurnTranscript();
+    const listState: FakeListState = {
+      scroll: 150,
+      scrollLength: 50, // gap [150, 200): first user ends at 60, second starts at 250
+      positions: [0, 80, 250, 330],
+      sizes: [60, 60, 60, 60],
+    };
+    const { inViewRefreshRef } = renderMinimap({ messages, listState });
+    await flushMinimapFrames(3);
+
+    const firstStrip = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-0"]',
+    );
+    const secondStrip = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-2"]',
+    );
+    await waitFor(() => {
+      expect(firstStrip?.getAttribute("data-in-view")).toBe("false");
+      expect(secondStrip?.getAttribute("data-in-view")).toBe("false");
+      expect(firstStrip?.getAttribute("data-proximity")).toBe("false");
+      expect(secondStrip?.getAttribute("data-proximity")).toBe("true");
+    });
+
+    listState.scroll = 70;
+    act(() => inViewRefreshRef.current());
+
+    expect(firstStrip?.getAttribute("data-proximity")).toBe("true");
+    expect(secondStrip?.getAttribute("data-proximity")).toBe("false");
+
+    // Equal distance above and below: keep the earlier marker stable rather
+    // than flickering between neighbors at the exact midpoint.
+    listState.scroll = 155;
+    listState.scrollLength = 0;
+    act(() => inViewRefreshRef.current());
+    expect(firstStrip?.getAttribute("data-proximity")).toBe("true");
+    expect(secondStrip?.getAttribute("data-proximity")).toBe("false");
+
+    // Far beyond the transcript: the final real query remains the anchor.
+    listState.scroll = 1_000;
+    listState.scrollLength = 50;
+    act(() => inViewRefreshRef.current());
+    expect(firstStrip?.getAttribute("data-proximity")).toBe("false");
+    expect(secondStrip?.getAttribute("data-proximity")).toBe("true");
+  });
+
+  it("does not add a proximity highlight while real query rows are visible", async () => {
+    const messages = makeTwoTurnTranscript();
+    const listState: FakeListState = {
+      scroll: 0,
+      scrollLength: 300,
+      positions: [0, 80, 250, 330],
+      sizes: [60, 60, 60, 60],
+    };
+    renderMinimap({ messages, listState });
+    await flushMinimapFrames(3);
+
+    const strips = document.querySelectorAll("[data-chat-turn-minimap-strip]");
+    await waitFor(() => {
+      expect(
+        [...strips].filter(
+          (strip) => strip.getAttribute("data-in-view") === "true",
+        ),
+      ).toHaveLength(2);
+      expect(
+        [...strips].filter(
+          (strip) => strip.getAttribute("data-proximity") === "true",
+        ),
+      ).toHaveLength(0);
+    });
+  });
+
+  it("keeps a deterministic real marker lit while row measurements are temporarily unavailable", async () => {
+    const messages = makeTwoTurnTranscript();
+    renderMinimap({
+      messages,
+      listState: {
+        scroll: 0,
+        scrollLength: 300,
+        positions: [],
+        sizes: [],
+      },
+    });
+    await flushMinimapFrames(3);
+
+    const firstStrip = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-0"]',
+    );
+    const secondStrip = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-2"]',
+    );
+    await waitFor(() => {
+      expect(firstStrip?.getAttribute("data-proximity")).toBe("true");
+      expect(secondStrip?.getAttribute("data-proximity")).toBe("false");
+    });
+  });
+
+  it("does not rewrite marker attributes when repeated scroll refreshes resolve the same state", async () => {
+    const messages = makeTwoTurnTranscript();
+    const { inViewRefreshRef } = renderMinimap({
+      messages,
+      listState: {
+        scroll: 150,
+        scrollLength: 50,
+        positions: [0, 80, 250, 330],
+        sizes: [60, 60, 60, 60],
+      },
+    });
+    await flushMinimapFrames(3);
+
+    const rail = screen.getByTestId("chat-turn-minimap");
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(rail, {
+      attributes: true,
+      attributeFilter: ["data-in-view", "data-proximity"],
+      subtree: true,
+    });
+
+    act(() => inViewRefreshRef.current());
+
+    expect(observer.takeRecords()).toHaveLength(0);
+    observer.disconnect();
   });
 
   it("excludes rows hidden behind the bottom overlay inset", async () => {

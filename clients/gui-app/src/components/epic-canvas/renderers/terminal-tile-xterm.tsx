@@ -55,6 +55,7 @@ import {
   useVisiblePaneEffect,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { registerTerminalFocus } from "@/lib/terminals/terminal-focus-registry";
 import {
   acquireXtermHost,
@@ -1288,15 +1289,17 @@ function useActiveTerminalFocus(
   termRef: RefObject<Terminal | null>,
   shouldFocusOnActivePane: boolean,
 ): void {
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const focusVisibleTerminal = useCallback(() => {
     if (!shouldFocusOnActivePane) return;
+    if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     const focusTimer = window.setTimeout(() => {
       termRef.current?.focus();
     }, 0);
     return () => {
       clearTimeout(focusTimer);
     };
-  }, [shouldFocusOnActivePane, termRef]);
+  }, [paneActivationFocusIntent, shouldFocusOnActivePane, termRef]);
   useActivePaneEffect(focusVisibleTerminal);
 }
 

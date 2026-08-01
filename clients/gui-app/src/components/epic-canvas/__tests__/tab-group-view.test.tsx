@@ -1,5 +1,11 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
@@ -15,12 +21,16 @@ interface TestState {
   readonly mounts: Map<string, number>;
   readonly unmounts: Map<string, number>;
   readonly deferredClicks: Map<string, number>;
+  readonly deferredRemovalClicks: Map<string, number>;
+  readonly closeAutoFocusGuards: Map<string, (event: Event) => void>;
 }
 
 const testState = vi.hoisted((): TestState => ({
   mounts: new Map(),
   unmounts: new Map(),
   deferredClicks: new Map(),
+  deferredRemovalClicks: new Map(),
+  closeAutoFocusGuards: new Map(),
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -71,16 +81,21 @@ vi.mock("@/lib/epic-selectors", () => ({
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
   const React = await import("react");
+  const { usePaneCloseAutoFocusGuard } =
+    await import("@/components/epic-tabs/pane-visibility-context");
   function MockTile(props: { readonly id: string }) {
+    const closeAutoFocusGuard = usePaneCloseAutoFocusGuard(undefined);
     React.useEffect(() => {
       testState.mounts.set(props.id, (testState.mounts.get(props.id) ?? 0) + 1);
+      testState.closeAutoFocusGuards.set(props.id, closeAutoFocusGuard);
       return () => {
         testState.unmounts.set(
           props.id,
           (testState.unmounts.get(props.id) ?? 0) + 1,
         );
+        testState.closeAutoFocusGuards.delete(props.id);
       };
-    }, [props.id]);
+    }, [closeAutoFocusGuard, props.id]);
 
     return (
       <div data-testid={`tile-${props.id}`}>
@@ -96,6 +111,20 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
           }}
         >
           Deferred action
+        </button>
+        <button
+          type="button"
+          {...paneActivationDeferProps}
+          data-testid={`deferred-removal-${props.id}`}
+          onClick={(event) => {
+            testState.deferredRemovalClicks.set(
+              props.id,
+              (testState.deferredRemovalClicks.get(props.id) ?? 0) + 1,
+            );
+            event.currentTarget.remove();
+          }}
+        >
+          Deferred action that replaces itself
         </button>
       </div>
     );
@@ -204,6 +233,8 @@ describe("<TabGroupView />", () => {
     testState.mounts.clear();
     testState.unmounts.clear();
     testState.deferredClicks.clear();
+    testState.deferredRemovalClicks.clear();
+    testState.closeAutoFocusGuards.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
@@ -234,12 +265,9 @@ describe("<TabGroupView />", () => {
       expect(testState.mounts.get(SPEC.id)).toBe(1);
     });
 
-    const deferredButton = document.querySelector(
-      `[data-testid="deferred-activation-${SPEC.id}"]`,
-    );
-    if (!(deferredButton instanceof HTMLButtonElement)) {
-      throw new Error("Expected deferred button");
-    }
+    const deferredButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Deferred action",
+    });
 
     fireEvent.pointerDown(deferredButton);
 
@@ -250,9 +278,80 @@ describe("<TabGroupView />", () => {
     fireEvent.click(deferredButton);
 
     expect(testState.deferredClicks.get(SPEC.id)).toBe(1);
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
+      ).toBe("group-1");
+    });
+  });
+
+  it("activates after a deferred child removes itself during its click action", async () => {
+    const tabs = [SPEC];
+    seedCanvasWithActivePane(tabs, SPEC.instanceId, "other-group");
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    await waitFor(() => {
+      expect(testState.mounts.get(SPEC.id)).toBe(1);
+    });
+
+    const deferredButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Deferred action that replaces itself",
+    });
+
+    fireEvent.pointerDown(deferredButton);
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
-    ).toBe("group-1");
+    ).toBe("other-group");
+
+    fireEvent.click(deferredButton);
+
+    expect(testState.deferredRemovalClicks.get(SPEC.id)).toBe(1);
+    expect(deferredButton.isConnected).toBe(false);
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
+      ).toBe("group-1");
+    });
+  });
+
+  it("gives keyboard focus ownership to the inactive inner pane", async () => {
+    const tabs = [SPEC];
+    seedCanvasWithActivePane(tabs, SPEC.instanceId, "other-group");
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Deferred action",
+    });
+    button.focus();
+
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
+      ).toBe("group-1");
+    });
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("prevents close-autofocus from bouncing ownership to an inactive inner pane", async () => {
+    const tabs = [SPEC];
+    seedCanvas(tabs, SPEC.instanceId);
+    const view = render(groupView(tabs, SPEC.instanceId, true));
+
+    await waitFor(() => {
+      expect(testState.closeAutoFocusGuards.get(SPEC.id)).toBeDefined();
+    });
+    seedCanvasWithActivePane(tabs, SPEC.instanceId, "other-group");
+    view.rerender(groupView(tabs, SPEC.instanceId, true));
+    await waitFor(() => {
+      expect(view.getByTestId("tab-group").dataset.active).toBe("false");
+    });
+
+    const closeAutoFocusEvent = new Event("closeAutoFocus", {
+      cancelable: true,
+    });
+    testState.closeAutoFocusGuards.get(SPEC.id)?.(closeAutoFocusEvent);
+
+    expect(closeAutoFocusEvent.defaultPrevented).toBe(true);
   });
 
   it("keeps recently active tabs mounted under display:none and evicts past the LRU cap", async () => {

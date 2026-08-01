@@ -32,14 +32,25 @@ import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 
 interface NewTerminalPickerProps {
   readonly epicId: string;
   readonly tabId: string;
+  readonly onBeforeOpen: (() => void) | undefined;
 }
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const { epicId, onBeforeOpen, tabId } = props;
+  const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
+  const setIsOpen = useCallback(
+    (open: boolean) => setMenuOpen(tabId, "terminals", "create", open),
+    [setMenuOpen, tabId],
+  );
   // The picker's `PopoverContent` (a modal Radix popover) un-presents by
   // unmounting when its pane is backgrounded, which silently resets the cmdk
   // folder-search query inside `WorktreeFolderListBody` while the root stays
@@ -65,7 +76,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   // Gated on `isOpen` so the "+" button costs no RPC while idle; the query
   // becomes active only while the popover is open.
   const bindingsQuery = useWorktreeListBindingsForEpic({
-    epicId: props.epicId,
+    epicId,
     enabled: isOpen,
   });
   // Host-proven-missing rows are hidden here (a deleted worktree can't host a
@@ -115,19 +126,23 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   // can unmount the popover, so each click would mint a fresh terminal id. This
   // synchronous latch collapses one open->launch session to a single terminal.
   const hasLaunchedRef = useRef(false);
-  const handleOpenChange = useCallback((open: boolean) => {
-    if (open) {
-      hasLaunchedRef.current = false;
-      setExplicitRow(null);
-    }
-    setIsOpen(open);
-  }, []);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        onBeforeOpen?.();
+        hasLaunchedRef.current = false;
+        setExplicitRow(null);
+      }
+      setIsOpen(open);
+    },
+    [onBeforeOpen, setIsOpen],
+  );
 
   const handleLaunch = useCallback(() => {
     if (hasLaunchedRef.current || launchTarget === null) return;
     hasLaunchedRef.current = true;
-    navigateNested(props.epicId, props.tabId, () =>
-      prepareOpenTileInTabFocusTarget(props.tabId, {
+    navigateNested(epicId, tabId, () =>
+      prepareOpenTileInTabFocusTarget(tabId, {
         id: `term-${uuidv4()}`,
         instanceId: uuidv4(),
         type: "terminal",
@@ -141,9 +156,10 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   }, [
     navigateNested,
     prepareOpenTileInTabFocusTarget,
-    props.epicId,
-    props.tabId,
+    epicId,
+    tabId,
     launchTarget,
+    setIsOpen,
   ]);
 
   const handleSelectRow = useCallback((row: WorktreeBindingSelectorRowV12) => {

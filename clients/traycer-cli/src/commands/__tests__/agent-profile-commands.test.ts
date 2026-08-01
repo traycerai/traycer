@@ -538,7 +538,7 @@ describe("command registration", () => {
     expect(optionFlags(expectAgentCommand("create"))).toContain(
       "--permission-mode",
     );
-    expect(optionFlags(expectAgentCommand("list-profiles"))).toContain(
+    expect(optionFlags(expectAgentCommand("list-profiles"))).not.toContain(
       "--epic-id",
     );
     expect(

@@ -850,8 +850,33 @@ export interface INotificationHost {
     payload: unknown,
     replaceKey: string | null,
     deliveryKey: string | null,
+    foregroundAppLocal: NotificationForegroundAppLocal | null,
   ): Promise<void>;
   onClick(handler: (payload: unknown) => void): Disposable;
+  onForegroundDisplay(
+    handler: (display: NotificationForegroundDisplay) => void,
+  ): Disposable;
+}
+
+/**
+ * App-local data that must cross renderer realms when another Traycer window
+ * owns the foreground. `entry` stays unknown at the shell boundary; gui-app
+ * validates it before merging it into the focused renderer's store.
+ */
+export interface NotificationForegroundAppLocal {
+  readonly userId: string;
+  readonly entry: unknown;
+}
+
+/** Plain-data main -> renderer relay used instead of an OS notification while
+ * another Traycer window is focused. */
+export interface NotificationForegroundDisplay {
+  readonly title: string;
+  readonly body: string;
+  readonly payload: unknown;
+  readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
 export interface ITrayState {

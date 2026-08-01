@@ -1,5 +1,6 @@
 import {
   Suspense,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -7,7 +8,6 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import type { FocusEvent, PointerEvent } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -45,12 +45,15 @@ import {
 } from "@/components/epic-canvas/dnd/dnd-store";
 import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
 import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
+import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
 import { TabSurfaceActivityProvider } from "./tab-surface-activity";
 import { SurfaceReadinessBoundary } from "./host-readiness-controller";
 import { SurfacePresentationBoundary } from "./surface-presentation-boundary";
 import {
-  activateTopLevelSurfaceFromFocus,
-  activateTopLevelSurfaceFromPointer,
+  type TopLevelSurfaceActivator,
   useTopLevelSurfaceActivator,
 } from "./top-level-surface-activation-context";
 
@@ -133,51 +136,11 @@ export function TopLevelTabHost() {
     >
       <PhaseMigrationControllerHost />
       {mounts.map((mount) => (
-        <div
+        <TopLevelSurfaceMount
           key={tabRefKey(mount.tab)}
-          aria-hidden={!mount.activity.visible}
-          className={surfaceClassName(mount.placement)}
-          data-focused={mount.activity.focused ? "true" : "false"}
-          data-surface-kind={mount.tab.kind}
-          data-surface-ref={tabRefKey(mount.tab)}
-          data-testid={`top-level-surface-${mount.tab.kind}-${mount.tab.id}`}
-          data-visible={mount.activity.visible ? "true" : "false"}
-          onFocusCapture={(event: FocusEvent<HTMLDivElement>) => {
-            activateTopLevelSurfaceFromFocus(
-              event,
-              mount.activity.focused,
-              mount.tab,
-              activateSurface,
-            );
-          }}
-          onPointerDownCapture={(event: PointerEvent<HTMLDivElement>) => {
-            activateTopLevelSurfaceFromPointer(
-              event,
-              mount.activity.focused,
-              mount.tab,
-              activateSurface,
-            );
-          }}
-          style={surfaceStyle(mount.placement)}
-        >
-          <TabSurfaceActivityProvider activity={mount.activity}>
-            <SurfacePresentationBoundary
-              visible={mount.activity.visible}
-              focused={mount.activity.focused}
-            >
-              <SurfaceReadinessBoundary
-                scope={tabSurfaceDescriptor(mount.tab.kind).readinessScope}
-                // T11 supplies a durable per-Epic host id. Current top-level
-                // members deliberately use their descriptor's default/none key.
-                tabHostId={null}
-              >
-                <Suspense fallback={null}>
-                  <TabSurface tab={mount.tab} />
-                </Suspense>
-              </SurfaceReadinessBoundary>
-            </SurfacePresentationBoundary>
-          </TabSurfaceActivityProvider>
-        </div>
+          mount={mount}
+          activateSurface={activateSurface}
+        />
       ))}
       {renderedActiveItem?.kind === "tab" ? (
         <TopLevelEdgeSplitTargets targetRef={renderedActiveItem.ref} />
@@ -194,6 +157,67 @@ export function TopLevelTabHost() {
         </>
       ) : null}
     </div>
+  );
+}
+
+interface MountedTopLevelSurface {
+  readonly tab: HeaderTab;
+  readonly placement: SurfacePlacement;
+  readonly activity: {
+    readonly visible: boolean;
+    readonly focused: boolean;
+  };
+}
+
+function TopLevelSurfaceMount(props: {
+  readonly mount: MountedTopLevelSurface;
+  readonly activateSurface: TopLevelSurfaceActivator | null;
+}): ReactNode {
+  const { mount, activateSurface } = props;
+  const activate = useCallback(() => {
+    activateSurface?.(mount.tab);
+  }, [activateSurface, mount.tab]);
+  const paneActivation = usePaneActivationOwnership({
+    active: mount.activity.focused,
+    activate,
+  });
+
+  return (
+    <PaneActivationFocusIntentContext.Provider
+      value={paneActivation.focusIntent}
+    >
+      <div
+        aria-hidden={!mount.activity.visible}
+        className={surfaceClassName(mount.placement)}
+        data-focused={mount.activity.focused ? "true" : "false"}
+        data-surface-kind={mount.tab.kind}
+        data-surface-ref={tabRefKey(mount.tab)}
+        data-testid={`top-level-surface-${mount.tab.kind}-${mount.tab.id}`}
+        data-visible={mount.activity.visible ? "true" : "false"}
+        onFocusCapture={paneActivation.onFocusCapture}
+        onPointerDownCapture={paneActivation.onPointerDownCapture}
+        onPointerCancelCapture={paneActivation.onPointerCancelCapture}
+        style={surfaceStyle(mount.placement)}
+      >
+        <TabSurfaceActivityProvider activity={mount.activity}>
+          <SurfacePresentationBoundary
+            visible={mount.activity.visible}
+            focused={mount.activity.focused}
+          >
+            <SurfaceReadinessBoundary
+              scope={tabSurfaceDescriptor(mount.tab.kind).readinessScope}
+              // T11 supplies a durable per-Epic host id. Current top-level
+              // members deliberately use their descriptor's default/none key.
+              tabHostId={null}
+            >
+              <Suspense fallback={null}>
+                <TabSurface tab={mount.tab} />
+              </Suspense>
+            </SurfaceReadinessBoundary>
+          </SurfacePresentationBoundary>
+        </TabSurfaceActivityProvider>
+      </div>
+    </PaneActivationFocusIntentContext.Provider>
   );
 }
 
