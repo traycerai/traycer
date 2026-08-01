@@ -8,7 +8,7 @@
     "traycer": "./src/index.ts"
   },
   "engines": {
-    "node": ">=20.18.0"
+    "node": ">=20.18.1"
   },
   "repository": {
     "type": "git",
@@ -33,6 +33,7 @@
     "commander": "catalog:",
     "node-stream-zip": "catalog:",
     "tar": "^7.5.22",
+    "undici": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
