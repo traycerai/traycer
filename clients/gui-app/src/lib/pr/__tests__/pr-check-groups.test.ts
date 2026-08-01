@@ -150,6 +150,17 @@ describe("prCheckContextKey", () => {
 
   it("prefers the per-run details url where there is one", () => {
     const context = check({ detailsUrl: "https://ci/run/1" });
-    expect(prCheckContextKey(context, 3)).toBe("https://ci/run/1");
+    expect(prCheckContextKey(context, 3)).toBe("https://ci/run/1:3");
+  });
+
+  it("still separates two contexts that SHARE a details url", () => {
+    // A check run's `detailsUrl` is per-run and unique; a commit status is
+    // not a check run, and several contexts posted by one integration
+    // routinely carry the same `target_url`. Keying on the bare url there
+    // hands the Checks list duplicate React keys and `derivePrAttentionQueue`
+    // a duplicate `check:` key.
+    const first = check({ name: "lint", detailsUrl: "https://ci/app" });
+    const second = check({ name: "typecheck", detailsUrl: "https://ci/app" });
+    expect(prCheckContextKey(first, 0)).not.toBe(prCheckContextKey(second, 1));
   });
 });

@@ -30,6 +30,8 @@ import {
   prGetLocalDiffRequestSchema,
   prGetLocalDiffResponseSchema,
   prLocalDiffFileSchema,
+  prLinkGroupKeySchema,
+  prRepoIdentifierSchema,
   DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET,
 } from "@traycer/protocol/host/pr-schemas";
 import {
@@ -363,11 +365,25 @@ describe("prCheckContextSchema", () => {
   });
 
   it("accepts GitHub's full CheckStatusState set, including pending/requested/waiting", () => {
-    (["queued", "in_progress", "completed", "pending", "requested", "waiting"] as const).forEach(
-      (status) => {
-        expect(prCheckStatusSchema.parse(status)).toBe(status);
-      },
+    const expected = [
+      "queued",
+      "in_progress",
+      "completed",
+      "pending",
+      "requested",
+      "waiting",
+    ] as const;
+
+    // The SET, not just its members. Asserting only that each listed value
+    // parses says nothing about a seventh being added: a new status would
+    // reach the client with no copy written for it and this test would stay
+    // green. Set equality makes adding one to the schema fail here first.
+    expect([...prCheckStatusSchema.options].sort()).toEqual(
+      [...expected].sort(),
     );
+    expected.forEach((status) => {
+      expect(prCheckStatusSchema.parse(status)).toBe(status);
+    });
   });
 
   it("accepts GitHub's startup_failure conclusion", () => {
@@ -1146,6 +1162,30 @@ describe("prGetLocalDiffRequestSchema", () => {
     expect(parsed).not.toHaveProperty("hostId");
   });
 
+  it("rejects an empty linkGroupKey - the host cannot resolve it to a directory", () => {
+    expect(() =>
+      prGetLocalDiffRequestSchema.parse({
+        ...LOCAL_DIFF_REQUEST_FIXTURE,
+        linkGroupKey: "",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an empty repoIdentifier owner or repo - they cannot be matched against a binding", () => {
+    expect(() =>
+      prGetLocalDiffRequestSchema.parse({
+        ...LOCAL_DIFF_REQUEST_FIXTURE,
+        repoIdentifier: { ...REPO_IDENTIFIER_FIXTURE, owner: "" },
+      }),
+    ).toThrow();
+    expect(() =>
+      prGetLocalDiffRequestSchema.parse({
+        ...LOCAL_DIFF_REQUEST_FIXTURE,
+        repoIdentifier: { ...REPO_IDENTIFIER_FIXTURE, repo: "" },
+      }),
+    ).toThrow();
+  });
+
   it("REQUIRES a non-empty epicId - it is the authorization scope, not a hint", () => {
     // The host gates this method on the caller's role in `epicId` and matches
     // it against the binding that vouches for `linkGroupKey`. An absent or
@@ -1160,6 +1200,25 @@ describe("prGetLocalDiffRequestSchema", () => {
         epicId: "",
       }),
     ).toThrow();
+  });
+});
+
+describe("prLinkGroupKeySchema / prRepoIdentifierSchema stay permissive", () => {
+  // `pr.getLocalDiff` tightens `linkGroupKey`/`owner`/`repo` to `.min(1)` on
+  // its OWN request fields, not on these shared schemas - the stream frames
+  // (`prLightItemSchema`, `prDetailCoreSchema`) legitimately carry an empty
+  // `linkGroupKey` for an entry with no stable local path, and a repo
+  // identifier that predates this stricter request shape. Tightening the
+  // shared schemas instead would silently break those frames.
+  it("prLinkGroupKeySchema still accepts an empty string", () => {
+    expect(prLinkGroupKeySchema.parse("")).toBe("");
+  });
+
+  it("prRepoIdentifierSchema still accepts empty owner and repo", () => {
+    expect(prRepoIdentifierSchema.parse({ owner: "", repo: "" })).toEqual({
+      owner: "",
+      repo: "",
+    });
   });
 });
 

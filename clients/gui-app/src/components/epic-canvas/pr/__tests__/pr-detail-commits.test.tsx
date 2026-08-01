@@ -17,9 +17,15 @@ const writeText = vi.hoisted(() =>
   vi.fn((_value: string) => Promise.resolve()),
 );
 
-vi.stubGlobal("navigator", {
-  ...globalThis.navigator,
-  clipboard: { writeText },
+// Define the ONE property under test on the real `navigator` rather than
+// swapping the object out. jsdom puts `userAgent`, `language` and the rest on
+// `Navigator.prototype`, and a spread copies own enumerable properties only -
+// so a replacement object silently loses them, and the first assertion that
+// reaches for one (anything driven by `user-event`, say) fails somewhere far
+// from here.
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  value: { writeText },
+  configurable: true,
 });
 
 function core(): PrDetailCore {

@@ -667,6 +667,25 @@ describe("useLeftPanelStore", () => {
     expect(hook.result.current).toBe(before);
   });
 
+  it("caches the normalized groups per stored-array identity, surviving a read of a different identity in between", () => {
+    // A `WeakMap` keyed by the stored array's own identity, not a single
+    // last-input slot: a single slot only stays stable while every reader
+    // passes the SAME input, so alternating between two identities (as two
+    // independent store readers naturally would) would miss on every read
+    // and hand back a fresh array each time - the exact "Maximum update
+    // depth exceeded" condition this cache exists to prevent.
+    useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
+    const firstRead = useLeftPanelStore.getState().getPanelGroups();
+
+    useLeftPanelStore.setState({ panelGroups: SPLIT_PANEL_GROUPS });
+    useLeftPanelStore.getState().getPanelGroups();
+
+    useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
+    const secondRead = useLeftPanelStore.getState().getPanelGroups();
+
+    expect(secondRead).toBe(firstRead);
+  });
+
   it("appends the new panel id to stored groups that predate it", () => {
     useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
 

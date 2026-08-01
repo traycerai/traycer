@@ -1,5 +1,6 @@
 import { useCallback, useState, type MouseEvent, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
+import type { LucideIcon } from "lucide-react";
 import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,6 +26,76 @@ const DELETED_OWNER_LABEL: Record<PrOwnerRef["ownerKind"], string> = {
   chat: "Removed chat",
   "terminal-agent": "Removed terminal agent",
 };
+
+/**
+ * What to call a SET of owners.
+ *
+ * `ownerKind` is not always `chat` - a PR can be derived entirely from
+ * terminal agents, and calling those "chats" in the overflow chip's accessible
+ * name announces the wrong thing to a screen reader. A uniform set gets its own
+ * noun; a mixed one has no single true noun, so it falls back to the
+ * kind-neutral word rather than picking a side.
+ */
+function prOwnerCollectionNouns(owners: readonly PrOwnerRef[]): {
+  readonly plural: string;
+  readonly capitalized: string;
+} {
+  const kinds = new Set(owners.map((owner) => owner.ownerKind));
+  if (kinds.size === 1) {
+    if (kinds.has("chat")) return { plural: "chats", capitalized: "Chats" };
+    return { plural: "terminal agents", capitalized: "Terminal agents" };
+  }
+  return { plural: "owners", capitalized: "Owners" };
+}
+
+/**
+ * The resolution `PrOwnerBadge` and `PrOwnerRow` must agree on, in one place:
+ * the two gated lookups, the legacy host fallback, the display label, the
+ * kind's icon, and the tile-open payload. The two surfaces render differently
+ * (pill vs. menu row) but have to decide "can this be opened, and as what?"
+ * identically - kept as two copies they could only drift.
+ */
+function usePrOwnerResolution(args: {
+  readonly owner: PrOwnerRef;
+  readonly epicId: string;
+  readonly fallbackHostId: string | null;
+}): {
+  readonly label: string | null;
+  readonly hostId: string | null;
+  readonly Icon: LucideIcon;
+  readonly openOwner: () => void;
+} {
+  // Both lookup hooks run unconditionally (rules-of-hooks) with the id gated
+  // to `null` for the kind that doesn't apply, so only one ever resolves.
+  const chat = useChatById(
+    args.owner.ownerKind === "chat" ? args.owner.ownerId : null,
+  );
+  const tuiAgent = useEpicTerminalAgent(
+    args.owner.ownerKind === "terminal-agent" ? args.owner.ownerId : null,
+  );
+  // A chat predating the per-node `hostId` field falls back to the host the
+  // CALLER nominated, exactly as the sidebar's own node opener does - a tile
+  // ref has no null host, and refusing to open would be worse than the fallback
+  // the rest of the app already relies on.
+  const nodeHostId = useEpicNodeHostId(args.owner.ownerId);
+  const hostId = nodeHostId ?? args.fallbackHostId;
+  const tileNavigation = useEpicTileNavigation();
+  const label = resolvePrOwnerLabel({ owner: args.owner, chat, tuiAgent });
+  const { epicId } = args;
+  const { ownerId, ownerKind } = args.owner;
+  const openOwner = useCallback((): void => {
+    if (label === null || hostId === null) return;
+    tileNavigation.openTileInEpic(epicId, {
+      id: ownerId,
+      instanceId: uuidv4(),
+      type: ownerKind,
+      name: label,
+      hostId,
+    });
+  }, [epicId, hostId, label, ownerId, ownerKind, tileNavigation]);
+
+  return { label, hostId, Icon: EPIC_NODE_ICONS[ownerKind], openOwner };
+}
 
 function resolvePrOwnerLabel(args: {
   readonly owner: PrOwnerRef;
@@ -158,6 +229,7 @@ function PrOwnerOverflow(props: {
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const close = useCallback((): void => setOpen(false), []);
+  const nouns = prOwnerCollectionNouns(props.owners);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -170,7 +242,7 @@ function PrOwnerOverflow(props: {
             type="button"
             // The row itself opens the PR tile; this chip means "show the rest".
             onClick={(event) => event.stopPropagation()}
-            aria-label={`Show all ${props.owners.length} chats`}
+            aria-label={`Show all ${props.owners.length} ${nouns.plural}`}
             data-testid="pr-owner-overflow"
           >
             {`+${props.hidden}`}
@@ -187,7 +259,7 @@ function PrOwnerOverflow(props: {
         className="w-[min(80vw,20rem)] p-0"
       >
         <p className="border-b px-3 py-2 text-ui-xs text-muted-foreground">
-          Chats this PR came from
+          {`${nouns.capitalized} this PR came from`}
         </p>
         {/* Capped by viewport rather than a row count: the same popover serves
             the narrow sidebar row and the wider detail card. */}
@@ -217,38 +289,18 @@ function PrOwnerBadge(props: {
   readonly epicId: string;
   readonly fallbackHostId: string | null;
 }): ReactNode {
-  // Both lookup hooks run unconditionally (rules-of-hooks) with the id gated
-  // to `null` for the kind that doesn't apply, so only one ever resolves.
-  const chat = useChatById(
-    props.owner.ownerKind === "chat" ? props.owner.ownerId : null,
-  );
-  const tuiAgent = useEpicTerminalAgent(
-    props.owner.ownerKind === "terminal-agent" ? props.owner.ownerId : null,
-  );
-  // A chat predating the per-node `hostId` field falls back to the host the
-  // CALLER nominated, exactly as the sidebar's own node opener does - a tile
-  // ref has no null host, and refusing to open would be worse than the fallback
-  // the rest of the app already relies on.
-  const nodeHostId = useEpicNodeHostId(props.owner.ownerId);
-  const hostId = nodeHostId ?? props.fallbackHostId;
-  const tileNavigation = useEpicTileNavigation();
-  const label = resolvePrOwnerLabel({ owner: props.owner, chat, tuiAgent });
-  const { epicId } = props;
-  const { ownerId, ownerKind } = props.owner;
-  const openOwner = useCallback(
+  const { label, hostId, openOwner } = usePrOwnerResolution({
+    owner: props.owner,
+    epicId: props.epicId,
+    fallbackHostId: props.fallbackHostId,
+  });
+  const handleClick = useCallback(
     (event: MouseEvent<HTMLButtonElement>): void => {
-      // The row itself opens the PR tile; a badge click means the CHAT.
+      // The row itself opens the PR tile; a badge click means the OWNER.
       event.stopPropagation();
-      if (label === null || hostId === null) return;
-      tileNavigation.openTileInEpic(epicId, {
-        id: ownerId,
-        instanceId: uuidv4(),
-        type: ownerKind,
-        name: label,
-        hostId,
-      });
+      openOwner();
     },
-    [epicId, hostId, label, ownerId, ownerKind, tileNavigation],
+    [openOwner],
   );
 
   // A deleted owner (orphaned worktree binding - no cascade) has no tile to
@@ -294,7 +346,7 @@ function PrOwnerBadge(props: {
         <button
           type="button"
           aria-label={`Open ${label}`}
-          onClick={openOwner}
+          onClick={handleClick}
           data-testid="pr-owner-badge"
         >
           <span className="truncate">{label}</span>
@@ -319,30 +371,18 @@ function PrOwnerRow(props: {
   readonly fallbackHostId: string | null;
   readonly onOpened: () => void;
 }): ReactNode {
-  const chat = useChatById(
-    props.owner.ownerKind === "chat" ? props.owner.ownerId : null,
-  );
-  const tuiAgent = useEpicTerminalAgent(
-    props.owner.ownerKind === "terminal-agent" ? props.owner.ownerId : null,
-  );
-  const nodeHostId = useEpicNodeHostId(props.owner.ownerId);
-  const hostId = nodeHostId ?? props.fallbackHostId;
-  const tileNavigation = useEpicTileNavigation();
-  const label = resolvePrOwnerLabel({ owner: props.owner, chat, tuiAgent });
-  const { epicId, onOpened } = props;
-  const { ownerId, ownerKind } = props.owner;
-  const Icon = EPIC_NODE_ICONS[ownerKind];
-  const openOwner = useCallback((): void => {
-    if (label === null || hostId === null) return;
-    tileNavigation.openTileInEpic(epicId, {
-      id: ownerId,
-      instanceId: uuidv4(),
-      type: ownerKind,
-      name: label,
-      hostId,
-    });
+  const { label, hostId, Icon, openOwner } = usePrOwnerResolution({
+    owner: props.owner,
+    epicId: props.epicId,
+    fallbackHostId: props.fallbackHostId,
+  });
+  const { onOpened } = props;
+  // Only reachable from the button below, which renders only when the owner
+  // IS openable - so `openOwner`'s own guard cannot fire here.
+  const openAndClose = useCallback((): void => {
+    openOwner();
     onOpened();
-  }, [epicId, hostId, label, onOpened, ownerId, ownerKind, tileNavigation]);
+  }, [onOpened, openOwner]);
 
   if (label === null || hostId === null) {
     return (
@@ -352,7 +392,7 @@ function PrOwnerRow(props: {
       >
         <Icon className="size-3.5 shrink-0" aria-hidden />
         <span className="min-w-0 truncate">
-          {label ?? DELETED_OWNER_LABEL[ownerKind]}
+          {label ?? DELETED_OWNER_LABEL[props.owner.ownerKind]}
         </span>
       </span>
     );
@@ -361,7 +401,7 @@ function PrOwnerRow(props: {
   return (
     <button
       type="button"
-      onClick={openOwner}
+      onClick={openAndClose}
       aria-label={`Open ${label}`}
       data-testid="pr-owner-row"
       className="flex min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-ui-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"

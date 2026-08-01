@@ -447,6 +447,7 @@ function PrNumberAnchor(props: {
 }): ReactNode {
   const runnerHost = use(RunnerHostContext);
   const openExternalLink = useRunnerOpenExternalLink();
+  const isPending = openExternalLink.isPending;
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       // The row opens the detail tile; this badge means GitHub.
@@ -455,9 +456,14 @@ function PrNumberAnchor(props: {
       // natively, preserving modifier-click/middle-click tab semantics.
       if (runnerHost === null) return;
       event.preventDefault();
+      // Guard against a second RunnerHost request firing while the first
+      // `openExternalLink` mutation for this PR is still in flight - `mutate`
+      // fires one per call, so a double click opens the browser twice. Same
+      // guard as `PrDetailGitHubLink` and `PrExternalGitHubLink`.
+      if (isPending) return;
       openExternalLink.mutate(props.prUrl);
     },
-    [openExternalLink, props.prUrl, runnerHost],
+    [isPending, openExternalLink, props.prUrl, runnerHost],
   );
   return (
     <a
@@ -466,6 +472,7 @@ function PrNumberAnchor(props: {
       rel="noreferrer"
       aria-label={props.ariaLabel}
       className={props.className}
+      aria-disabled={isPending}
       data-testid="pr-row-number"
       data-pr-state={props.state}
       onClick={handleClick}

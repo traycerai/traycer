@@ -236,9 +236,11 @@ export function derivePrAttentionQueue(args: {
   const blocking = changesRequestedItems(args.core, args.activity);
   items.push(...blocking);
 
-  // Only surface "review required" when nothing else already blocks: beside a
-  // concrete objection it is noise, since an approving review is implied by
-  // resolving the objection.
+  // Suppressed only by a standing OBJECTION (`blocking`), not by a failing
+  // check: beside a concrete "changes requested" this row is noise, since an
+  // approving review is implied by resolving the objection. A red check says
+  // nothing about whether a human still has to sign off, so it leaves the row
+  // standing.
   if (args.core.reviewDecision === "review_required" && blocking.length === 0) {
     items.push({
       key: "review-required",

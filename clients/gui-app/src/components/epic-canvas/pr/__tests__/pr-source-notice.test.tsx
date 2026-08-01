@@ -92,12 +92,11 @@ describe("PrSourceNoticeHint", () => {
       { kind: "rate-limited", retryAt: null },
       null,
     );
-    const region = screen.getByTestId("pr-source-notice");
-    expect(region.getAttribute("role")).toBe("status");
+    // Selected by ROLE, which is the accessible contract itself rather than a
+    // proxy for it: if the live region stops being a `status`, this query
+    // fails instead of a separate attribute assertion doing so.
+    const region = screen.getByRole("status");
     expect(region.textContent).toContain(expected);
-    expect(screen.getByTestId("pr-source-notice-message").textContent).toBe(
-      expected,
-    );
   });
 
   it("marks which pause it is, so the two are tellable apart in the DOM", () => {

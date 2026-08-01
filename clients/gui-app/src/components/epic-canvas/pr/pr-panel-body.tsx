@@ -370,8 +370,11 @@ function PrStatusBanner(props: {
       data-testid={props.testId}
       className={cn(
         "m-2 rounded-md border px-2.5 py-2 text-ui-xs",
+        // Theme tokens, not a fixed Tailwind ramp - see `pr-detail-tone.ts`:
+        // the nine theme presets each redefine `--warning`, and an amber ramp
+        // opts this banner out of every one of them.
         props.tone === "warning" &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-100",
+          "border-warning/30 bg-warning/10 text-warning-foreground",
         props.tone === "error" &&
           "border-destructive/30 bg-destructive/10 text-destructive",
       )}

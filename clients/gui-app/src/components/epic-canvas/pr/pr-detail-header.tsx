@@ -152,16 +152,6 @@ export function PrDetailHeader(props: {
 }
 
 /**
- * The PR's orientation lines: who, from where to where, how big, how fresh,
- * and which chats produced it.
- *
- * Split from the title row because only the title row is pinned. This block is
- * read once when the page opens and never again while scrolling a 300-file
- * diff, so keeping it on screen would spend four lines of every viewport on
- * facts nobody is re-reading - while the two things a reader DOES keep
- * reaching for (which PR, which section) are exactly what fits in one bar.
- */
-/**
  * Who is merging what into where - pinned alongside the title.
  *
  * It answers the second question a reader asks after "which PR", and unlike

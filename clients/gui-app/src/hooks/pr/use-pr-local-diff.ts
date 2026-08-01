@@ -57,26 +57,6 @@ export function prLocalDiffTarget(
 }
 
 /**
- * A PR's patch, read from the local checkout the branch was pushed from.
- *
- * GitHub's GraphQL changed-file list carries no patch text, so this is the
- * only source of a real diff in the PR view. It is an OPTIONAL host method: a
- * host predating it answers `E_HOST_UNSUPPORTED`, which surfaces here as an
- * ordinary query error and lets the Files tab fall back to the file list.
- *
- * `staleTime: Infinity` because the answer cannot change without the key
- * changing: both endpoints are commits, and a new push moves `headRefOid`,
- * which IS part of the key. The one thing that moves underneath it is the
- * local checkout itself (a rebase, a fetch), which is what the drift banner
- * and its refetch are for.
- *
- * The host is resolved INTERNALLY from `useTabHostId()` -> `useTabHostClient`,
- * the same way `usePrDetailSubscription` does it and for the same reason: a
- * tile is bound to its tab's host for life, which need not be the app-wide
- * active host. Taking a `hostId` argument alongside an app-wide client would
- * let the query key name one host while the request went to another.
- */
-/**
  * The identity half of the local-diff query key, flattened off a target that
  * may not exist yet.
  *
@@ -117,6 +97,26 @@ function localDiffKeyParts(target: PrLocalDiffTarget | null): {
   };
 }
 
+/**
+ * A PR's patch, read from the local checkout the branch was pushed from.
+ *
+ * GitHub's GraphQL changed-file list carries no patch text, so this is the
+ * only source of a real diff in the PR view. It is an OPTIONAL host method: a
+ * host predating it answers `E_HOST_UNSUPPORTED`, which surfaces here as an
+ * ordinary query error and lets the Files tab fall back to the file list.
+ *
+ * `staleTime: Infinity` because the answer cannot change without the key
+ * changing: both endpoints are commits, and a new push moves `headRefOid`,
+ * which IS part of the key. The one thing that moves underneath it is the
+ * local checkout itself (a rebase, a fetch), which is what the drift banner
+ * and its refetch are for.
+ *
+ * The host is resolved INTERNALLY from `useTabHostId()` -> `useTabHostClient`,
+ * the same way `usePrDetailSubscription` does it and for the same reason: a
+ * tile is bound to its tab's host for life, which need not be the app-wide
+ * active host. Taking a `hostId` argument alongside an app-wide client would
+ * let the query key name one host while the request went to another.
+ */
 export function usePrLocalDiffQuery(args: {
   readonly target: PrLocalDiffTarget | null;
   readonly ignoreWhitespace: boolean;

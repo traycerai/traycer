@@ -93,6 +93,17 @@ export const usePrPresenceStore = create<PrPresenceStore>()(
         hasItemsByScopeKey: state.hasItemsByScopeKey,
       }),
       migrate: (persisted) => migratePrPresencePersistedState(persisted),
+      // `migrate` runs ONLY on a version mismatch, and `basePersistOptions`
+      // already pins this store at the current version - so the ordinary
+      // rehydrate path skips it entirely and zustand's default shallow merge
+      // would adopt whatever shape `localStorage` holds, corruption included.
+      // Sanitizing in `merge` puts the same guard on EVERY rehydration.
+      // `migratePrPresencePersistedState` is idempotent, so the version-bump
+      // path applying it twice is harmless.
+      merge: (persisted, current) => ({
+        ...current,
+        ...migratePrPresencePersistedState(persisted),
+      }),
     },
   ),
 );

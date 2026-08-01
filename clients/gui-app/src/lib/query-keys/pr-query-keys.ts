@@ -12,9 +12,21 @@ export const prQueryKeys = {
    * `mode`: a background and a foreground subscription for the same epic
    * feed the same cache entry (the host runs one poller per
    * `(hostId, epicId)` regardless of how many modes are subscribed).
+   *
+   * Named args like its two siblings: positionally, `hostId` and `epicId` are
+   * two adjacent strings, and swapping them builds a valid-looking key for the
+   * wrong scope that nothing downstream can catch.
    */
-  listForEpic: (hostId: string | null, epicId: string) =>
-    [...hostQueryKeys.scope(hostId), "pr", "listForEpic", epicId] as const,
+  listForEpic: (args: {
+    readonly hostId: string | null;
+    readonly epicId: string;
+  }) =>
+    [
+      ...hostQueryKeys.scope(args.hostId),
+      "pr",
+      "listForEpic",
+      args.epicId,
+    ] as const,
 
   /**
    * Query key for one PR's projected detail cache (`pr.subscribeDetail`).

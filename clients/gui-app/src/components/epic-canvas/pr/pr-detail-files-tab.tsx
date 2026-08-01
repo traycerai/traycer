@@ -1,10 +1,4 @@
-import {
-  use,
-  useCallback,
-  useMemo,
-  type MouseEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { FileDiff } from "lucide-react";
 import type {
   PrChangedFile,
@@ -13,11 +7,10 @@ import type {
 } from "@traycer/protocol/host/pr-schemas";
 import { Button } from "@/components/ui/button";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { makePrDiffTile } from "@/lib/pr/pr-diff-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import { PrDetailFilesChanged } from "@/components/epic-canvas/pr/pr-detail-sections";
+import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-github-link";
 
 /**
  * The Files tab: the changed-file list, plus the one control that opens the
@@ -131,34 +124,18 @@ function PrOpenDiffButton(props: {
 }
 
 /**
- * The footer's "View it on GitHub instead" link - routed through the
- * RunnerHost bridge (like every other GitHub link on this tile), not a bare
- * `target="_blank"` anchor: in the desktop shell a plain anchor opens a
- * second, unmanaged browser surface instead of the user's actual browser.
- * With no RunnerHost bound (e.g. the web client), the click handler is a
- * no-op and the anchor's native `target="_blank"` navigation still applies.
+ * The footer's "View it on GitHub instead" link. See
+ * {@link PrExternalGitHubLink} for why every GitHub anchor on these surfaces
+ * goes through the RunnerHost bridge.
  */
 function PrFilesGitHubFooterLink(props: { readonly href: string }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
-  const handleClick = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>): void => {
-      if (runnerHost === null) return;
-      event.preventDefault();
-      openExternalLink.mutate(props.href);
-    },
-    [openExternalLink, props.href, runnerHost],
-  );
   return (
-    <a
+    <PrExternalGitHubLink
       href={props.href}
-      target="_blank"
-      rel="noreferrer"
       className="text-primary hover:underline"
-      data-testid="pr-detail-files-github-footer-link"
-      onClick={handleClick}
+      testId="pr-detail-files-github-footer-link"
     >
       View it on GitHub instead
-    </a>
+    </PrExternalGitHubLink>
   );
 }

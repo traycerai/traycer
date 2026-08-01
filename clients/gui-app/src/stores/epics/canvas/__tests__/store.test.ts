@@ -1176,8 +1176,20 @@ describe("makeSelectIsActiveTile", () => {
       name: "Right",
     });
     store.openTileInTab(tabId, left);
-    store.openTileInTab(tabId, right);
+    // Two `openTileInTab` calls land in the SAME pane, which makes this the
+    // active-TAB case, not the active-PANE one - and the assertions below pass
+    // either way. Split first so `right` genuinely sits in another pane.
+    const sourcePaneId = requireCanvas(tabId).activePaneId;
+    if (sourcePaneId === null) throw new Error("expected an active pane");
+    const otherPaneId = useEpicCanvasStore
+      .getState()
+      .splitPaneEmptyRightInTab(tabId, sourcePaneId);
+    if (otherPaneId === null) throw new Error("expected a second pane");
+    useEpicCanvasStore.getState().openTileInPane(tabId, otherPaneId, right);
 
+    // `splitPaneEmpty` makes the NEW pane active, so `right` is the tile the
+    // user is looking at and `left` is parked beside it.
+    expect(requireCanvas(tabId).activePaneId).toBe(otherPaneId);
     const state = useEpicCanvasStore.getState();
     expect(makeSelectIsActiveTile(tabId, right.id)(state)).toBe(true);
     expect(makeSelectIsActiveTile(tabId, left.id)(state)).toBe(false);

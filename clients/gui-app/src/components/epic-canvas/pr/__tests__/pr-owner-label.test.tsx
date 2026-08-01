@@ -33,6 +33,13 @@ function chatOwners(count: number): readonly PrOwnerRef[] {
   }));
 }
 
+function terminalAgentOwners(count: number): readonly PrOwnerRef[] {
+  return Array.from({ length: count }, (_unused, index) => ({
+    ownerId: `agent-${index + 1}`,
+    ownerKind: "terminal-agent" as const,
+  }));
+}
+
 function renderBadges(owners: readonly PrOwnerRef[]) {
   return render(
     <TooltipProvider>
@@ -108,5 +115,21 @@ describe("PrOwnerBadges overflow", () => {
 
     // "+9" alone does not say what it is or how many there are in total.
     expect(screen.getByLabelText("Show all 12 chats")).toBeTruthy();
+  });
+
+  it("uses 'terminal agents' for an overflow chip's name and heading when every owner is a terminal agent", () => {
+    renderBadges(terminalAgentOwners(12));
+
+    expect(screen.getByLabelText("Show all 12 terminal agents")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+    expect(screen.getByText("Terminal agents this PR came from")).toBeTruthy();
+  });
+
+  it("falls back to the kind-neutral 'owners' for a mixed chat/terminal-agent set", () => {
+    renderBadges([...chatOwners(6), ...terminalAgentOwners(6)]);
+
+    expect(screen.getByLabelText("Show all 12 owners")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+    expect(screen.getByText("Owners this PR came from")).toBeTruthy();
   });
 });

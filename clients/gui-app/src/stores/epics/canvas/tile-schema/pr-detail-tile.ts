@@ -9,6 +9,7 @@ import { TILE_KIND_PR_DETAIL } from "../tile-kinds";
 import type { PrDetailTileRef } from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
+import { isPersistedPrNumber } from "./pr-number";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -23,7 +24,7 @@ function parsePrDetailTileRef(value: unknown): PrDetailTileRef | null {
     typeof value.githubHost !== "string" ||
     typeof value.owner !== "string" ||
     typeof value.repo !== "string" ||
-    typeof value.prNumber !== "number"
+    !isPersistedPrNumber(value.prNumber)
   ) {
     return null;
   }

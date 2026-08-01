@@ -1,10 +1,10 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -193,8 +193,12 @@ describe("PrDetailFilesTab", () => {
       viewTabId,
     });
 
-    const button = screen.getByTestId("pr-detail-open-diff");
-    expect(button.hasAttribute("disabled")).toBe(false);
+    // By ROLE, and asserting the native `disabled` property: that is the fact
+    // a user meets, and jest-dom matchers are not wired in here.
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Open diff/u,
+    });
+    expect(button.disabled).toBe(false);
     fireEvent.click(button);
     expect(openTileIdsOnTab(viewTabId)).toHaveLength(1);
   });
@@ -229,11 +233,12 @@ describe("PrDetailFilesTab", () => {
 
     const link = screen.getByTestId("pr-detail-files-github-footer-link");
     fireEvent.click(link);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
 
-    expect(openExternalLink).toHaveBeenCalledTimes(1);
+    // `waitFor` rather than a zero-delay timer flush: the latter pins the
+    // assertion to the mutation's exact microtask depth.
+    await waitFor(() => {
+      expect(openExternalLink).toHaveBeenCalledTimes(1);
+    });
     expect(openExternalLink).toHaveBeenCalledWith(
       "https://github.com/acme/widgets/pull/7/files",
     );

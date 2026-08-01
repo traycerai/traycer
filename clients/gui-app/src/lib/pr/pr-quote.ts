@@ -30,6 +30,7 @@ import {
   formatPrReviewStateLabel,
 } from "./pr-detail-projection";
 import { prReviewThreadAnchor } from "./pr-conversation";
+import { formatPrCheckName } from "./pr-check-groups";
 
 /**
  * A chat or terminal agent a quote can be sent to. `id` is the composer draft
@@ -80,7 +81,11 @@ export function buildPrCheckQuote(
     text: quoteText(
       [
         `PR ${formatPrSlug(core)}`,
-        `check ${context.name} · ${formatPrCheckStatusLabel(context)}`,
+        // The COMPOSED name, as the Checks tab shows it: `name` alone is the
+        // job name, which a reusable workflow reports identically for every
+        // job it runs, so quoting it would not tell the agent which check
+        // failed.
+        `check ${formatPrCheckName(context)} · ${formatPrCheckStatusLabel(context)}`,
         context.detailsUrl !== null ? context.detailsUrl : null,
       ].filter((line): line is string => line !== null),
       null,

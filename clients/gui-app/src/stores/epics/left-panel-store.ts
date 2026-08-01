@@ -383,21 +383,37 @@ function getPersistedPanelVisibilityOverrides(
 // update depth exceeded" (minified error #185) - which is what every user
 // carrying pre-Pull-Requests sidebar state hit on opening an epic.
 //
-// One entry is enough: the normalized value is a pure function of the stored
-// slice, which zustand only ever replaces by identity, never mutates in place.
-let lastStoredPanelGroupsInput: unknown = null;
-let lastStoredPanelGroupsResult: ReadonlyArray<LeftPanelGroup> =
-  DEFAULT_LEFT_PANEL_GROUPS;
+// Keyed by the stored array's identity rather than held as ONE last-input
+// slot: a single slot only guarantees stability while every reader passes the
+// same input, so two readers alternating between two identities (a rehydrated
+// persisted array and the live slice, say) would each miss and hand
+// `useSyncExternalStore` a fresh array on every commit again - the exact
+// condition above. A WeakMap keeps every observed input stable and lets the
+// entry die with the array it belongs to.
+const storedPanelGroupsCache = new WeakMap<
+  object,
+  ReadonlyArray<LeftPanelGroup>
+>();
+
+function normalizeStoredPanelGroups(
+  groups: unknown,
+): ReadonlyArray<LeftPanelGroup> {
+  const storedGroups = readPersistedPanelGroups(groups);
+  return storedGroups === null
+    ? DEFAULT_LEFT_PANEL_GROUPS
+    : normalizeLeftPanelGroups(storedGroups);
+}
 
 function getStoredPanelGroups(groups: unknown): ReadonlyArray<LeftPanelGroup> {
-  if (groups === lastStoredPanelGroupsInput) return lastStoredPanelGroupsResult;
-  const storedGroups = readPersistedPanelGroups(groups);
-  const normalizedGroups =
-    storedGroups === null
-      ? DEFAULT_LEFT_PANEL_GROUPS
-      : normalizeLeftPanelGroups(storedGroups);
-  lastStoredPanelGroupsInput = groups;
-  lastStoredPanelGroupsResult = normalizedGroups;
+  // A non-object input cannot key a WeakMap, but it also cannot be normalized
+  // to anything but the default constant, which is already a stable reference.
+  if (typeof groups !== "object" || groups === null) {
+    return normalizeStoredPanelGroups(groups);
+  }
+  const cached = storedPanelGroupsCache.get(groups);
+  if (cached !== undefined) return cached;
+  const normalizedGroups = normalizeStoredPanelGroups(groups);
+  storedPanelGroupsCache.set(groups, normalizedGroups);
   return normalizedGroups;
 }
 

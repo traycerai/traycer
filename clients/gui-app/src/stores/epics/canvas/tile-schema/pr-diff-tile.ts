@@ -10,6 +10,7 @@ import { TILE_KIND_PR_DIFF } from "../tile-kinds";
 import type { PrDiffTileRef } from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
+import { isPersistedPrNumber } from "./pr-number";
 import {
   parseDiffTileViewState,
   serializeDiffTileViewState,
@@ -28,7 +29,7 @@ function parsePrDiffTileRef(value: unknown): PrDiffTileRef | null {
     typeof value.githubHost !== "string" ||
     typeof value.owner !== "string" ||
     typeof value.repo !== "string" ||
-    typeof value.prNumber !== "number"
+    !isPersistedPrNumber(value.prNumber)
   ) {
     return null;
   }

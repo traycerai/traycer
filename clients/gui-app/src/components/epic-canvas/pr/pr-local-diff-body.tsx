@@ -9,6 +9,7 @@ import { DiffContentPrimitive } from "@/components/epic-canvas/git-diff/diff-con
 import { DiffBundleCollapseChevron } from "@/components/epic-canvas/git-diff/diff-bundle-file-section";
 import { GitSectionStatsSummary } from "@/components/epic-canvas/git-diff/diff-tab-shell";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-github-link";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
@@ -85,14 +86,13 @@ export function PrLocalDiffBody(props: {
           : UNAVAILABLE_SENTENCE["no-local-checkout"]}
       </p>
       {props.prUrl !== null ? (
-        <a
+        <PrExternalGitHubLink
           href={`${props.prUrl}/files`}
-          target="_blank"
-          rel="noreferrer"
           className="text-ui-sm text-primary hover:underline"
+          testId="pr-diff-unavailable-github-link"
         >
           View the full diff on GitHub
-        </a>
+        </PrExternalGitHubLink>
       ) : null}
     </div>
   );
@@ -157,14 +157,13 @@ function PrLocalDiffFiles(props: {
           The patch was cut off after {shownPatches} of {diff.files.length}{" "}
           files.{" "}
           {props.prUrl !== null ? (
-            <a
+            <PrExternalGitHubLink
               href={`${props.prUrl}/files`}
-              target="_blank"
-              rel="noreferrer"
               className="text-primary hover:underline"
+              testId="pr-diff-truncated-github-link"
             >
               View the full diff on GitHub
-            </a>
+            </PrExternalGitHubLink>
           ) : null}
         </p>
       ) : null}

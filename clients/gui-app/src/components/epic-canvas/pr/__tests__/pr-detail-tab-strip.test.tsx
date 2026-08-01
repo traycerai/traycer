@@ -11,8 +11,12 @@ function renderStrip(args: {
     <PrDetailTabStrip
       tab={args.tab}
       onSelectTab={args.onSelectTab}
-      counts={{ feedback: 1, files: 324, checks: 1, commits: 66 }}
-      blocking={{ feedback: 1, checks: 1 }}
+      // Every blocking value differs from its own plain count. With the two
+      // equal, the Checks tab renders the same digit whichever one the strip
+      // reads, so the substitution assertion below would pass even with the
+      // substitution deleted.
+      counts={{ feedback: 4, files: 324, checks: 12, commits: 66 }}
+      blocking={{ feedback: 1, checks: 2 }}
     />,
   );
 }
@@ -68,13 +72,15 @@ describe("PrDetailTabStrip", () => {
   });
 
   it("shows the blocking count in place of the size when something blocks", () => {
-    // A red "1" that means "one failure" is a different fact from a grey
+    // A red "2" that means "two failures" is a different fact from a grey
     // "324" that means "this many files"; the tab must not conflate them.
     renderStrip({ tab: "overview", onSelectTab: () => undefined });
 
-    expect(screen.getByTestId("pr-detail-tab-checks").textContent).toContain(
-      "1",
-    );
+    const checks = screen.getByTestId("pr-detail-tab-checks").textContent;
+    expect(checks).toContain("2");
+    // The one that does the work: 12 is the plain count. A strip that fell
+    // back to it would still satisfy `toContain("2")`, since "12" holds a "2".
+    expect(checks).not.toContain("12");
     expect(screen.getByTestId("pr-detail-tab-files").textContent).toContain(
       "324",
     );

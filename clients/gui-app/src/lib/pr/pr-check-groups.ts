@@ -114,13 +114,16 @@ export function formatPrCheckName(context: PrCheckContext): string {
 /**
  * A key that survives duplicate job names.
  *
- * `detailsUrl` is per-run and therefore genuinely unique where it exists;
- * everything else falls back to the composed name plus the index, because two
- * rows that are identical in every carried field still need distinct keys.
+ * The index is appended in EVERY branch, `detailsUrl` included. A check run's
+ * `detailsUrl` is per-run and unique, but a commit STATUS is not a check run:
+ * several contexts posted by the same integration routinely share one
+ * `target_url`, and a bare URL key would then repeat - duplicate React keys in
+ * the Checks list, and a duplicate `check:` key in `derivePrAttentionQueue`,
+ * which is the exact collision this helper exists to prevent.
  */
 export function prCheckContextKey(
   context: PrCheckContext,
   index: number,
 ): string {
-  return context.detailsUrl ?? `${formatPrCheckName(context)}:${index}`;
+  return `${context.detailsUrl ?? formatPrCheckName(context)}:${index}`;
 }

@@ -172,15 +172,28 @@ export function useActiveEpicArtifactId(
  * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
  * otherwise have to re-walk the pane tree.
  */
+/**
+ * The tile showing in `tabId`'s ACTIVE pane, or `null`. The one place the
+ * active-pane walk lives, shared by every selector below it - the rules for
+ * "which tile is the user looking at" must not be able to drift between the
+ * record-backed and renderer-only answers.
+ */
+function activeTileRef(
+  state: EpicCanvasStore,
+  tabId: string | undefined,
+): EpicCanvasTileRef | null {
+  if (tabId === undefined) return null;
+  const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+  if (canvas.activePaneId === null) return null;
+  const pane = findPaneById(canvas.root, canvas.activePaneId);
+  if (pane === null || pane.activeTabId === null) return null;
+  return canvas.tilesByInstanceId[pane.activeTabId] ?? null;
+}
+
 export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
   return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
-    if (tabId === undefined) return null;
-    const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
-    if (canvas.activePaneId === null) return null;
-    const pane = findPaneById(canvas.root, canvas.activePaneId);
-    if (pane === null || pane.activeTabId === null) return null;
-    const active = canvas.tilesByInstanceId[pane.activeTabId];
-    if (active === undefined) return null;
+    const active = activeTileRef(state, tabId);
+    if (active === null) return null;
     // Only record-backed tiles are resolvable artifacts. Renderer-only tiles -
     // workspace file, git-diff, comm-graph, and the PR detail/diff pair -
     // carry synthetic ids that cannot be restored from artifact records, so
@@ -250,14 +263,8 @@ export function makeSelectIsActiveTile(
   tileId: string | null,
 ) {
   return (state: EpicCanvasStore): boolean => {
-    if (tabId === undefined || tileId === null) return false;
-    const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
-    if (canvas.activePaneId === null) return false;
-    const pane = findPaneById(canvas.root, canvas.activePaneId);
-    if (pane === null || pane.activeTabId === null) return false;
-    const active = canvas.tilesByInstanceId[pane.activeTabId];
-    if (active === undefined) return false;
-    return active.id === tileId;
+    if (tileId === null) return false;
+    return activeTileRef(state, tabId)?.id === tileId;
   };
 }
 

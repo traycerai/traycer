@@ -661,8 +661,18 @@ export const prGetLocalDiffRequestSchema = z.object({
   // runs on is the only host it could mean - taking one as an argument would
   // invite a caller to believe it selects something.
   epicId: z.string().min(1),
-  linkGroupKey: prLinkGroupKeySchema,
-  repoIdentifier: prRepoIdentifierSchema,
+  // `.min(1)` on the REQUEST fields, not on the shared schemas: the host
+  // resolves `linkGroupKey` to a directory and matches `repoIdentifier`
+  // against a binding, so an empty value reaches that resolution and only
+  // fails later as `no-local-checkout`/`repo-mismatch` - a wrong answer
+  // dressed as a real one. The same fields are nullable on the stream frames
+  // (`prLightItemSchema`, `prDetailCoreSchema`), which may legitimately carry
+  // an identifier this request could never be made with.
+  linkGroupKey: prLinkGroupKeySchema.min(1),
+  repoIdentifier: prRepoIdentifierSchema.extend({
+    owner: z.string().min(1),
+    repo: z.string().min(1),
+  }),
   repoRole: prRepoRoleSchema,
   baseRefName: z.string().min(1),
   headRefName: z.string().min(1),

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PrGetLocalDiffResponse } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { PrLocalDiffBody } from "@/components/epic-canvas/pr/pr-local-diff-body";
@@ -90,16 +91,25 @@ function renderBody(args: {
   readonly hasTarget: boolean;
   readonly isError: boolean;
 }): void {
+  // The GitHub links here go through `useRunnerOpenExternalLink`, which is a
+  // TanStack mutation - so the body needs a client even though nothing in
+  // these cases fetches. In the app it always has one.
   render(
-    <PrLocalDiffBody
-      node={args.node}
-      viewTabId={args.viewTabId}
-      result={args.result}
-      hasTarget={args.hasTarget}
-      isError={args.isError}
-      prUrl="https://github.com/acme/widgets/pull/7"
-      preferences={DEFAULT_DIFF_VIEWER_PREFERENCES}
-    />,
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <PrLocalDiffBody
+        node={args.node}
+        viewTabId={args.viewTabId}
+        result={args.result}
+        hasTarget={args.hasTarget}
+        isError={args.isError}
+        prUrl="https://github.com/acme/widgets/pull/7"
+        preferences={DEFAULT_DIFF_VIEWER_PREFERENCES}
+      />
+    </QueryClientProvider>,
   );
 }
 

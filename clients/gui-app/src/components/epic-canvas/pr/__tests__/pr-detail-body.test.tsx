@@ -19,21 +19,9 @@ import type {
   PrSourceStatus,
   PrSubscribeDetailServerFrame,
 } from "@traycer/protocol/host/pr-schemas";
-import type {
-  IStreamSession,
-  ServerFrameHandler,
-  StatusChangeHandler,
-  StreamFrameEnvelope,
-  StreamCloseReason,
-} from "@traycer-clients/shared/host-transport/i-stream-session";
-import {
-  hostStreamRpcRegistry,
-  type HostStreamRpcRegistry,
-} from "@traycer/protocol/host/registry";
-import {
-  WsStreamClient,
-  type ParamsOf,
-} from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { MockWsStreamClient as SharedMockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
 
 /**
@@ -140,100 +128,12 @@ import {
   type PrDetailSubscriptionData,
 } from "@/hooks/pr/use-pr-detail-subscription";
 
-class MockStreamSession implements IStreamSession {
-  private serverFrameHandler: ServerFrameHandler | null = null;
-  private statusChangeHandler: StatusChangeHandler | null = null;
-  closed: boolean = false;
-  sentClientFrames: StreamFrameEnvelope[] = [];
-
-  onServerFrame(handler: ServerFrameHandler): void {
-    this.serverFrameHandler = handler;
-  }
-
-  onStatusChange(handler: StatusChangeHandler): void {
-    this.statusChangeHandler = handler;
-  }
-
-  sendClientFrame(
-    envelope: StreamFrameEnvelope,
-    _binaryPayload: Uint8Array | null,
-  ): void {
-    this.sentClientFrames.push(envelope);
-  }
-
-  requestReconnect(): void {
-    // No-op for this test; reconnect is owned by the real StreamSession.
-  }
-
-  close(): void {
-    this.closed = true;
-    this.statusChangeHandler?.("closed", { kind: "caller" });
-  }
-
-  emitFrame(frame: PrSubscribeDetailServerFrame): void {
-    if (this.serverFrameHandler !== null) {
-      const handler = this.serverFrameHandler;
-      const envelope = { ...frame } satisfies StreamFrameEnvelope;
-      handler(envelope, null);
-    }
-  }
-
-  emitStatus(
-    status: "connecting" | "open" | "reconnecting" | "closed",
-    reason: StreamCloseReason | null,
-  ): void {
-    this.statusChangeHandler?.(status, reason);
-  }
-}
-
-class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
-  sessions: Map<string, MockStreamSession> = new Map();
-  subscribeCallCount: number = 0;
-
-  constructor() {
-    super({
-      registry: hostStreamRpcRegistry,
-      endpoint: () => null,
-      bearer: () => null,
-      auth: null,
-      hostCredentialMint: null,
-      webSocketFactory: {
-        create: () => {
-          throw new Error("MockWsStreamClient should not open a websocket");
-        },
-      },
-      dialTimeoutMs: 1_000,
-      openAckTimeoutMs: 1_000,
-      pingIntervalMs: 25_000,
-      pongTimeoutMs: 50_000,
-      initialBackoffMs: 10,
-      maxBackoffMs: 1_000,
-    });
-  }
-
-  override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
-    method: Method,
-    params: ParamsOf<HostStreamRpcRegistry, Method>,
-  ): IStreamSession {
-    this.subscribeCallCount += 1;
-    const key = JSON.stringify({ method, params });
-
-    if (!this.sessions.has(key)) {
-      this.sessions.set(key, new MockStreamSession());
-    }
-
-    const session = this.sessions.get(key);
-    if (session === undefined) {
-      throw new Error("Session not found");
-    }
-    return session;
-  }
-
-  getSession(method: string, params: unknown): MockStreamSession | undefined {
-    const key = JSON.stringify({ method, params });
-    return this.sessions.get(key);
-  }
-}
+type MockWsStreamClient =
+  SharedMockWsStreamClient<PrSubscribeDetailServerFrame>;
+// Instantiation expression: binds the shared generic class to THIS
+// suite's frame type, so `new MockWsStreamClient()` needs no argument.
+const MockWsStreamClient =
+  SharedMockWsStreamClient<PrSubscribeDetailServerFrame>;
 
 function buildPrDetailCore(overrides: Partial<PrDetailCore>): PrDetailCore {
   return {
@@ -712,8 +612,11 @@ describe("PrDetailBody", () => {
     const overview = shellClasses();
     expect(overview).toContain("max-w-3xl");
 
-    for (const tab of ["feedback", "files", "checks", "commits"] as const) {
-      fireEvent.click(screen.getByTestId(`pr-detail-tab-${tab}`));
+    // Driven by ROLE: the switch is the user-facing interaction, so it should
+    // go through the accessible name. `getByTestId` stays for the class
+    // assertions below, which have no role to hang off.
+    for (const tab of [/Feedback/, /Files/, /Checks/, /Commits/] as const) {
+      fireEvent.click(screen.getByRole("tab", { name: tab }));
       expect(shellClasses()).toBe(overview);
     }
 
@@ -882,7 +785,11 @@ describe("PrDetailBody", () => {
     fireEvent.click(screen.getByTestId("pr-detail-queue-send"));
 
     const draft = JSON.stringify(readComposerDraftSnapshot("chat-9").content);
-    expect(draft).toContain("check pre-commit");
+    // The COMPOSED name, exactly as the Checks tab shows it. `pre-commit`
+    // alone is the job name, which a reusable workflow reports identically
+    // for every job it runs - the agent receiving this quote would have no
+    // way to tell which of them failed.
+    expect(draft).toContain("check Run Pre-commit / pre-commit (pull_request)");
     expect(draft).toContain("https://ci/pre-commit");
   });
 

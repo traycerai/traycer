@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -23,6 +23,12 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
+import {
+  resetSharedStreamSubscriptions,
+  useSharedStreamSubscription,
+  type SharedStreamSubscription,
+  type SharedStreamSubscriptionRegistry,
+} from "@/hooks/pr/shared-stream-subscription";
 
 export interface PrDetailSubscriptionData {
   readonly sourceStatus: PrSourceStatus;
@@ -72,17 +78,8 @@ interface ActiveDetailSubscriptionArgs {
   readonly prNumber: number;
 }
 
-interface SharedDetailSubscription {
-  refCount: number;
-  unsubscribeFromStream: () => void;
-  sendRefresh: () => void;
-  lastEvent: PrSubscribeDetailServerFrame | null;
-  // Set once the stream reaches a terminal state (fatal frame or an
-  // unexpected close). A terminal session's `sendRefresh` is inert, so the
-  // entry must be REPLACED (not reused) on retry - see the subscribe effect.
-  isTerminal: boolean;
-  consumers: Map<symbol, () => void>;
-}
+type SharedDetailSubscription =
+  SharedStreamSubscription<PrSubscribeDetailServerFrame>;
 
 /**
  * Module-level ref-counted subscriptions, keyed by the owning client
@@ -91,7 +88,8 @@ interface SharedDetailSubscription {
  * the same PR opened from different epics cannot share one session even
  * though the underlying host poller consolidates by PR key alone).
  */
-const subscriptions = new Map<string, SharedDetailSubscription>();
+const subscriptions: SharedStreamSubscriptionRegistry<PrSubscribeDetailServerFrame> =
+  new Map();
 
 function subscriptionKeyFor(
   client: WsStreamClient<HostStreamRpcRegistry>,
@@ -107,27 +105,9 @@ function subscriptionKeyFor(
   ].join("|");
 }
 
-function activeSubscriptionFor(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
-  args: {
-    readonly hostId: string;
-    readonly epicId: string;
-    readonly githubHost: string;
-    readonly owner: string;
-    readonly repo: string;
-    readonly prNumber: number;
-  },
-): SharedDetailSubscription | undefined {
-  if (client === null) return undefined;
-  return subscriptions.get(subscriptionKeyFor(client, args));
-}
-
 // Test helper to reset module state.
 export function __resetPrDetailSubscriptionsForTesting(): void {
-  for (const sub of subscriptions.values()) {
-    sub.unsubscribeFromStream();
-  }
-  subscriptions.clear();
+  resetSharedStreamSubscriptions(subscriptions);
 }
 
 /**
@@ -156,10 +136,6 @@ export function usePrDetailSubscription(args: {
   );
   const methodSupported = methodSupport !== "unsupported";
 
-  const [, forceRender] = useReducer((renderCount: number) => {
-    return renderCount + 1;
-  }, 0);
-
   const stableArgs: typeof args & {
     readonly hostId: string;
     readonly methodSupported: boolean;
@@ -186,94 +162,56 @@ export function usePrDetailSubscription(args: {
     ],
   );
 
-  const [consumerId] = useState(() => Symbol("pr-detail-consumer"));
-  // Bumped by `retry()` to force this consumer's subscribe effect to re-run so
-  // a TERMINAL shared session is torn down and replaced with a fresh one.
-  const [retryNonce, retry] = useReducer(
-    (count: number): number => count + 1,
-    0,
-  );
-
-  useEffect(() => {
-    if (
-      !stableArgs.enabled ||
-      !stableArgs.methodSupported ||
-      wsStreamClient === null
-    ) {
-      return;
-    }
-    void retryNonce;
-
-    const activeArgs: ActiveDetailSubscriptionArgs = {
+  const activeArgs: ActiveDetailSubscriptionArgs = useMemo(
+    () => ({
       hostId: stableArgs.hostId,
       epicId: stableArgs.epicId,
       githubHost: stableArgs.githubHost,
       owner: stableArgs.owner,
       repo: stableArgs.repo,
       prNumber: stableArgs.prNumber,
-    };
-    const key = subscriptionKeyFor(wsStreamClient, activeArgs);
-    let shared = subscriptions.get(key);
+    }),
+    [
+      stableArgs.hostId,
+      stableArgs.epicId,
+      stableArgs.githubHost,
+      stableArgs.owner,
+      stableArgs.repo,
+      stableArgs.prNumber,
+    ],
+  );
+  // `null` only while there is no client to key against - NOT when this hook
+  // instance is disabled, which still reads a sibling's live session.
+  const sessionKey =
+    wsStreamClient === null
+      ? null
+      : subscriptionKeyFor(wsStreamClient, activeArgs);
 
-    // Create a fresh session when there is none OR when the cached one is
-    // terminal (its stream is dead and its `sendRefresh` is inert). Replacing a
-    // terminal entry is what makes "Try again" actually reconnect instead of
-    // spinning against a closed session.
-    if (shared === undefined || shared.isTerminal) {
-      // A terminal entry can still carry OTHER mounted consumers - this
-      // effect's own cleanup already removed THIS consumer if it was
-      // previously attached, so anything left in `staleConsumers` belongs to
-      // a different hook instance. Migrate them onto the fresh session
-      // instead of leaving them ref-counted against the one we are about to
-      // close, which would silently drop their subscription the next time
-      // only THIS (retrying) consumer unmounts.
-      const staleConsumers = shared?.consumers;
-      shared?.unsubscribeFromStream();
-      shared = createSharedSubscription(
-        wsStreamClient,
-        queryClient,
-        activeArgs,
-      );
-      subscriptions.set(key, shared);
-      if (staleConsumers !== undefined) {
-        for (const [id, notify] of staleConsumers) {
-          shared.consumers.set(id, notify);
-          shared.refCount += 1;
-          notify();
-        }
-      }
+  const createSession = useCallback((): SharedDetailSubscription => {
+    if (wsStreamClient === null) {
+      throw new Error("A PR detail session needs a stream client.");
     }
+    return createSharedSubscription(wsStreamClient, queryClient, activeArgs);
+  }, [wsStreamClient, queryClient, activeArgs]);
 
-    shared.refCount += 1;
-    shared.consumers.set(consumerId, forceRender);
-
-    // A second consumer joining an ALREADY-LIVE session gets no fresh
-    // hydration snapshot from the host - the session never dropped to zero.
-    // Refill the cache slot if it was GC'd while unobserved.
-    if (shared.lastEvent !== null && shared.lastEvent.kind !== "error") {
+  const onConsumerJoined = useCallback(
+    (shared: SharedDetailSubscription): void => {
+      if (shared.lastEvent === null || shared.lastEvent.kind === "error") {
+        return;
+      }
       replayLastEventIntoCache(queryClient, activeArgs, shared.lastEvent);
-    }
+    },
+    [queryClient, activeArgs],
+  );
 
-    return () => {
-      // Look up the CURRENT entry at this key rather than closing over the
-      // one captured above: a sibling consumer's retry may have replaced a
-      // terminal entry with a fresh session in the meantime and migrated
-      // THIS consumer onto it (see the migration above), so releasing the
-      // stale captured `shared` would decrement/delete the wrong entry and
-      // leak this consumer's hold on the session that is actually live.
-      const current = subscriptions.get(key);
-      if (current === undefined || !current.consumers.has(consumerId)) return;
-      current.refCount -= 1;
-      current.consumers.delete(consumerId);
-
-      // ADR-0003: no grace period - tear down immediately when ref count
-      // reaches 0.
-      if (current.refCount === 0) {
-        current.unsubscribeFromStream();
-        if (subscriptions.get(key) === current) subscriptions.delete(key);
-      }
-    };
-  }, [stableArgs, queryClient, wsStreamClient, consumerId, retryNonce]);
+  const { subscription, sendRefresh } = useSharedStreamSubscription({
+    registry: subscriptions,
+    sessionKey,
+    enabled: stableArgs.enabled && stableArgs.methodSupported,
+    consumerLabel: "pr-detail-consumer",
+    createSession,
+    onConsumerJoined,
+  });
 
   const { data: queryData } = useQuery({
     ...queryOptions({
@@ -292,24 +230,9 @@ export function usePrDetailSubscription(args: {
     enabled: false,
   });
 
-  const subscription = activeSubscriptionFor(wsStreamClient, stableArgs);
   const lastEvent = subscription?.lastEvent ?? null;
   const errorEvent = lastEvent?.kind === "error" ? lastEvent : null;
   const data = queryData ?? null;
-
-  const sendRefresh = useCallback(() => {
-    // After a terminal error the session is dead and its `sendRefresh` is a
-    // no-op; a user "refresh"/"Try again" there means RECONNECT. Re-run the
-    // subscribe effect (which replaces the terminal entry) instead of sending a
-    // frame into a closed session. A NONFATAL error leaves the session live,
-    // so it must still get an actual refresh frame rather than being treated
-    // as if the transport were dead.
-    if (subscription?.isTerminal === true) {
-      retry();
-      return;
-    }
-    subscription?.sendRefresh();
-  }, [subscription, retry]);
 
   return {
     data,

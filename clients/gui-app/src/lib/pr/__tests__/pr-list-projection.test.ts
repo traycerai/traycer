@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import {
+  formatPrRowTitle,
   groupPrItemsByRepo,
   prChecksSummary,
+  prRowTitleText,
 } from "@/lib/pr/pr-list-projection";
 
 const BASE_ITEM: PrLightItem = {
@@ -253,5 +255,26 @@ describe("prChecksSummary", () => {
 
     expect(summary?.tone).toBe("none");
     expect(summary?.label).toBe("4 checks");
+  });
+});
+
+describe("prRowTitleText / formatPrRowTitle", () => {
+  it("reports NO title for a never-swept row rather than inventing one", () => {
+    // An unswept row genuinely has no title. The previous shape filled the
+    // gap with an "Untitled pull request" placeholder, which rendered a blank
+    // second line on every such row and claimed a fact the host never sent.
+    expect(prRowTitleText(item({ title: null }))).toBeNull();
+    expect(prRowTitleText(item({ title: "" }))).toBeNull();
+  });
+
+  it("falls back to the bare identity when the title is absent", () => {
+    expect(formatPrRowTitle(item({ title: null }))).toBe("#4226");
+    expect(
+      formatPrRowTitle(item({ title: null, base: null, headRefName: "wip" })),
+    ).toBe("wip");
+  });
+
+  it("joins identity and title when both are known", () => {
+    expect(formatPrRowTitle(item({}))).toBe("#4226 · Remote host support");
   });
 });

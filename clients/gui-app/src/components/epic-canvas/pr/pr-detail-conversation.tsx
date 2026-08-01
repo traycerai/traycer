@@ -36,6 +36,7 @@ import {
 } from "@/components/diff/diff-content-primitive";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-github-link";
 import {
   formatPrActorName,
   formatPrReviewStateLabel,
@@ -598,19 +599,23 @@ function PrQuoteAction(props: {
   );
 }
 
+/**
+ * "…and N older on GitHub" - the escape hatch out of a truncated section.
+ * Routed through {@link PrExternalGitHubLink} like every other GitHub anchor
+ * on these surfaces.
+ */
 export function PrOlderOnGitHub(props: {
   readonly href: string;
   readonly label: string;
 }): ReactNode {
   return (
-    <a
+    <PrExternalGitHubLink
       href={props.href}
-      target="_blank"
-      rel="noreferrer"
       className="self-start px-1 text-ui-xs text-primary hover:underline"
+      testId="pr-older-on-github"
     >
       {props.label}
-    </a>
+    </PrExternalGitHubLink>
   );
 }
 

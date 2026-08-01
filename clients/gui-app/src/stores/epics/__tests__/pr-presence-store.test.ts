@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   migratePrPresencePersistedState,
+  PR_PRESENCE_PERSIST_KEY,
   prPresenceScopeKey,
   selectPrScopeHasItems,
   usePrPresenceStore,
 } from "@/stores/epics/pr-presence-store";
+
+const PERSISTED_CURRENT_VERSION = 1;
 
 const HOST_ID = "host-1";
 const EPIC_ID = "epic-1";
@@ -101,6 +104,77 @@ describe("pr presence store", () => {
       expect(migrated.hasItemsByScopeKey).toEqual({
         [prPresenceScopeKey(HOST_ID, EPIC_ID)]: true,
       });
+    });
+  });
+
+  describe("rehydration at the current version", () => {
+    beforeEach(() => {
+      window.localStorage.clear();
+    });
+
+    // `migrate` only runs on a version mismatch, so persisted corruption
+    // written under the CURRENT version would reach zustand's default merge
+    // unsanitized without a `merge` option applying the same guard on every
+    // rehydration. Driven through `persist.rehydrate()` rather than calling
+    // `migratePrPresencePersistedState` directly - the helper alone would not
+    // fail if `merge:` were deleted from the store's persist config.
+    it("sanitizes a corrupted hasItemsByScopeKey even though the version already matches", async () => {
+      window.localStorage.setItem(
+        PR_PRESENCE_PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            hasItemsByScopeKey: {
+              [prPresenceScopeKey(HOST_ID, EPIC_ID)]: true,
+              "stale-non-boolean": "yes",
+              "stale-false": false,
+              "stale-number": 1,
+            },
+          },
+          version: PERSISTED_CURRENT_VERSION,
+        }),
+      );
+
+      await usePrPresenceStore.persist.rehydrate();
+
+      expect(usePrPresenceStore.getState().hasItemsByScopeKey).toEqual({
+        [prPresenceScopeKey(HOST_ID, EPIC_ID)]: true,
+      });
+    });
+
+    it("sanitizes a hasItemsByScopeKey that is not even an object", async () => {
+      window.localStorage.setItem(
+        PR_PRESENCE_PERSIST_KEY,
+        JSON.stringify({
+          state: { hasItemsByScopeKey: "not-an-object" },
+          version: PERSISTED_CURRENT_VERSION,
+        }),
+      );
+
+      await usePrPresenceStore.persist.rehydrate();
+
+      expect(usePrPresenceStore.getState().hasItemsByScopeKey).toEqual({});
+    });
+
+    it("keeps recordPrPresence working after a rehydration that sanitized corrupted state", async () => {
+      window.localStorage.setItem(
+        PR_PRESENCE_PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            hasItemsByScopeKey: { "stale-non-boolean": "yes" },
+          },
+          version: PERSISTED_CURRENT_VERSION,
+        }),
+      );
+
+      await usePrPresenceStore.persist.rehydrate();
+
+      // The custom `merge` must not drop the store's actions off the merged
+      // state - only spread `hasItemsByScopeKey` from the sanitized shape.
+      usePrPresenceStore.getState().recordPrPresence(HOST_ID, EPIC_ID, true);
+
+      expect(
+        selectPrScopeHasItems(HOST_ID, EPIC_ID)(usePrPresenceStore.getState()),
+      ).toBe(true);
     });
   });
 });

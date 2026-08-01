@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -14,6 +14,12 @@ import {
 } from "@traycer/protocol/host/pr-schemas";
 import { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import {
+  resetSharedStreamSubscriptions,
+  useSharedStreamSubscription,
+  type SharedStreamSubscription,
+  type SharedStreamSubscriptionRegistry,
+} from "@/hooks/pr/shared-stream-subscription";
 
 export interface PrListSubscriptionData {
   readonly sourceStatus: PrSourceStatus;
@@ -45,16 +51,8 @@ interface ActiveSubscriptionArgs {
   readonly mode: PrSubscribeListForEpicMode;
 }
 
-interface SharedSubscription {
-  refCount: number;
-  unsubscribeFromStream: () => void;
-  sendRefresh: () => void;
-  lastEvent: PrSubscribeListForEpicServerFrame | null;
-  // Set once the stream is terminal; its `sendRefresh` is then inert, so the
-  // entry is REPLACED (not reused) on retry - see the subscribe effect.
-  isTerminal: boolean;
-  consumers: Map<symbol, () => void>;
-}
+type SharedSubscription =
+  SharedStreamSubscription<PrSubscribeListForEpicServerFrame>;
 
 /**
  * Module-level ref-counted subscriptions, keyed by the owning client
@@ -64,7 +62,8 @@ interface SharedSubscription {
  * panel) coexist as two independent transport lifecycles instead of one
  * collapsing into the other, per the tech plan's session-key rule.
  */
-const subscriptions = new Map<string, SharedSubscription>();
+const subscriptions: SharedStreamSubscriptionRegistry<PrSubscribeListForEpicServerFrame> =
+  new Map();
 
 function subscriptionKeyFor(
   client: WsStreamClient<HostStreamRpcRegistry>,
@@ -73,33 +72,9 @@ function subscriptionKeyFor(
   return `${client.instanceId}|${args.hostId}|${args.epicId}|${args.mode}`;
 }
 
-/** Render-time lookup of the shared entry this hook instance is attached to. */
-function activeSubscriptionFor(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
-  args: {
-    readonly hostId: string | null;
-    readonly epicId: string;
-    readonly mode: PrSubscribeListForEpicMode;
-  },
-): SharedSubscription | undefined {
-  if (client === null || args.hostId === null) {
-    return undefined;
-  }
-  return subscriptions.get(
-    subscriptionKeyFor(client, {
-      hostId: args.hostId,
-      epicId: args.epicId,
-      mode: args.mode,
-    }),
-  );
-}
-
 // Test helper to reset module state.
 export function __resetPrListSubscriptionsForTesting(): void {
-  for (const sub of subscriptions.values()) {
-    sub.unsubscribeFromStream();
-  }
-  subscriptions.clear();
+  resetSharedStreamSubscriptions(subscriptions);
 }
 
 export function usePrListSubscription(args: {
@@ -110,12 +85,6 @@ export function usePrListSubscription(args: {
 }): PrListSubscriptionResult {
   const queryClient = useQueryClient();
   const wsStreamClient = useWsStreamClient();
-  // Re-render channel for subscription events that do NOT write the query
-  // cache (fatal/non-fatal error frames, terminal closes). Cache-writing
-  // frames re-render through `useQuery` below.
-  const [, forceRender] = useReducer((renderCount: number) => {
-    return renderCount + 1;
-  }, 0);
 
   const stableArgs: typeof args = useMemo(
     () => ({
@@ -127,97 +96,60 @@ export function usePrListSubscription(args: {
     [args.hostId, args.epicId, args.mode, args.enabled],
   );
 
-  const [consumerId] = useState(() => Symbol("pr-list-consumer"));
-  // Bumped by `retry()` to re-run the subscribe effect so a TERMINAL shared
-  // session is replaced with a fresh one (its `sendRefresh` is inert).
-  const [retryNonce, retry] = useReducer(
-    (count: number): number => count + 1,
-    0,
+  // `null` while the key is unknowable. Note this does NOT fold in `enabled`:
+  // a disabled hook still reads a sibling's live session for the same key.
+  const activeArgs: ActiveSubscriptionArgs | null = useMemo(
+    () =>
+      stableArgs.hostId === null
+        ? null
+        : {
+            hostId: stableArgs.hostId,
+            epicId: stableArgs.epicId,
+            mode: stableArgs.mode,
+          },
+    [stableArgs.hostId, stableArgs.epicId, stableArgs.mode],
+  );
+  const sessionKey =
+    wsStreamClient === null || activeArgs === null
+      ? null
+      : subscriptionKeyFor(wsStreamClient, activeArgs);
+
+  const createSession = useCallback((): SharedSubscription => {
+    if (wsStreamClient === null || activeArgs === null) {
+      throw new Error("A PR list session needs a client and a host.");
+    }
+    return createSharedSubscription(wsStreamClient, queryClient, activeArgs);
+  }, [wsStreamClient, queryClient, activeArgs]);
+
+  const onConsumerJoined = useCallback(
+    (shared: SharedSubscription): void => {
+      if (activeArgs === null) return;
+      if (shared.lastEvent === null || shared.lastEvent.kind === "error") {
+        return;
+      }
+      replayLastEventIntoCache(queryClient, activeArgs, shared.lastEvent);
+    },
+    [queryClient, activeArgs],
   );
 
-  useEffect(() => {
-    if (
-      !stableArgs.enabled ||
-      stableArgs.hostId === null ||
-      wsStreamClient === null
-    ) {
-      return;
-    }
-    void retryNonce;
-
-    const activeArgs: ActiveSubscriptionArgs = {
-      hostId: stableArgs.hostId,
-      epicId: stableArgs.epicId,
-      mode: stableArgs.mode,
-    };
-    const key = subscriptionKeyFor(wsStreamClient, activeArgs);
-    let shared = subscriptions.get(key);
-
-    // Create fresh when there is none OR when the cached one is terminal, so a
-    // retry actually reconnects instead of reusing a dead session.
-    if (shared === undefined || shared.isTerminal) {
-      // A terminal entry can still carry OTHER mounted consumers - this
-      // effect's own cleanup already removed THIS consumer if it was
-      // previously attached, so anything left in `staleConsumers` belongs to
-      // a different hook instance. Migrate them onto the fresh session
-      // instead of leaving them ref-counted against the one we are about to
-      // close, which would silently drop their subscription the next time
-      // only THIS (retrying) consumer unmounts.
-      const staleConsumers = shared?.consumers;
-      shared?.unsubscribeFromStream();
-      shared = createSharedSubscription(
-        wsStreamClient,
-        queryClient,
-        activeArgs,
-      );
-      subscriptions.set(key, shared);
-      if (staleConsumers !== undefined) {
-        for (const [id, notify] of staleConsumers) {
-          shared.consumers.set(id, notify);
-          shared.refCount += 1;
-          notify();
-        }
-      }
-    }
-
-    shared.refCount += 1;
-    shared.consumers.set(consumerId, forceRender);
-
-    // A second consumer joining an ALREADY-LIVE session (e.g. the same epic
-    // open in two panes) gets no fresh hydration snapshot from the host - the
-    // session never dropped to zero. Refill the cache slot if it was GC'd
-    // while unobserved.
-    if (shared.lastEvent !== null && shared.lastEvent.kind !== "error") {
-      replayLastEventIntoCache(queryClient, activeArgs, shared.lastEvent);
-    }
-
-    return () => {
-      // Look up the CURRENT entry at this key rather than closing over the
-      // one captured above: a sibling consumer's retry may have replaced a
-      // terminal entry with a fresh session in the meantime and migrated
-      // THIS consumer onto it (see the migration above), so releasing the
-      // stale captured `shared` would decrement/delete the wrong entry and
-      // leak this consumer's hold on the session that is actually live.
-      const current = subscriptions.get(key);
-      if (current === undefined || !current.consumers.has(consumerId)) return;
-      current.refCount -= 1;
-      current.consumers.delete(consumerId);
-
-      // ADR-0003: no grace period - tear down immediately when ref count
-      // reaches 0.
-      if (current.refCount === 0) {
-        current.unsubscribeFromStream();
-        if (subscriptions.get(key) === current) subscriptions.delete(key);
-      }
-    };
-  }, [stableArgs, queryClient, wsStreamClient, consumerId, retryNonce]);
+  const { subscription, sendRefresh } = useSharedStreamSubscription({
+    registry: subscriptions,
+    sessionKey,
+    enabled: stableArgs.enabled,
+    consumerLabel: "pr-list-consumer",
+    createSession,
+    onConsumerJoined,
+  });
 
   // Read current cache state via useQuery with disabled fetching. The
   // subscription effect above feeds cache updates, so this renders
   // reactively whenever the cache changes.
   const { data: queryData } = useQuery({
     ...queryOptions({
-      queryKey: prQueryKeys.listForEpic(stableArgs.hostId, stableArgs.epicId),
+      queryKey: prQueryKeys.listForEpic({
+        hostId: stableArgs.hostId,
+        epicId: stableArgs.epicId,
+      }),
       queryFn: (): Promise<PrListSubscriptionData | null> =>
         Promise.resolve(null),
       staleTime: Infinity,
@@ -225,25 +157,9 @@ export function usePrListSubscription(args: {
     enabled: false,
   });
 
-  const subscription = activeSubscriptionFor(wsStreamClient, stableArgs);
   const lastEvent = subscription?.lastEvent ?? null;
   const errorEvent = lastEvent?.kind === "error" ? lastEvent : null;
   const data = queryData ?? null;
-
-  const sendRefresh = useCallback(() => {
-    // A terminal session's `sendRefresh` is inert; a refresh there means
-    // RECONNECT - re-run the effect to replace the dead entry. Branching on
-    // `errorEvent` instead would swallow the refresh entirely after a
-    // NONFATAL error: that leaves the session live and `isTerminal` false, so
-    // `retry()` only bumps the nonce, the subscribe effect reuses the very
-    // same entry, and no frame is ever sent. Mirrors
-    // `use-pr-detail-subscription`.
-    if (subscription?.isTerminal === true) {
-      retry();
-      return;
-    }
-    subscription?.sendRefresh();
-  }, [subscription, retry]);
 
   return {
     data,
@@ -355,6 +271,19 @@ function describeStreamClose(reason: StreamCloseReason | null): string {
 }
 
 /**
+ * The one frame-to-cache-value projection, so a new field on the frame cannot
+ * reach the write path and be missed on the replay path (or the reverse).
+ * `use-pr-detail-subscription.ts` carries the same helper.
+ */
+function toSubscriptionData(frame: PrListDataFrame): PrListSubscriptionData {
+  return {
+    sourceStatus: frame.sourceStatus,
+    notice: frame.notice,
+    items: frame.items,
+  };
+}
+
+/**
  * Writes subscription frames into the TanStack Query cache.
  * Authorization: CLAUDE.md "Optimistic setQueryData is reserved for
  * response-equals-state cases". This call falls under that carve-out: the
@@ -366,11 +295,10 @@ function writeIntoCache(
   args: ActiveSubscriptionArgs,
   frame: PrListDataFrame,
 ): void {
-  queryClient.setQueryData(prQueryKeys.listForEpic(args.hostId, args.epicId), {
-    sourceStatus: frame.sourceStatus,
-    notice: frame.notice,
-    items: frame.items,
-  } satisfies PrListSubscriptionData);
+  queryClient.setQueryData(
+    prQueryKeys.listForEpic({ hostId: args.hostId, epicId: args.epicId }),
+    toSubscriptionData(frame),
+  );
 }
 
 /**
@@ -386,11 +314,10 @@ function replayLastEventIntoCache(
   args: ActiveSubscriptionArgs,
   frame: PrListDataFrame,
 ): void {
-  const key = prQueryKeys.listForEpic(args.hostId, args.epicId);
+  const key = prQueryKeys.listForEpic({
+    hostId: args.hostId,
+    epicId: args.epicId,
+  });
   if (queryClient.getQueryData(key) !== undefined) return;
-  queryClient.setQueryData(key, {
-    sourceStatus: frame.sourceStatus,
-    notice: frame.notice,
-    items: frame.items,
-  } satisfies PrListSubscriptionData);
+  queryClient.setQueryData(key, toSubscriptionData(frame));
 }

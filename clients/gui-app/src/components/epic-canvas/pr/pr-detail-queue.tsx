@@ -212,13 +212,13 @@ function PrQueueRow(props: {
         {/* The name IS the link, as on the Checks tab: the row's subject is
             the thing a reader wants to open, so it should not need a separate
             target beside it. No url means plain text, never a dead control. */}
-        {item.detailsUrl === null ? (
-          <TooltipWrapper
-            label={text.headline}
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
+        <TooltipWrapper
+          label={text.headline}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          {item.detailsUrl === null ? (
             <p
               className={cn(
                 "min-w-0 truncate text-ui-sm text-foreground",
@@ -228,14 +228,7 @@ function PrQueueRow(props: {
             >
               {text.headline}
             </p>
-          </TooltipWrapper>
-        ) : (
-          <TooltipWrapper
-            label={text.headline}
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
+          ) : (
             <button
               type="button"
               onClick={openDetails}
@@ -249,8 +242,8 @@ function PrQueueRow(props: {
             >
               {text.headline}
             </button>
-          </TooltipWrapper>
-        )}
+          )}
+        </TooltipWrapper>
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground/70">
           <span className="shrink-0">{KIND_SOURCE_LABEL[item.kind]}</span>
           {text.meta !== null ? (
