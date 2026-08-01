@@ -180,7 +180,7 @@ vi.mock("../../runner/runner", async (importOriginal) => {
   };
 });
 
-import { buildProgram } from "../../index";
+import { buildProgram, buildProgramWithAgentRoles } from "../../index";
 
 // Native-packaging follow-up bug: previously `traycer-cli/src/index.ts`
 // only wired up `login`, `logout`, `whoami`, `host start`,
@@ -241,7 +241,7 @@ function collectOptionFlags(command: Command): Array<string | undefined> {
 
 describe("traycer CLI entrypoint registration", () => {
   it("keeps epic and sender context env-only across the entire command tree", () => {
-    const flags = collectOptionFlags(buildProgram());
+    const flags = collectOptionFlags(buildProgramWithAgentRoles(true));
     expect(flags).not.toContain("--epic-id");
     expect(flags).not.toContain("--sender-agent-id");
   });
