@@ -9,6 +9,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
 import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -72,6 +73,7 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:artifact-read-state",
   ],
   ["useGitPanelStore", useGitPanelStore, "traycer-gui-app:git-panel"],
+  ["usePrPresenceStore", usePrPresenceStore, "traycer-gui-app:pr-presence"],
   [
     "useInitialChatHandoffStore",
     useInitialChatHandoffStore,

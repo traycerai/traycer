@@ -2239,6 +2239,49 @@ describe("T3 rev-3 adversarial: external supersede + POP + envelope fields", () 
     expect(nav.calls.length).toBe(1);
   });
 
+  it("history reactivation restores its last committed search and filters", () => {
+    const nav = makeDeferredNavigate();
+    const committedHistorySearch = {
+      historyQuery: "persistence",
+      historyRepos: ["traycerai/traycer"],
+      historyOwnership: ["mine"],
+      historySort: "oldest",
+    };
+
+    activateTabIntent(nav.asNavigate, historyTabIntent(), undefined);
+    const historyEnvelope = nav.lastEnvelope();
+    commitInternal({
+      navigate: nav.asNavigate,
+      pathname: "/epics",
+      envelope: historyEnvelope,
+      action: "PUSH",
+      key: "history-filtered",
+      index: 1,
+      search: committedHistorySearch,
+    });
+
+    activateTabIntent(nav.asNavigate, settingsTabIntent("general"), undefined);
+    const settingsEnvelope = nav.lastEnvelope();
+    commitInternal({
+      navigate: nav.asNavigate,
+      pathname: "/settings/general",
+      envelope: settingsEnvelope,
+      action: "PUSH",
+      key: "settings",
+      index: 2,
+      search: undefined,
+    });
+
+    activateTabIntent(nav.asNavigate, historyTabIntent(), {
+      search: (previous) => {
+        const { historyOverlay: _historyOverlay, ...rest } = previous;
+        return rest;
+      },
+    });
+
+    expect(nav.lastOptions().search).toEqual(committedHistorySearch);
+  });
+
   it("issued envelopes carry sessionId, serial, and destination union", () => {
     const a = openEpic("epic-a", "A");
     seedCommittedLayout({

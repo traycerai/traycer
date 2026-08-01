@@ -256,28 +256,37 @@ export function WorkspaceFolderSummaryControl(props: {
         align="start"
         collisionPadding={12}
         container={dialogBoundaryEl ?? undefined}
-        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
+        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-hidden p-0"
         data-testid={props.popoverTestId}
         onOpenAutoFocus={(event) => event.preventDefault()}
         onInteractOutside={(event) =>
           preserveWhenNestedOverlay(event, contentRef.current)
         }
       >
-        <WorkspaceFolderRows
-          items={props.items}
-          trailingSlot={null}
-          addFolderPending={props.addFolderPending}
-          addFolderDisabled={props.addFolderDisabled}
-          addFolderDisabledReason={props.addFolderDisabledReason}
-          onAddFolder={props.onAddFolder}
-          onUpdate={props.onUpdate === null ? null : handleUpdate}
-          updateEnabled={props.updateEnabled}
-          updatePending={props.updatePending}
-          onEditEnvironment={props.onEditEnvironment}
-          readOnly={false}
-          nestedInPopover={dialogBoundaryEl !== null}
-          bindingResolved={props.bindingResolved}
-        />
+        {/* Match the sidebar owner card's structure: the content owns the
+            scroll, while the refresh row stays outside it. This keeps one
+            consistent 12px horizontal inset and avoids sticky positioning
+            interacting with the popover's padding at the bottom edge. */}
+        <div
+          className="min-h-0 w-full overflow-y-auto overscroll-contain px-3 pt-3 pb-2"
+          data-testid="workspace-folder-scroll-region"
+        >
+          <WorkspaceFolderRows
+            items={props.items}
+            trailingSlot={null}
+            addFolderPending={props.addFolderPending}
+            addFolderDisabled={props.addFolderDisabled}
+            addFolderDisabledReason={props.addFolderDisabledReason}
+            onAddFolder={props.onAddFolder}
+            onUpdate={props.onUpdate === null ? null : handleUpdate}
+            updateEnabled={props.updateEnabled}
+            updatePending={props.updatePending}
+            onEditEnvironment={props.onEditEnvironment}
+            readOnly={false}
+            nestedInPopover={dialogBoundaryEl !== null}
+            bindingResolved={props.bindingResolved}
+          />
+        </div>
         {refreshState === null ? null : (
           <WorkspaceRefreshFooter
             checkedAt={refreshState.checkedAt}
@@ -294,12 +303,9 @@ export function WorkspaceFolderSummaryControl(props: {
 /**
  * How old the folder facts are, and the action that re-derives them.
  *
- * `sticky` because the popover content is its own scroll container: a binding
- * with many folders would otherwise scroll Refresh out of reach, and the one
- * case where the user most needs it (a long folder list gone stale) is exactly
- * the case where it would be hidden. The negative margins undo the content's
- * `p-3` so the bar sits flush against the popover's bottom edge instead of
- * floating with a transparent gutter under it.
+ * Outside the scroll region, matching the left-sidebar owner hover card: a
+ * long folder list scrolls under a fixed footer, and the inset divider and
+ * controls share the same horizontal rhythm as the folder content above.
  */
 function WorkspaceRefreshFooter(props: {
   readonly checkedAt: number | null;
@@ -308,7 +314,10 @@ function WorkspaceRefreshFooter(props: {
   readonly onRefresh: () => void;
 }): ReactNode {
   return (
-    <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-1.5 bg-popover px-3">
+    <div
+      className="shrink-0 bg-popover px-3"
+      data-testid="workspace-refresh-footer"
+    >
       <div className="flex items-center justify-between gap-2 border-t border-border/25 py-1.5">
         <WorkspaceCheckedAt
           checkedAt={props.checkedAt}

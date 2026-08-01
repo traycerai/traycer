@@ -12,6 +12,7 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FileDiff,
   FilePlus,
+  GitPullRequest,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -57,6 +58,8 @@ import {
   isDiffTileRef,
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
+  isPrDetailTileRef,
+  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
@@ -920,8 +923,13 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (isDiffTileRef(props.tab)) {
+  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isPrDetailTileRef(props.tab)) {
+    return (
+      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+    );
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;

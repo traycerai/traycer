@@ -32,6 +32,7 @@ import {
   isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
+  isPrDiffTileRef,
 } from "./types";
 import {
   activationHistoryEqual,
@@ -1479,11 +1480,49 @@ export function toggleSnapshotDiffBundleFileCollapsed(
   );
 }
 
+export function updatePrDiffTileView(
+  state: EpicCanvasState,
+  tileId: string,
+  view: GitDiffTileViewState,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isPrDiffTileRef(ref),
+    // Re-narrowed here for the same reason as `updateGitDiffTileView`: `view`
+    // is per-kind now that the comm-graph tile carries a viewport-shaped one,
+    // so a bare spread over the union would type-check against the wrong kind.
+    (ref) => (isPrDiffTileRef(ref) ? { ...ref, view } : ref),
+  );
+}
+
+/**
+ * No `ref.diff.kind` gate, unlike the git and snapshot pairs: a PR diff tile
+ * is ALWAYS the multi-file view (there is no single-file PR diff tile), so
+ * there is no non-bundle variant to exclude.
+ */
+export function togglePrDiffFileCollapsed(
+  state: EpicCanvasState,
+  tileId: string,
+  filePath: string,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isPrDiffTileRef(ref),
+    (ref) => toggleCollapsedFilePath(ref, filePath),
+  );
+}
+
 function toggleCollapsedFilePath(
   ref: EpicCanvasTileRef,
   filePath: string,
 ): EpicCanvasTileRef {
-  if (!isGitDiffTileRef(ref) && !isSnapshotDiffTileRef(ref)) return ref;
+  if (
+    !isGitDiffTileRef(ref) &&
+    !isSnapshotDiffTileRef(ref) &&
+    !isPrDiffTileRef(ref)
+  ) {
+    return ref;
+  }
   const collapsed = new Set(ref.view.collapsedFilePaths);
   if (collapsed.has(filePath)) {
     collapsed.delete(filePath);

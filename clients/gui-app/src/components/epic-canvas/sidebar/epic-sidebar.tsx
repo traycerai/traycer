@@ -20,7 +20,9 @@ import {
   useSidebarReparentRootActive,
 } from "@/components/epic-canvas/dnd/dnd-store";
 import {
+  isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
+  resolveActiveVisibleGroupIndex,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
   type LeftPanelSlotProps,
@@ -83,10 +85,15 @@ import {
   useLeftPanelGroups,
   useLeftPanelSectionCollapsed,
   useLocalRootCreatePending,
+  usePanelVisibilityOverrides,
   type LeftPanelGroup,
   type LeftPanelId,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
+import {
+  selectPrScopeHasItems,
+  usePrPresenceStore,
+} from "@/stores/epics/pr-presence-store";
 import {
   useFileTreeStore,
   useSelectedFileTreeWorkspace,
@@ -145,6 +152,7 @@ import {
   Download,
   FolderOpen,
   ListChecks,
+  MessageSquareText,
   MoreHorizontal,
   Plus,
   Trash2,
@@ -152,6 +160,8 @@ import {
 } from "lucide-react";
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
+import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
+import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -360,6 +370,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
     },
     loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
+  "pull-requests": {
+    live: {
+      Body: PrPanelBody,
+      Actions: PrPanelActions,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
+  },
   "file-tree": {
     live: {
       Body: FileTreePanelBody,
@@ -427,7 +445,7 @@ function getVisiblePanelGroupDefinitions(
 ): ReadonlyArray<LeftPanelDefinition> {
   return group.panelIds.flatMap((panelId) => {
     const definition = getLeftPanelDefinition(definitionsById, panelId);
-    return definition.isVisible(context) ? [definition] : [];
+    return isLeftPanelVisible(definition, context) ? [definition] : [];
   });
 }
 
@@ -445,15 +463,18 @@ function getActivePanelDefinitions(
     );
     return definitions.length === 0 ? [] : [definitions];
   });
-  const activeGroup = visibleGroups.find((group) =>
-    group.some((definition) => definition.id === activePanelId),
+  // Shared with the rail so the highlighted icon and the rendered body agree
+  // even when the active panel is hidden.
+  const activeIndex = resolveActiveVisibleGroupIndex(
+    visibleGroups.map((definitions) =>
+      definitions.map((definition) => definition.id),
+    ),
+    activePanelId,
   );
-  if (activeGroup !== undefined) return activeGroup;
-  const defaultGroup = visibleGroups.find((group) =>
-    group.some((definition) => definition.id === DEFAULT_LEFT_PANEL_ID),
-  );
-  if (defaultGroup !== undefined) return defaultGroup;
-  return [getLeftPanelDefinition(definitionsById, DEFAULT_LEFT_PANEL_ID)];
+  if (activeIndex === null) {
+    return [getLeftPanelDefinition(definitionsById, DEFAULT_LEFT_PANEL_ID)];
+  }
+  return visibleGroups[activeIndex];
 }
 
 export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
@@ -465,9 +486,24 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
+  const hostId = useReactiveActiveHostId();
+  const hasPullRequests = usePrPresenceStore(
+    selectPrScopeHasItems(hostId, epicId),
+  );
+  const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
-    () => ({ commentsPanelRevealed, hasActiveCommentableArtifact }),
-    [commentsPanelRevealed, hasActiveCommentableArtifact],
+    () => ({
+      commentsPanelRevealed,
+      hasActiveCommentableArtifact,
+      hasPullRequests,
+      visibilityOverrideById,
+    }),
+    [
+      commentsPanelRevealed,
+      hasActiveCommentableArtifact,
+      hasPullRequests,
+      visibilityOverrideById,
+    ],
   );
   const panels = useMemo(
     () =>
@@ -502,12 +538,22 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
+  const hostId = useReactiveActiveHostId();
+  // The persisted PR baseline is readable before the epic's Y.doc resolves, so
+  // the loading rail already shows the same set of panels the live one will -
+  // no icon appears or disappears as the epic finishes opening.
+  const hasPullRequests = usePrPresenceStore(
+    selectPrScopeHasItems(hostId, epicId),
+  );
+  const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
     () => ({
       commentsPanelRevealed,
       hasActiveCommentableArtifact: false,
+      hasPullRequests,
+      visibilityOverrideById,
     }),
-    [commentsPanelRevealed],
+    [commentsPanelRevealed, hasPullRequests, visibilityOverrideById],
   );
   const panels = useMemo(
     () =>
@@ -1006,7 +1052,19 @@ function CommentsPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const activeArtifactId = useActiveEpicArtifactId(props.tabId);
-  if (activeArtifactId === null) return null;
+  // Normally unreachable - the panel is revealed by an artifact that has
+  // comments. Reachable once a user checks Comments in the rail context menu,
+  // which keeps the panel there regardless of what the canvas is showing.
+  if (activeArtifactId === null) {
+    return (
+      <SidebarPanelEmptyState
+        icon={MessageSquareText}
+        title="No artifact open"
+        description="Open an artifact to see and add comments on it."
+        testId="epic-comments-empty"
+      />
+    );
+  }
   return (
     <CommentSidebarPanel
       epicId={props.epicId}
