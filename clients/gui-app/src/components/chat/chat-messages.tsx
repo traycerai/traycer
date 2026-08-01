@@ -12,6 +12,7 @@ import {
   applyChatAnchorDriftRepair,
   buildMessageIdToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
+  chatAnchorScrollCaptureShouldCancel,
   chatTimelineAnchorShouldAnimateInitialIssue,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
@@ -21,6 +22,7 @@ import {
   resolveChatAnchorTargetWithSetupCard,
   selectActiveUserMessageId,
   viewportActiveUserMessageId,
+  type ChatAnchorScrollCapturePhysicalSnapshot,
   type ChatTimelineNavigationLocation,
   type ChatViewportAnchorListState,
 } from "@/components/chat/chat-messages-scroll-helpers";
@@ -969,6 +971,23 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // comparing against both prevents either geometry change from looking like
   // user intent.
   const expectedAnchorScrollTopRef = useRef<number | null>(null);
+  // Ticket 19 (decision #31, capture-provenance classifier): the physical
+  // DOM snapshot the capture-phase scroll listener compares each new event
+  // against (browser-clamp signature) - refreshed on every captured event
+  // regardless of mode/ownership, and reseeded at `beginAnchoringNewTurn` so
+  // the FIRST captured event of a session always has a same-session
+  // baseline. See `chatAnchorScrollCaptureShouldCancel`'s doc comment.
+  const anchoringPhysicalSnapshotRef =
+    useRef<ChatAnchorScrollCapturePhysicalSnapshot | null>(null);
+  // Ticket 19: the ONE generation-scoped in-flight ref the design/decision
+  // #31 machinery cap allows - non-null (holding the owning generation)
+  // only while the anchor engine's `scrollToIndex` issue/reissue is inside
+  // ticket 18's settle lifecycle (`positionAnchor` below). Armed
+  // immediately before each issue, cleared symmetrically in
+  // begin/retarget/cancel/valid/invalid - see each site's own comment.
+  const activeAnchorImperativeMotionGenerationRef = useRef<number | null>(
+    null,
+  );
   // Ticket 22: coalesces item-size/viewport-layout triggers into ONE pending
   // two-rAF geometry-repair pass at a time - `scheduleChatAnchorGeometryRepair`'s
   // own doc comment covers why.
@@ -1201,6 +1220,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       settledTimelineAnchorRef.current = null;
       activeTimelineAnchorIndexRef.current = null;
       pendingAnchorScrollRestoreRef.current = null;
+      // Ticket 19: a cancel (real gesture or superseding navigation) ends
+      // whatever anchor motion window was in flight for the OLD generation -
+      // symmetric with the arm sites in `positionAnchor` below.
+      activeAnchorImperativeMotionGenerationRef.current = null;
+      anchoringPhysicalSnapshotRef.current = null;
       // A real gesture (or a fresh navigation, which calls this first) wins
       // immediately over a still-in-flight programmatic-scroll operation,
       // regardless of what that operation was in the middle of doing.
@@ -1385,6 +1409,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
         anchorScrollRestoreFrameRef.current = null;
       }
+      // Ticket 19: fresh session, fresh motion/physical bookkeeping - a
+      // stale active-motion generation from a superseded session must not
+      // exempt this one, and the physical snapshot needs a same-session
+      // baseline for the capture listener's clamp check (design's "seeded
+      // on entry to an anchoring generation"). Reading the scroll node here
+      // (not deferring to the first captured event) means a session with no
+      // natural scroll before its own positioning still has a baseline.
+      activeAnchorImperativeMotionGenerationRef.current = null;
+      const scrollNodeAtBegin = chatTimelineRef.current?.getScrollableNode();
+      anchoringPhysicalSnapshotRef.current = scrollNodeAtBegin
+        ? {
+            scrollTop: scrollNodeAtBegin.scrollTop,
+            maxScrollTop: Math.max(
+              0,
+              scrollNodeAtBegin.scrollHeight - scrollNodeAtBegin.clientHeight,
+            ),
+          }
+        : null;
       suppressFollowRestoreRef.current = false;
       anchorAnimatedRef.current = animated;
       cancelPillShow();
@@ -1449,6 +1491,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
       anchorScrollRestoreFrameRef.current = null;
     }
+    // Ticket 19: the OLD target's settle window (if any) is being
+    // superseded the same way `positionedTimelineAnchorRef` above is - the
+    // new target's own positioning re-arms this fresh, same generation.
+    activeAnchorImperativeMotionGenerationRef.current = null;
     timelineAnchorMessageIdRef.current = messageId;
     setTimelineAnchorMessageId(messageId);
   }, []);
@@ -1541,6 +1587,75 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       detach();
     };
   }, [hasContent]);
+
+  // Ticket 19 (decision #31): the capture-provenance classifier's ONE
+  // native listener - installed on the STABLE transcript wrapper (unlike
+  // the wheel/touch listeners above, it never needs to track scroll-node
+  // replacement across an empty/repopulate cycle; it simply filters each
+  // captured event to whichever scroll node is current right now). Capture
+  // phase (`{ capture: true }`) is load-bearing - it is what lets this
+  // listener observe the raw DOM state before LegendList's own non-capture
+  // target listener consumes the event; see
+  // `chatAnchorScrollCaptureShouldCancel`'s doc comment (chat-messages-
+  // scroll-helpers.ts) for the full library-ordering proof this depends on,
+  // and the dedicated library-contract pins that gate a future
+  // `@legendapp/list` upgrade.
+  useLayoutEffect(() => {
+    const container = transcriptContainerRef.current;
+    if (!container) return;
+    const handleCapturedScroll = (event: Event): void => {
+      const list = chatTimelineRef.current;
+      if (!list) return;
+      const scrollNode = list.getScrollableNode();
+      // Any nested scrollable region (a code block, a horizontally
+      // overflowing table) also dispatches `scroll` events this ancestor
+      // capture listener observes - `scroll` never bubbles, but capturing
+      // phase runs regardless, for EVERY descendant's own scroll, not just
+      // the transcript's. Only the transcript's own scroll node is this
+      // classifier's concern.
+      if (event.target !== scrollNode) return;
+      const domScrollTop = scrollNode.scrollTop;
+      const currentMaxScrollTop = Math.max(
+        0,
+        scrollNode.scrollHeight - scrollNode.clientHeight,
+      );
+      const generationOwned =
+        liveFollowUserScrollGenerationRef.current ===
+        anchorUserScrollGenerationRef.current;
+      const shouldCancel = chatAnchorScrollCaptureShouldCancel({
+        isAnchoringSessionOwned:
+          timelineScrollModeRef.current === "anchoring-new-turn" &&
+          generationOwned,
+        activeAnchorMotionOwnsGeneration:
+          activeAnchorImperativeMotionGenerationRef.current ===
+          anchorUserScrollGenerationRef.current,
+        domScrollTop,
+        listStateScroll: list.getState().scroll,
+        previousSnapshot: anchoringPhysicalSnapshotRef.current,
+        currentMaxScrollTop,
+      });
+      // Design step 2: refresh regardless of outcome, so the NEXT captured
+      // event - in any mode - always compares against the last real
+      // physical position, not a stale one from several mode transitions
+      // ago. Refreshed AFTER classifying this event (which needs the OLD
+      // snapshot as its "previous" input), BEFORE acting on the result.
+      anchoringPhysicalSnapshotRef.current = {
+        scrollTop: domScrollTop,
+        maxScrollTop: currentMaxScrollTop,
+      };
+      if (shouldCancel) {
+        cancelTimelineLiveFollowForUserNavigationRef.current(false);
+      }
+    };
+    container.addEventListener("scroll", handleCapturedScroll, {
+      capture: true,
+    });
+    return () => {
+      container.removeEventListener("scroll", handleCapturedScroll, {
+        capture: true,
+      });
+    };
+  }, []);
 
   // --- Anchor engine --------------------------------------------------------
 
@@ -1675,6 +1790,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             }
           };
 
+          // Ticket 19: arm immediately before issuing the command - the
+          // ONE generation-scoped in-flight ref the machinery cap allows
+          // (decision #31d). Every guard above this point has already
+          // confirmed `generationAtReady` is still current, so arming to it
+          // here (not `anchorUserScrollGenerationRef.current` - same value,
+          // but this documents which one this closure owns) is safe.
+          activeAnchorImperativeMotionGenerationRef.current = generationAtReady;
           let pendingAnchorScrollPromise = list.scrollToIndex({
             index: currentAnchorIndex,
             animated: shouldAnimateInitialIssue,
@@ -1715,6 +1837,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               // offset) self-corrects both an estimate-drift undershoot and
               // a still-resolving `anchoredEndSpace` reserve clamp.
               reissue: () => {
+                // Ticket 19: retained across the re-issue - still the same
+                // generation, still the same anchor-issue closure (design's
+                // "retain across settle re-issues"). Re-set (not just left
+                // alone) so a reissue is defensively self-arming too.
+                activeAnchorImperativeMotionGenerationRef.current =
+                  generationAtReady;
                 pendingAnchorScrollPromise = list.scrollToIndex({
                   index: anchorSettleTargetIndex(),
                   animated: false,
@@ -1723,6 +1851,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 });
               },
               onSettledValid: () => {
+                // Ticket 19: the motion window this session owned is over -
+                // symmetric with the arm sites above.
+                if (
+                  activeAnchorImperativeMotionGenerationRef.current ===
+                  generationAtReady
+                ) {
+                  activeAnchorImperativeMotionGenerationRef.current = null;
+                }
                 expectedAnchorScrollTopRef.current = expectedAnchorScrollTop(
                   list,
                   anchorSettleTargetIndex(),
@@ -1739,6 +1875,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 measureSettledOverflow();
               },
               onSettledInvalid: () => {
+                // Ticket 19: same symmetric clear as onSettledValid - a
+                // corrective operation that gives up must not leave the
+                // capture classifier believing motion is still in flight.
+                if (
+                  activeAnchorImperativeMotionGenerationRef.current ===
+                  generationAtReady
+                ) {
+                  activeAnchorImperativeMotionGenerationRef.current = null;
+                }
                 // Ticket 18 safety cap: a corrective operation that cannot
                 // safely land must never claim settled. Log only the
                 // genuine non-convergence case, not the (expected, correct)

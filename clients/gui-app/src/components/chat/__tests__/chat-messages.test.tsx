@@ -37,7 +37,6 @@ import {
 import {
   captureChatFreeScrollingOffset,
   CHAT_LIST_ANCHOR_OFFSET,
-  getChatNaturalMaxScrollWithoutAnchorReserve,
 } from "@/components/chat/chat-scroll-anchoring";
 import { appLogger } from "@/lib/logger";
 import { preserveChatScrollAcrossDisclosureChange } from "@/components/chat/chat-scroll-disclosure";
@@ -680,6 +679,105 @@ function fireScrollTopWithoutFlush(scrollTop: number): void {
     scrollNode.scrollTop = scrollTop;
     fireEvent.scroll(scrollNode);
   });
+}
+
+/**
+ * Ticket 19: repositions the scroll node through the REAL LegendList
+ * imperative API (`scrollToOffset`, non-animated) instead of a bare
+ * `scrollTop` write. The installed library pre-writes its own internal
+ * `getState().scroll` synchronously, before this jsdom harness's `scrollTo`
+ * shim ever touches the DOM `scrollTop` (verified against installed
+ * `@legendapp/list@3.2.0`: `react.mjs:2104-2110`) - so the capture-
+ * provenance classifier (chat-messages-scroll-helpers.ts) correctly reads
+ * this as a library-owned correction and stays silent, unlike
+ * `fireScrollTopAndFlush`/`fireScrollOnlyTo`, which (correctly, post-
+ * ticket-19) now cancels an owned anchoring-new-turn session on first use.
+ *
+ * Use this whenever a test needs to move the scroll node while remaining
+ * inside whatever mode/generation currently owns it - the same shape
+ * production code itself produces via the reveal pass / geometry repair -
+ * NOT to simulate a reader gesture (that is exactly what
+ * `fireScrollTopAndFlush` is for, and what should now correctly cancel).
+ */
+async function fireLibraryOwnedScrollTo(offset: number): Promise<void> {
+  const list = legendListRefHolder.current;
+  if (!list) throw new Error("expected LegendListRef to be attached");
+  const scrollNode = getScrollNode();
+  await act(async () => {
+    void list.scrollToOffset({ offset, animated: false });
+    fireEvent.scroll(scrollNode);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+/**
+ * Ticket 19 silence pins: the jsdom harness's `scrollTop` setter and
+ * `scrollTo` shim never `dispatchEvent` (legend-list-test-environment.ts),
+ * so production's capture-phase classifier never runs unless a test fires
+ * `scroll` explicitly. Call this after a library-owned write
+ * (`scrollToOffset`/`scrollToIndex`/MVCP/`setItemSize` correction) so the
+ * classifier actually observes the post-write DOM - same shape the hard-
+ * gate pins and `fireLibraryOwnedScrollTo` use. Without it, a "silence"
+ * pin can stay green under a maximally-broken classifier that always
+ * cancels while owned.
+ */
+async function fireCaptureScrollAfterLibraryWrite(): Promise<void> {
+  const scrollNode = getScrollNode();
+  await act(async () => {
+    fireEvent.scroll(scrollNode);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+/**
+ * Ticket 19: wrap LegendList imperative scroll APIs so every call also
+ * delivers a capture-phase `scroll` event (the harness never auto-fires
+ * one). Used for anchor-engine issue/reissue paths that call
+ * `scrollToIndex` from rAF inside production - without the wrap those
+ * writes are invisible to `chatAnchorScrollCaptureShouldCancel`.
+ * Fires scroll synchronously after the real method returns so the
+ * capture listener runs while `activeAnchorImperativeMotionGenerationRef`
+ * is still armed (guard 2) for in-flight anchor issues.
+ */
+function installLibraryScrollCaptureDispatch(): {
+  dispose: () => void;
+  scrollToIndexCallCount: () => number;
+  scrollToOffsetCallCount: () => number;
+} {
+  const list = legendListRefHolder.current;
+  if (!list) throw new Error("expected LegendListRef to be attached");
+  let scrollToIndexCalls = 0;
+  let scrollToOffsetCalls = 0;
+  const originalScrollToIndex = list.scrollToIndex.bind(list);
+  const originalScrollToOffset = list.scrollToOffset.bind(list);
+  const indexSpy = vi
+    .spyOn(list, "scrollToIndex")
+    .mockImplementation((opts) => {
+      scrollToIndexCalls += 1;
+      const result = originalScrollToIndex(opts);
+      fireEvent.scroll(getScrollNode());
+      return result;
+    });
+  const offsetSpy = vi
+    .spyOn(list, "scrollToOffset")
+    .mockImplementation((opts) => {
+      scrollToOffsetCalls += 1;
+      const result = originalScrollToOffset(opts);
+      fireEvent.scroll(getScrollNode());
+      return result;
+    });
+  return {
+    dispose: () => {
+      indexSpy.mockRestore();
+      offsetSpy.mockRestore();
+    },
+    scrollToIndexCallCount: () => scrollToIndexCalls,
+    scrollToOffsetCallCount: () => scrollToOffsetCalls,
+  };
 }
 
 /** Dispatch a keydown with target inside the keyboard-scroll scope. */
@@ -1753,7 +1851,7 @@ describe("ChatMessages scroll policy", () => {
     // Deleting a user message above the parked position (a real suffix
     // removal) was then expected to land at the new live edge
     // (`following-end`) but did not move.
-    it("(reachability) a programmatic scrollTop write during anchoring-new-turn does not cancel the session - documents current behavior, not a fix", async () => {
+    it("(ticket 19 pin) a settled anchoring session cedes ownership on a scroll-only DOM departure - the scrollbar-thumb gesture the reachability pin above used to document as undetected", async () => {
       const sendId = "s4b-reachability-send";
       const messages = makeCompletedTranscript(30);
       const { rerenderMessages } = renderChatMessages({
@@ -1772,22 +1870,53 @@ describe("ChatMessages scroll policy", () => {
       await waitForAnchorEngineSettle();
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
-      // Programmatic scrollTop write, no gesture event of any kind - the
-      // live harness's exact entry mechanism. A real user parking mid-history
-      // uses wheel/minimap/keys, all of which cancel or suppress the
-      // anchoring session; this path is reachable only through a
-      // non-gesture, script-driven scroll.
+      // Same scroll-only departure the old (pre-ticket-19) reachability pin
+      // documented as undetected: a direct DOM `scrollTop` write with no
+      // wheel/touch/pointerdown event of its own - the live harness's exact
+      // native-thumb-drag shape. Critically, this is also NOT a library
+      // call of any kind, so `list.getState().scroll` never advances to
+      // match - the capture-provenance classifier's state-equality check
+      // (chat-messages-scroll-helpers.ts) sees the mismatch and cancels on
+      // the very first captured event, before LegendList's own non-capture
+      // target listener ever consumes it.
       const scrollNode = getScrollNode();
       act(() => {
         scrollNode.scrollTop = 900;
         fireEvent.scroll(scrollNode);
       });
 
-      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      expect(scrollNode.scrollTop).toBe(900);
+
+      // Ownership oracle (design's integrated pin, item 3): the departed
+      // generation must never again receive a reveal/follow correction.
+      // Spying on the REAL LegendList instance's own imperative API is the
+      // strongest available negative - it is the exact surface the reveal
+      // pass and anchor engine would call to pull a still-owned reader back.
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+      const scrollToIndexSpy = vi.spyOn(list, "scrollToIndex");
+      const withReply: ReadonlyArray<ChatMessageModel> = [
+        ...afterSend,
+        {
+          ...makeMessageAt(0, "assistant", 700_001),
+          id: "s4b-reachability-reply-1",
+          content: "chunk",
+          completedAt: null,
+          runState: "running",
+        },
+      ];
+      rerenderMessages(withReply);
+      await settleLegendList();
+
+      expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      expect(scrollToIndexSpy).not.toHaveBeenCalled();
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
       expect(scrollNode.scrollTop).toBe(900);
     });
 
-    it("(delete pin) a suffix delete that sweeps a programmatically-parked anchoring session lands at the new live edge", async () => {
+    it("(delete pin) a suffix delete that sweeps a scroll-only-departed (now free-scrolling) reader lands at the new live edge", async () => {
       const sendId = "s4b-delete-send";
       const ROW_COUNT = 30;
       const KEEP_COUNT = 10;
@@ -1808,16 +1937,22 @@ describe("ChatMessages scroll policy", () => {
       await waitForAnchorEngineSettle();
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
-      // Same programmatic park as the reachability pin above - lands well
+      // Same scroll-only departure as the ticket-19 pin above - lands well
       // past KEEP_COUNT (10), so the reader's current viewport (and the
       // anchored send itself, at index ROW_COUNT=30) both fall inside the
-      // to-be-deleted suffix.
+      // to-be-deleted suffix. Post-ticket-19, the capture-provenance
+      // classifier cancels anchoring ownership on this SAME event (mode
+      // transitions to `free-scrolling` immediately, not merely at delete
+      // time) - the delete below now exercises `classifySuffixRemoval`'s
+      // ordinary free-scrolling-viewport-touched branch, not the old
+      // anchoring-reserve teardown this pin originally targeted; the
+      // observable outcome (lands at the new live edge) is unchanged.
       const scrollNode = getScrollNode();
       act(() => {
         scrollNode.scrollTop = 900;
         fireEvent.scroll(scrollNode);
       });
-      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
 
       // Real suffix delete: a user message above the parked viewport is
       // removed, taking everything after it (including the parked position
@@ -1892,6 +2027,768 @@ describe("ChatMessages scroll policy", () => {
       // cleared, `anchoredEndSpace` undefined, no reserve), it lands at the
       // true natural end, 2290 - a 474px gap matching the reserve exactly.
       expect(getScrollNode().scrollTop).toBe(2290);
+    });
+  });
+
+  // Ticket 19 (decision #31 binding condition c): these two pins are a HARD
+  // dependency-upgrade gate against the INSTALLED @legendapp/list@3.2.0, not
+  // ordinary behavior coverage. `chatAnchorScrollCaptureShouldCancel`'s
+  // entire state-equality/clamp classification (chat-messages-scroll-
+  // helpers.ts) depends on the library's OWN listener-ordering and pre-write
+  // contract - these pins assert THAT contract directly, against a REAL
+  // mounted LegendList instance, independent of the classifier's own logic.
+  // A future @legendapp/list bump can break this contract in two OPPOSITE
+  // directions - triage a red pin here by which one actually broke, they
+  // are not interchangeable:
+  //
+  // (a) Losing the imperative/MVCP PRE-WRITE (the non-animated-scrollToOffset
+  //     pin, or the MVCP pin below, goes red): a legitimate library-owned
+  //     correction no longer advances `state.scroll` before its DOM event
+  //     reaches ancestor capture, so it now mismatches the state-equality
+  //     check. Effect: FALSE CANCELS - the classifier treats a real
+  //     library-owned scroll as a departure. Reader-safe (the fail-safe bias
+  //     is unsure -> cancel), degrades send UX with an extra unwanted
+  //     free-scrolling transition. This is the safety net working exactly as
+  //     designed - do NOT "fix" this direction by loosening the classifier;
+  //     re-audit and restore the dependency contract instead.
+  //
+  // (b) Losing CAPTURE-BEFORE-CONSUMPTION ordering (the direct-DOM-write pin
+  //     goes red): if the library's own consuming listener ever runs before
+  //     this ancestor's capture-phase listener, then by the time capture
+  //     observes an event, LegendList has ALREADY consumed and often
+  //     resynchronized `state.scroll` to match DOM - including for a genuine
+  //     native thumb-drag departure. Effect: FALSE SILENCE - a real reader
+  //     departure now looks state-equal and slips past the classifier
+  //     un-cancelled, recreating the exact intent violation ticket 19 exists
+  //     to fix. This is the dangerous direction: it cannot be caught by
+  //     "make the classifier stricter," because the classifier never even
+  //     sees a mismatch to act on - only re-establishing capture-phase
+  //     ordering (or an entirely different detection mechanism) fixes it.
+  //
+  // (See the module doc comment on chat-messages-scroll-helpers.ts for the
+  // full writer-site table these pins are drawn from.)
+  describe("ticket 19: installed @legendapp/list 3.2.0 contract pins (hard upgrade gate)", () => {
+    it("a direct DOM scrollTop move is STALE at ancestor capture - react.mjs:5663-5671 installs the consuming listener on the scroll node with no capture flag", async () => {
+      const sendId = "t19-contract-direct-send";
+      const messages = makeCompletedTranscript(30);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t19-contract-direct-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const wrapper = screen.getByTestId("chat-transcript-container");
+      const scrollNode = getScrollNode();
+      const observedListStateAtCapture: Array<number> = [];
+      const observer = (event: Event): void => {
+        if (event.target !== scrollNode) return;
+        observedListStateAtCapture.push(list.getState().scroll);
+      };
+      wrapper.addEventListener("scroll", observer, { capture: true });
+      try {
+        const domScrollTopBeforeWrite = scrollNode.scrollTop;
+        act(() => {
+          scrollNode.scrollTop = domScrollTopBeforeWrite + 300;
+          fireEvent.scroll(scrollNode);
+        });
+        expect(observedListStateAtCapture).toHaveLength(1);
+        expect(observedListStateAtCapture[0]).toBe(domScrollTopBeforeWrite);
+        expect(observedListStateAtCapture[0]).not.toBe(
+          domScrollTopBeforeWrite + 300,
+        );
+      } finally {
+        wrapper.removeEventListener("scroll", observer, { capture: true });
+      }
+    });
+
+    it("a non-animated scrollToOffset call is ALREADY SYNCHRONIZED at ancestor capture - react.mjs:2104-2110 calls updateScroll before doScrollTo", async () => {
+      const sendId = "t19-contract-scrollto-send";
+      const messages = makeCompletedTranscript(30);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t19-contract-scrollto-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const wrapper = screen.getByTestId("chat-transcript-container");
+      const scrollNode = getScrollNode();
+      const observedListStateAtCapture: Array<number> = [];
+      const observer = (event: Event): void => {
+        if (event.target !== scrollNode) return;
+        observedListStateAtCapture.push(list.getState().scroll);
+      };
+      wrapper.addEventListener("scroll", observer, { capture: true });
+      try {
+        await act(async () => {
+          void list.scrollToOffset({
+            offset: scrollNode.scrollTop + 40,
+            animated: false,
+          });
+          fireEvent.scroll(scrollNode);
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        });
+        expect(observedListStateAtCapture).toHaveLength(1);
+        // Whatever position the (possibly clamped) call actually landed at,
+        // the library's internal state must already equal it BEFORE this
+        // ancestor capture listener ever runs - the load-bearing property
+        // `chatAnchorScrollCaptureShouldCancel`'s state-equality check
+        // depends on, proven here independent of that classifier's own code.
+        expect(observedListStateAtCapture[0]).toBe(scrollNode.scrollTop);
+      } finally {
+        wrapper.removeEventListener("scroll", observer, { capture: true });
+      }
+    });
+
+    // Decision #31 binding condition (c), third writer site: MVCP
+    // `requestAdjust` (react.mjs:1611-1629) advances `state.scroll` before
+    // the deferred web `ScrollAdjust` path issues DOM `scrollBy`
+    // (:5849-5899,6456-6467). A future @legendapp/list bump that stops
+    // pre-writing for data adjustments would break the state-equality
+    // silence path for every above-anchor weave during anchoring - this
+    // pin is the hard upgrade gate for that writer, same observation
+    // shape as the two pins above.
+    it("an MVCP data adjustment (row insertion above the anchor) is ALREADY SYNCHRONIZED at ancestor capture - react.mjs:1611-1629 requestAdjust pre-writes state.scroll before scrollBy", async () => {
+      const sendId = "t19-contract-mvcp-send";
+      const earlierUserId = "message-2";
+      const initial = makeCompletedTranscript(12);
+      const { rerenderMessages } = renderChatMessages({
+        messages: initial,
+        scrollStateKey: "t19-contract-mvcp-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(initial, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const scrollBeforeWeave = getScrollNode().scrollTop;
+
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      const wrapper = screen.getByTestId("chat-transcript-container");
+      const scrollNode = getScrollNode();
+      const observedAtCapture: Array<{
+        listScroll: number;
+        domScroll: number;
+      }> = [];
+      const observer = (event: Event): void => {
+        if (event.target !== scrollNode) return;
+        observedAtCapture.push({
+          listScroll: list.getState().scroll,
+          domScroll: scrollNode.scrollTop,
+        });
+      };
+      wrapper.addEventListener("scroll", observer, { capture: true });
+
+      // jsdom does not fire `scroll` on Element.scrollBy (LegendList's web
+      // MVCP path: react.mjs:5840). Polyfill on THIS node only so the
+      // capture-phase observation actually runs for the library's own
+      // scrollBy - without inventing a second production listener. The
+      // load-bearing property is still "list state already matches DOM at
+      // ancestor capture", not the polyfill itself.
+      const originalScrollBy = scrollNode.scrollBy.bind(scrollNode);
+      scrollNode.scrollBy = ((
+        options?: ScrollToOptions | number,
+        yArg?: number,
+      ): void => {
+        if (typeof options === "number") {
+          scrollNode.scrollLeft += options;
+          scrollNode.scrollTop += typeof yArg === "number" ? yArg : 0;
+        } else if (options && typeof options === "object") {
+          if (typeof options.left === "number") {
+            scrollNode.scrollLeft += options.left;
+          }
+          if (typeof options.top === "number") {
+            scrollNode.scrollTop += options.top;
+          }
+        }
+        fireEvent.scroll(scrollNode);
+      }) as typeof scrollNode.scrollBy;
+
+      try {
+        // Same natural MVCP trigger as ticket 13 pin (e): a non-retarget
+        // setup-card weave ABOVE an earlier (non-anchored) row - classify
+        // as `none`, so the only scroll motion is LegendList's own data
+        // MVCP adjustment keeping the anchored send pixel-stable
+        // (+1 row height). Not a messages-array tail append (which would
+        // not shift content above the viewport).
+        const earlierIndex = afterSend.findIndex(
+          (message) => message.id === earlierUserId,
+        );
+        expect(earlierIndex).toBeGreaterThanOrEqual(0);
+        const foreignCard = setupCardRow(
+          `setup-card:owner-1:0:${earlierUserId}`,
+          100,
+          earlierUserId,
+        );
+        const afterForeignCard: ReadonlyArray<ChatMessageModel> = [
+          ...afterSend.slice(0, earlierIndex),
+          foreignCard,
+          ...afterSend.slice(earlierIndex),
+        ];
+        rerenderMessages(afterForeignCard);
+        await waitForAnchorEngineSettle();
+
+        // Behavioral ownership: mode + generation still owned across the
+        // weave (classifier stayed silent for every library-owned event).
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(getScrollNode().scrollTop).toBe(
+          scrollBeforeWeave + TICKET_13_ROW_HEIGHT_PX,
+        );
+
+        // Hard-gate observation: at least one capture-phase event during
+        // the MVCP path must already show list state equal to DOM (the
+        // pre-write). If the library never issued scrollBy for this
+        // weave in this harness, fall through is impossible - the
+        // behavioral +1-row assert above would have failed first.
+        const synchronizedCaptures = observedAtCapture.filter(
+          (sample) =>
+            Math.abs(sample.listScroll - sample.domScroll) <= 1,
+        );
+        expect(synchronizedCaptures.length).toBeGreaterThan(0);
+        for (const sample of synchronizedCaptures) {
+          expect(sample.listScroll).toBe(sample.domScroll);
+        }
+      } finally {
+        scrollNode.scrollBy = originalScrollBy;
+        wrapper.removeEventListener("scroll", observer, { capture: true });
+      }
+    });
+  });
+
+  // Ticket 19 (decision #31): remaining non-gesture sources from the
+  // design's audit table. Each pin settles an `anchoring-new-turn`
+  // session, drives ONE library/app/browser-owned scroll source, and
+  // asserts the capture-provenance classifier stays SILENT (mode remains
+  // `anchoring-new-turn`, session still owned). The core defect pin and
+  // pure truth-table live elsewhere; these are the silence side of the
+  // audit. Do NOT add production machinery to make a pin possible - if a
+  // source cannot be expressed in jsdom, fall back to a behavioral mode/
+  // generation-owned assertion and document the proof shape.
+  describe("ticket 19: non-gesture sources stay silent during settled anchoring", () => {
+    it("(browser-clamp integration) a content-height shrink that clamps scrollTop to the new max does not cancel anchoring", async () => {
+      // Pure clamp-predicate unit tests already cover the math
+      // (chat-messages-scroll-helpers.test.ts). This pin is the DOM-level
+      // integration: settle anchoring, shrink the scroller's reported
+      // scrollHeight so the new max falls BELOW the parked scrollTop
+      // (previous.scrollTop > currentMax + 1 AND currentMax < previousMax),
+      // then write scrollTop to the new max exactly as a real browser clamp
+      // would - no library scroll call, no wheel/touch/pointer. The
+      // classifier must recognize the exact clamp signature and stay silent
+      // (design audit table: "Browser clamping after content/reserve/
+      // viewport shrink"). A bare write that is NOT this signature is
+      // exactly what the S4B defect pin proves DOES cancel.
+      const sendId = "t19-clamp-integration-send";
+      const messages = makeCompletedTranscript(30);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t19-clamp-integration-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      const scrollNode = getScrollNode();
+      const parkedTop = scrollNode.scrollTop;
+      expect(parkedTop).toBeGreaterThan(100);
+      // Seed the capture listener's previousSnapshot at the parked
+      // position against the (still-large) default max - one library-owned
+      // no-op re-write so the next event has a real "previous" to compare.
+      await fireLibraryOwnedScrollTo(parkedTop);
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // Shrink content so the new max is well below the parked top. New
+      // max = scrollHeight - clientHeight. Pick scrollHeight so
+      // max = parkedTop - 120 (prior-over-max evidence with room for the
+      // 1px exclusivity boundary).
+      const clientHeight = scrollNode.clientHeight;
+      const newMax = parkedTop - 120;
+      expect(newMax).toBeGreaterThan(0);
+      setLegendListScrollContainerScrollHeightOverride(newMax + clientHeight);
+      try {
+        act(() => {
+          // Bare DOM write landing within 1px of the new max - the exact
+          // browser-clamp shape (list state still at parkedTop → mismatch,
+          // so state-equality does NOT silence; the clamp predicate must).
+          scrollNode.scrollTop = newMax;
+          fireEvent.scroll(scrollNode);
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(getScrollNode().scrollTop).toBe(newMax);
+      } finally {
+        setLegendListScrollContainerScrollHeightOverride(null);
+      }
+    });
+
+    it("(fresh-open / settle re-issue) undershoot-then-reissue during anchor settle never leaves anchoring-new-turn", async () => {
+      // Ticket 10/18 F2-style: force the first large programmatic jumps
+      // short of target so the settle loop re-issues. Ticket 19's capture
+      // classifier must treat those issue/reissue DOM moves as
+      // library-owned (guard 2: active-motion ref armed across the
+      // scrollToIndex call; and/or state pre-write on non-animated path),
+      // never as a scroll-only departure.
+      //
+      // Load-bearing shape: wrap list.scrollToIndex/scrollToOffset so each
+      // real LegendList call also fires a capture-phase `scroll` event
+      // (jsdom never auto-dispatches). Without that wrap the classifier is
+      // dead code and this pin stays green under a maximally-broken
+      // "cancel every owned scroll" mutation. F2 undershoot stays in place
+      // so issue/reissue actually cycles; the fire happens inside the spy
+      // while activeAnchorImperativeMotionGenerationRef is still armed.
+      const history = makeCompletedTranscript(40);
+      const sendId = "t19-reissue-silence-send";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t19-reissue-silence-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      const modesAtCapture: Array<string | undefined> = [];
+      const wrapper = screen.getByTestId("chat-transcript-container");
+      const captureObserver = (event: Event): void => {
+        if (event.target !== scrollNode) return;
+        modesAtCapture.push(scrollNode.dataset.scrollMode);
+      };
+      wrapper.addEventListener("scroll", captureObserver, { capture: true });
+
+      // Local F2-style undershoot (same shape as ticket 18's helper).
+      let remainingCorrupt = 2;
+      let stored = scrollNode.scrollTop;
+      const undershootPx = 500;
+      Object.defineProperty(scrollNode, "scrollTop", {
+        configurable: true,
+        get() {
+          return stored;
+        },
+        set(value: number) {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            stored = 0;
+            return;
+          }
+          if (remainingCorrupt > 0 && Math.abs(numeric - stored) > 80) {
+            remainingCorrupt -= 1;
+            stored =
+              numeric > stored
+                ? Math.max(0, numeric - undershootPx)
+                : numeric + undershootPx;
+            return;
+          }
+          stored = numeric;
+        },
+      });
+
+      const dispatch = installLibraryScrollCaptureDispatch();
+      try {
+        const afterSend = appendOptimisticUserSend(history, sendId, 700_000);
+        rerenderMessages(afterSend);
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(
+              resolve,
+              (CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS + 100) * 5,
+            );
+          });
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        // Classifier actually ran: at least one capture-phase sample from
+        // the scrollToIndex wrap, all while still anchoring.
+        expect(dispatch.scrollToIndexCallCount()).toBeGreaterThan(0);
+        expect(modesAtCapture.length).toBeGreaterThan(0);
+        for (const mode of modesAtCapture) {
+          expect(mode).toBe("anchoring-new-turn");
+        }
+      } finally {
+        dispatch.dispose();
+        wrapper.removeEventListener("scroll", captureObserver, {
+          capture: true,
+        });
+        Reflect.deleteProperty(scrollNode, "scrollTop");
+        scrollNode.scrollTop = stored;
+      }
+    });
+
+    it("(fresh-open instant positioning) mount-time freshOpen seed never cancels itself via the capture classifier", async () => {
+      // Decision #15: fresh-open with no saved scroll state seeds
+      // anchoring-new-turn and positions non-animated at mount. That
+      // initial positioning (and any settle re-issue it triggers) must not
+      // be misclassified as a scroll-only departure.
+      //
+      // After settle, explicitly fire a capture-phase scroll at the
+      // post-position DOM (library state already synchronized) so the
+      // classifier runs. A "cancel every owned scroll" mutation must
+      // redden this pin; without the fire it stayed green vacuously.
+      const messages = makeCompletedTranscript(24);
+      const scrollStateKey = `t19-fresh-open-silence-${Math.random().toString(36).slice(2)}`;
+      expect(
+        hasSavedChatTabState(makeDefaultTestIdentity(scrollStateKey)),
+      ).toBe(false);
+
+      renderChatMessages({
+        messages,
+        scrollStateKey,
+        freshOpen: true,
+      });
+      // Mode seed is sync; capture listener is mounted via layout effect.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await settleLegendList();
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitFor(() => {
+        expect(screen.getByTestId("mock-message-message-22")).toBeTruthy();
+      });
+
+      // Deliver the capture event the harness never auto-fires after the
+      // bootstrap scroll path. List state matches DOM → healthy silence;
+      // a broken always-cancel classifier trips free-scrolling here.
+      await fireCaptureScrollAfterLibraryWrite();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+    });
+
+    it("(hydration-retry navigation) navigateToMessage cancels anchoring before its own scroll - capture does not misclassify the landing", async () => {
+      // Design audit: "Hydration-retry navigation" - navigateToMessage
+      // cancels ownership BEFORE issuing its own scroll (chat-messages.tsx),
+      // so the capture classifier sees an unowned session for that landing.
+      //
+      // Load-bearing proof is cancel-first ordering observed AT CAPTURE:
+      // wrap scrollToOffset/scrollToIndex so the landing write fires a
+      // real capture-phase scroll, and assert mode is already
+      // free-scrolling when that event is observed (not still
+      // anchoring-new-turn). Ending free-scrolling alone is not enough -
+      // without a capture fire the classifier never runs.
+      //
+      // Note on mutation shape: a "cancel every owned scroll" mutation
+      // does NOT redden this pin by design - the landing event is already
+      // unowned (`isAnchoringSessionOwned=false`). The capture-phase mode
+      // sample is the load-bearing assertion for cancel-first ordering.
+      const messages = makeCompletedTranscript(20);
+      const sendId = "t19-hydration-nav-send";
+      const targetId = messages[4]?.id;
+      expect(targetId).toBeTruthy();
+      const { rerenderMessages, rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "t19-hydration-nav-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      const scrollNode = getScrollNode();
+      const modesAtCapture: Array<string | undefined> = [];
+      const wrapper = screen.getByTestId("chat-transcript-container");
+      const captureObserver = (event: Event): void => {
+        if (event.target !== scrollNode) return;
+        modesAtCapture.push(scrollNode.dataset.scrollMode);
+      };
+      wrapper.addEventListener("scroll", captureObserver, { capture: true });
+      const dispatch = installLibraryScrollCaptureDispatch();
+      try {
+        rerenderWith({
+          scrollRequest: {
+            messageId: targetId!,
+            blockId: null,
+            requestId: 19_001,
+          },
+        });
+        await waitForNavigationSettle();
+        // Also flush one explicit capture in case the nav path used a
+        // route that did not go through the wrapped list methods.
+        await fireCaptureScrollAfterLibraryWrite();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        expect(getScrollNode().dataset.scrollMode).not.toBe(
+          "anchoring-new-turn",
+        );
+        // Capture-phase evidence: the classifier ran (at least one scroll
+        // event reached the wrapper). dataset.scrollMode can lag one React
+        // paint behind the ref cancel (cancel sets timelineScrollModeRef
+        // synchronously but setScrollMode is async), so samples taken
+        // mid-navigateToMessage may still read anchoring-new-turn on the
+        // DOM attribute even though the classifier already saw unowned via
+        // the ref. After settle the attribute is free-scrolling; the final
+        // fire above must stay free-scrolling (classifier silent for
+        // unowned). That post-settle capture is the cancel-first proof
+        // that does not race React paint.
+        expect(modesAtCapture.length).toBeGreaterThan(0);
+        expect(modesAtCapture[modesAtCapture.length - 1]).toBe(
+          "free-scrolling",
+        );
+      } finally {
+        dispatch.dispose();
+        wrapper.removeEventListener("scroll", captureObserver, {
+          capture: true,
+        });
+      }
+    });
+
+    it("(disclosure preservation) a disclosure helper correction during settled anchoring does not cancel the session", async () => {
+      // Design audit: "Disclosure preservation correction" - non-animated
+      // scrollToOffset advances list state before DOM, so the classifier's
+      // state-equality path silences it. After the helper writes, explicitly
+      // fire capture-phase scroll (jsdom never does) so a broken always-
+      // cancel classifier would free-scroll and redden this pin.
+      const history = makeCompletedTranscript(10);
+      const sendId = "t19-disclosure-silence-send";
+      const { rerenderMessages } = renderChatMessages({
+        messages: history,
+        scrollStateKey: "t19-disclosure-silence-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(history, sendId, 830_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current).not.toBeNull();
+      });
+      const list = legendListRefHolder.current;
+      if (!list) throw new Error("expected LegendListRef to be attached");
+      // Auto-fire capture scroll on every library scroll write the helper
+      // or geometry-repair path issues during mutate.
+      const dispatch = installLibraryScrollCaptureDispatch();
+
+      const DISCLOSURE_DELTA_PX = 180;
+      const anchorElement = document.createElement("div");
+      const rectSpy = vi.spyOn(anchorElement, "getBoundingClientRect");
+      rectSpy.mockReturnValueOnce({
+        x: 0,
+        y: 100,
+        width: 100,
+        height: 20,
+        top: 100,
+        left: 0,
+        right: 100,
+        bottom: 120,
+        toJSON: () => ({}),
+      });
+      rectSpy.mockReturnValueOnce({
+        x: 0,
+        y: 100 + DISCLOSURE_DELTA_PX,
+        width: 100,
+        height: 20,
+        top: 100 + DISCLOSURE_DELTA_PX,
+        left: 0,
+        right: 100,
+        bottom: 120 + DISCLOSURE_DELTA_PX,
+        toJSON: () => ({}),
+      });
+
+      try {
+        act(() => {
+          preserveChatScrollAcrossDisclosureChange({
+            list,
+            anchorElement,
+            mutate: () => {
+              legendListRefHolder.current?.setItemSize("message-2", {
+                height: 90 + DISCLOSURE_DELTA_PX,
+                width: VIEWPORT_WIDTH_PX,
+              });
+            },
+            correctionOwnedByMvcp: false,
+          });
+        });
+        await waitForRevealPassTick();
+        await waitForRevealPassTick();
+        // Final capture flush: covers any write that bypassed the wrap and
+        // ensures at least one classifier invocation while still owned.
+        await fireCaptureScrollAfterLibraryWrite();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(
+          dispatch.scrollToOffsetCallCount() +
+            dispatch.scrollToIndexCallCount(),
+        ).toBeGreaterThan(0);
+      } finally {
+        dispatch.dispose();
+        rectSpy.mockRestore();
+      }
+    });
+
+    it("(setup-card weave) mid-anchoring setup-card retarget does not cancel via the capture classifier", async () => {
+      // Design audit: "Setup-card weave/anchor retarget" is the composition
+      // of MVCP data adjustment + a new anchor issue under the current
+      // settle generation. Wrap list scroll APIs (and polyfill scrollBy for
+      // MVCP) so every library-owned DOM write delivers a capture-phase
+      // scroll - without that the classifier is never invoked and a
+      // broken always-cancel mutation would leave this pin green.
+      const initial = makeCompletedTranscript(6);
+      const sendId = "t19-setup-card-weave-send";
+      const { rerenderMessages } = renderChatMessages({
+        messages: initial,
+        scrollStateKey: "t19-setup-card-weave-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(initial, sendId, 500_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const scrollBeforeCard = getScrollNode().scrollTop;
+
+      const scrollNode = getScrollNode();
+      const originalScrollBy = scrollNode.scrollBy.bind(scrollNode);
+      scrollNode.scrollBy = ((
+        options?: ScrollToOptions | number,
+        yArg?: number,
+      ): void => {
+        if (typeof options === "number") {
+          scrollNode.scrollLeft += options;
+          scrollNode.scrollTop += typeof yArg === "number" ? yArg : 0;
+        } else if (options && typeof options === "object") {
+          if (typeof options.left === "number") {
+            scrollNode.scrollLeft += options.left;
+          }
+          if (typeof options.top === "number") {
+            scrollNode.scrollTop += options.top;
+          }
+        }
+        fireEvent.scroll(scrollNode);
+      }) as typeof scrollNode.scrollBy;
+
+      const dispatch = installLibraryScrollCaptureDispatch();
+      try {
+        const sendIndex = afterSend.findIndex(
+          (message) => message.id === sendId,
+        );
+        const card = setupCardRow(
+          `setup-card:owner-1:0:${sendId}`,
+          499_999,
+          sendId,
+        );
+        const afterCard: ReadonlyArray<ChatMessageModel> = [
+          ...afterSend.slice(0, sendIndex),
+          card,
+          ...afterSend.slice(sendIndex),
+        ];
+        rerenderMessages(afterCard);
+        await waitForAnchorEngineSettle();
+        // Explicit capture flush after settle so a retarget path that
+        // only repositioned via already-fired wraps still has a final
+        // owned event for the classifier to silence.
+        await fireCaptureScrollAfterLibraryWrite();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(screen.getByTestId(`mock-message-${card.id}`)).toBeTruthy();
+        // Uniform 90px rows: card takes the send's prior slot → same
+        // scrollTop after a correct retarget (ticket 13 pin d geometry).
+        expect(getScrollNode().scrollTop).toBe(scrollBeforeCard);
+      } finally {
+        dispatch.dispose();
+        scrollNode.scrollBy = originalScrollBy;
+      }
+    });
+
+    it("(endInset / lower-dock resize) composerOverlayHeight change while anchoring does not cancel the session", async () => {
+      // Design audit: "endInset / lower-dock resize" - LegendList may
+      // reprocess or requestAdjust on contentInsetEndAdjustment changes;
+      // a pure max shrink uses the clamp predicate. Either path must stay
+      // silent. After the prop change, fire a capture-phase scroll so the
+      // classifier actually runs (library state equals DOM → silence;
+      // broken always-cancel while owned → free-scrolling).
+      const sendId = "t19-endinset-silence-send";
+      const messages = makeCompletedTranscript(20);
+      const { rerenderMessages, rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "t19-endinset-silence-key",
+        localProvenanceMessageIds: new Set([sendId]),
+        composerOverlayHeight: 80,
+      });
+      await settleLegendList();
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const scrollBefore = getScrollNode().scrollTop;
+
+      const scrollNode = getScrollNode();
+      const originalScrollBy = scrollNode.scrollBy.bind(scrollNode);
+      scrollNode.scrollBy = ((
+        options?: ScrollToOptions | number,
+        yArg?: number,
+      ): void => {
+        if (typeof options === "number") {
+          scrollNode.scrollLeft += options;
+          scrollNode.scrollTop += typeof yArg === "number" ? yArg : 0;
+        } else if (options && typeof options === "object") {
+          if (typeof options.left === "number") {
+            scrollNode.scrollLeft += options.left;
+          }
+          if (typeof options.top === "number") {
+            scrollNode.scrollTop += options.top;
+          }
+        }
+        fireEvent.scroll(scrollNode);
+      }) as typeof scrollNode.scrollBy;
+      const dispatch = installLibraryScrollCaptureDispatch();
+      try {
+        rerenderWith({ composerOverlayHeight: 240 });
+        await settleLegendList();
+        await waitForRevealPassTick();
+        // Ensure the classifier sees at least one event while still owned
+        // even if inset change produced no library write in this harness.
+        await fireCaptureScrollAfterLibraryWrite();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+        expect(getScrollNode().dataset.scrollMode).not.toBe("free-scrolling");
+        expect(
+          Math.abs(getScrollNode().scrollTop - scrollBefore),
+        ).toBeLessThan(500);
+      } finally {
+        dispatch.dispose();
+        scrollNode.scrollBy = originalScrollBy;
+      }
     });
   });
 
@@ -3929,7 +4826,15 @@ describe("ChatMessages scroll policy", () => {
       const scrollNode = getScrollNode();
       const departedScrollTop = scrollNode.scrollTop - 180;
       expect(departedScrollTop).toBeGreaterThan(0);
-      await fireScrollTopAndFlush(departedScrollTop);
+      // Ticket 19: `anchorMoverShouldYieldToReader`'s yield check is a pure
+      // position comparison - it does not care HOW `scrollTop` ended up
+      // below the expected anchor position, only that it did. Using the
+      // real library API to set up that precondition (instead of a bare
+      // `scrollTop` write, which the capture-provenance classifier now
+      // correctly cancels as an unexplained departure) keeps this test
+      // inside `anchoring-new-turn` so it still reaches the SAME reveal-
+      // pass yield branch it always exercised.
+      await fireLibraryOwnedScrollTo(departedScrollTop);
       expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
 
       const anchorIndex = afterSend.length - 1;
@@ -4621,14 +5526,6 @@ describe("ChatMessages scroll policy", () => {
       const sendId = "t5-mid-anchor-send";
       const scrollStateKey = `t5-mid-anchor-${Math.random().toString(36).slice(2)}`;
       const instanceId = `t5-mid-anchor-inst-${Math.random().toString(36).slice(2)}`;
-      // Matches legend-list-test-environment's fixed SPACER_HEIGHT_PX for any
-      // aria-hidden header/footer shell (the harness measures every spacer
-      // the same regardless of its real Tailwind height class, so this is
-      // independent of the production chat-timeline.tsx sizes - ticket 16/M4
-      // changed those to h-3/h-4 sm:h-4/h-12, not 40px).
-      const HARNESS_HEADER_PX = 40;
-      const HARNESS_FOOTER_PX = 40;
-      const HARNESS_ITEM_PX = 90;
       const composerOverlayHeight = 80;
 
       tileLiveness.live = true;
@@ -4654,46 +5551,42 @@ describe("ChatMessages scroll policy", () => {
       });
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
-      // Content-relative last-row bottom: N items of fixed harness height
-      // (positions start at 0; last bottom = N * itemHeight).
-      const lastBottom = afterSend.length * HARNESS_ITEM_PX;
-      const naturalMax = getChatNaturalMaxScrollWithoutAnchorReserve({
-        headerSize: HARNESS_HEADER_PX,
-        footerSize: HARNESS_FOOTER_PX,
-        lastBottom,
-        endInset: composerOverlayHeight,
-        viewportLength: VIEWPORT_HEIGHT_PX,
-      });
-      // Old (wrong) bound for mutation contrast - under-clamps by
-      // header+footer-anchorOffset (= 64 in this harness).
-      const oldRevealBound = Math.max(
-        0,
-        lastBottom -
-          (VIEWPORT_HEIGHT_PX -
-            composerOverlayHeight -
-            CHAT_LIST_ANCHOR_OFFSET),
-      );
-      expect(naturalMax - oldRevealBound).toBe(
-        HARNESS_HEADER_PX + HARNESS_FOOTER_PX - CHAT_LIST_ANCHOR_OFFSET,
-      );
-      expect(naturalMax).toBeGreaterThan(oldRevealBound);
-
-      // Force a reserve-inflated park ABOVE both bounds while still in
-      // anchoring-new-turn (bare scrollTop write is not a cancel gesture).
-      // F3 must clamp to naturalMax on save; the old reveal bound would clamp
-      // 64px lower - restored geometry distinguishes them.
-      await fireScrollTopAndFlush(naturalMax + 200);
-      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
-      expect(getScrollNode().scrollTop).toBeGreaterThan(naturalMax);
-
-      // Unmount while still mid-anchor - do NOT wait for settle.
+      // Ticket 19 finding (investigated, confirmed unrelated to the capture
+      // classifier): in THIS fixture the anchor engine's own `scrollToIndex`
+      // is never issued at all - `list.scrollToIndex` stays at zero calls
+      // for several seconds past `waitForAnchorEngineSettle()`, and
+      // `list.getState().scroll` never leaves 0, even though the target row
+      // is fully measured (`positionAtIndex(16)` resolves). That means
+      // `onAnchorReady` (and with it, LegendList's own `anchoredEndSpace`
+      // reserve) never fires for this specific fixture - a pre-existing gap
+      // unrelated to this ticket's classifier (there is no departure event
+      // of any kind between the send and this point for the classifier to
+      // even act on). The original version of this test never surfaced that
+      // gap because it forced the DOM `scrollTop` directly - a technique
+      // ticket 19 now correctly reads as an unexplained departure, and
+      // through LegendList's own `scrollToOffset` API the reserve-dependent
+      // clamp caps any requested offset at `naturalMax` regardless (since
+      // the reserve is stuck at zero here), making the ABOVE-natural-max
+      // park this test used to construct unreachable through any real
+      // mechanism in this fixture. Flagged to the ticket-19 orchestrator
+      // rather than papered over; F3's underlying clamp FORMULA keeps its
+      // own dedicated coverage in chat-scroll-anchoring.test.ts
+      // (`describe("getChatNaturalMaxScrollWithoutAnchorReserve")`) - only
+      // THIS specific "unmount while genuinely parked above naturalMax"
+      // integration shape is untestable here until that separate gap is
+      // fixed.
+      //
+      // What remains fully testable, and is ticket 5's actual core claim:
+      // an unmount that catches a session GENUINELY still in
+      // `anchoring-new-turn` (no departure, no cheat) must still collapse to
+      // `free-scrolling` on save - `anchoring-new-turn` never round-trips
+      // through the cache, regardless of where `scrollTop` happens to sit.
       first.unmount();
 
       const saved = restoreChatTabState(
         makeDefaultTestIdentity(instanceId),
         afterSend,
       );
-      // anchoring-new-turn never round-trips through the cache.
       expect(saved.mode).toBe("free-scrolling");
       expect(saved.mode).not.toBe("following-end");
       // Active minimap/reading-line row (not necessarily the anchored send).
@@ -4711,19 +5604,6 @@ describe("ChatMessages scroll policy", () => {
 
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(getScrollNode().dataset.scrollMode).not.toBe("anchoring-new-turn");
-      // Ticket 11 fix #3: the restore lands exactly at the true content end
-      // (naturalMax, asserted below) - decision #16's "out of view" semantic
-      // correctly keeps the pill HIDDEN here even though mode is
-      // free-scrolling, not following-end (the no-follow contract -
-      // decision #14/#21 - is about MODE, not pill visibility).
-      expect(isJumpPillVisible()).toBe(false);
-
-      // F3 geometry: restore lands on the true no-reserve max, not the
-      // under-clamped reveal target (oldRevealBound = naturalMax - 64 here).
-      const restoredScrollTop = getScrollNode().scrollTop;
-      expect(restoredScrollTop).toBe(naturalMax);
-      expect(restoredScrollTop).not.toBe(oldRevealBound);
-      expect(restoredScrollTop).toBeGreaterThan(oldRevealBound);
 
       second.unmount();
     });
@@ -5295,10 +6175,20 @@ describe("ChatMessages scroll policy", () => {
       // Find the minimal content-end scroll that flips to following-end via
       // the Ticket 11 reconciliation (scrollDeltaToRevealEnd <= 1), walking
       // from the parked anchor rather than the shim's fixed max scroll.
+      //
+      // Ticket 19: this probe walk must stay OWNED (still `anchoring-new-
+      // turn`) at every intermediate step so the boundary it finds is the
+      // ONE `onIsAtEndChange`'s strict-epsilon gate itself produces, not an
+      // earlier capture-classifier cancellation. `fireScrollOnlyTo` (a bare
+      // `scrollTop` write) is now correctly read as an unexplained reader
+      // departure and cancels on the very first divergent step - the same
+      // false-input class this ticket's classifier exists to police, which
+      // is exactly why probing the boundary now needs the real library API
+      // (pre-writes internal state, so the classifier stays silent) instead.
       const parkedAtAnchor = getScrollNode().scrollTop;
       let contentEndScroll: number | null = null;
       for (let top = parkedAtAnchor; top <= parkedAtAnchor + 4_000; top += 40) {
-        await fireScrollOnlyTo(top);
+        await fireLibraryOwnedScrollTo(top);
         if (getScrollNode().dataset.scrollMode === "following-end") {
           contentEndScroll = getScrollNode().scrollTop;
           break;
@@ -5328,7 +6218,9 @@ describe("ChatMessages scroll policy", () => {
 
       // ~200px short of the true content end: scrollDeltaToRevealEnd >> 1,
       // so even if isNearEnd is true the strict gate must keep anchoring.
-      await fireScrollOnlyTo(Math.max(0, end - 200));
+      // Library-owned (see above) - a bare write would cancel before the
+      // strict-epsilon branch is even reached.
+      await fireLibraryOwnedScrollTo(Math.max(0, end - 200));
       await act(async () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 50);
@@ -5337,7 +6229,7 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
       // True live edge: strict epsilon satisfied → following-end.
-      await fireScrollOnlyTo(end);
+      await fireLibraryOwnedScrollTo(end);
       await waitFor(
         () => {
           expect(getScrollNode().dataset.scrollMode).toBe("following-end");
@@ -5360,10 +6252,15 @@ describe("ChatMessages scroll policy", () => {
       // Row positions are content-relative, while scrollTop includes the
       // measured 40px LegendList header. The old mixed-coordinate gate
       // declared following-end here, one whole header before the real edge.
-      await fireScrollOnlyTo(oldEarlyThreshold);
+      //
+      // Ticket 19: library-owned (not a bare `scrollTop` write) - see the
+      // matching comment on test (e) above. A bare write would cancel the
+      // session on this very first probe, before the header-pad gate this
+      // test targets is ever reached.
+      await fireLibraryOwnedScrollTo(oldEarlyThreshold);
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
-      await fireScrollOnlyTo(oldEarlyThreshold + LEGEND_LIST_HEADER_PX);
+      await fireLibraryOwnedScrollTo(oldEarlyThreshold + LEGEND_LIST_HEADER_PX);
       await waitFor(
         () => {
           expect(getScrollNode().dataset.scrollMode).toBe("following-end");
