@@ -66,6 +66,12 @@ export function AppearanceSettingsPanel() {
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
   );
+  const chatTurnMinimapSide = useSettingsStore(
+    (state) => state.chatTurnMinimapSide,
+  );
+  const setChatTurnMinimapSide = useSettingsStore(
+    (state) => state.setChatTurnMinimapSide,
+  );
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
   const codeFontSize = useSettingsStore((state) => state.codeFontSize);
@@ -177,6 +183,34 @@ export function AppearanceSettingsPanel() {
                 )}
                 aria-label="Use pointer cursors"
               />
+            }
+          />
+          <SettingsRow
+            label="Message minimap side"
+            description="Place the chat turn minimap on the left or right edge of the transcript."
+            control={
+              <Select
+                value={chatTurnMinimapSide}
+                onValueChange={(value) => {
+                  if (value !== "left" && value !== "right") return;
+                  trackAppearanceSetting("chatTurnMinimapSide");
+                  setChatTurnMinimapSide(value);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Message minimap side"
+                  className="w-[min(40vw,8rem)]"
+                >
+                  <span data-slot="select-value">
+                    {chatTurnMinimapSide === "right" ? "Right" : "Left"}
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="right">Right</SelectItem>
+                  <SelectItem value="left">Left</SelectItem>
+                </SelectContent>
+              </Select>
             }
           />
         </SettingsGroup>

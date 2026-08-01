@@ -33,6 +33,8 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
+import { shouldDeferNestedRouteApplication } from "@/lib/nested-focus-navigation-intent";
+import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -135,6 +137,9 @@ export function useEpicRouteSynchronization(
       return;
     }
     if (!hasRestoredCanvas) {
+      return;
+    }
+    if (shouldDeferNestedRouteApplication(epicId, tabId, nestedRouteTarget)) {
       return;
     }
 
@@ -506,6 +511,9 @@ function focusNestedRouteTarget(
       ? findActivePaneElement(target.paneId)
       : findSelectedTileElement(target.tileInstanceId);
   if (element === null) {
+    return;
+  }
+  if (!focusPrimaryEditor && shouldYieldPaneActivationRouteFocus(element)) {
     return;
   }
   if (focusPrimaryEditor) {
