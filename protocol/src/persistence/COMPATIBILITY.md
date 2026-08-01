@@ -297,6 +297,35 @@ base's.
 
 ### 6. Parts, graduation and lineage
 
+**The stored head is a DOCUMENT: tenant envelope + opaque payload.** What lands
+on the chat row is not the record's own bytes. It is
+`serializeChatHeadDocument(record)` — the record's canonical encoding wrapped
+with one derived top-level `parts` array of `{sha256, byteLength}`. That array
+is the entire obligation a tenant owes the sync layer, and the minimum a
+*deletion* mechanism can be built on: when a head is swapped, the parts the old
+head named and the new one does not are owed a deletion, and nothing but the
+head knows which those are. The server reads `parts` and interprets nothing
+else — cohorts, sections, ordering, versions and lineage are all in the bytes it
+stores and none of them is ever looked at.
+
+`parts` is a **reserved top-level key**: no modeled head field may be called it,
+and `decodeChatHeadDocument` strips it before parsing so it can never land in a
+residual bag, where a re-publication would re-emit a stale index. The envelope is
+always derived, never authored, and decode re-derives and compares rather than
+trusting — a mismatch is corrupt and fails closed, because an envelope short one
+entry describes a swap that strands an object and one entry long describes a swap
+that deletes a live one.
+
+**One digest identity.** `sha256` of the document bytes is simultaneously the CAS
+witness, the digest the row holds, and the next head's `parentHeadSha256`. Over
+the document, never the payload: the document is what is stored, and a chain
+anchored on anything else names bytes nobody has. `serializeChatHead` remains for
+payload-only uses and is *not* what anything is addressed by.
+
+A head may not name the same part twice, anywhere across its lists — the server
+refuses one, because "displaced = previous minus current" stops being
+well-defined exactly where that set drives deletion.
+
 **A part is named by content and nothing else.** The head carries
 `(sha256, byteLength)` per part — no key, no storage generation, no per-part seq.
 The key layout is derived from the hash under a `(task, tenant kind)` prefix and
@@ -369,6 +398,8 @@ coupled surface moves with it. Work the list top to bottom:
 | Change how a section graduates, or the head's part ordering | **breaking**, not additive: shipped readers would assemble a different chat from the same bytes. New major, and a publisher that keeps writing the old shape until old readers are out of support |
 | Cut a new record minor | add its literal + `chatSyncSchemaVersionSchema` in `chat-sync/version.ts`, and pass that constant to BOTH new `defineRecordContract` calls — the payload version is pinned per contract, and the registry binds the same literal rather than repeating it |
 | Name a new modeled field `residual` | don't — the name is reserved at every captured level (§3) |
+| Name a new modeled head field `parts` | don't — reserved for the tenant envelope (§6). The decoder strips that key, so a modeled field of that name would be silently unreadable |
+| Add a field to the `parts` envelope entry | this is the TENANT SEAM, not a record field: it changes what the sync server is handed. Coordinate with the server's `readDeclaredHeadParts` and keep chat-domain data out of it — the envelope is read by a layer that must interpret nothing |
 | Add a residual-capture LEVEL (a new `withResidualCapture` site) | add a `CAPTURED_RESIDUAL_LEVELS` entry in `chat-sync/captured-levels.ts` and its frozen key set in `chat-sync-captured-levels.test.ts`. The guard fails until you do |
 | Restructure an existing captured level | a level identifier may **never** be reused with changed semantics — consumers key behaviour off it. Give the changed level a NEW id so those exceptions break loudly instead of misfiring, and update the frozen id → declared-keys table |
 | Add a `chat.subscribe` field that also lands in a publication | the subscribe stream's own minor, on top of the record minor |

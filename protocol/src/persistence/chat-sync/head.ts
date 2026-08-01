@@ -19,6 +19,8 @@ import {
 import {
   canonicalJsonStringify,
   canonicalizeJsonObject,
+  isJsonObject,
+  readJsonProperty,
   type JsonObject,
 } from "@traycer/protocol/persistence/chat-sync/json";
 import {
@@ -209,6 +211,53 @@ export function refineChatHeadSections(
 }
 
 /**
+ * A head may not name the same part twice, anywhere across its lists.
+ *
+ * This is the payload half of the tenant envelope's one obligation. The sync
+ * server refuses a head that names a part more than once, because "displaced =
+ * previous minus current" stops being well-defined at exactly the moment that
+ * set drives deletion - so a head with a repeated address is a head that cannot
+ * be committed. Catching it at parse rather than at CAS means the publisher
+ * sees it where the mistake is, not at the far end of a swap.
+ *
+ * It is also the more honest reading of the record: two message cohorts with
+ * identical canonical bytes are the same object, so a chat naming one twice is
+ * claiming the same messages appear twice in its own transcript.
+ */
+export function refineChatHeadPartUniqueness(
+  head: {
+    readonly messageShards: readonly { readonly sha256: string }[];
+    readonly eventShards: readonly { readonly sha256: string }[];
+    readonly hostPrivateShard: { readonly sha256: string } | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const seen = new Set<string>();
+
+  const check = (sha256: string, path: (string | number)[]): void => {
+    if (seen.has(sha256)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `A head must not name the same part twice; the sync layer cannot tell what a swap displaces`,
+      });
+      return;
+    }
+    seen.add(sha256);
+  };
+
+  head.messageShards.forEach((part, index) =>
+    check(part.sha256, ["messageShards", index, "sha256"]),
+  );
+  head.eventShards.forEach((part, index) =>
+    check(part.sha256, ["eventShards", index, "sha256"]),
+  );
+  if (head.hostPrivateShard !== null) {
+    check(head.hostPrivateShard.sha256, ["hostPrivateShard", "sha256"]);
+  }
+}
+
+/**
  * Coherence of a `minReaderVersion` against the version it guards.
  *
  * A minimum on a different major is unopenable by construction: every reader
@@ -250,14 +299,16 @@ function refineChatHead(
     readonly schemaVersion: SchemaVersion;
     readonly minReaderVersion: SchemaVersion | null;
     readonly events: readonly unknown[] | null;
-    readonly eventShards: readonly unknown[];
     readonly hostPrivate: unknown;
-    readonly hostPrivateShard: unknown;
+    readonly hostPrivateShard: ChatHeadPart | null;
+    readonly messageShards: readonly ChatHeadPart[];
+    readonly eventShards: readonly ChatHeadPart[];
   },
   ctx: z.RefinementCtx,
 ): void {
   refineMinReaderVersion(head, ctx);
   refineChatHeadSections(head, ctx);
+  refineChatHeadPartUniqueness(head, ctx);
 }
 
 /**
@@ -365,9 +416,13 @@ function encodeSimpleLevel(level: { readonly residual: JsonObject }): JsonObject
 }
 
 /**
- * Canonical bytes for a head. Hashed by the publisher into the value the next
- * head carries as `parentHeadSha256`, and by a reader that wants to prove the
- * head it holds is the one an ancestor named.
+ * Canonical bytes for the head PAYLOAD alone, without the tenant envelope.
+ *
+ * Not what gets stored, and not what anything is addressed by - see
+ * `serializeChatHeadDocument`, which is the one public entry point for the
+ * bytes that travel. This stays exported for payload-only uses: proving two
+ * records encode identically, and tests that care about the record rather than
+ * the document.
  */
 export function serializeChatHead(record: ChatHeadRecord): string {
   return canonicalJsonStringify(encodeChatHead(record));
@@ -384,6 +439,245 @@ export function listChatHeadParts(head: {
     ...head.eventShards,
     ...(head.hostPrivateShard === null ? [] : [head.hostPrivateShard]),
   ];
+}
+
+// ---- The head DOCUMENT: tenant envelope + opaque payload ---------------- //
+
+/**
+ * The one key the sync layer reads inside a head document.
+ *
+ * **Reserved.** No modeled field of the `chat-head` record may ever be called
+ * this, and the decoder strips it before parsing so it can never land in a
+ * residual bag either - a re-published head must derive its envelope afresh,
+ * never re-emit a stale index it happened to carry through.
+ */
+export const CHAT_HEAD_PARTS_KEY = "parts";
+
+/**
+ * The stored head DOCUMENT: this record's canonical payload plus one derived
+ * envelope.
+ *
+ * ## The tenancy seam, stated at the byte level
+ *
+ * The sync server is tenant-generic. Enrolling in it costs exactly one
+ * obligation: a top-level `parts` array of `{sha256, byteLength}`. That is not
+ * a stylistic concession - it is the minimum a DELETION mechanism can be built
+ * on. When a head is swapped, the parts the old head named and the new one does
+ * not are owed a deletion, and nothing but the head knows which those are.
+ *
+ * So the document is two layers with a hard line between them:
+ *
+ * - the **envelope** (`parts`) is the server's, derived mechanically from the
+ *   payload and read by nothing else;
+ * - the **payload** is the chat's, and the server interprets none of it -
+ *   cohorts, sections, ordering, versions and lineage are all present in the
+ *   bytes it stores and none of them is ever looked at.
+ *
+ * The envelope is DERIVED, never authored. A head that stated its part list
+ * independently of its shard lists could disagree with itself, and the
+ * disagreement would surface as either a stranded object or a deleted live one.
+ * `decodeChatHeadDocument` re-derives and compares rather than trusting.
+ *
+ * ## One digest identity
+ *
+ * `sha256(serializeChatHeadDocument(record))` is simultaneously the CAS witness
+ * a publisher presents, the digest the chat row holds, and the value the NEXT
+ * head carries as its `parentHeadSha256`. Over the DOCUMENT, not the payload:
+ * the document is what is stored, and a chain anchored on anything else would
+ * name bytes nobody has.
+ *
+ * Consequently the document bytes are the identity, and nothing may
+ * re-serialize them on the way to a hash. Callers that hold a document hold the
+ * string.
+ *
+ * ## The part ceiling
+ *
+ * The server caps a head at 4,096 parts (a p99 chat measures ~165, so that is
+ * headroom, not a working limit). It is deliberately NOT re-asserted here: it
+ * is a server-side bound on work an authenticated caller can request, and a
+ * second copy of the constant would drift from the one that enforces it. A
+ * publisher that exceeds it is refused at CAS.
+ */
+export function encodeChatHeadDocument(record: ChatHeadRecord): JsonObject {
+  // Envelope wins on collision, which is what makes a stale `parts` carried in
+  // a hand-built record's residual bag unable to survive into the document.
+  return canonicalizeJsonObject(
+    mergeResidual(
+      { parts: listChatHeadParts(record).map((part) => ({ ...part })) },
+      encodeChatHead(record),
+    ),
+  );
+}
+
+/**
+ * Canonical bytes of the head document - the one public entry point for bytes
+ * that travel. Store these, hash these, chain on these.
+ */
+export function serializeChatHeadDocument(record: ChatHeadRecord): string {
+  return canonicalJsonStringify(encodeChatHeadDocument(record));
+}
+
+export type ChatHeadDocumentCorruptionReason =
+  /** The stored bytes are not JSON, or not a JSON object. */
+  | "malformed-json"
+  /** No readable top-level `parts` envelope. */
+  | "parts-envelope-missing"
+  /** The payload is not a head this build can parse. */
+  | "schema-rejected"
+  /** The envelope disagrees with the part list the payload derives. */
+  | "parts-envelope-mismatch";
+
+export type ChatHeadDocumentResult =
+  | { readonly status: "ok"; readonly record: ChatHeadRecord }
+  | {
+      readonly status: "corrupt";
+      readonly reason: ChatHeadDocumentCorruptionReason;
+      /** Renderer-safe: a fixed phrase per reason, carrying no coordinates. */
+      readonly message: string;
+      /** HOST-INTERNAL. Log it, never wire it. */
+      readonly diagnostic: string;
+    };
+
+export const CHAT_HEAD_DOCUMENT_CORRUPTION_MESSAGES: Readonly<
+  Record<ChatHeadDocumentCorruptionReason, string>
+> = {
+  "malformed-json": "This chat's stored record is damaged and could not be read.",
+  "parts-envelope-missing":
+    "This chat's stored record is incomplete and could not be opened.",
+  "schema-rejected":
+    "This chat's stored record is not in a form this version can read.",
+  "parts-envelope-mismatch":
+    "This chat's stored record disagrees with itself and could not be opened.",
+};
+
+function corruptDocument(
+  reason: ChatHeadDocumentCorruptionReason,
+  diagnostic: string,
+): ChatHeadDocumentResult {
+  return {
+    status: "corrupt",
+    reason,
+    message: CHAT_HEAD_DOCUMENT_CORRUPTION_MESSAGES[reason],
+    diagnostic,
+  };
+}
+
+/**
+ * Stored document bytes -> head record.
+ *
+ * The order is the contract:
+ *
+ * 1. parse the bytes as JSON;
+ * 2. read the `parts` envelope;
+ * 3. **strip** it - so it can never reach the record's residual bag, where a
+ *    re-publication would re-emit a stale index beside a freshly derived one;
+ * 4. parse the payload through the forward-compatible reader schema;
+ * 5. re-derive the part list from the parsed record and require the envelope to
+ *    match it exactly, in order.
+ *
+ * Step 5 fails CLOSED. An envelope that has lost an entry describes a swap that
+ * strands an object; one that has gained an entry describes a swap that deletes
+ * a live one; one that has merely been reordered is a document no honest
+ * publisher produces. None of them is a chat this reader may act on.
+ *
+ * Takes the string rather than parsed JSON on purpose: the document bytes are
+ * the digest identity, so the type that reaches this function is the type the
+ * caller must have hashed.
+ */
+export function decodeChatHeadDocument(
+  documentBytes: string,
+): ChatHeadDocumentResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(documentBytes);
+  } catch (error) {
+    return corruptDocument(
+      "malformed-json",
+      `Head document is not JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (!isJsonObject(parsed)) {
+    return corruptDocument("malformed-json", "Head document is not a JSON object");
+  }
+
+  const envelope = readJsonProperty(parsed, CHAT_HEAD_PARTS_KEY);
+  if (!Array.isArray(envelope)) {
+    return corruptDocument(
+      "parts-envelope-missing",
+      `Head document has no "${CHAT_HEAD_PARTS_KEY}" array; the sync layer cannot determine what a swap displaces`,
+    );
+  }
+
+  const declared = chatHeadPartsEnvelopeSchema.safeParse(envelope);
+  if (!declared.success) {
+    return corruptDocument(
+      "parts-envelope-missing",
+      `Head document's "${CHAT_HEAD_PARTS_KEY}" envelope is malformed: ${declared.error.message}`,
+    );
+  }
+
+  const payload = withoutPartsEnvelope(parsed);
+  const record = chatHeadReaderSchema.safeParse(payload);
+  if (!record.success) {
+    return corruptDocument(
+      "schema-rejected",
+      `Head document payload is not a readable chat-head record: ${record.error.message}`,
+    );
+  }
+
+  const derived = listChatHeadParts(record.data);
+  const mismatch = describeEnvelopeMismatch(declared.data, derived);
+  if (mismatch !== null) {
+    return corruptDocument("parts-envelope-mismatch", mismatch);
+  }
+
+  return { status: "ok", record: record.data };
+}
+
+const chatHeadPartsEnvelopeSchema = z.array(chatHeadPartSchema);
+
+/**
+ * Every own key of the document except the envelope, rebuilt with
+ * `Object.defineProperty` onto a null-prototype object so a legal own
+ * `__proto__` survives the strip (see `json.ts`).
+ */
+function withoutPartsEnvelope(document: JsonObject): JsonObject {
+  const payload: JsonObject = Object.create(null);
+
+  for (const key of Object.getOwnPropertyNames(document)) {
+    if (key === CHAT_HEAD_PARTS_KEY) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(document, key);
+    if (descriptor === undefined) continue;
+    Object.defineProperty(payload, key, {
+      value: descriptor.value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+
+  return payload;
+}
+
+function describeEnvelopeMismatch(
+  declared: readonly ChatHeadPart[],
+  derived: readonly ChatHeadPart[],
+): string | null {
+  if (declared.length !== derived.length) {
+    return `Head document declares ${declared.length} parts but its payload names ${derived.length}`;
+  }
+
+  for (const [index, part] of derived.entries()) {
+    if (declared[index].sha256 !== part.sha256) {
+      return `Head document's part ${index} is ${declared[index].sha256} but its payload names ${part.sha256}`;
+    }
+    if (declared[index].byteLength !== part.byteLength) {
+      return `Head document's part ${index} declares ${declared[index].byteLength} bytes but its payload names ${part.byteLength}`;
+    }
+  }
+
+  return null;
 }
 
 // ---- Version gating ---------------------------------------------------- //

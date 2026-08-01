@@ -39,6 +39,9 @@ const chatHeadSchema = getRecordSchema(
 
 const PART_A = { sha256: "a".repeat(64), byteLength: 120 };
 const PART_B = { sha256: "b".repeat(64), byteLength: 240 };
+// Distinct from A and B: a head may not name the same part twice, so a
+// graduated section in these fixtures needs an address of its own.
+const PART_C = { sha256: "c".repeat(64), byteLength: 360 };
 
 const wireHead: JsonObject = {
   schemaVersion: { major: 1, minor: 0 },
@@ -147,14 +150,14 @@ describe("chat-head lineage", () => {
 describe("chat-head section graduation", () => {
   it("accepts either layout for a section", () => {
     expect(() =>
-      parse({ ...wireHead, events: null, eventShards: [{ ...PART_A }] }),
+      parse({ ...wireHead, events: null, eventShards: [{ ...PART_C }] }),
     ).not.toThrow();
 
     expect(() =>
       parse({
         ...wireHead,
         hostPrivate: null,
-        hostPrivateShard: { ...PART_A },
+        hostPrivateShard: { ...PART_C },
       }),
     ).not.toThrow();
   });
@@ -163,11 +166,11 @@ describe("chat-head section graduation", () => {
     // Inline AND graduated would let two readers assemble two different chats
     // from the same bytes.
     expect(() =>
-      parse({ ...wireHead, eventShards: [{ ...PART_A }] }),
+      parse({ ...wireHead, eventShards: [{ ...PART_C }] }),
     ).toThrow();
 
     expect(() =>
-      parse({ ...wireHead, hostPrivateShard: { ...PART_A } }),
+      parse({ ...wireHead, hostPrivateShard: { ...PART_C } }),
     ).toThrow();
   });
 
