@@ -1,13 +1,24 @@
+import type { Sha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
 import type { ReadCloudChatPayloadResponse } from "@traycer/protocol/host/epic/cloud-chat";
 
 /**
- * One payload response as the text a block can render.
+ * One payload response as the text a block may render - after the bytes have
+ * been proved to be the ones the ref names.
  *
  * The other half of the payload channel - which refs are fetchable at all -
  * lives in `@traycer-clients/shared/cloud-chat/payloads`, because the CLI needs
- * exactly the same answer. What is here is renderer-specific and belongs
- * nowhere else: how much of a file body may reach the DOM, and what a truncated
- * preview says about itself.
+ * the same answer. What is here is renderer-specific: how much of a file body
+ * may reach the DOM, and what a truncated preview says about itself.
+ *
+ * ## The client verifies, because the client is the only party that can
+ *
+ * A payload is content-addressed: `ref.sha256` IS its identity, and the reader
+ * asked for that ref by name. Checking the host-declared length is not a
+ * substitute - length cannot establish content identity, and a same-length
+ * substitution would render under the original ref with nothing to notice it.
+ * This is the same posture the shard path already takes, and it has to hold
+ * here for the same reason: the host is a byte pipe, not an authority on what
+ * it moved.
  */
 
 /**
@@ -15,10 +26,26 @@ import type { ReadCloudChatPayloadResponse } from "@traycer/protocol/host/epic/c
  *
  * The same 16 MiB per-chat ceiling the publisher refuses above, so meeting it
  * here means the object is wrong rather than that someone has a big attachment.
- * Checked against the response's DECLARED length before the base64 is expanded,
- * so an oversized payload costs no decode.
  */
 export const MAX_RENDERED_PAYLOAD_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Largest base64 body this reader will expand.
+ *
+ * The DECLARED length is a claim by the same party that supplied the bytes, so
+ * checking it alone bounds nothing: a response can declare ten bytes and carry
+ * a few hundred megabytes of base64, and `atob` will happily expand all of it -
+ * plus a second `Uint8Array` copy - before the declared-length check ever gets
+ * to disagree. The encoded body is the thing actually in hand, so it is what
+ * has to be bounded first.
+ *
+ * Base64 encodes 3 bytes as 4 characters, so this is the largest encoding a
+ * within-ceiling payload can have. Both checks are kept: this one bounds the
+ * work, and the decoded-length check still catches a body that is small but
+ * lies about itself.
+ */
+export const MAX_ENCODED_PAYLOAD_CHARS =
+  4 * Math.ceil(MAX_RENDERED_PAYLOAD_BYTES / 3);
 
 /**
  * How much of a payload reaches the DOM, measured in SOURCE BYTES.
@@ -46,37 +73,61 @@ export type CloudChatPayloadBytes =
     }
   /** Nothing to show, and nothing a retry fixes. Renders as the marker. */
   | { readonly kind: "unavailable" }
+  /**
+   * The bytes that arrived are not the ones the ref names.
+   *
+   * Its own arm rather than folded into `unavailable`, even though a reader
+   * sees the same marker for both: one means "the cloud does not have this",
+   * and the other means "something returned different content under this
+   * address". They are the same to a user and very much not the same to whoever
+   * reads the logs, and a union member is how a test can tell them apart at all.
+   */
+  | { readonly kind: "digest-mismatch" }
   /** Answered from a different owner's row. Surfaced, never rendered. */
   | { readonly kind: "ambiguous-identity" };
 
 const UNAVAILABLE: CloudChatPayloadBytes = { kind: "unavailable" };
 
 /**
- * Every failure below lands on `unavailable` - the marker - rather than on an
- * error: a payload is one part of a transcript that is otherwise fine, and an
- * error box inside it would misdescribe a chat that reads perfectly well.
- * Transport failures never reach here at all; they throw, so the query retries
- * instead of caching a permanent refusal.
+ * Decode, verify against the requested content address, and reduce to a
+ * previewable string.
  *
- * The length check is not ceremony. The protocol carries `byteLength`
- * specifically so a client can verify what it decoded, and base64 that decodes
- * to a different size than the host measured is not the object the record
- * named.
+ * Async because the verification is: WebCrypto's digest is, and hashing is not
+ * something to skip for the convenience of a synchronous signature. The order
+ * is deliberate - cheap structural checks bound the work first, then the bytes
+ * are decoded, then they are hashed, and only bytes that ARE what the ref names
+ * are ever turned into text.
+ *
+ * Every failure lands on a marker rather than an error: a payload is one part of
+ * a transcript that is otherwise fine, and an error box inside it would
+ * misdescribe a chat that reads perfectly well. Transport failures never reach
+ * here at all; they throw, so the query retries rather than caching a permanent
+ * refusal.
  */
-export function decodeCloudChatPayload(
+export async function decodeCloudChatPayload(
   response: ReadCloudChatPayloadResponse,
-): CloudChatPayloadBytes {
+  expected: { readonly sha256: string },
+  sha256Hex: Sha256Hex,
+): Promise<CloudChatPayloadBytes> {
   const { outcome } = response;
   if (outcome.status === "ambiguous-identity") {
     return { kind: "ambiguous-identity" };
   }
   if (outcome.status === "unavailable") return UNAVAILABLE;
   if (outcome.byteLength > MAX_RENDERED_PAYLOAD_BYTES) return UNAVAILABLE;
+  if (outcome.bytesBase64.length > MAX_ENCODED_PAYLOAD_CHARS) return UNAVAILABLE;
 
   const bytes = decodeBase64(outcome.bytesBase64);
   if (bytes === null || bytes.byteLength !== outcome.byteLength) {
     return UNAVAILABLE;
   }
+
+  // The whole point. `byteLength` above is the host's claim about its own
+  // transfer; this is the record's claim about the CONTENT, and only the second
+  // one is what the reader asked for.
+  const digest = await sha256Hex(bytes);
+  if (digest !== expected.sha256) return { kind: "digest-mismatch" };
+
   const preview = previewOf(bytes);
   return {
     kind: "text",

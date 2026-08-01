@@ -12,6 +12,10 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { readCloudChat, type CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
+import {
+  decodeCloudChatPayload,
+  type CloudChatPayloadBytes,
+} from "@/lib/chats/cloud-chat-payloads";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -125,9 +129,33 @@ export interface UseCloudChatReadArgs {
  * what keeps a chat that is one reconnect away from readable out of the cache as
  * a permanent refusal.
  *
- * `staleTime: Infinity`: a read is a point-in-time copy at publication
- * freshness. Swapping the transcript under a reader mid-scroll would be worse
- * than showing the copy they opened; a newer head is picked up by reopening.
+ * ## One read per OPEN, and none within one
+ *
+ * These two options are a pair and neither works alone.
+ *
+ * `staleTime: Infinity` is what makes an open dialog a point-in-time copy:
+ * swapping the transcript under a reader mid-scroll would be worse than showing
+ * them the copy they opened, so nothing refetches while an observer is mounted.
+ *
+ * `gcTime: 0` is what makes "picked up by reopening" true rather than merely
+ * intended. The dialog's body unmounts when it closes, so this query loses its
+ * last observer and is dropped immediately; the next open finds no entry and
+ * resolves the head again. WITHOUT it, `staleTime: Infinity` answers every
+ * reopen out of memory - the reader opens H1, the owning device publishes H2,
+ * and the reopen renders H1 having made zero requests. The incremental-read
+ * property then holds in the pipeline and is unreachable from the surface built
+ * for it, which is exactly the shape the mounted reopen test pins.
+ *
+ * Chosen over invalidating on the dialog's open transition because it needs no
+ * caller to remember: any surface that mounts this hook gets one read per mount
+ * lifecycle by construction. It also avoids the double fetch an on-mount
+ * invalidation causes on a COLD open, and the stale-then-fresh flash a
+ * post-render invalidation causes on a warm one.
+ *
+ * Dropping the assembled chat costs nothing to re-derive but the head: the
+ * PARTS are content-addressed and live in a store this query does not own, so a
+ * reopen after one turn fetches a head and one shard. That is measured as a
+ * request count in `cloud-chat-dialog-reopen.test.tsx`, not inferred.
  */
 export function useCloudChatRead(
   args: UseCloudChatReadArgs,
@@ -179,6 +207,8 @@ export function useCloudChatRead(
         identity !== null &&
         viewerUserId.length > 0,
       staleTime: Infinity,
+      // See the note above: this is the half that makes a reopen a new read.
+      gcTime: 0,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     }),
@@ -240,56 +270,72 @@ export function useCloudChatPayloadList(args: {
 }
 
 /**
- * One payload's bytes, fetched on demand.
+ * One payload's bytes, fetched on demand and VERIFIED before anyone can render
+ * them.
  *
- * `enabled` is the whole point: a transcript can name many payloads and this
- * fetches exactly the one a reader asked to see. `staleTime: Infinity` is safe
- * here in a way it rarely is - a payload is content-addressed, so the ref in the
- * key names immutable bytes.
+ * `enabled` is the whole point of the on-demand part: a transcript can name many
+ * payloads, and a chat with fifty file changes would otherwise spend a hundred
+ * requests on content nobody looked at.
  *
- * `unavailable` and `ambiguous-identity` arrive as SUCCESS values and become
- * markers; only a genuine transport failure lands in `query.error`.
+ * ## Why the decode lives in the queryFn
+ *
+ * Returning the raw RPC response and decoding at the call site is what the
+ * first version did, and it put UNVERIFIED bytes in a component's hands - the
+ * dialog held the ref, dropped it, and rendered whatever came back under it.
+ * Fetching and verifying as ONE operation removes the opportunity: nothing
+ * downstream of this hook can obtain payload bytes that have not been hashed
+ * against the address they were requested by. That is the same shape the shard
+ * path already has, where `assembleChat` owns fetch-and-verify together.
+ *
+ * A bare `useQuery` rather than `useHostQuery` for that reason alone - the
+ * latter's job is to return a method's response, and the response is precisely
+ * what must not escape.
+ *
+ * `staleTime: Infinity` is safe here in a way it rarely is: a payload is
+ * content-addressed, so the ref in the key names immutable bytes. `gcTime` is
+ * left at its default, unlike the head read - there is no newer version of
+ * these bytes to discover, which is the whole difference between an address and
+ * a pointer.
  */
 export function useCloudChatPayload(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly identity: CloudChatIdentity | null;
   readonly ref: { readonly kind: string; readonly sha256: string } | null;
   readonly enabled: boolean;
-}): UseQueryResult<
-  ResponseOfMethod<HostRpcRegistry, "epic.readCloudChatPayload">,
-  HostRpcError
-> {
+}): UseQueryResult<CloudChatPayloadBytes, HostRpcError> {
   const viewerUserId = useCloudChatViewerId();
-  const { identity, ref } = args;
-  const params = useMemo(
-    () => ({
-      taskId: identity?.taskId ?? "",
-      chatId: identity?.chatId ?? "",
-      ownerUserId: identity?.ownerUserId ?? "",
-      ref: { kind: ref?.kind ?? "", sha256: ref?.sha256 ?? "" },
-    }),
-    [
-      identity?.taskId,
-      identity?.chatId,
-      identity?.ownerUserId,
-      ref?.kind,
-      ref?.sha256,
-    ],
-  );
-  return useHostQuery<HostRpcRegistry, "epic.readCloudChatPayload">({
-    cacheKeyIdentity: [viewerUserId],
-    client: args.client,
-    method: "epic.readCloudChatPayload",
-    params,
-    options: {
+  const { client, identity, ref } = args;
+  const hostId = client?.getActiveHostId() ?? null;
+
+  const run = async (): Promise<CloudChatPayloadBytes> => {
+    if (client === null || identity === null || ref === null) {
+      throw new Error("Cloud chat payload read ran without its inputs");
+    }
+    const response = await client.request("epic.readCloudChatPayload", {
+      ...identity,
+      ref: { kind: ref.kind, sha256: ref.sha256 },
+    });
+    return decodeCloudChatPayload(response, ref, webCryptoSha256Hex);
+  };
+
+  return useQuery<CloudChatPayloadBytes, HostRpcError>(
+    queryOptions<CloudChatPayloadBytes, HostRpcError>({
+      queryKey: cloudChatQueryKeys.payload(
+        hostId,
+        viewerUserId,
+        identity ?? { taskId: "", chatId: "", ownerUserId: "" },
+        ref ?? { kind: "", sha256: "" },
+      ),
+      queryFn: run,
       enabled:
         args.enabled &&
+        client !== null &&
         identity !== null &&
         ref !== null &&
         viewerUserId.length > 0,
       staleTime: Infinity,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
-    },
-  });
+    }),
+  );
 }

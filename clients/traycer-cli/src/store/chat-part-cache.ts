@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ChatPartCache } from "@traycer-clients/shared/cloud-chat/part-cache";
 
 /**
@@ -81,10 +81,6 @@ export function createDiskChatPartCache(rootDir: string): ChatPartCache {
 function pathFor(rootDir: string, sha256: string): string | null {
   if (!/^[0-9a-f]{64}$/.test(sha256)) return null;
   return join(rootDir, sha256.slice(0, 2), sha256);
-}
-
-function dirname(path: string): string {
-  return path.slice(0, path.lastIndexOf("/"));
 }
 
 let writes = 0;

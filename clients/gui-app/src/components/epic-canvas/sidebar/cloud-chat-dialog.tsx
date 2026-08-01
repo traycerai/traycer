@@ -16,10 +16,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useHostClient } from "@/lib/host/runtime";
 import { cn } from "@/lib/utils";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
-import {
-  decodeCloudChatPayload,
-  type CloudChatPayloadBytes,
-} from "@/lib/chats/cloud-chat-payloads";
 import type {
   TranscriptBlockDisplay,
   TranscriptMessageDisplay,
@@ -142,6 +138,33 @@ function CloudChatDialogBody(props: {
               message={message}
             />
           ))}
+          {/* The event log is rendered, not just counted. `fidelityNotice`
+              includes unknown EVENTS in its "N items need a newer version"
+              total, so omitting the rows would point that warning at content
+              the reader cannot find - which is worse than either rendering
+              them or not counting them. */}
+          {state.transcript.events.length > 0 && (
+            <div className="flex w-full flex-col gap-1 border-t pt-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                Activity
+              </p>
+              {state.transcript.events.map((event) => (
+                <p
+                  key={event.key}
+                  className={cn(
+                    "text-xs",
+                    event.isUnknown
+                      ? "italic text-muted-foreground"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {event.detail === null
+                    ? event.label
+                    : `${event.label} · ${event.detail}`}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       </ScrollArea>
     </div>
@@ -234,6 +257,10 @@ function BlockRow(props: {
  * A transcript can name many, and a chat with fifty file changes would spend a
  * hundred requests on content nobody looked at. The request is gated on
  * `requested` for that reason, not for latency.
+ *
+ * The bytes arrive already hashed against the ref they were requested by - see
+ * `useCloudChatPayload`. This component never sees an unverified payload, which
+ * is why it has no verification of its own to forget.
  */
 function PayloadRow(props: {
   readonly identity: CloudChatIdentity | null;
@@ -248,9 +275,6 @@ function PayloadRow(props: {
     enabled: requested,
   });
 
-  const bytes: CloudChatPayloadBytes | null =
-    query.data === undefined ? null : decodeCloudChatPayload(query.data);
-
   if (!requested) {
     return (
       <Button
@@ -264,7 +288,15 @@ function PayloadRow(props: {
     );
   }
 
-  if (bytes === null) {
+  // A settled FAILURE is an answer, and the row has to say so. Without this the
+  // row falls through to the spinner below and stays there forever: retries are
+  // exhausted, `data` never arrives, and a host that simply lacks the payload
+  // method answers `E_HOST_UNSUPPORTED` on the first try. An unavailable marker
+  // is the honest end state, and it is the one this surface drew before the
+  // payload channel existed at all.
+  if (query.isError) return <PayloadUnavailable label={props.payload.label} />;
+
+  if (query.data === undefined) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
@@ -273,14 +305,16 @@ function PayloadRow(props: {
     );
   }
 
-  if (bytes.kind !== "text") {
-    return (
-      <p className="text-xs italic text-muted-foreground">
-        {props.payload.label} is not available here.
-      </p>
-    );
+  // `unavailable`, `digest-mismatch` and `ambiguous-identity` all render the
+  // same marker. They are different facts - not in the cloud, not the content
+  // this ref names, answered from another owner's row - and a reader can act on
+  // none of them differently, so the union carries the distinction for the logs
+  // and the tests while the UI states the one thing that is true for all three.
+  if (query.data.kind !== "text") {
+    return <PayloadUnavailable label={props.payload.label} />;
   }
 
+  const bytes = query.data;
   return (
     <div className="flex w-full flex-col gap-1">
       <p className="text-xs text-muted-foreground">{props.payload.label}</p>
@@ -293,5 +327,15 @@ function PayloadRow(props: {
         </p>
       ) : null}
     </div>
+  );
+}
+
+function PayloadUnavailable(props: {
+  readonly label: string;
+}): React.JSX.Element {
+  return (
+    <p className="text-xs italic text-muted-foreground">
+      {props.label} is not available here.
+    </p>
   );
 }

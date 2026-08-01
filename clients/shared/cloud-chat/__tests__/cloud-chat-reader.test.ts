@@ -52,6 +52,19 @@ function read(
   });
 }
 
+/**
+ * The same bytes with one bit changed - same length, different content.
+ *
+ * The mutation every hash-guard test here uses. A wrong-LENGTH corruption is
+ * caught by the length check on its own, so it cannot witness whether anything
+ * hashes; only an equal-length one can.
+ */
+function flipOneByte(bytes: Uint8Array): Uint8Array {
+  const mutated = new Uint8Array(bytes);
+  mutated[0] ^= 0x01;
+  return mutated;
+}
+
 /** The fixture chat with one more message appended to its TAIL cohort. */
 function publishOneMoreTurn(): Promise<PublishedCloudChat> {
   return publishCloudChat({
@@ -127,7 +140,8 @@ describe("the incremental read", () => {
     expect(secondPort.resolveCalls).toHaveLength(1);
     expect(secondPort.partCalls).toEqual([second.parts[1].address.sha256]);
     // ...and the head cohort's address is untouched, which is why it was not
-    // fetched: birth-cohort assignment makes an old shard byte-stable.
+    // fetched: a deterministic re-cut of an unchanged prefix produces the same
+    // cohort, so the same bytes, so the same address.
     expect(second.parts[0].address.sha256).toBe(first.parts[0].address.sha256);
   });
 
@@ -165,11 +179,13 @@ describe("the incremental read", () => {
   it("a cache hit is re-hashed, so a poisoned entry is caught not trusted", async () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const cache = new InMemoryChatPartCache();
-    // File plausible-but-wrong bytes under a real part's digest - the shape a
-    // corrupted disk entry or a colliding writer would take.
+    // A SAME-LENGTH mutation, which is the only shape that tests what this
+    // claims to. Bytes of the wrong length are caught by the length guard
+    // whether or not anything re-hashes, so a wrong-length fixture here would
+    // stay green with the hash check deleted - a test that witnesses nothing.
     await cache.put(
       published.parts[0].address.sha256,
-      utf8Bytes('{"schemaVersion":{"major":1,"minor":0}}'),
+      flipOneByte(published.parts[0].bytes),
     );
 
     const port = recordingPort(servingBehaviour(published));
@@ -177,9 +193,8 @@ describe("the incremental read", () => {
 
     expect(result.outcome.kind).toBe("corrupt");
     if (result.outcome.kind !== "corrupt") return;
-    // Caught by the length check first, which is the honest diagnosis for bytes
-    // that are simply not the ones the head promised.
-    expect(result.outcome.reason).toBe("byte-length-mismatch");
+    // The DIGEST is what caught it: the length matched exactly.
+    expect(result.outcome.reason).toBe("digest-mismatch");
     // And it was never asked for on the wire - the cache answered, and the
     // reader refused what it answered with.
     expect(port.partCalls).not.toContain(published.parts[0].address.sha256);
@@ -189,8 +204,10 @@ describe("the incremental read", () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const cache = new InMemoryChatPartCache();
     const serving = servingBehaviour(published);
-    const substituted = utf8Bytes("not the part you asked for");
     const poisoned = published.parts[0].address.sha256;
+    // Same length again, and declared honestly, so admission can only be
+    // refused on the digest.
+    const substituted = flipOneByte(published.parts[0].bytes);
 
     const port = recordingPort({
       resolve: serving.resolve,
@@ -206,7 +223,11 @@ describe("the incremental read", () => {
           : serving.part(sha256),
     });
 
-    expect((await read(port, cache)).outcome.kind).toBe("corrupt");
+    const result = await read(port, cache);
+
+    expect(result.outcome.kind).toBe("corrupt");
+    if (result.outcome.kind !== "corrupt") return;
+    expect(result.outcome.reason).toBe("digest-mismatch");
     // Nothing was filed under the poisoned digest: had it been, every later read
     // would serve the substituted bytes from disk and never ask again.
     expect(await cache.get(poisoned)).toBeNull();

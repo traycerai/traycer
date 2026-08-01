@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import {
   readCloudChat,
   type CloudChatRead,
@@ -35,7 +36,10 @@ async function readFixture(): Promise<CloudChatRead> {
   });
 }
 
-function rpcError(code: string): HostRpcError {
+// The CONCRETE union, not `string`: the helper builds a real `HostRpcError`,
+// and widening its code here is what made the OSS compile gate red while the
+// per-package `tsc --noEmit` stayed quiet.
+function rpcError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
     code,
     message: "boom",

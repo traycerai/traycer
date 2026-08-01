@@ -16,6 +16,14 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
  * without removing, so a stale-but-successful result stays readable through the
  * refetch window - which is exactly the window a viewer switch opens.
  *
+ * ## Only the queries that BUILD their own keys are here
+ *
+ * `chat.list` and the payload list go through `useHostQuery`, which owns its own
+ * key shape. Builders for those used to sit here too and matched nothing - a
+ * future invalidation would have reached for one, produced a key no query uses,
+ * and silently done nothing. A key builder with no consumer is worse than
+ * absent.
+ *
  * ## Every key carries the OWNER, because a chat id is not an identity
  *
  * `chatId` is host-minted and two hosts can mint the same one under a task, so
@@ -25,10 +33,6 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 export const cloudChatQueryKeys = {
   scope: (hostId: string | null, viewerUserId: string) =>
     [...hostQueryKeys.scope(hostId), "cloud-chat", viewerUserId] as const,
-
-  /** A task's cloud chats, as this viewer may see them. */
-  list: (hostId: string | null, viewerUserId: string, taskId: string) =>
-    [...cloudChatQueryKeys.scope(hostId, viewerUserId), "list", taskId] as const,
 
   /**
    * One chat, resolved and assembled.
@@ -45,20 +49,6 @@ export const cloudChatQueryKeys = {
     [
       ...cloudChatQueryKeys.scope(hostId, viewerUserId),
       "read",
-      identity.taskId,
-      identity.ownerUserId,
-      identity.chatId,
-    ] as const,
-
-  /** Which of a chat's payloads this reader may fetch. */
-  payloads: (
-    hostId: string | null,
-    viewerUserId: string,
-    identity: CloudChatIdentity,
-  ) =>
-    [
-      ...cloudChatQueryKeys.scope(hostId, viewerUserId),
-      "payloads",
       identity.taskId,
       identity.ownerUserId,
       identity.chatId,
