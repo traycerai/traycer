@@ -946,6 +946,15 @@ export const ompUserMessageAnchorResolvedSchema = z.object({
   ompSessionId: z.string().nullable(),
 });
 
+export const jcodeUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("jcode"),
+  sessionId: z.string(),
+  // The ACP session id the `jcode acp` process assigned for this turn. Null
+  // until `session/new` resolves; used to resume the same jcode session on a
+  // later turn.
+  jcodeSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -969,6 +978,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     piUserMessageAnchorResolvedSchema,
     hermesUserMessageAnchorResolvedSchema,
     ompUserMessageAnchorResolvedSchema,
+    jcodeUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<

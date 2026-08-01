@@ -3,6 +3,7 @@ import {
   defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
   type DowngradeResult,
+  type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   defineVersionedStreamRpcRegistry,
@@ -38,17 +39,25 @@ import {
   agentListDowngradeV6ToV3,
   agentListDowngradeV6ToV4,
   agentListDowngradeV6ToV5,
+  agentListDowngradeV7ToV1,
+  agentListDowngradeV7ToV2,
+  agentListDowngradeV7ToV3,
+  agentListDowngradeV7ToV4,
+  agentListDowngradeV7ToV5,
+  agentListDowngradeV7ToV6,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
   agentListUpgradeV4ToV5,
   agentListUpgradeV5ToV6,
+  agentListUpgradeV6ToV7,
   agentListV10,
   agentListV20,
   agentListV30,
   agentListV40,
   agentListV50,
   agentListV60,
+  agentListV70,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -61,27 +70,42 @@ import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
   agentConfigureDowngradeV30ToV20,
+  agentConfigureDowngradeV40ToV10,
+  agentConfigureDowngradeV40ToV20,
+  agentConfigureDowngradeV40ToV30,
   agentConfigureV10,
   agentConfigureV20,
   agentConfigureV30,
+  agentConfigureV40,
   agentConfigureUpgradeV10ToV20,
   agentConfigureUpgradeV20ToV30,
+  agentConfigureUpgradeV30ToV40,
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV30,
   agentGetProviderProfileRateLimitsV10,
   agentGetProviderProfileRateLimitsV20,
   agentGetProviderProfileRateLimitsV30,
+  agentGetProviderProfileRateLimitsV40,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsUpgradeV20ToV30,
+  agentGetProviderProfileRateLimitsUpgradeV30ToV40,
   agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesDowngradeV30ToV10,
   agentListProviderProfilesDowngradeV30ToV20,
+  agentListProviderProfilesDowngradeV40ToV10,
+  agentListProviderProfilesDowngradeV40ToV20,
+  agentListProviderProfilesDowngradeV40ToV30,
   agentListProviderProfilesV10,
   agentListProviderProfilesV20,
   agentListProviderProfilesV30,
+  agentListProviderProfilesV40,
   agentListProviderProfilesUpgradeV10ToV20,
   agentListProviderProfilesUpgradeV20ToV30,
+  agentListProviderProfilesUpgradeV30ToV40,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxReadV10,
@@ -115,12 +139,19 @@ import {
   agentGuiListHarnessesDowngradeV6ToV3,
   agentGuiListHarnessesDowngradeV6ToV4,
   agentGuiListHarnessesDowngradeV6ToV5,
+  agentGuiListHarnessesDowngradeV7ToV1,
+  agentGuiListHarnessesDowngradeV7ToV2,
+  agentGuiListHarnessesDowngradeV7ToV3,
+  agentGuiListHarnessesDowngradeV7ToV4,
+  agentGuiListHarnessesDowngradeV7ToV5,
+  agentGuiListHarnessesDowngradeV7ToV6,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
   agentGuiListHarnessesUpgradeV3ToV4,
   agentGuiListHarnessesUpgradeV4ToV5,
   agentGuiListHarnessesUpgradeV5ToV6,
+  agentGuiListHarnessesUpgradeV6ToV7,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -128,6 +159,7 @@ import {
   agentGuiListHarnessesV40,
   agentGuiListHarnessesV50,
   agentGuiListHarnessesV60,
+  agentGuiListHarnessesV70,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -166,13 +198,18 @@ import {
   hostGetRateLimitUsageV20,
   hostGetRateLimitUsageV21,
   hostGetRateLimitUsageV30,
+  hostGetRateLimitUsageV40,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
   hostGetRateLimitUsageUpgradeV20ToV21,
   hostGetRateLimitUsageUpgradeV21ToV30,
+  hostGetRateLimitUsageUpgradeV30ToV40,
   hostGetRateLimitUsageDowngradeV2ToV1,
   hostGetRateLimitUsageDowngradeV3ToV2,
+  hostGetRateLimitUsageDowngradeV4ToV1,
+  hostGetRateLimitUsageDowngradeV4ToV2,
+  hostGetRateLimitUsageDowngradeV4ToV3,
   hostGetRateLimitUsageDowngradeV3ToV1,
   providersConsumeRateLimitResetCreditV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
@@ -445,6 +482,7 @@ import {
   downgradeProviderCliStateToMutationV20,
   downgradeProviderCliStateListToV40,
   downgradeProviderCliStateListToV50,
+  downgradeProviderCliStateListToV60,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateListToLatest,
   upgradeProviderCliStateV10ToMutationV20,
@@ -1362,14 +1400,15 @@ export const providersListDowngradeV7ToV6 = defineDowngradePath<
   from: { major: 7, minor: 0 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // The id sets are identical, so this hop exists purely to strip the
-  // provider-pack-registry fields: reparsing through the frozen v6.0 schema
-  // drops the keys it does not model, which is exactly what `cli-v1.1.9`
-  // expects to receive.
+  // Two jobs now. It still strips the provider-pack-registry fields (reparsing
+  // through the frozen v6.0 schema drops the keys it does not model, which is
+  // exactly what `cli-v1.1.9` expects to receive) - but the id sets are no
+  // longer identical, so it must also DROP `jcode` first. A straight reparse of
+  // the whole list would throw on the jcode row rather than filtering it.
   downgradeResponse: (response) => ({
     ok: true,
     value: providersListResponseSchemaV60.parse({
-      providers: response.providers,
+      providers: downgradeProviderCliStateListToV60(response.providers),
     }),
   }),
 });
@@ -2818,7 +2857,8 @@ export const worktreeListBindingsForEpicUpgradeV11ToV12 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-const HOST_RPC_REGISTRY_DEFINITION = {
+// host status, lifecycle, rate limits, notifications, comments, snapshots.
+const HOST_RPC_REGISTRY_DEFINITION_CORE = {
   "host.status": {
     1: {
       latestMinor: 0,
@@ -2932,6 +2972,20 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {
         2: hostGetRateLimitUsageDowngradeV3ToV2,
         1: hostGetRateLimitUsageDowngradeV3ToV1,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV40,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        3: hostGetRateLimitUsageDowngradeV4ToV3,
+        2: hostGetRateLimitUsageDowngradeV4ToV2,
+        1: hostGetRateLimitUsageDowngradeV4ToV1,
       },
     },
   },
@@ -3219,6 +3273,11 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+} as const;
+type HostRpcMethodMapCore = typeof HOST_RPC_REGISTRY_DEFINITION_CORE;
+
+// the agent surface: gui + tui catalogs, create/list/send, roles, inbox, stop.
+const HOST_RPC_REGISTRY_DEFINITION_AGENT = {
   "agent.gui.listHarnesses": {
     1: {
       latestMinor: 0,
@@ -3300,6 +3359,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         3: agentGuiListHarnessesDowngradeV6ToV3,
         4: agentGuiListHarnessesDowngradeV6ToV4,
         5: agentGuiListHarnessesDowngradeV6ToV5,
+      },
+    },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV70,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV6ToV7,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV7ToV1,
+        2: agentGuiListHarnessesDowngradeV7ToV2,
+        3: agentGuiListHarnessesDowngradeV7ToV3,
+        4: agentGuiListHarnessesDowngradeV7ToV4,
+        5: agentGuiListHarnessesDowngradeV7ToV5,
+        6: agentGuiListHarnessesDowngradeV7ToV6,
       },
     },
   },
@@ -3626,6 +3702,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         5: agentListDowngradeV6ToV5,
       },
     },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV70,
+          upgradeFromPreviousVersion: agentListUpgradeV6ToV7,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV7ToV1,
+        2: agentListDowngradeV7ToV2,
+        3: agentListDowngradeV7ToV3,
+        4: agentListDowngradeV7ToV4,
+        5: agentListDowngradeV7ToV5,
+        6: agentListDowngradeV7ToV6,
+      },
+    },
   },
   "agent.sendMessage": {
     1: {
@@ -3731,6 +3824,11 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+} as const;
+type HostRpcMethodMapAgent = typeof HOST_RPC_REGISTRY_DEFINITION_AGENT;
+
+// epic, workspace, git, editor, terminal, resources, worktree.
+const HOST_RPC_REGISTRY_DEFINITION_EPIC = {
   "phase.migrateToEpic": {
     1: {
       latestMinor: 0,
@@ -4776,6 +4874,11 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+} as const;
+type HostRpcMethodMapEpic = typeof HOST_RPC_REGISTRY_DEFINITION_EPIC;
+
+// providers, speech, and the A2A provider-profile methods.
+const HOST_RPC_REGISTRY_DEFINITION_PROVIDERS = {
   "providers.list": {
     1: {
       latestMinor: 0,
@@ -5391,6 +5494,20 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         2: agentListProviderProfilesDowngradeV30ToV20,
       },
     },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV40,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV40ToV10,
+        2: agentListProviderProfilesDowngradeV40ToV20,
+        3: agentListProviderProfilesDowngradeV40ToV30,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -5431,6 +5548,21 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         2: agentGetProviderProfileRateLimitsDowngradeV30ToV20,
       },
     },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV40,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV40ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV40ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -5467,6 +5599,20 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         2: agentConfigureDowngradeV30ToV20,
       },
     },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV40,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentConfigureDowngradeV40ToV10,
+        2: agentConfigureDowngradeV40ToV20,
+        3: agentConfigureDowngradeV40ToV30,
+      },
+    },
   },
   // Additive, post-v1.0.0 optional method: a PR's patch read from the local
   // checkout. A host that predates it simply lacks it and the PR view falls
@@ -5488,13 +5634,63 @@ const HOST_RPC_REGISTRY_DEFINITION = {
     },
   },
 } as const;
+type HostRpcMethodMapProviders = typeof HOST_RPC_REGISTRY_DEFINITION_PROVIDERS;
 
-export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
-  RELEASED_FLOOR_METHOD_NAMES,
-  HOST_RPC_REGISTRY_DEFINITION,
-);
+/**
+ * The registry's method map, as an intersection of the four named group types
+ * above rather than one anonymous literal type.
+ *
+ * This split exists for declaration emit, not for readability. `tsc -p
+ * tsconfig.build.json` has to SERIALIZE the type of every exported node, and a
+ * single 157-method literal exceeded TS7056's ceiling once jcode added six
+ * version lines at once. `tsc --noEmit` never serializes, which is why `bun run
+ * compile` stayed green while `bun run build` failed - the two gates genuinely
+ * cover different things.
+ *
+ * The ceiling is per NODE, so four smaller literals plus an intersection of
+ * four short names stays under it, and each future method lands in one group
+ * rather than growing the single node that overflowed. Nothing here is widened:
+ * the intersection is exactly the type the one literal had, so
+ * `defineFloorAwareVersionedRpcRegistry` still infers the precise `Registry`
+ * and still runs every structural, minor-additivity and
+ * major-bump-must-be-breaking check against it.
+ */
+export type HostRpcMethodMap = HostRpcMethodMapCore &
+  HostRpcMethodMapAgent &
+  HostRpcMethodMapEpic &
+  HostRpcMethodMapProviders;
 
-export type HostRpcRegistry = typeof hostRpcRegistry;
+// Annotated (not inferred) so this node prints as the short name above instead
+// of re-serializing all four groups inline.
+const HOST_RPC_REGISTRY_DEFINITION: HostRpcMethodMap = {
+  ...HOST_RPC_REGISTRY_DEFINITION_CORE,
+  ...HOST_RPC_REGISTRY_DEFINITION_AGENT,
+  ...HOST_RPC_REGISTRY_DEFINITION_EPIC,
+  ...HOST_RPC_REGISTRY_DEFINITION_PROVIDERS,
+};
+
+// Annotated for the same reason `hostStreamRpcRegistry` below is, and with the
+// same trade-off: without an explicit annotation the inferred type of this node
+// exceeds TS7056's declaration-emit ceiling. That limit is only reached on the
+// EMIT path - `tsc --noEmit` never has to serialize the type, so `bun run
+// compile` stays green while `bun run build` fails. jcode pushed it over by
+// adding six version lines at once (two catalogs at 7.0, three profile methods
+// and `host.getRateLimitUsage` at 4.0).
+//
+// `defineFloorAwareVersionedRpcRegistry` still receives the full precise
+// literal and still validates it at this call site - structural checks, the
+// minors-only-add rule, and the major-bump-must-be-breaking rule all run
+// exactly as before. The annotation names the type of the RESULT; it does not
+// weaken the argument's check. (Verified by re-running the probe that made the
+// registry refuse a non-breaking 3 -> 4 bump on `host.getRateLimitUsage`: it
+// still refuses.)
+export type HostRpcRegistry = VersionedRpcRegistry<HostRpcMethodMap>;
+
+export const hostRpcRegistry: HostRpcRegistry =
+  defineFloorAwareVersionedRpcRegistry(
+    RELEASED_FLOOR_METHOD_NAMES,
+    HOST_RPC_REGISTRY_DEFINITION,
+  );
 
 /**
  * Combined streaming-RPC registry for the `/stream` WS manifest.

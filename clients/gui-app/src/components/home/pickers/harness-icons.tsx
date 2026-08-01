@@ -126,3 +126,29 @@ export const TraycerIcon: HarnessIcon = (props) => (
     />
   </svg>
 );
+
+// JCode (Solo Systems / jcode.sh) has no lobehub entry. Official brand mark is
+// the shell-prompt chevron + cursor bar (`>_`) from the product AppIcon /
+// GitHub identity — not a generic code-bracket glyph. Monochrome
+// `currentColor` so it tracks light/dark theme (same convention as Traycer /
+// Omp strokes); the mint plate from the AppIcon is omitted for the same
+// reason Omp dropped its near-white plate fill.
+export const JCodeIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M6 5.5 L14.5 12 L6 18.5"
+      stroke="currentColor"
+      strokeWidth="3.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <rect
+      x="14"
+      y="15.25"
+      width="6"
+      height="3.25"
+      rx="1.5"
+      fill="currentColor"
+    />
+  </svg>
+);

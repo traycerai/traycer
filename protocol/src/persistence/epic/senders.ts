@@ -411,6 +411,29 @@ export const ompChatSessionAnchorSchema = z.object({
 });
 export type OmpChatSessionAnchor = z.infer<typeof ompChatSessionAnchorSchema>;
 
+// JCode (`jcode acp`) resumes at session granularity only — its ACP surface
+// reloads a whole session id with no per-message truncation/fork point — so the
+// anchor carries just the session id. `sessionId` is the jcode ACP session id.
+//
+// The union is a `discriminatedUnion`, so a MISSING member is not a compile
+// error anywhere: it only shows up as an unparseable persisted anchor on a real
+// jcode chat. Session resume itself is a recorded deferral for jcode (an
+// upstream `attach_existing_session` bug), so this member may go unused until
+// that lands — it is registered now so the persisted shape is complete rather
+// than retro-fitted later.
+export const jcodeChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("jcode"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type JCodeChatSessionAnchor = z.infer<
+  typeof jcodeChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -430,5 +453,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   piChatSessionAnchorSchema,
   hermesChatSessionAnchorSchema,
   ompChatSessionAnchorSchema,
+  jcodeChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

@@ -67,6 +67,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "pi",
   "hermes",
   "omp",
+  "jcode",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -193,6 +194,43 @@ export const guiHarnessIdSchemaV50 = harnessIdSchema.extract([
 ]);
 export type GuiHarnessIdV50 = z.infer<typeof guiHarnessIdSchemaV50>;
 
+/**
+ * Frozen harness id set as shipped in protocol v6.0 (with omp, before jcode).
+ *
+ * This line IS released - `cli-v1.1.9` (tagged 2026-07-29) shipped v6.0, so a
+ * client in the field strict-decodes exactly these 18 ids.
+ *
+ * It was NOT pinned when that release shipped: `agent.gui.listHarnesses@6.0`,
+ * `agent.list@6.0` and the three `@3.0` profile methods all still pointed at
+ * the LIVE `guiHarnessIdSchema`, so those released lines silently absorbed
+ * every id added afterwards - the same defect that let `omp` first ride v5.0.
+ * This snapshot (and the frozen response schemas built on it) repairs that
+ * gap; jcode opens v7.0 instead, with v7→v6 … v7→v1 bridges that drop
+ * post-v6.0 ids. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the v7 bridge instead.
+ */
+export const guiHarnessIdSchemaV60 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+]);
+export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
+
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
   "codex",
@@ -257,6 +295,14 @@ export const AGENT_FACING_HARNESS_IDS = [
   "pi",
   "hermes",
   "omp",
+  // jcode is deliberately ABSENT. This set gates `traycer_create_agent`, i.e.
+  // which harnesses an agent may spawn a CHILD on. jcode has no A2A tool
+  // surface: its ACP transport rejects `mcpServers` outright, and the only
+  // config-driven route would mean writing an MCP file into the user's own
+  // workspace or home, which we will not do. A jcode child could therefore
+  // never call `traycer_send_message` to report back, and would strand its
+  // parent waiting for a reply that cannot arrive. Humans can still open jcode
+  // tabs - that is `guiHarnessIdSchema`, which does include it.
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -742,6 +788,24 @@ export const listAgentsResponseSchemaV50 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV50),
 });
 export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
+
+// ── Frozen protocol-v6.0 agent.list response (with omp, before jcode) ───────
+// `agent.list` enumerates every agent in the epic - including jcode GUI harness
+// chats a newer client created - so an already-shipped v6.0 client would hit a
+// strict enum on those rows. This line IS released (`cli-v1.1.9` /
+// `host-v1.1.9`, tagged 2026-07-29) and, until now, still pointed at the LIVE
+// `listAgentsResponseSchema`, so it absorbed every id added after the release -
+// the same defect that let `omp` first ride v5.0. Frozen here as actually
+// shipped; the v7.0 line carries jcode rows and v7→v6 … v7→v1 bridges drop them
+// for older callers. Do not add new harnesses here - use the existing v7
+// bridge.
+export const agentSummarySchemaV60 = agentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV60.nullable(),
+});
+export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV60),
+});
+export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

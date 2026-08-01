@@ -2,6 +2,7 @@ import {
   classifyProviderRateLimits,
   classifyProviderRateLimitWindow,
   isProviderRateLimitWindowLive,
+  jcodeSubProviderRateLimitLabel,
   providerRateLimitWindows,
   type LiveProviderRateLimitSeverity,
   type ProviderRateLimits,
@@ -294,6 +295,48 @@ function projectedLiveWindows(
       ].filter((window): window is ProfileUsageWindow => window !== null);
     case "kilocode":
       return [];
+    case "jcode":
+      // Meta-harness: one window per connected sub-provider that reported a
+      // measurable quota, named by `subProviderId` (same multi-window shape as
+      // claude-code model-scoped). `usage_percent` is already percent CONSUMED
+      // — no inversion. `resetsAt: null` means "not reported", not "never
+      // resets"; `isProviderRateLimitWindowLive` treats null reset as live.
+      //
+      // Roles: peer sub-providers are not "extras" on a primary meter — each
+      // is an independent quota the user tracks. Using primary (first live)
+      // + secondary (rest) keeps healthy peers visible through the
+      // projectProfileUsage filter that drops healthy `extra` rows; labeling
+      // them all `extra` would hide a 10% OpenRouter row next to an 85%
+      // Copilot bar, which is the wrong meta-harness UX.
+      //
+      // Error trap: a sub-provider with non-null `error` must never render as
+      // a 0% bar. Schema separates `error` from `window: null` so a broken
+      // credential is distinct from "no quota". We **omit** failed rows rather
+      // than invent an error-window UI primitive — `ProfileUsageWindow` has no
+      // error field, and a missing row is honest (severity still rolls up via
+      // protocol `classifyProviderRateLimits` / `hardLimitReached` on remaining
+      // live windows). Never synthesize a zero window for an error.
+      return rateLimits.subProviders
+        .flatMap((subProvider, index) => {
+          if (subProvider.error !== null) return [];
+          return [
+            windowProjection({
+              id: `sub:${subProvider.subProviderId}:${index}`,
+              // Provisional role; reassigned on the live list below so the
+              // first *surviving* window is primary even when earlier rows
+              // were null/expired/errored.
+              role: "extra",
+              name: jcodeSubProviderRateLimitLabel(subProvider),
+              window: subProvider.window,
+              now,
+            }),
+          ];
+        })
+        .filter((entry): entry is ProfileUsageWindow => entry !== null)
+        .map((entry, liveIndex) => ({
+          ...entry,
+          role: liveIndex === 0 ? "primary" : "secondary",
+        }));
   }
 }
 

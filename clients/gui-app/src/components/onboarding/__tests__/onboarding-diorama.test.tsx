@@ -45,6 +45,7 @@ describe("OnboardingDiorama", () => {
       "Pi",
       "Hermes Agent",
       "Oh My Pi",
+      "JCode",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
     // Longest match, not first match: display names overlap ("Pi" is a

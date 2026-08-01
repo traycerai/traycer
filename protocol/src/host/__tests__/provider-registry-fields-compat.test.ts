@@ -240,14 +240,17 @@ describe("old-client behavior on the error arm", () => {
     },
   });
 
-  it.each([1, 2, 3, 4, 5] as const)(
-    "v6.0 -> v%i.0 strips the error arm instead of failing the downgrade",
+  it.each([1, 2, 3, 4, 5, 6] as const)(
+    "v7.0 -> v%i.0 strips the error arm instead of failing the downgrade",
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        6,
+        7,
         targetMajor,
-        { providers: [erroredState] },
+        // Sourced from v7.0, the live line the host actually produces: the
+        // registry fields (and `native`) only exist there, and v6.0 froze
+        // before any of them.
+        { providers: [erroredState], native: null },
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) return;
@@ -437,9 +440,9 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v2.0 downgrade never leaks the new fields to a v2.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       2,
-      { providers: [stateWithRegistryFields] },
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -453,9 +456,9 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v3.0 downgrade never leaks the new fields to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       3,
-      { providers: [stateWithRegistryFields] },
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -589,16 +592,16 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
 });
 
 describe("providers.list v5.0 is frozen against the registry fields", () => {
-  it("v5.0 does not model them, so a v6.0 -> v5.0 downgrade strips them", () => {
+  it("v5.0 does not model them, so a v7.0 -> v5.0 downgrade strips them", () => {
     // `cli-v1.1.8` shipped v5.0. Growing it is the same defect class as the
     // original mutation-echo break, on the carrier line itself. v5.0 pins the
     // frozen v4.0 base shape precisely so a field added to the LIVE base shape
     // cannot reach it.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       5,
-      { providers: [stateWithRegistryFields] },
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

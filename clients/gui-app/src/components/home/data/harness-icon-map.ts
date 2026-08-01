@@ -8,6 +8,7 @@ import {
   DroidIcon,
   GrokIcon,
   HermesIcon,
+  JCodeIcon,
   KiroIcon,
   KiloCodeIcon,
   KimiIcon,
@@ -45,4 +46,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   pi: { Icon: PiIcon, className: "text-foreground" },
   hermes: { Icon: HermesIcon, className: "text-foreground" },
   omp: { Icon: OmpIcon, className: "text-foreground" },
+  jcode: { Icon: JCodeIcon, className: "text-foreground" },
 };

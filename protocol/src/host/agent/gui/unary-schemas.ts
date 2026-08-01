@@ -6,6 +6,7 @@ import {
   guiHarnessIdSchemaV30,
   guiHarnessIdSchemaV40,
   guiHarnessIdSchemaV50,
+  guiHarnessIdSchemaV60,
 } from "@traycer/protocol/host/agent/shared";
 import {
   ALL_PERMISSION_MODES,
@@ -256,6 +257,24 @@ export const guiHarnessOptionSchemaV50 = guiHarnessOptionSchema.extend({
 });
 export const listGuiHarnessesResponseSchemaV50 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV50),
+});
+
+// ── Frozen protocol-v6.0 catalog row + response (with omp, before jcode) ────
+// v6.0 shipped with omp in `cli-v1.1.9` / `host-v1.1.9` (tagged 2026-07-29);
+// the v7.0 line of `agent.gui.listHarnesses` adds jcode, and the v7→v6
+// downgrade bridge filters it out for already-shipped v6.0 callers so their
+// strict decode never sees a value it can't parse.
+//
+// This line was NOT pinned when that release shipped - `agentGuiListHarnessesV60`
+// still served the LIVE `listGuiHarnessesResponseSchema`, so it absorbed every
+// id added afterwards, exactly the way v5.0 did before `cli-v1.1.8` froze it.
+// Pinning the id here keeps a future `.extend()` on the live row from leaking
+// into this shipped line.
+export const guiHarnessOptionSchemaV60 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV60,
+});
+export const listGuiHarnessesResponseSchemaV60 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV60),
 });
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema

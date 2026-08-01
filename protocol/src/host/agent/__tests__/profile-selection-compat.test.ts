@@ -11,6 +11,9 @@ import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
   agentConfigureDowngradeV30ToV20,
+  agentConfigureDowngradeV40ToV10,
+  agentConfigureDowngradeV40ToV20,
+  agentConfigureDowngradeV40ToV30,
   agentConfigureUpgradeV10ToV20,
   agentCreateDowngradeV20ToV10,
   agentCreateUpgradeV10ToV20,
@@ -18,12 +21,18 @@ import {
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV30,
   agentGetProviderProfileRateLimitsRequestSchema,
   agentGetProviderProfileRateLimitsResponseSchema,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesDowngradeV30ToV10,
   agentListProviderProfilesDowngradeV30ToV20,
+  agentListProviderProfilesDowngradeV40ToV10,
+  agentListProviderProfilesDowngradeV40ToV20,
+  agentListProviderProfilesDowngradeV40ToV30,
   agentListProviderProfilesRequestSchema,
   agentListProviderProfilesResponseSchema,
   agentListProviderProfilesUpgradeV10ToV20,
@@ -34,7 +43,9 @@ import {
   createAgentRequestSchemaV30,
   hostRpcRegistry,
   profileSelectionSchema,
+  type GuiHarnessId,
 } from "@traycer/protocol/host/index";
+import type { ProviderId } from "@traycer/protocol/host/provider-ids";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 describe("ProfileSelection / ConcreteProfileSelection schemas", () => {
@@ -570,17 +581,17 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // v3.0 is the advertised latest: the v1.1.8 tags froze v2.0 with the
-    // pre-omp id sets, so omp opened a new major on all three methods.
+    // v4.0 is the advertised latest: the v1.1.9 tags froze v3.0 with the
+    // pre-jcode id sets, so jcode opened a new major on all three methods.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 3,
+      major: 4,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 3, minor: 0 });
+    ).toEqual({ major: 4, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 3,
+      major: 4,
       minor: 0,
     });
   });
@@ -1019,5 +1030,212 @@ describe("agent.configure v1 <-> v2 hermes-harness response translation", () => 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+});
+
+// ─── jcode: the v4.0 line on all three profile methods ─────────────────────
+//
+// These bridges exist because `cli-v1.1.9` shipped v3.0 - but v3.0 was still
+// WIRED to the live response until the jcode work froze it, so before that
+// repair these three methods absorbed `jcode` at an already-released version
+// and no bridge ran at all. A mutation probe against the released baselines
+// confirmed exactly that: reverting the freeze produces blocking findings on
+// `agent.listProviderProfiles@3.0`, `agent.getProviderProfileRateLimits@3.0`
+// and `agent.configure@3.0`.
+//
+// Every assertion below matches on the STABLE part of the fail-closed message
+// ("newer Traycer client"), never a provider or harness name: a message naming
+// one vendor is only ever correct for the first id added after a freeze.
+describe("jcode v4.0 profile-method bridges", () => {
+  const profilesResponse = {
+    providerId: "codex" as const,
+    profiles: [
+      {
+        selection: { kind: "ambient" as const },
+        label: "Terminal account",
+        authStatus: "authenticated" as const,
+        rateLimitStatus: "unknown" as const,
+        usageUpdatedAt: null,
+        isEffectiveLastUsed: false,
+      },
+    ],
+  };
+
+  describe("agent.listProviderProfiles", () => {
+    it("passes an omp response through the v4->v3 downgrade (v3.0 shipped with omp)", () => {
+      const response = { ...profilesResponse, providerId: "omp" as const };
+      const downgraded =
+        agentListProviderProfilesDowngradeV40ToV30.downgradeResponse(response);
+      expect(downgraded).toEqual({ ok: true, value: response });
+    });
+
+    it.each([3, 2, 1] as const)(
+      "fails closed downgrading a jcode response to v%i.0",
+      (targetMajor) => {
+        const bridge = {
+          3: agentListProviderProfilesDowngradeV40ToV30,
+          2: agentListProviderProfilesDowngradeV40ToV20,
+          1: agentListProviderProfilesDowngradeV40ToV10,
+        }[targetMajor];
+        const downgraded = bridge.downgradeResponse({
+          ...profilesResponse,
+          providerId: "jcode",
+        });
+        expect(downgraded.ok).toBe(false);
+        if (downgraded.ok) return;
+        expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+        expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+        expect(downgraded.error.message).not.toMatch(/jcode/i);
+      },
+    );
+  });
+
+  describe("agent.getProviderProfileRateLimits", () => {
+    const unavailable = (provider: ProviderId) => ({
+      rateLimits: {
+        provider,
+        available: false as const,
+        reason: "timeout" as const,
+      },
+      usageUpdatedAt: null,
+    });
+
+    it("passes an omp read through the v4->v3 downgrade (v3.0 shipped with omp)", () => {
+      const response = unavailable("omp");
+      const downgraded =
+        agentGetProviderProfileRateLimitsDowngradeV40ToV30.downgradeResponse(
+          response,
+        );
+      expect(downgraded).toEqual({ ok: true, value: response });
+    });
+
+    it.each([3, 2, 1] as const)(
+      "fails closed downgrading a jcode UNAVAILABLE read to v%i.0",
+      (targetMajor) => {
+        const bridge = {
+          3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
+          2: agentGetProviderProfileRateLimitsDowngradeV40ToV20,
+          1: agentGetProviderProfileRateLimitsDowngradeV40ToV10,
+        }[targetMajor];
+        const downgraded = bridge.downgradeResponse(unavailable("jcode"));
+        expect(downgraded.ok).toBe(false);
+        if (downgraded.ok) return;
+        expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+        expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+      },
+    );
+
+    // The arm the issue said would never exist. jcode DOES expose a real quota
+    // API, so it populates `available: true` with a per-sub-provider list - and
+    // that arm is unrepresentable in every frozen union, so it must fail closed
+    // rather than degrade. Degrading to `{ available: false, provider: "jcode" }`
+    // would not help either: the frozen unions pin `providerIdSchemaV40/50/60`,
+    // none of which contain `jcode`.
+    it.each([3, 2, 1] as const)(
+      "fails closed downgrading a jcode AVAILABLE read to v%i.0",
+      (targetMajor) => {
+        const bridge = {
+          3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
+          2: agentGetProviderProfileRateLimitsDowngradeV40ToV20,
+          1: agentGetProviderProfileRateLimitsDowngradeV40ToV10,
+        }[targetMajor];
+        const downgraded = bridge.downgradeResponse({
+          rateLimits: {
+            provider: "jcode" as const,
+            available: true as const,
+            subProviders: [
+              {
+                subProviderId: "openrouter",
+                limitName: "Credits",
+                window: {
+                  usedPercent: 99.607,
+                  resetsAt: null,
+                  durationMinutes: null,
+                },
+                hardLimitReached: false,
+                error: null,
+              },
+            ],
+          },
+          usageUpdatedAt: null,
+        });
+        expect(downgraded.ok).toBe(false);
+        if (downgraded.ok) return;
+        expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+      },
+    );
+  });
+
+  describe("agent.configure", () => {
+    const settings = (harnessId: GuiHarnessId) => ({
+      harnessId,
+      model: "opus-4.7",
+      profileSelection: { kind: "ambient" as const },
+      reasoningEffort: null,
+      fastMode: false,
+      permissionMode: "supervised" as const,
+      agentMode: "regular" as const,
+    });
+
+    it("passes an omp-configured response through the v4->v3 downgrade", () => {
+      const response = { settings: settings("omp"), warnings: [] };
+      const downgraded =
+        agentConfigureDowngradeV40ToV30.downgradeResponse(response);
+      expect(downgraded).toEqual({ ok: true, value: response });
+    });
+
+    it.each([3, 2, 1] as const)(
+      "fails closed downgrading a jcode-configured response to v%i.0",
+      (targetMajor) => {
+        const bridge = {
+          3: agentConfigureDowngradeV40ToV30,
+          2: agentConfigureDowngradeV40ToV20,
+          1: agentConfigureDowngradeV40ToV10,
+        }[targetMajor];
+        const downgraded = bridge.downgradeResponse({
+          settings: settings("jcode"),
+          warnings: [],
+        });
+        expect(downgraded.ok).toBe(false);
+        if (downgraded.ok) return;
+        expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+        expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+        expect(downgraded.error.message).not.toMatch(/jcode/i);
+      },
+    );
+
+    it("keeps the v4->v3 REQUEST downgrade open (v4.0 added no request field)", () => {
+      // Unlike the v*->v1 bridges, which must refuse because v1.0 has no
+      // `permissionMode`, v4.0 reuses the v2.0 request shape verbatim.
+      const downgraded = agentConfigureDowngradeV40ToV30.downgradeRequest({
+        epicId: "e",
+        senderAgentId: "s",
+        agentId: "a",
+        harnessId: "claude",
+        model: "opus-4.7",
+        profileSelection: { kind: "ambient" },
+        reasoningEffort: null,
+        fastMode: false,
+        permissionMode: "supervised",
+      });
+      expect(downgraded.ok).toBe(true);
+    });
+
+    it("still refuses the v4->v1 request downgrade", () => {
+      const downgraded = agentConfigureDowngradeV40ToV10.downgradeRequest({
+        epicId: "e",
+        senderAgentId: "s",
+        agentId: "a",
+        harnessId: "claude",
+        model: "opus-4.7",
+        profileSelection: { kind: "ambient" },
+        reasoningEffort: null,
+        fastMode: false,
+        permissionMode: "supervised",
+      });
+      expect(downgraded.ok).toBe(false);
+      if (downgraded.ok) return;
+      expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+    });
   });
 });

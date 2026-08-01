@@ -15,7 +15,9 @@ import {
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
+  rateLimitUsageResponseSchemaV40,
   mapGrokAvailableToUnavailable,
+  mapJcodeAvailableToUnavailable,
   type ProviderRateLimits,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
@@ -247,6 +249,104 @@ export const hostGetRateLimitUsageDowngradeV3ToV1 = defineDowngradePath<
       ...response,
       providerRateLimits: mapUsageFetchFailedToNotAvailable(
         mapGrokAvailableToUnavailable(response.providerRateLimits),
+      ),
+    }),
+  }),
+});
+
+// v4.0 adds the jcode available arm to the provider-account snapshot - the
+// per-sub-provider quota list `jcode usage --json` reports. Shipped as a major
+// for exactly the reason v3.0 was: a new available union arm isn't strippable
+// by the within-major skew handler, and `host-v1.1.9` already shipped v3.0, so
+// growing it in place would have grown a released response. The request shape
+// is unchanged, so this reuses `rateLimitUsageRequestSchemaV12` directly.
+export const hostGetRateLimitUsageV40 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV12,
+  responseSchema: rateLimitUsageResponseSchemaV40,
+});
+
+// A v3.0 request and a v4.0 request are identical shapes, so the request
+// upgrade is the identity. A v3.0 response only ever carries the frozen v3.0
+// union arms, every one of which is a valid v4.0 arm (the v4.0 union is a
+// strict superset), so the response upgrade is the identity too.
+export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV30,
+  typeof hostGetRateLimitUsageV40
+>({
+  from: hostGetRateLimitUsageV30.schemaVersion,
+  to: hostGetRateLimitUsageV40.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Downgrade bridge 4.0 -> 3.0: request is identity. A jcode-available snapshot
+// degrades to the unavailable `unsupported_provider` shape (jcode has no arm in
+// the frozen v3.0 union) - the exact row a pre-jcode host returns for an
+// unknown provider today; every other arm is already valid v3.0 and passes
+// through the re-parse unchanged.
+export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV30
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV30.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV30.parse({
+      ...response,
+      providerRateLimits: mapJcodeAvailableToUnavailable(
+        response.providerRateLimits,
+      ),
+    }),
+  }),
+});
+
+// Downgrade bridge 4.0 -> 2.1: composes the jcode and grok degrades before the
+// v2.1 re-parse. Order matters only in that each map is a no-op for the other's
+// provider, so composing them is safe in either direction; jcode first keeps
+// the chain reading newest-arm-first, matching 4.0 -> 1.2 below.
+export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV21.parse({
+      ...response,
+      providerRateLimits: mapGrokAvailableToUnavailable(
+        mapJcodeAvailableToUnavailable(response.providerRateLimits),
+      ),
+    }),
+  }),
+});
+
+// Downgrade bridge 4.0 -> 1.2: composes all three frozen-line maps before the
+// v1.2 re-parse - jcode- and grok-available snapshots degrade to
+// `unsupported_provider`, and the v2-only `usage_fetch_failed` reason degrades
+// to `rate_limits_not_available` - so a v1.2 client's frozen union and 8-value
+// reason enum both keep parsing. The available-arm degrades run first so a
+// genuinely available snapshot never lands on the usage-fetch-failed branch.
+export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV12.parse({
+      ...response,
+      providerRateLimits: mapUsageFetchFailedToNotAvailable(
+        mapGrokAvailableToUnavailable(
+          mapJcodeAvailableToUnavailable(response.providerRateLimits),
+        ),
       ),
     }),
   }),

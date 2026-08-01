@@ -10,7 +10,10 @@ import type {
   ProviderRateLimitWindow,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
-import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
+import {
+  classifyProviderRateLimitWindow,
+  jcodeSubProviderRateLimitLabel,
+} from "@traycer/protocol/host/rate-limit";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -109,6 +112,7 @@ type OpenRouterRateLimits = Extract<
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type JCodeRateLimits = Extract<ProviderRateLimits, { provider: "jcode" }>;
 
 const MINUTES_PER_HOUR = 60;
 // A manual reset expiring inside this window is tinted `text-destructive` in the
@@ -1155,6 +1159,59 @@ export function GrokRateLimitView({
   );
 }
 
+/**
+ * JCode meta-harness: one row per connected sub-provider. Live windows use the
+ * shared meter; failed fetches render as muted error copy (never a 0% bar).
+ * Sub-providers with no measurable quota and no error contribute nothing.
+ * Overview and detail show the same list — every peer quota matters.
+ */
+export function JCodeRateLimitView({
+  data,
+}: {
+  readonly data: JCodeRateLimits;
+  // Kept for call-site parity with sibling views; peer quotas are not trimmed
+  // for Overview.
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  if (data.subProviders.length === 0) {
+    return (
+      <p className="text-ui-xs text-muted-foreground">
+        No connected sub-provider reported a quota.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {data.subProviders.map((sub, index) => {
+        // One sub-provider can contribute SEVERAL rows (jcode reports a list
+        // of named quotas per provider), so `subProviderId` is neither unique
+        // nor self-describing. The row's position in the host-built list is
+        // the only guaranteed-unique key — these rows are never locally
+        // reordered, inserted, or keyed into component state.
+        const key = `${index}:${sub.subProviderId}`;
+        const label = jcodeSubProviderRateLimitLabel(sub);
+        if (sub.error !== null) {
+          return (
+            <div
+              key={key}
+              className="flex items-start justify-between gap-2 text-ui-sm"
+            >
+              <span className="text-muted-foreground">{label}</span>
+              <span className="text-right text-ui-xs text-destructive">
+                {sub.error}
+              </span>
+            </div>
+          );
+        }
+        if (sub.window === null) return null;
+        return (
+          <RateLimitWindowRow key={key} label={label} window={sub.window} />
+        );
+      })}
+    </div>
+  );
+}
+
 export function ProviderRateLimitBody(
   props: ProviderRateLimitQueryState & {
     readonly codexResetAction: CodexResetCreditActionRenderer | null;
@@ -1299,5 +1356,9 @@ export function ProviderRateLimitDetail({
     // `variant` drives just the Overview-vs-detail trim.
     case "grok":
       return <GrokRateLimitView data={data} variant={variant} />;
+    // JCode is a list of peer sub-provider quotas (not a single primary/secondary
+    // pair); Overview and detail share the same rows.
+    case "jcode":
+      return <JCodeRateLimitView data={data} variant={variant} />;
   }
 }

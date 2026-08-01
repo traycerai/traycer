@@ -30,11 +30,13 @@ import {
   listAgentsResponseSchemaV30,
   listAgentsResponseSchemaV40,
   listAgentsResponseSchemaV50,
+  listAgentsResponseSchemaV60,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
   agentSummarySchemaV40,
   agentSummarySchemaV50,
+  agentSummarySchemaV60,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
@@ -586,7 +588,12 @@ export const agentListV60 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 6, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  responseSchema: listAgentsResponseSchema,
+  // Frozen: the v1.1.9 tags shipped this line, so it must serve the v6.0
+  // harness id set rather than the live one. Until this repair it still pointed
+  // at the canonical schema - the same defect that let `omp` first ride v5.0,
+  // one version later and unnoticed because the release froze the line without
+  // anyone repointing it.
+  responseSchema: listAgentsResponseSchemaV60,
 });
 
 export const agentListUpgradeV5ToV6 = defineUpgradePath<
@@ -685,6 +692,142 @@ export const agentListDowngradeV6ToV1 = defineDowngradePath<
   typeof agentListV10
 >({
   from: { major: 6, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV10.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListV70 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 7, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV6ToV7 = defineUpgradePath<
+  typeof agentListV60,
+  typeof agentListV70
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 7, minor: 0 },
+  // A v6.0 response without jcode agents is a valid v7.0 response (purely
+  // additive), and the request shape is identical - both upgrades are
+  // identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListDowngradeV7ToV6 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV60
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop jcode agents so an already-shipped v6.0 client's strict decode never
+  // sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV60.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV60.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV5 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV50
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop omp/jcode agents so an already-shipped v5.0 client's strict decode
+  // never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV50.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV50.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV4 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV40
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hermes/omp/jcode agents so an already-shipped v4.0 client's strict
+  // decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV40.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV40.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV3 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV30
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Devin/Pi/Hermes/omp/jcode agents so an already-shipped v3.0 client's
+  // strict decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV30.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV30.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV2 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV20
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV20.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV20.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV1 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV10
+>({
+  from: { major: 7, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

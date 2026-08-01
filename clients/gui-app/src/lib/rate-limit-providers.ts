@@ -30,8 +30,8 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  *   their observers opt into the table-owned fixed cadence and never enter the
  *   serial queue.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
- *   (codex, claude-code). Expensive; these are funnelled through a shared
- *   queue so background and single-profile triggers cannot overlap. The
+ *   (codex, claude-code, grok, jcode). Expensive; these are funnelled through a
+ *   shared queue so background and single-profile triggers cannot overlap. The
  *   deliberate exception is the popover's "Refresh all" queue item, which fans
  *   out its configured profiles together before the next item begins.
  */
@@ -89,6 +89,16 @@ export function rateLimitFetchLane(
       // extension (a subprocess RPC, so Traycer never touches the grok OAuth
       // token) - an ephemeral spawn like codex/claude-code, despite grok's
       // credit-shaped payload resembling the httpFetch providers'.
+      return "ephemeralProcess";
+    case "jcode":
+      // JCode spawns `jcode usage --json` (CLI subprocess). That lane is the
+      // serial ephemeral queue (`ephemeral-fetch-queue.ts`): every automatic
+      // trigger appends to one shared promise chain, so process spawns never
+      // overlap. Two jcode-specific reasons this matters: (1) the CLI fans out
+      // real upstream network calls per connected sub-provider, so tight
+      // concurrent polling would thrash credentials/rate limits; (2) the host
+      // must inherit the adapter's per-tab `JCODE_RUNTIME_DIR` — an unqueued
+      // parallel spawn can attach to the wrong daemon. Not `httpFetch`.
       return "ephemeralProcess";
   }
 }

@@ -95,6 +95,19 @@ function grok(
   };
 }
 
+function jcode(
+  subProviders: Extract<
+    ProviderRateLimits,
+    { provider: "jcode"; available: true }
+  >["subProviders"],
+): Extract<ProviderRateLimits, { provider: "jcode"; available: true }> {
+  return {
+    provider: "jcode",
+    available: true,
+    subProviders: [...subProviders],
+  };
+}
+
 function envelope(
   data: Extract<ProviderRateLimits, { available: true }>,
   lastGoodAt: number,
@@ -216,6 +229,133 @@ describe("projectProfileUsage", () => {
       windows: [],
       checkedAt: null,
     });
+  });
+
+  it("projects one JCode window per live sub-provider, named by subProviderId", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        jcode([
+          {
+            subProviderId: "openrouter",
+            limitName: null,
+            window: window(10, null, null),
+            hardLimitReached: false,
+            error: null,
+          },
+          {
+            subProviderId: "copilot",
+            limitName: null,
+            window: window(85, 300, NOW + 1),
+            hardLimitReached: false,
+            error: null,
+          },
+        ]),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.windows.map((entry) => entry.name)).toEqual([
+      "openrouter",
+      "copilot",
+    ]);
+    // Most constrained (running_low at 85%) becomes the compact bar.
+    expect(projection.compactWindow?.name).toBe("copilot");
+    expect(projection.compactWindow?.window.usedPercent).toBe(85);
+  });
+
+  it("distinguishes two quotas reported by the same JCode sub-provider", () => {
+    // jcode returns a LIST of named limits per provider, so `subProviderId`
+    // repeats. Two identically-named bars are unreadable — the user cannot
+    // tell which quota is at 92%.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        jcode([
+          {
+            subProviderId: "copilot",
+            limitName: "Premium requests",
+            window: window(92, 300, NOW + 1),
+            hardLimitReached: false,
+            error: null,
+          },
+          {
+            subProviderId: "copilot",
+            limitName: "Chat",
+            window: window(11, 300, NOW + 1),
+            hardLimitReached: false,
+            error: null,
+          },
+        ]),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection.windows.map((entry) => entry.name)).toEqual([
+      "copilot · Premium requests",
+      "copilot · Chat",
+    ]);
+    expect(projection.compactWindow?.name).toBe("copilot · Premium requests");
+  });
+
+  it("omits JCode sub-providers whose error is set (never a 0% bar)", () => {
+    // Schema separates error from window:null so a broken credential must not
+    // look like a healthy unused quota. Failed rows are omitted entirely.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        jcode([
+          {
+            subProviderId: "anthropic",
+            limitName: null,
+            window: null,
+            hardLimitReached: false,
+            error: "401 after token refresh",
+          },
+          {
+            subProviderId: "openrouter",
+            limitName: null,
+            window: window(12, null, null),
+            hardLimitReached: false,
+            error: null,
+          },
+        ]),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.windows).toHaveLength(1);
+    expect(projection.windows[0]?.name).toBe("openrouter");
+    expect(projection.windows[0]?.window.usedPercent).toBe(12);
+  });
+
+  it("never projects a JCode error row even if a window sneaks through", () => {
+    // Defensive: if host ever sent both error and a window, still omit —
+    // better a missing bar than a false healthy meter.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        jcode([
+          {
+            subProviderId: "anthropic",
+            limitName: null,
+            window: window(0, null, null),
+            hardLimitReached: false,
+            error: "credential missing",
+          },
+        ]),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection.windows).toEqual([]);
+    expect(projection.compactWindow).toBeNull();
   });
 
   it("selects the most consumed live window and ignores expired windows", () => {

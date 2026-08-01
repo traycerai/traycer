@@ -49,6 +49,23 @@ A breaking change requires a new registered persistence major and an explicit
 migration/downgrade strategy. Regenerating a fixture is not a substitute for
 versioning the contract.
 
+## Classification: additive harness/provider id growth
+
+Adding a harness/provider id to the persisted enums (`guiHarnessIdSchema` in
+`epic/foundation.ts`, the matching per-harness `chatSessionAnchorSchema` variant
+in `epic/senders.ts`) is a **same-major** change, even though the list above
+names enum growth.
+
+An older reader loses exactly the affected chat and nothing else: `harnessId`
+sits in `chatRunSettingsSchema`, the host reads a chat with one all-or-nothing
+`chatSchema.safeParse`, and `readChatSnapshot` turns that failure into
+`CHAT_INVALID` for that chat alone — the epic, its artifacts, its other chats
+and its TUI agents all still open.
+
+This covers *additive* id growth and its anchor variant only. Removing an id,
+changing what an existing id means, or growing any other enum still requires a
+new major.
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the

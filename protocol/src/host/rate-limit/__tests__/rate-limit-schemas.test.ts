@@ -5,12 +5,16 @@ import {
   hostGetRateLimitUsageDowngradeV2ToV1,
   hostGetRateLimitUsageDowngradeV3ToV1,
   hostGetRateLimitUsageDowngradeV3ToV2,
+  hostGetRateLimitUsageDowngradeV4ToV1,
+  hostGetRateLimitUsageDowngradeV4ToV2,
+  hostGetRateLimitUsageDowngradeV4ToV3,
   hostGetRateLimitUsageUpgradeV20ToV21,
   hostGetRateLimitUsageUpgradeV21ToV30,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   providerRateLimitsSchema,
+  providerRateLimitsSchemaV30,
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
   rateLimitUnavailableReasonSchemaV1,
@@ -914,5 +918,189 @@ describe("host.getRateLimitUsage v3.0 -> v2.1 / v1.2 grok downgrade bridges", ()
       hostRpcRegistry["host.getRateLimitUsage"][2].versions[1].contract
         .schemaVersion,
     ).toEqual({ major: 2, minor: 1 });
+  });
+});
+
+// ─── jcode: the v4.0 available arm ─────────────────────────────────────────
+//
+// `host.getRateLimitUsage@3.0` IS released (`host-v1.1.9`), and it served the
+// LIVE union until the jcode work pinned it to `providerRateLimitsSchemaV30`.
+// Without that pin the jcode available arm would have landed on an
+// already-released response - and the registry's own validator proves the pin
+// is load-bearing: reverting it makes the 3 -> 4 major bump non-breaking and
+// `defineFloorAwareVersionedRpcRegistry` refuses to load at all.
+describe("jcode rate-limit available arm and the 4.0 bridges", () => {
+  // Local copies of the two cross-arm fixtures: the originals are scoped to the
+  // v3.0 describe above, and the grok pair is needed here to prove the jcode
+  // degrade does not take grok down with it.
+  const grokAvailableWithPeriod = {
+    provider: "grok" as const,
+    available: true as const,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: 1753142400000,
+    periodEnd: 1753747200000,
+    period: {
+      usedPercent: 12,
+      resetsAt: 1753747200000,
+      durationMinutes: 10080,
+    },
+    monthlyLimit: null,
+    onDemandCap: 0,
+    onDemandUsed: 0,
+    prepaidBalance: 0,
+  };
+
+  const grokUnavailable = {
+    provider: "grok" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const codexAvailable = {
+    provider: "codex" as const,
+    available: true as const,
+    planType: "plus",
+    limitId: "plus-primary",
+    limitName: "Plus",
+    primary: {
+      usedPercent: 42,
+      resetsAt: 1735689600000,
+      durationMinutes: 300,
+    },
+    secondary: null,
+    extraWindows: [],
+    credits: null,
+    individualLimit: null,
+    resetCredits: null,
+    rateLimitReachedType: null,
+  };
+
+  const jcodeAvailable = {
+    provider: "jcode" as const,
+    available: true as const,
+    subProviders: [
+      {
+        // Percent CONSUMED, straight from jcode's `usage_percent`.
+        subProviderId: "openrouter",
+        limitName: "Credits",
+        window: { usedPercent: 99.607, resetsAt: null, durationMinutes: null },
+        hardLimitReached: false,
+        error: null,
+      },
+      {
+        // Only Antigravity and Copilot report a reset instant upstream.
+        subProviderId: "copilot",
+        limitName: "Premium requests",
+        window: {
+          usedPercent: 12,
+          resetsAt: 1_700_000_000_000,
+          durationMinutes: null,
+        },
+        hardLimitReached: false,
+        error: null,
+      },
+      {
+        // A failed fetch, NOT a healthy zero - distinguished by `error`.
+        subProviderId: "anthropic",
+        limitName: null,
+        window: null,
+        hardLimitReached: false,
+        error: "401 after token refresh",
+      },
+    ],
+  };
+
+  const jcodeUnavailable = {
+    provider: "jcode" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  it("accepts the per-sub-provider list on the live union", () => {
+    expect(providerRateLimitsSchema.safeParse(jcodeAvailable).success).toBe(
+      true,
+    );
+  });
+
+  it("accepts an empty sub-provider list as available (nothing to show != could not ask)", () => {
+    expect(
+      providerRateLimitsSchema.safeParse({
+        provider: "jcode",
+        available: true,
+        subProviders: [],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps the jcode arm OFF the frozen v3.0 union", () => {
+    // The whole reason v4.0 exists. If this ever passes, the freeze has been
+    // widened and a released `host-v1.1.9` peer would receive an arm it cannot
+    // decode.
+    expect(providerRateLimitsSchemaV30.safeParse(jcodeAvailable).success).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ["4.0 -> 3.0", hostGetRateLimitUsageDowngradeV4ToV3],
+    ["4.0 -> 2.1", hostGetRateLimitUsageDowngradeV4ToV2],
+    ["4.0 -> 1.2", hostGetRateLimitUsageDowngradeV4ToV1],
+  ] as const)(
+    "degrades a jcode-available snapshot to unsupported_provider through the %s bridge",
+    (_label, bridge) => {
+      const downgraded = bridge.downgradeResponse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: jcodeAvailable,
+      });
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) return;
+      expect(downgraded.value.providerRateLimits).toEqual(jcodeUnavailable);
+    },
+  );
+
+  it("passes non-jcode arms and null through the 4.0 -> 3.0 bridge unchanged", () => {
+    const withCodex = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: codexAvailable,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(withCodex),
+    ).toEqual({ ok: true, value: withCodex });
+
+    const withNull = {
+      totalTokens: 100,
+      remainingTokens: 50,
+      providerRateLimits: null,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(withNull),
+    ).toEqual({ ok: true, value: withNull });
+  });
+
+  it("still degrades grok on the 4.0 -> 1.2 bridge (both maps compose)", () => {
+    const downgraded = hostGetRateLimitUsageDowngradeV4ToV1.downgradeResponse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    });
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    expect(downgraded.value.providerRateLimits).toEqual(grokUnavailable);
+  });
+
+  it("keeps the grok available arm on the 4.0 -> 3.0 bridge (v3.0 shipped with grok)", () => {
+    // The jcode degrade must not accidentally take grok down with it - v3.0's
+    // frozen union genuinely carries the grok arm.
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(response),
+    ).toEqual({ ok: true, value: response });
   });
 });

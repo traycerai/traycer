@@ -270,8 +270,12 @@ export function resolveProviderPlanLabel(
     // intra-word capital ("Supergrok").
     case "grok":
       return data.subscriptionTier;
+    // OpenRouter and Kilo Code expose no plan/tier field. JCode is a
+    // meta-harness: tier is per sub-provider, not a single plan/tier field on
+    // the account, so no chip is the honest render.
     case "openrouter":
     case "kilocode":
+    case "jcode":
       return null;
   }
 }

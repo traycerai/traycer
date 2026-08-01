@@ -31,6 +31,10 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   // OpenRouter, ...) in its own credential store; the env name is illustrative
   // only, same as Hermes above.
   omp: "OPENROUTER_API_KEY",
+  // JCode is a meta-harness: it authenticates ~46 sub-providers (OAuth logins
+  // and per-provider keys), not a single Traycer-stored API key. OPENROUTER is
+  // one common sub-provider path — illustrative only.
+  jcode: "OPENROUTER_API_KEY",
 };
 
 export function envNamePlaceholder(providerId: ProviderId): string {

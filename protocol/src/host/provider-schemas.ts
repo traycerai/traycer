@@ -180,6 +180,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   pi: "Pi",
   hermes: "Hermes Agent",
   omp: "Oh My Pi",
+  jcode: "JCode",
 };
 
 /**
@@ -2195,6 +2196,26 @@ export function downgradeProviderCliStateListToV50(
 ): ProviderCliStateV50[] {
   return states.flatMap((state) => {
     const parsed = providerCliStateSchemaV50.safeParse(state);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * Drop post-v6.0 providers (currently `jcode`) for an already-shipped v6.0
+ * client. Same filter-by-reparse shape as the older bridges.
+ *
+ * The v7->v6 hop needed this the moment a provider id landed after `cli-v1.1.9`:
+ * until then the two id sets were identical, so that bridge could reparse the
+ * whole list through the frozen v6.0 schema purely to strip the
+ * provider-pack-registry fields. With `jcode` on the live enum that straight
+ * reparse would THROW on the jcode row instead of dropping it, so the hop must
+ * filter first - the reparse still strips the unmodeled registry keys.
+ */
+export function downgradeProviderCliStateListToV60(
+  states: readonly unknown[],
+): ProviderCliStateV60[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV60.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

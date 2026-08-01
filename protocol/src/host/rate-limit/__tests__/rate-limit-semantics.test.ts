@@ -53,6 +53,37 @@ function codex(
   };
 }
 
+function jcode(
+  subProviders: readonly {
+    subProviderId: string;
+    limitName: string | null;
+    window: ProviderRateLimitWindow | null;
+    hardLimitReached: boolean;
+    error: string | null;
+  }[],
+): ProviderRateLimits {
+  return {
+    provider: "jcode",
+    available: true,
+    subProviders: [...subProviders],
+  };
+}
+
+function jcodeSub(
+  subProviderId: string,
+  windowValue: ProviderRateLimitWindow | null,
+  hardLimitReached: boolean,
+  error: string | null,
+) {
+  return {
+    subProviderId,
+    limitName: null,
+    window: windowValue,
+    hardLimitReached,
+    error,
+  };
+}
+
 describe("classifyProviderRateLimitWindow", () => {
   it("warns short windows at 80% and long or undated windows at 95%", () => {
     expect(classifyProviderRateLimitWindow(window(79, 300, null))).toBe(
@@ -138,5 +169,117 @@ describe("classifyProviderRateLimits", () => {
         NOW,
       ),
     ).toBe("unknown");
+  });
+});
+
+// jcode is the only provider whose quota is genuinely per SUB-provider, so its
+// arm contributes a LIST of windows the way claude-code's model-scoped windows
+// do. These pin that it folds into the shared rollup with no special casing -
+// and that a failed sub-provider fetch never reads as headroom.
+describe("jcode per-sub-provider severity folding", () => {
+  it("takes the worst live sub-provider window", () => {
+    expect(
+      classifyProviderRateLimits(
+        jcode([
+          jcodeSub("openrouter", window(10, null, null), false, null),
+          jcodeSub("copilot", window(85, 300, NOW + 1), false, null),
+        ]),
+        NOW,
+      ),
+    ).toBe("running_low");
+  });
+
+  it("stays Healthy when every live sub-provider is well under its threshold", () => {
+    expect(
+      classifyProviderRateLimits(
+        jcode([
+          jcodeSub("openrouter", window(10, null, null), false, null),
+          jcodeSub("anthropic", window(20, 300, NOW + 1), false, null),
+        ]),
+        NOW,
+      ),
+    ).toBe("healthy");
+  });
+
+  it("reports Unknown - never Healthy - when a sub-provider's fetch failed and nothing else reported", () => {
+    // Both "fetch failed" and "no quota" carry `window: null`. Neither may be
+    // read as 0% used.
+    expect(
+      classifyProviderRateLimits(
+        jcode([jcodeSub("anthropic", null, false, "401 after token refresh")]),
+        NOW,
+      ),
+    ).toBe("unknown");
+  });
+
+  it("reports Unknown for an empty sub-provider list", () => {
+    expect(classifyProviderRateLimits(jcode([]), NOW)).toBe("unknown");
+  });
+
+  it("honors hardLimitReached as authoritative, like Codex's reached-type", () => {
+    // jcode computes `hard_limit_reached` upstream but does not serialize it,
+    // so the host derives it. Reading the flag rather than re-deriving keeps a
+    // future upstream rule change honest.
+    expect(
+      classifyProviderRateLimits(
+        jcode([jcodeSub("copilot", window(12, 300, NOW + 1), true, null)]),
+        NOW,
+      ),
+    ).toBe("limited");
+  });
+
+  it("discards an authoritative hard-limit signal from a fully expired capture", () => {
+    // Same staleness guard Codex gets: an all-expired capture is Unknown, not
+    // a stale "limited" that outlives the window it came from.
+    expect(
+      classifyProviderRateLimits(
+        jcode([jcodeSub("copilot", window(100, 300, NOW - 1), true, null)]),
+        NOW,
+      ),
+    ).toBe("unknown");
+  });
+
+  it("does not let an EXPIRED hard-limit row limit a healthy live snapshot", () => {
+    // jcode is the only LIST arm, so one capture mixes rows with independent
+    // reset times. The all-expired guard above only fires when EVERY row is
+    // stale, so a rolled-over OpenRouter row must be dropped on its own
+    // liveness - otherwise a user with headroom everywhere reads as limited.
+    expect(
+      classifyProviderRateLimits(
+        jcode([
+          jcodeSub("openrouter", window(100, 300, NOW - 1), true, null),
+          jcodeSub("copilot", window(30, 300, NOW + 1), false, null),
+        ]),
+        NOW,
+      ),
+    ).toBe("healthy");
+  });
+
+  it("keeps a hard-limit row with no window authoritative", () => {
+    // No window is no evidence of rolling over, matching the null-reset rule
+    // in `isProviderRateLimitWindowLive`. Today the host never emits this
+    // pair; an upstream build that starts serializing `hard_limit_reached`
+    // without a percentage would, and it must not be silently discarded.
+    expect(
+      classifyProviderRateLimits(
+        jcode([
+          jcodeSub("copilot", null, true, null),
+          jcodeSub("openrouter", window(30, 300, NOW + 1), false, null),
+        ]),
+        NOW,
+      ),
+    ).toBe("limited");
+  });
+
+  it("drops expired sub-provider windows from the live set", () => {
+    expect(
+      liveProviderRateLimitWindows(
+        jcode([
+          jcodeSub("openrouter", window(90, 300, NOW - 1), false, null),
+          jcodeSub("copilot", window(30, 300, NOW + 1), false, null),
+        ]),
+        NOW,
+      ),
+    ).toEqual([window(30, 300, NOW + 1)]);
   });
 });
