@@ -5,22 +5,22 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
-  AgentMode,
-  TuiHarnessId,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { useEpicCreateTuiAgentForClient } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
+import { useValidateTuiForkProfile } from "@/hooks/agent/use-validate-tui-fork-profile-mutation";
+import { useTuiForkProfileSupported } from "@/hooks/agent/use-tui-fork-profile-support";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { displayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -77,6 +77,18 @@ type WorktreeCreateResponse = ResponseOfMethod<
 type WorktreeCreateMutateAsync = (
   variables: WorktreeCreateRequest,
 ) => Promise<WorktreeCreateResponse>;
+
+type ValidateForkProfileRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "agent.tui.validateForkProfile"
+>;
+type ValidateForkProfileResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "agent.tui.validateForkProfile"
+>;
+type ValidateForkProfileMutateAsync = (
+  variables: ValidateForkProfileRequest,
+) => Promise<ValidateForkProfileResponse>;
 
 /**
  * Composite mutation that:
@@ -157,8 +169,23 @@ export interface CreateTuiAgentInput {
   readonly harnessId: TuiHarnessId;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
-  readonly agentMode: AgentMode;
   readonly forkSourceHarnessSessionId: string | null;
+  /**
+   * The fork source's own stable artifact id (T3 "stable source id"). `null`
+   * for a non-fork launch. Threaded onto `agent.tui.prepareLaunch` as
+   * `forkSourceTuiAgentId` so the resolver validates the exact
+   * `{id, epic, harness, session, user, host}` tuple instead of scanning for
+   * a `(harnessId, harnessSessionId, hostId, userId)` match, and used here to
+   * preflight cross-profile admission before any worktree/binding work.
+   */
+  readonly sourceTuiAgentId: string | null;
+  /**
+   * The fork source's own `profileId`, so this hook can tell a cross-profile
+   * fork (preflight required) apart from a same-profile one (the guard
+   * trivially admits; skip the extra round trip). `null` for a non-fork
+   * launch, or when the source itself runs ambient.
+   */
+  readonly sourceProfileId: string | null;
   readonly onStatusChange: ((status: CreateTuiAgentStatus) => void) | null;
   /**
    * Optional worktree binding intent. `null` means no explicit worktree
@@ -213,6 +240,9 @@ export function useCreateTuiAgentForClient(
   const startSession = useAgentStartTerminalSession(hostClient);
   const createTuiAgent = useEpicCreateTuiAgentForClient(hostClient);
   const worktreeCreate = useWorktreeCreateForClient(hostClient);
+  const validateForkProfile = useValidateTuiForkProfile(hostClient);
+  const forkProfilePreflightSupported =
+    useTuiForkProfileSupported(placeholderHostId);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -280,6 +310,23 @@ export function useCreateTuiAgentForClient(
 
       let clearStashedPreparedLaunch = false;
       try {
+        // Preflight cross-profile fork admission BEFORE anything else -
+        // including the placeholder tile and worktree/binding work below -
+        // so a rejection leaves NOTHING created (tech plan governing
+        // mechanism 2, T3 client ordering). See
+        // `resolveForkProfilePreflightTarget` for when this actually applies.
+        const preflightTarget = resolveForkProfilePreflightTarget(
+          input,
+          forkProfilePreflightSupported,
+        );
+        if (preflightTarget !== null) {
+          await preflightForkProfileAdmission({
+            epicId: input.epicId,
+            sourceTuiAgentId: preflightTarget.sourceTuiAgentId,
+            targetProfileId: preflightTarget.targetProfileId,
+            validateForkProfile: validateForkProfile.mutateAsync,
+          });
+        }
         if (!opensAfterSessionPrepared) {
           openPlaceholder();
         }
@@ -319,10 +366,13 @@ export function useCreateTuiAgentForClient(
           epicId: input.epicId,
           model: input.model,
           reasoningEffort: input.reasoningEffort,
-          agentMode: input.agentMode,
+          // Epic Mode was removed from the product; the protocol still carries
+          // the field, so state the one remaining mode.
+          agentMode: "regular",
           tuiAgentId,
           harnessSessionId: null,
           forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
+          forkSourceTuiAgentId: input.sourceTuiAgentId,
           terminalAgentArgs: input.terminalAgentArgs,
           workspaceMode: input.workspaceMode,
           profileId: input.profileId,
@@ -361,9 +411,10 @@ export function useCreateTuiAgentForClient(
           workspaceMode: input.workspaceMode,
           model: input.model,
           reasoningEffort: input.reasoningEffort,
-          agentMode: input.agentMode,
+          agentMode: "regular",
           tuiAgentId,
           profileId: input.profileId,
+          forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
         });
         // Hold the pending-create mark until the record actually projects, so
         // the close-tile reconcile can't close the optimistic tab in the window
@@ -392,16 +443,76 @@ export function useCreateTuiAgentForClient(
       unmarkArtifactPendingCreate,
       placeholderHostId,
       worktreeCreate,
+      validateForkProfile,
+      forkProfilePreflightSupported,
     ],
   );
 
   return {
     create,
     isPending:
+      validateForkProfile.isPending ||
       startSession.isPending ||
       createTuiAgent.isPending ||
       worktreeCreate.isPending,
   };
+}
+
+// Only a genuine cross-profile fork needs the preflight round trip: a
+// same-profile fork (including every non-fork launch, where
+// `sourceTuiAgentId` is `null`) trivially admits on the host's own guard.
+// `null` also when the connected host predates the capability - never call
+// an unsupported method; `agent.tui.prepareLaunch`'s own authoritative guard
+// still backstops that case with the strict-scan fallback. Split out of
+// `create` purely to keep that callback's branch count down, and returns the
+// narrowed non-null `sourceTuiAgentId` so the call site needs no second null
+// check of its own.
+function resolveForkProfilePreflightTarget(
+  input: CreateTuiAgentInput,
+  preflightSupported: boolean,
+): { sourceTuiAgentId: string; targetProfileId: string | null } | null {
+  if (
+    input.sourceTuiAgentId === null ||
+    input.profileId === input.sourceProfileId ||
+    !preflightSupported
+  ) {
+    return null;
+  }
+  return {
+    sourceTuiAgentId: input.sourceTuiAgentId,
+    targetProfileId: input.profileId,
+  };
+}
+
+interface PreflightForkProfileAdmissionArgs {
+  readonly epicId: string;
+  readonly sourceTuiAgentId: string;
+  readonly targetProfileId: string | null;
+  readonly validateForkProfile: ValidateForkProfileMutateAsync;
+}
+
+// Read-only preflight against the guard core's bulk-verdict shape (T3), asked
+// for exactly this one target profile. Rejects with `TuiForkProfileRejectedError`
+// - never a silent no-op - so the caller's `try` aborts before any
+// worktree/binding side effect. `agent.tui.prepareLaunch` re-runs the SAME
+// guard authoritatively (TOCTOU-safe); this call is advisory only.
+async function preflightForkProfileAdmission(
+  args: PreflightForkProfileAdmissionArgs,
+): Promise<void> {
+  const result = await args.validateForkProfile({
+    epicId: args.epicId,
+    sourceTuiAgentId: args.sourceTuiAgentId,
+    targetProfileIds: [args.targetProfileId],
+  });
+  const verdict = result.verdicts.find(
+    (candidate) => candidate.targetProfileId === args.targetProfileId,
+  );
+  if (verdict?.admitted === true) return;
+  const subcode = verdict?.subcode ?? "SCOPE_MISMATCH";
+  const message =
+    verdict?.message ??
+    "This profile doesn't share conversation history with the source terminal agent.";
+  throw new TuiForkProfileRejectedError(subcode, message);
 }
 
 interface DispatchWorktreeIntentArgs {

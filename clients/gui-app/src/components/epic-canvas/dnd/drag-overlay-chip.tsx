@@ -7,7 +7,7 @@
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
-import { FileDiff, FilePlus } from "lucide-react";
+import { FileDiff, FilePlus, GitPullRequest } from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
@@ -25,10 +25,14 @@ import {
   isCommGraphTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
+  isPrDetailTileRef,
+  isPrDiffTileRef,
   type BlankTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
+  type PrDetailTileRef,
+  type PrDiffTileRef,
   type SnapshotDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
@@ -133,6 +137,12 @@ function EpicCanvasNodeDragOverlay(props: {
   if (isDiffTileRef(props.node)) {
     return <DiffTileDragOverlay node={props.node} />;
   }
+  if (isPrDetailTileRef(props.node)) {
+    return <PrDetailTileDragOverlay node={props.node} />;
+  }
+  if (isPrDiffTileRef(props.node)) {
+    return <PrDiffTileDragOverlay node={props.node} />;
+  }
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
   }
@@ -151,6 +161,24 @@ function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {
   return (
     <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+    </m.div>
+  );
+}
+
+function PrDetailTileDragOverlay(props: { readonly node: PrDetailTileRef }) {
+  return (
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+    </m.div>
+  );
+}
+
+function PrDiffTileDragOverlay(props: { readonly node: PrDiffTileRef }) {
+  return (
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+      <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
   );

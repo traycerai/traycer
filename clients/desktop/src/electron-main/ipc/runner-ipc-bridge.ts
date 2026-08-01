@@ -23,14 +23,20 @@ import type {
   PerWindowStateCapabilities,
   PerWindowStatePatch,
   PerWindowStateUpdateAcknowledgement,
+  SupportBuildPublicDraftResult,
+  SupportFingerprintOccurrence,
+  SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
+  SupportReadFrozenLogTailInput,
   SupportRevealLogResult,
+  SupportSaveDiagnosticBundleResult,
   SupportSnapshot,
   SupportSubmitReportRequest,
   SupportSubmitReportResult,
   WindowSummary,
 } from "../../ipc-contracts/window-types";
+import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 import type {
   CredentialsMigrationOutcome,
   StoredAuthTokens,
@@ -227,13 +233,38 @@ export interface IpcZoomController {
 export interface IpcSupportService {
   getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
+  // `frozenEvidenceKey` is composed in the IPC layer (support-ipc.ts) from
+  // the sender's webContents id + the renderer-local draftId - a draftId
+  // alone is only unique within one renderer realm, and this service is one
+  // process-wide map shared by every window.
   submitReport(
     form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
   ): Promise<SupportSubmitReportResult>;
   tailLog(input: {
     readonly target: SupportLogTarget;
     readonly tailLines: number;
   }): Promise<SupportLogTailResult>;
+  freezeEvidence(
+    frozenEvidenceKey: string,
+    fingerprint: string | null,
+  ): Promise<SupportFreezeEvidenceResult>;
+  discardFrozenEvidence(frozenEvidenceKey: string): void;
+  readFrozenLogTail(
+    frozenEvidenceKey: string,
+    target: SupportLogTarget,
+  ): Promise<SupportLogTailResult>;
+  saveDiagnosticBundle(
+    form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
+  ): Promise<SupportSaveDiagnosticBundleResult>;
+  getFingerprintOccurrence(
+    fingerprint: string,
+  ): Promise<SupportFingerprintOccurrence | null>;
+  buildPublicDraft(
+    form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
+  ): Promise<SupportBuildPublicDraftResult>;
 }
 
 type HostChangeListener = (snapshot: DesktopLocalHostSnapshot | null) => void;
@@ -567,6 +598,31 @@ export class RunnerIpcBridge {
       RunnerHostEvent.notificationClick,
       payload,
     );
+  }
+
+  /**
+   * Relays a renderer-owned notification to the focused renderer when the
+   * emitter lives in another window. The originating renderer already drew
+   * its own toast, so same-window focus needs no duplicate delivery.
+   */
+  deliverForegroundNotificationDisplay(
+    senderWebContentsId: number | null,
+    display: DesktopNotificationForegroundDisplay,
+  ): boolean {
+    const focused = this.findFocusedLiveRecord();
+    if (focused === null) return false;
+    if (focused.webContentsId === senderWebContentsId) return true;
+    const delivered = this.safeSendToWindow(
+      focused.windowId,
+      RunnerHostEvent.notificationForegroundDisplay,
+      display,
+    );
+    if (!delivered) {
+      log.warn("[runner-ipc] foreground notification relay failed", {
+        windowId: focused.windowId,
+      });
+    }
+    return delivered;
   }
 
   /**
@@ -1003,18 +1059,24 @@ export class RunnerIpcBridge {
   private resolveRendererHostedCommandTarget(
     command: MenuCommandId,
   ): IpcWindowRecord | null {
-    const focused = this.windowRegistry
-      .records()
-      .find(
-        (record) => record.window.isFocused() && !record.window.isDestroyed(),
-      );
-    if (focused !== undefined) {
+    const focused = this.findFocusedLiveRecord();
+    if (focused !== null) {
       return focused;
     }
     if (isMruFallbackMenuCommand(command)) {
       return this.windowRegistry.getMruRecord();
     }
     return null;
+  }
+
+  private findFocusedLiveRecord(): IpcWindowRecord | null {
+    return (
+      this.windowRegistry
+        .records()
+        .find(
+          (record) => !record.window.isDestroyed() && record.window.isFocused(),
+        ) ?? null
+    );
   }
 
   pruneClosedWindowState(): void {
@@ -1334,6 +1396,7 @@ class NullSupportService implements IpcSupportService {
       logs: [],
       links: [],
       supportEmail: "",
+      privateDeliveryAvailable: false,
     });
   }
 
@@ -1343,8 +1406,9 @@ class NullSupportService implements IpcSupportService {
 
   submitReport(
     _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
   ): Promise<SupportSubmitReportResult> {
-    return Promise.resolve({ reportId: null });
+    return Promise.resolve({ status: "unavailable" });
   }
 
   tailLog(input: {
@@ -1355,6 +1419,58 @@ class NullSupportService implements IpcSupportService {
       target: input.target,
       path: "",
       lines: [],
+      truncated: false,
+    });
+  }
+
+  freezeEvidence(
+    _frozenEvidenceKey: string,
+    _fingerprint: string | null,
+  ): Promise<SupportFreezeEvidenceResult> {
+    return Promise.reject(new Error("Support evidence is unavailable"));
+  }
+
+  discardFrozenEvidence(_frozenEvidenceKey: string): void {}
+
+  readFrozenLogTail(
+    _frozenEvidenceKey: string,
+    target: SupportLogTarget,
+  ): Promise<SupportLogTailResult> {
+    return Promise.resolve({
+      target,
+      path: "",
+      lines: [],
+      truncated: false,
+    });
+  }
+
+  saveDiagnosticBundle(
+    _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
+  ): Promise<SupportSaveDiagnosticBundleResult> {
+    return Promise.resolve({ path: "" });
+  }
+
+  getFingerprintOccurrence(
+    _fingerprint: string,
+  ): Promise<SupportFingerprintOccurrence | null> {
+    return Promise.resolve(null);
+  }
+
+  buildPublicDraft(
+    _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
+  ): Promise<SupportBuildPublicDraftResult> {
+    return Promise.resolve({
+      template: "bug_report.yml",
+      title: "",
+      fields: {
+        "what-happened": "",
+        version: "",
+        os: "",
+        component: "",
+        repro: "",
+      },
       truncated: false,
     });
   }

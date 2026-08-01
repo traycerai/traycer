@@ -184,7 +184,6 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           reasoning: "high",
           serviceTier: "",
           permission: "supervised",
-          agentMode: "regular",
         },
       });
     };
@@ -386,6 +385,7 @@ describe("<HomePage />", () => {
           path: "/tmp/draft-app",
           name: "draft-app",
           repoIdentifier: null,
+          hostId: null,
         },
       },
     });
@@ -398,6 +398,7 @@ describe("<HomePage />", () => {
           path: "/tmp/global-app",
           name: "global-app",
           repoIdentifier: null,
+          hostId: null,
         },
       },
     });
@@ -425,6 +426,7 @@ describe("<HomePage />", () => {
           path: "/tmp/traycer",
           name: "traycer",
           repoIdentifier: null,
+          hostId: null,
         },
       },
     });
@@ -522,11 +524,13 @@ describe("<HomePage />", () => {
           path: "/tmp/gui-app",
           name: "gui-app",
           repoIdentifier: { owner: "traycerai", repo: "gui-app" },
+          hostId: null,
         },
         "/tmp/host": {
           path: "/tmp/host",
           name: "host",
           repoIdentifier: { owner: "traycerai", repo: "host" },
+          hostId: null,
         },
       },
     });

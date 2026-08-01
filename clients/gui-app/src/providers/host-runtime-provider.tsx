@@ -219,11 +219,14 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // the existing context's credential lease in place (refresh
       // succeeded) or signs the user out (refresh rejected) instead of
       // leaving them staring at a generic failure toast.
-      // Retry is the outermost layer: a pre-send transient dial/handshake
-      // failure (`RetryableTransportError`) re-dials on a short backoff before
-      // the auth-aware wrapper or the query layer ever see it. The auth wrapper
-      // only acts on `UNAUTHORIZED`, never a retryable transport error, so the
-      // two never contend. When auth revalidation really rotates the bearer,
+      // Retry is the outermost layer: a transport failure the host provably
+      // never dispatched (`RetryableTransportError` - a pre-send dial/handshake
+      // failure, or a host-attested post-`openAck` request timeout) re-dials on
+      // a short backoff before the auth-aware wrapper or the query layer ever
+      // see it. That includes the legacy `UNAUTHORIZED` spelling of the
+      // post-open timeout, which is why the auth wrapper never sees it as a
+      // credential rejection. The auth wrapper only acts on `UNAUTHORIZED`,
+      // never a retryable transport error, so the two never contend. When auth revalidation really rotates the bearer,
       // retry the same RPC once against the fresh lease; some usage-limit
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.

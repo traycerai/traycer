@@ -198,11 +198,16 @@ beforeEach(() => {
       postSwapAction: "install",
       postSwapError: null,
     },
-    lifecycle: { beforeSwap: vi.fn(), afterSwap: vi.fn() },
+    lifecycle: {
+      beforeSwap: vi.fn(),
+      afterSwap: vi.fn(),
+      swapLockRecovery: null,
+    },
   }));
   createBytesOnlyInstallLifecycleMock.mockImplementation(() => ({
     beforeSwap: vi.fn(),
     afterSwap: vi.fn(),
+    swapLockRecovery: null,
   }));
   stageHostInstallSourceMock.mockResolvedValue({
     stagingDir: "/tmp/staged",

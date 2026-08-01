@@ -21,7 +21,6 @@ import {
   useWorktreeIntentStagingStore,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { isTuiHarnessId } from "@/components/home/data/landing-options";
-import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { cn } from "@/lib/utils";
@@ -56,6 +55,7 @@ export interface AddArtifactDropdownProps {
   children: ReactNode;
   open: boolean | undefined;
   onOpenChange: ((open: boolean) => void) | undefined;
+  menuPlacement: "header" | "row";
   menuTestId: string;
   itemTestId: (type: EpicNodeKind) => string;
   onAdd: (type: EpicNodeKind) => void;
@@ -121,6 +121,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     children,
     open,
     onOpenChange,
+    menuPlacement,
     menuTestId,
     itemTestId,
     onAdd,
@@ -180,7 +181,10 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
       <DropdownMenuContent
-        align="end"
+        side={menuPlacement === "header" ? "right" : "bottom"}
+        align={menuPlacement === "header" ? "start" : "end"}
+        sideOffset={menuPlacement === "header" ? 8 : 4}
+        avoidCollisions={menuPlacement !== "header"}
         className="w-[min(90vw,11rem)]"
         data-testid={menuTestId}
       >
@@ -292,8 +296,6 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;
   const reasoning = useStore(toolbarStore, (state) => state.reasoning);
-  const agentMode = useStore(toolbarStore, (state) => state.agentMode);
-  const setAgentMode = useStore(toolbarStore, (state) => state.setAgentMode);
   const selectionIsTuiCapable = useStore(
     toolbarStore,
     (state) =>
@@ -341,7 +343,6 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       harnessId: selectedHarnessId,
       model: selection.modelSlug.length > 0 ? selection.modelSlug : null,
       reasoningEffort: reasoning.length > 0 ? reasoning : null,
-      agentMode,
       terminalAgentArgs: argsTouched ? argsDraft : null,
       profileId: selection.profileId,
       worktreeIntent: launchWorkspace.worktreeIntent,
@@ -351,7 +352,6 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       ),
     });
   }, [
-    agentMode,
     argsDraft,
     argsTouched,
     launchDisabled,
@@ -403,15 +403,8 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             // dropdown's own `useProvidersList()` read below.
             createProfileHostId={null}
             runTargetHostId={null}
+            profileAdmission={null}
           />
-          <div className="shrink-0">
-            <AgentModeToggle
-              value={agentMode}
-              disabled={tuiAgentPending}
-              showTooltip={false}
-              onChange={setAgentMode}
-            />
-          </div>
         </div>
       </section>
       <section

@@ -35,7 +35,22 @@ class FakeNotification {
   }
 }
 
+class FakeBrowserWindow {
+  static windows: Array<{
+    readonly destroyed: boolean;
+    readonly focused: boolean;
+  }> = [];
+
+  static getAllWindows() {
+    return FakeBrowserWindow.windows.map((window) => ({
+      isDestroyed: () => window.destroyed,
+      isFocused: () => window.focused,
+    }));
+  }
+}
+
 vi.mock("electron", () => ({
+  BrowserWindow: FakeBrowserWindow,
   Notification: FakeNotification,
 }));
 
@@ -47,6 +62,7 @@ vi.mock("../app/logger", () => ({
 }));
 
 beforeEach(() => {
+  FakeBrowserWindow.windows = [];
   FakeNotification.supported = true;
   FakeNotification.instances = [];
   vi.useFakeTimers();
@@ -69,10 +85,93 @@ function showOptions(replaceKey: string) {
     replaceKey,
     deliveryKey: null,
     onClick: null,
+    onForegroundSuppressed: null,
   };
 }
 
 describe("showNativeNotification", () => {
+  it("suppresses the OS notification when any live Traycer window is focused", async () => {
+    const { showNativeNotification } = await loadNotifications();
+    const onForegroundSuppressed = vi.fn();
+    FakeBrowserWindow.windows = [
+      { destroyed: false, focused: false },
+      { destroyed: false, focused: true },
+    ];
+
+    showNativeNotification({
+      ...showOptions("host:chat:chat-1"),
+      onForegroundSuppressed,
+    });
+
+    expect(FakeNotification.instances).toHaveLength(0);
+    expect(onForegroundSuppressed).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a foreground-suppressed delivery after the app loses focus", async () => {
+    const { showNativeNotification } = await loadNotifications();
+    const options = {
+      ...showOptions("host:chat:chat-1"),
+      deliveryKey: "user-1:notification-1:10",
+    };
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+    showNativeNotification(options);
+
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: false }];
+    showNativeNotification(options);
+
+    expect(FakeNotification.instances).toHaveLength(0);
+  });
+
+  it("does not commit an exact delivery key when the foreground relay fails", async () => {
+    const { showNativeNotification } = await loadNotifications();
+    const options = {
+      ...showOptions("host:chat:chat-1"),
+      deliveryKey: "user-1:notification-1:10",
+      onForegroundSuppressed: () => {
+        throw new Error("focused renderer unavailable");
+      },
+    };
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+
+    expect(() => showNativeNotification(options)).toThrow(
+      "focused renderer unavailable",
+    );
+
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: false }];
+    showNativeNotification({
+      ...options,
+      onForegroundSuppressed: null,
+    });
+
+    expect(FakeNotification.instances).toHaveLength(1);
+    expect(FakeNotification.instances[0]?.show).toHaveBeenCalledOnce();
+  });
+
+  it("closes a stale same-key notification when its replacement is foreground-suppressed", async () => {
+    const { showNativeNotification } = await loadNotifications();
+    showNativeNotification(showOptions("host:chat:chat-1"));
+    const stale = FakeNotification.instances[0];
+
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+    showNativeNotification(showOptions("host:chat:chat-1"));
+
+    expect(stale.close).toHaveBeenCalledOnce();
+    expect(FakeNotification.instances).toHaveLength(1);
+  });
+
+  it("shows the OS notification when no live Traycer window is focused", async () => {
+    const { showNativeNotification } = await loadNotifications();
+    FakeBrowserWindow.windows = [
+      { destroyed: false, focused: false },
+      { destroyed: true, focused: true },
+    ];
+
+    showNativeNotification(showOptions("host:chat:chat-1"));
+
+    expect(FakeNotification.instances).toHaveLength(1);
+    expect(FakeNotification.instances[0]?.show).toHaveBeenCalledOnce();
+  });
+
   it("closes the prior notification before showing a same-key replacement", async () => {
     const { showNativeNotification } = await loadNotifications();
 
@@ -113,16 +212,17 @@ describe("showNativeNotification", () => {
     expect(second.close).toHaveBeenCalledOnce();
   });
 
-  it("evicts a replacement mapping after its TTL without closing the notification", async () => {
-    const { NOTIFICATION_REPLACE_TTL_MS, showNativeNotification } =
-      await loadNotifications();
+  it("closes an aged notification when its same-key replacement is foreground-suppressed", async () => {
+    const { showNativeNotification } = await loadNotifications();
 
     showNativeNotification(showOptions("host:chat:chat-1"));
     const first = FakeNotification.instances[0];
-    vi.advanceTimersByTime(NOTIFICATION_REPLACE_TTL_MS);
+    vi.advanceTimersByTime(10 * 60_000);
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
     showNativeNotification(showOptions("host:chat:chat-1"));
 
-    expect(first.close).not.toHaveBeenCalled();
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(FakeNotification.instances).toHaveLength(1);
   });
 
   it("evicts capacity bookkeeping without closing unrelated notifications", async () => {

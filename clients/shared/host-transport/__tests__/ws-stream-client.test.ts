@@ -925,6 +925,124 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
+  it("re-probes the full host manifest after reconnect and discovers a newly enabled method", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("host.notifications.feed.subscribe", {
+      initialAttentionLimit: 50,
+      initialRecentLimit: 50,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    const firstSocket = sockets[0].socket;
+    firstSocket.fireOpen();
+    const firstOpen = parseText(firstSocket.textSent[0]);
+    const firstManifest = firstOpen.manifest as Record<
+      string,
+      { major: number; minor: number }
+    >;
+    const methodlessManifest = { ...firstManifest };
+    delete methodlessManifest["host.notifications.cloudFeed.subscribe"];
+    firstSocket.fireText(streamOpenAck(methodlessManifest, undefined));
+    expect(
+      client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
+    ).toBe("unsupported");
+
+    client.reconnectAll("host-endpoint-change");
+    expect(
+      client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
+    ).toBe("unknown");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(2);
+    completeHandshake(sockets[1].socket);
+    expect(
+      client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
+    ).toBe("supported");
+
+    session.close();
+  });
+
+  it("preserves Git v1.2 routing on one repo while another Git session reconnects", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const reconnectingGitSession = client.subscribe("git.subscribeStatus", {
+      hostId: "host-1",
+      runningDir: "/repo-a",
+      ignoreWhitespace: false,
+      freshNonce: null,
+    });
+    const liveGitSession = client.subscribe("git.subscribeStatus", {
+      hostId: "host-1",
+      runningDir: "/repo-b",
+      ignoreWhitespace: false,
+      freshNonce: null,
+    });
+    const routedGitMinors: number[] = [];
+    liveGitSession.onServerFrame(() => {
+      routedGitMinors.push(
+        client.getMethodSchemaVersion("git.subscribeStatus")?.minor ?? -1,
+      );
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(2);
+    completeHandshake(sockets[0].socket);
+    completeHandshake(sockets[1].socket);
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
+      major: 1,
+      minor: 2,
+    });
+
+    reconnectingGitSession.requestReconnect();
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
+      major: 1,
+      minor: 2,
+    });
+    sockets[1].socket.fireText({
+      kind: "update",
+      hasBinaryPayload: false,
+      value: { type: "error", message: "during reconnect", isFatal: false },
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(3);
+    completeHandshake(sockets[2].socket);
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
+      major: 1,
+      minor: 2,
+    });
+    sockets[1].socket.fireText({
+      kind: "update",
+      hasBinaryPayload: false,
+      value: { type: "error", message: "after reconnect", isFatal: false },
+    });
+    expect(routedGitMinors).toEqual([2, 2]);
+
+    reconnectingGitSession.close();
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
+      major: 1,
+      minor: 2,
+    });
+    liveGitSession.close();
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toBeNull();
+  });
+
   it("closes the socket after two missed pongs and triggers a reconnect", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 
@@ -1761,6 +1879,15 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       retryable: true,
     },
   } as const;
+  const LEGACY_SUBSCRIBE_TIMEOUT_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "STREAM_SUBSCRIBE_TIMEOUT",
+      reason: "Timed out waiting for 'subscribe' frame after openAck (30000ms)",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  } as const;
 
   function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -2007,6 +2134,26 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     // Reconnected well past the no-progress bound (3) that a misclassified
     // UNAUTHORIZED would have hit - proof the transient path never gives up.
     expect(sockets.length).toBeGreaterThan(4);
+    session.close();
+  });
+
+  it("recovers an older host's subscribe timeout even when it omits `retryable`", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeAuthRevalidator(["rotated"]);
+    const client = makeAuthClient(factory, revalidator.auth, 5);
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await flush();
+    completeHandshake(sockets[0].socket);
+    sockets[0].socket.fireText(LEGACY_SUBSCRIBE_TIMEOUT_FATAL);
+    await wait(50);
+
+    expect(revalidator.calls.count).toBe(0);
+    expect(statuses).toContain("reconnecting");
+    expect(statuses).not.toContain("closed");
+    expect(sockets).toHaveLength(2);
     session.close();
   });
 

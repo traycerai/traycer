@@ -228,6 +228,8 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
     errorMessage: null,
     retrying: false,
     retry: () => undefined,
+    degraded: false,
+    unreachable: false,
   },
 };
 

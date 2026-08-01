@@ -521,6 +521,17 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
     desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
   });
+  // The mutation lane's NDJSON progress is the only evidence main has that a
+  // first install is still downloading/extracting rather than stuck. Feeding it
+  // to the lifecycle is what keeps `bootstrap()` from declaring "Traycer Host
+  // did not start" over an install that is minutes from finishing
+  // (traycer#862). Wired here, at the one place that owns both objects, rather
+  // than handing the lifecycle a controller it must not otherwise touch - the
+  // controller already holds the lifecycle, and the reverse edge would be a
+  // cycle.
+  hostController.onMutationProgress(() => {
+    host.notifyProvisioningActivity();
+  });
   const support = new DesktopSupportService({
     appName: appDisplayName,
     host,

@@ -55,16 +55,15 @@ export const NO_RETRY_TRANSPORT_POLICY: TransportRetryPolicy = {
 
 /**
  * Wraps an `IHostMessenger` so a `RetryableTransportError` - a transient
- * transport failure that the transport proved happened *before* the request
- * frame was sent (dial timeout, handshake drop, `openAck` timeout) - is
- * retried on a fresh dial with jittered exponential backoff, up to
+ * transport failure for which the host is known not to have dispatched the
+ * request (dial/handshake failure, or an explicit post-open request timeout) -
+ * is retried on a fresh dial with jittered exponential backoff, up to
  * `policy.maxRetries` times.
  *
- * Only `RetryableTransportError` is retried: a post-send drop, a malformed
- * frame, an `UNAUTHORIZED`, or any other host-originated `HostRpcError` is a
- * plain `HostRpcError` and propagates on the first attempt. The "pre-send"
- * guarantee is what makes the retry safe even for non-idempotent methods - the
- * host never observed the original call.
+ * Only `RetryableTransportError` is retried: an ambiguous post-send drop, a
+ * malformed frame, an `UNAUTHORIZED`, or any other host-originated
+ * `HostRpcError` propagates on the first attempt. The no-dispatch guarantee is
+ * what makes the retry safe even for non-idempotent methods.
  *
  * Compose this *outside* `createAuthAwareMessenger`: the auth wrapper only acts
  * on `UNAUTHORIZED` (never a `RetryableTransportError`), so the two layers

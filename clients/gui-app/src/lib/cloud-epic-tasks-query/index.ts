@@ -2,6 +2,7 @@ export { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/clien
 export {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
+  cloudEpicTasksLastKnownQueryKey,
   cloudEpicTasksQueryKey,
   fetchCloudEpicTasksPage,
   listCloudTasksRequestForHistorySearch,

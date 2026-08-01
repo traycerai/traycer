@@ -46,11 +46,13 @@ const sonnerToastWarning = vi.hoisted(() =>
 );
 const sonnerToastError = vi.hoisted(() => vi.fn());
 const sonnerToast = vi.hoisted(() => vi.fn());
+const sonnerToastSuccess = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({
   toast: Object.assign(sonnerToast, {
     warning: sonnerToastWarning,
     error: sonnerToastError,
+    success: sonnerToastSuccess,
     dismiss: vi.fn(),
   }),
   __esModule: true,
@@ -70,6 +72,11 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { ChatControlStrip } from "../chat-tile-control-strip";
 import { ChatTileErrorNoticeToasts } from "../chat-tile-error-notice-toasts";
+import { ChatTileRestoreResultToasts } from "../chat-tile-restore-result-toasts";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
 
 const EPIC_ID = "epic-x";
@@ -193,6 +200,7 @@ beforeEach(() => {
   sonnerToastWarning.mockReset();
   sonnerToastWarning.mockReturnValue("warning-toast");
   sonnerToastError.mockReset();
+  sonnerToastSuccess.mockReset();
   useComposerDraftStore.setState({ drafts: {} });
   useDesktopDialogStore.setState({
     activeDialog: null,
@@ -931,6 +939,79 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
 
     expect(sonnerToastWarning).not.toHaveBeenCalled();
+  });
+});
+
+describe("<ChatTileRestoreResultToasts />", () => {
+  function RestoreToastHost(props: {
+    readonly active: boolean;
+    readonly handle: ChatSessionStoreHandle;
+  }) {
+    const activity = {
+      visible: props.active,
+      focused: props.active,
+    };
+    return (
+      <PaneSurfaceActivityContext.Provider value={activity}>
+        <PaneVisibilityContext.Provider value={activity.visible}>
+          <ChatTileRestoreResultToasts handle={props.handle} />
+        </PaneVisibilityContext.Provider>
+      </PaneSurfaceActivityContext.Provider>
+    );
+  }
+
+  function completeRestore(harness: Harness, finishedAt: number): void {
+    act(() => {
+      harness.callbacks().onRestoreCompleted({
+        kind: "restoreCompleted",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        checkpointId: "checkpoint-1",
+        finishedAt,
+        results: [
+          {
+            filePath: "/repo/src/app.ts",
+            status: "restored",
+            operation: "edit",
+            reason: null,
+          },
+        ],
+      });
+    });
+  }
+
+  it("shows each completion once across task-tab focus changes and remounts", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+    const view = render(
+      <RestoreToastHost active={false} handle={harness.handle} />,
+    );
+
+    completeRestore(harness, 1);
+
+    expect(sonnerToastSuccess).not.toHaveBeenCalled();
+
+    view.rerender(<RestoreToastHost active handle={harness.handle} />);
+    expect(sonnerToastSuccess).toHaveBeenCalledTimes(1);
+    expect(sonnerToastSuccess).toHaveBeenLastCalledWith(
+      "1 restored, 0 skipped, 0 failed",
+    );
+
+    view.rerender(<RestoreToastHost active={false} handle={harness.handle} />);
+    view.rerender(<RestoreToastHost active handle={harness.handle} />);
+    expect(sonnerToastSuccess).toHaveBeenCalledTimes(1);
+
+    completeRestore(harness, 1);
+    expect(sonnerToastSuccess).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    render(<RestoreToastHost active handle={harness.handle} />);
+    expect(sonnerToastSuccess).toHaveBeenCalledTimes(1);
+
+    completeRestore(harness, 2);
+
+    expect(sonnerToastSuccess).toHaveBeenCalledTimes(2);
   });
 });
 

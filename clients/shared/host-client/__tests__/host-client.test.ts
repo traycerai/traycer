@@ -414,6 +414,7 @@ describe("HostClient", () => {
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
     });
 
     const client = new HostClient({
@@ -467,6 +468,7 @@ describe("HostClient", () => {
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
     });
     const client = new HostClient({
       registry,

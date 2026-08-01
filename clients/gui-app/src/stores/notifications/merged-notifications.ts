@@ -51,6 +51,12 @@ import {
   useHostNotificationUnreadCount,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
+import {
+  cloudNotificationFeedId,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
+import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
+import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
   useNotificationEntries,
@@ -68,11 +74,16 @@ import {
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsResolveRequest,
+  type HostNotificationsCloudFeedRow,
+  type HostNotificationsCloudFeedEntryRequest,
+  type HostNotificationsCloudFeedClearAllRequest,
+  type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 
-export type MergedNotificationSource = "host" | "app-local" | "global";
+export type MergedNotificationSource =
+  "host" | "app-local" | "global" | "cloud";
 
 export interface MergedNotificationRow {
   readonly feedId: string;
@@ -95,20 +106,37 @@ export interface MergedNotificationRow {
    * dismiss occurrence token `(id, updatedAt, sourceRef)`. `null` for
    * non-host rows and host rows without a source ref. */
   readonly sourceRef: string | null;
+  /** The machine the notification happened on. Display and NAVIGATION only:
+   * a cloud approval must open on its owning host, never on whichever host
+   * relayed the feed. Feed mutations never use it - they address the entry.
+   * `null` for rows with no meaningful origin. */
+  readonly originHostId: string | null;
   /** Product-vocabulary category, mapped from `source` at the projection
    * boundary so consumers never branch on the internal source seam. */
   readonly category: NotificationCategory;
 }
 
 export interface MergedNotificationsActions {
-  readonly markAsRead: (feedId: string) => void;
+  readonly markAsRead: (row: MergedNotificationRow | string) => void;
   /** Dismiss an unresolved `needs_action` Attention row: stamps `resolvedAt`
    * (and marks it read) so it leaves Attention without answering the
    * underlying prompt. Takes the row (not just its id) because the request
    * carries the immutable occurrence token `(id, updatedAt)`. Host rows only -
    * no other source is blocking-eligible. */
   readonly resolve: (row: MergedNotificationRow) => void;
+  readonly clear: (row: MergedNotificationRow) => void;
+  readonly clearAll: () => void;
   readonly markAllAsRead: () => void;
+  /**
+   * View consumption for one entity - the cloud counterpart of the v1
+   * `host.notifications.markRead {kind:"entity"}` RPC, which in cloud mode
+   * addresses rows the connected host may not even hold.
+   *
+   * Cloud mode only: local mode keeps issuing the host RPC from the session
+   * provider, because there the host's own SQLite is the authority being
+   * consumed. No-op in every other mode.
+   */
+  readonly markEntityAsRead: (entity: HostNotificationsEntityRef) => void;
   readonly loadMoreHost: () => void;
   readonly canLoadMoreHost: boolean;
   readonly isLoadingMoreHost: boolean;
@@ -137,6 +165,11 @@ interface HostNotificationMutationContext {
   readonly hostId: string | null;
   readonly snapshotEpoch: number;
   readonly liveLifecycleRevision: number;
+}
+
+interface CloudFeedMutationContext {
+  readonly hostId: string | null;
+  readonly sessionEpoch: number;
 }
 
 export function hostFeedId(id: string): string {
@@ -172,13 +205,26 @@ export function mergedUnreadCount(input: {
  * the id/Attention/Recent projections all derive from without recomputing
  * their own source subscriptions. */
 function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
+  const feedMode = useNotificationFeedMode();
+  const activeHostId = useReactiveActiveHostId();
   const hostIds = useHostNotificationIds();
   const appLocalIds = useAppLocalNotificationIds();
   const globalIds = useNotificationEntryIds();
   const globalEntries = useNotificationEntries();
   const hostById = useHostNotificationsStore((state) => state.byId);
   const appLocalById = useAppLocalNotificationsStore((state) => state.byId);
+  const cloudRows = useCloudNotificationsStore((state) => state.rows);
   return useMemo(() => {
+    if (feedMode === "cloud") {
+      const rows = Object.values(cloudRows)
+        .filter(
+          (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+        )
+        .map(rowFromCloudFeedRow);
+      rows.sort(compareFeedCandidates);
+      return rows;
+    }
+    if (feedMode === "upgrade-required") return [];
     const globalEntriesById = new Map(
       globalEntries.map((entry) => [entry.id, entry]),
     );
@@ -186,13 +232,25 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
       .map((id) => globalEntriesById.get(id))
       .filter((entry): entry is NotificationEntry => entry !== undefined);
     const rows: MergedNotificationRow[] = [
-      ...hostIds.map((id) => rowFromHostEntry(hostById[id])),
+      ...hostIds.map((id) =>
+        rowFromHostEntryForOrigin(hostById[id], activeHostId),
+      ),
       ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
       ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
     ];
     rows.sort(compareFeedCandidates);
     return rows;
-  }, [hostIds, hostById, appLocalIds, appLocalById, globalIds, globalEntries]);
+  }, [
+    feedMode,
+    cloudRows,
+    hostIds,
+    hostById,
+    appLocalIds,
+    appLocalById,
+    globalIds,
+    globalEntries,
+    activeHostId,
+  ]);
 }
 
 export function useMergedNotificationIds(): ReadonlyArray<string> {
@@ -275,9 +333,46 @@ export function useRecentNotificationIds(): ReadonlyArray<string> {
   }, [rows, unreadOnly, categories]);
 }
 
+function rowFromLocalFeedId(input: {
+  readonly parsed: ParsedFeedId;
+  readonly feedMode: "local" | "cloud" | "upgrade-required";
+  readonly hostEntry: HostNotificationFeedEntry | null;
+  readonly appLocalEntry: AppLocalNotificationEntry | null;
+  readonly globalEntry: NotificationEntry | null;
+  readonly hostOriginId: string | null;
+}): MergedNotificationRow | null {
+  if (input.feedMode !== "local") return null;
+  switch (input.parsed.source) {
+    case "host":
+      return input.hostEntry === null
+        ? null
+        : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
+    case "app-local":
+      return input.appLocalEntry === null
+        ? null
+        : rowFromAppLocalEntry(input.appLocalEntry);
+    case "global":
+      return input.globalEntry === null
+        ? null
+        : rowFromGlobalEntry(input.globalEntry);
+    case "cloud":
+      return null;
+  }
+}
+
+function rowFromCloudFeedId(input: {
+  readonly feedMode: "local" | "cloud" | "upgrade-required";
+  readonly cloudRow: HostNotificationsCloudFeedRow | undefined;
+}): MergedNotificationRow | null {
+  if (input.feedMode !== "cloud" || input.cloudRow === undefined) return null;
+  return rowFromCloudFeedRow(input.cloudRow);
+}
+
 export function useMergedNotificationRow(
   feedId: string,
 ): MergedNotificationRow | null {
+  const feedMode = useNotificationFeedMode();
+  const activeHostId = useReactiveActiveHostId();
   const parsed = parseFeedId(feedId);
   const hostEntry = useHostNotificationById(
     parsed?.source === "host" ? parsed.sourceId : "",
@@ -288,20 +383,29 @@ export function useMergedNotificationRow(
   const globalEntry = useNotificationEntryById(
     parsed?.source === "global" ? parsed.sourceId : "",
   );
+  const cloudRow = useCloudNotificationsStore((state) => state.rows[feedId]);
   if (parsed === null) return null;
-  if (parsed.source === "host") {
-    return hostEntry === null ? null : rowFromHostEntry(hostEntry);
+  if (parsed.source === "cloud") {
+    return rowFromCloudFeedId({ feedMode, cloudRow });
   }
-  if (parsed.source === "app-local") {
-    return appLocalEntry === null ? null : rowFromAppLocalEntry(appLocalEntry);
-  }
-  return globalEntry === null ? null : rowFromGlobalEntry(globalEntry);
+  return rowFromLocalFeedId({
+    parsed,
+    feedMode,
+    hostEntry,
+    appLocalEntry,
+    globalEntry,
+    hostOriginId: activeHostId,
+  });
 }
 
 export function useMergedNotificationUnreadCount(): number {
+  const feedMode = useNotificationFeedMode();
   const hostUnread = useHostNotificationUnreadCount();
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
+  const cloudSummary = useCloudNotificationsStore((state) => state.summary);
+  if (feedMode === "cloud") return cloudSummary?.unreadCount ?? 0;
+  if (feedMode === "upgrade-required") return 0;
   return mergedUnreadCount({
     hostUnread,
     appLocalUnread,
@@ -330,12 +434,24 @@ export type NotificationBellState =
  * the open-lifecycle tracking in `notifications-bell.tsx`).
  */
 export function useNotificationBellState(): NotificationBellState {
+  const feedMode = useNotificationFeedMode();
   const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
   // App-local rows are always severity "failure" (`rowFromAppLocalEntry`
   // hardcodes it), so the app-local unread count already IS its
   // unread-failure count - no extra filter needed to fold it into attention.
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
+  const cloudSummary = useCloudNotificationsStore((state) => state.summary);
+  if (feedMode === "cloud") {
+    if (cloudSummary === null) return { kind: "unknown" };
+    if (cloudSummary.attentionCount > 0) {
+      return { kind: "attention", count: cloudSummary.attentionCount };
+    }
+    return cloudSummary.unreadCount > 0
+      ? { kind: "quietDot" }
+      : { kind: "clear" };
+  }
+  if (feedMode === "upgrade-required") return { kind: "clear" };
   if (hostSummary === null) return { kind: "unknown" };
   const attention = hostSummary.attentionCount + appLocalUnread;
   if (attention > 0) return { kind: "attention", count: attention };
@@ -379,7 +495,13 @@ export interface NotificationCenterHostState {
 export function useNotificationCenterHostState(): NotificationCenterHostState {
   const activeHostId = useReactiveActiveHostId();
   const hostEntry = useHostDirectoryEntry(activeHostId ?? "");
-  const summary = useHostNotificationsStore(selectHostNotificationSummary);
+  const feedMode = useNotificationFeedMode();
+  const localSummary = useHostNotificationsStore(selectHostNotificationSummary);
+  const cloudSummary = useCloudNotificationsStore((state) => state.summary);
+  // The cloud relay is the complete authority once the host confirms support.
+  // The v1 replica is intentionally discarded at the mode boundary, so using
+  // its null summary here would make an exact cloud feed look perpetually cold.
+  const summary = feedMode === "cloud" ? cloudSummary : localSummary;
   return {
     hostLabel: hostEntry?.label ?? null,
     isPartial: activeHostId === null || summary === null,
@@ -387,6 +509,7 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
 }
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
+  const feedMode = useNotificationFeedMode();
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
   const queryClient = useQueryClient();
@@ -421,6 +544,119 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   const hasUnreadRecentLoadError = useHostNotificationsStore(
     (state) => state.unreadRecentStatus === "error",
   );
+  const cloudVersion = useCloudNotificationsStore((state) => state.version);
+
+  const markCloudUnavailable = (): void => {
+    useCloudNotificationsStore.getState().setConnectionState("unavailable");
+  };
+  const handleCloudMutationResult = (data: {
+    readonly status: "applied" | "unavailable";
+  }): void => {
+    if (data.status === "unavailable") markCloudUnavailable();
+  };
+  const captureCloudMutationContext = (): CloudFeedMutationContext => ({
+    hostId: client?.getActiveHostId() ?? null,
+    sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
+  });
+  const isCurrentCloudMutation = (context: CloudFeedMutationContext): boolean =>
+    client?.getActiveHostId() === context.hostId &&
+    useCloudNotificationsStore.getState().sessionEpoch === context.sessionEpoch;
+  const cloudMarkRead = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.cloudFeed.markRead",
+    CloudFeedMutationContext,
+    HostNotificationsCloudFeedEntryRequest
+  >({
+    client,
+    method: "host.notifications.cloudFeed.markRead",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.cloudMarkRead(),
+      onMutate: captureCloudMutationContext,
+      onSuccess: (data, _variables, context) => {
+        if (isCurrentCloudMutation(context)) {
+          handleCloudMutationResult(data);
+        }
+      },
+      onError: (_error, _variables, context) => {
+        if (context !== undefined && isCurrentCloudMutation(context)) {
+          markCloudUnavailable();
+        }
+      },
+    },
+  });
+  const cloudResolve = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.cloudFeed.resolve",
+    CloudFeedMutationContext,
+    HostNotificationsCloudFeedEntryRequest
+  >({
+    client,
+    method: "host.notifications.cloudFeed.resolve",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.cloudResolve(),
+      onMutate: captureCloudMutationContext,
+      onSuccess: (data, _variables, context) => {
+        if (isCurrentCloudMutation(context)) {
+          handleCloudMutationResult(data);
+        }
+      },
+      onError: (_error, _variables, context) => {
+        if (context !== undefined && isCurrentCloudMutation(context)) {
+          markCloudUnavailable();
+        }
+      },
+    },
+  });
+  const cloudClear = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.cloudFeed.clear",
+    CloudFeedMutationContext,
+    HostNotificationsCloudFeedEntryRequest
+  >({
+    client,
+    method: "host.notifications.cloudFeed.clear",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.cloudClear(),
+      onMutate: captureCloudMutationContext,
+      onSuccess: (data, _variables, context) => {
+        if (isCurrentCloudMutation(context)) {
+          handleCloudMutationResult(data);
+        }
+      },
+      onError: (_error, _variables, context) => {
+        if (context !== undefined && isCurrentCloudMutation(context)) {
+          markCloudUnavailable();
+        }
+      },
+    },
+  });
+  const cloudClearAll = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.cloudFeed.clearAll",
+    CloudFeedMutationContext,
+    HostNotificationsCloudFeedClearAllRequest
+  >({
+    client,
+    method: "host.notifications.cloudFeed.clearAll",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.cloudClearAll(),
+      onMutate: captureCloudMutationContext,
+      onSuccess: (data, _variables, context) => {
+        if (isCurrentCloudMutation(context)) {
+          handleCloudMutationResult(data);
+        }
+      },
+      onError: (_error, _variables, context) => {
+        if (context !== undefined && isCurrentCloudMutation(context)) {
+          markCloudUnavailable();
+        }
+      },
+    },
+  });
 
   const markHostRead = useHostMutation<
     HostRpcRegistry,
@@ -723,9 +959,19 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 
   return useMemo(
     () => ({
-      markAsRead: (feedId) => {
+      markAsRead: (target) => {
+        const feedId = typeof target === "string" ? target : target.feedId;
         const parsed = parseFeedId(feedId);
         if (parsed === null) return;
+        if (parsed.source === "cloud") {
+          if (feedMode !== "cloud" || typeof target === "string") return;
+          useCloudNotificationsStore
+            .getState()
+            .markReadLocally(target.sourceId, Date.now());
+          cloudMarkRead.mutate({ entryId: target.sourceId });
+          return;
+        }
+        if (feedMode !== "local") return;
         if (parsed.source === "host") {
           if (client === null) return;
           markHostRead.mutate({
@@ -741,6 +987,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         appLocalMarkAsRead(parsed.sourceId, Date.now());
       },
       resolve: (row) => {
+        if (row.source === "cloud") {
+          if (feedMode !== "cloud") return;
+          cloudResolve.mutate({ entryId: row.sourceId });
+          return;
+        }
+        if (feedMode !== "local") return;
         // Only host `needs_action` rows are dismiss-eligible (app-local rows
         // are `failure`, global rows are `info` - neither reaches the blocking
         // tier), so this is host-only by construction. `row.createdAt` is the
@@ -760,6 +1012,35 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         });
       },
       markAllAsRead: () => {
+        if (feedMode === "cloud") {
+          const readAt = Date.now();
+          const unreadEntryIds: string[] = [];
+          for (const row of Object.values(
+            useCloudNotificationsStore.getState().rows,
+          )) {
+            if (row !== undefined && row.entry.readAt === null) {
+              unreadEntryIds.push(row.entryId);
+              useCloudNotificationsStore
+                .getState()
+                .markReadLocally(row.entryId, readAt);
+            }
+          }
+          // Optimistic set-once markers land as one immediate UI update, then
+          // the wire work is serialized so a large cross-device feed cannot
+          // burst hundreds of unary requests through one host connection.
+          void (async (): Promise<void> => {
+            for (const entryId of unreadEntryIds) {
+              try {
+                await cloudMarkRead.mutateAsync({ entryId });
+              } catch {
+                // The mutation's onError owns availability state. Continue so
+                // one failed entry does not prevent later entries being sent.
+              }
+            }
+          })();
+          return;
+        }
+        if (feedMode !== "local") return;
         globalMarkAllAsRead();
         appLocalMarkAllAsRead(Date.now());
         // Both host halves - mark-all-read AND dismiss-all - apply only against
@@ -798,18 +1079,55 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           }
         }
       },
+      markEntityAsRead: (entity) => {
+        if (feedMode !== "cloud") return;
+        // Selection, single-flight, backoff and the retry timer all live in
+        // the driver: they have to outlive this render and stay single-flight
+        // across every caller. There is no cloud mark-many RPC, so the driver
+        // serializes per entry the way `markAllAsRead` does.
+        requestCloudEntityRead(entity, {
+          markRead: async (entryId) => {
+            const result = await cloudMarkRead.mutateAsync({ entryId });
+            // `unavailable` is a refusal, not a transport failure - the
+            // mutation resolves, so the driver has to be told explicitly or it
+            // would record a success the server never performed.
+            if (result.status === "unavailable") {
+              throw new Error("cloud feed unavailable");
+            }
+          },
+          now: () => Date.now(),
+          random: () => Math.random(),
+        });
+      },
+      clear: (row) => {
+        if (row.source !== "cloud" || feedMode !== "cloud") return;
+        cloudClear.mutate({ entryId: row.sourceId });
+      },
+      clearAll: () => {
+        if (feedMode !== "cloud" || cloudVersion === null) return;
+        // Send the version of the snapshot the user is LOOKING AT, not
+        // whatever the cloud head has reached by the time this lands. The
+        // fan-out then covers exactly the rows on screen, and an entry that
+        // arrives in between survives however many times a lost-response
+        // retry replays this call.
+        cloudClearAll.mutate({ observedVersion: cloudVersion });
+      },
       loadMoreHost: () => {
+        if (feedMode !== "local") return;
         if (hostNextCursor === null || client === null) return;
         loadMoreHost.mutate({ cursor: hostNextCursor });
       },
-      canLoadMoreHost: hostNextCursor !== null && client !== null,
+      canLoadMoreHost:
+        feedMode === "local" && hostNextCursor !== null && client !== null,
       isLoadingMoreHost: loadMoreHost.isPending,
       hasHostLoadError,
       loadMoreAttention: () => {
+        if (feedMode !== "local") return;
         if (hostAttentionCursor === null || client === null) return;
         loadMoreAttention.mutate({ cursor: hostAttentionCursor });
       },
-      canLoadMoreAttention: hostAttentionCursor !== null && client !== null,
+      canLoadMoreAttention:
+        feedMode === "local" && hostAttentionCursor !== null && client !== null,
       isLoadingMoreAttention: loadMoreAttention.isPending,
       hasAttentionLoadError,
       // Unlike the other two tracks, a `null` cursor here is ambiguous on its
@@ -819,10 +1137,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       // it: only once a page has actually loaded does a `null` cursor mean
       // genuine exhaustion.
       loadMoreUnreadRecent: () => {
+        if (feedMode !== "local") return;
         if (client === null) return;
         loadMoreUnreadRecent.mutate({ cursor: hostUnreadRecentCursor });
       },
       canLoadMoreUnreadRecent:
+        feedMode === "local" &&
         client !== null &&
         (hostUnreadRecentCursor !== null || !unreadRecentHasLoadedOnce),
       isLoadingMoreUnreadRecent: loadMoreUnreadRecent.isPending,
@@ -848,6 +1168,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       unreadRecentHasLoadedOnce,
       hasUnreadRecentLoadError,
       client,
+      feedMode,
+      cloudVersion,
+      cloudMarkRead,
+      cloudResolve,
+      cloudClear,
+      cloudClearAll,
     ],
   );
 }
@@ -905,6 +1231,17 @@ function trackNotificationPageLoadedFailure(
 export function rowFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): MergedNotificationRow {
+  return rowFromHostEntryForOrigin(entry, null);
+}
+
+/** The v1 host store is scoped to the connected host. Preserve that source
+ * identity in interactive row projections so approval/interview routing never
+ * guesses across hosts. The legacy public formatter remains host-less for
+ * native display callers that pass origin separately in their envelope. */
+function rowFromHostEntryForOrigin(
+  entry: HostNotificationFeedEntry,
+  originHostId: string | null,
+): MergedNotificationRow {
   const presentation = formatHostNotificationPresentation(entry);
   return {
     feedId: hostFeedId(entry.id),
@@ -922,6 +1259,7 @@ export function rowFromHostEntry(
     outcome: entry.outcome,
     resolvedAt: "resolvedAt" in entry ? entry.resolvedAt : null,
     sourceRef: entry.sourceRef,
+    originHostId,
     category: categoryForNotificationSource("host"),
   };
 }
@@ -945,6 +1283,7 @@ export function rowFromAppLocalEntry(
     outcome: null,
     resolvedAt: null,
     sourceRef: null,
+    originHostId: null,
     category: categoryForNotificationSource("app-local"),
   };
 }
@@ -968,7 +1307,36 @@ export function rowFromGlobalEntry(
     outcome: null,
     resolvedAt: null,
     sourceRef: null,
+    originHostId: null,
     category: categoryForNotificationSource("global"),
+  };
+}
+
+export function rowFromCloudFeedRow(
+  row: HostNotificationsCloudFeedRow,
+): MergedNotificationRow {
+  const fallback = formatHostNotificationPresentation(row.entry);
+  const title =
+    row.presentation.chatTitle ?? row.presentation.epicTitle ?? fallback.title;
+  return {
+    feedId: cloudNotificationFeedId(row.entryId),
+    source: "cloud",
+    // `sourceId` IS the `entryId` - the one thing every cloud mutation needs.
+    sourceId: row.entryId,
+    createdAt: row.entry.updatedAt,
+    readAt: row.entry.readAt,
+    title,
+    body: fallback.body,
+    payload: payloadFromHostEntry(row.entry),
+    hostKind: row.entry.kind,
+    appLocalKind: null,
+    globalEntry: null,
+    severity: row.entry.severity,
+    outcome: row.entry.outcome,
+    resolvedAt: "resolvedAt" in row.entry ? row.entry.resolvedAt : null,
+    sourceRef: row.entry.sourceRef,
+    originHostId: row.originHostId,
+    category: categoryForNotificationSource("cloud"),
   };
 }
 
@@ -978,7 +1346,12 @@ function parseFeedId(feedId: string): ParsedFeedId | null {
   const source = feedId.slice(0, delimiterIndex);
   const sourceId = feedId.slice(delimiterIndex + 1);
   if (sourceId.length === 0) return null;
-  if (source === "host" || source === "app-local" || source === "global") {
+  if (
+    source === "host" ||
+    source === "app-local" ||
+    source === "global" ||
+    source === "cloud"
+  ) {
     return { source, sourceId };
   }
   return null;
@@ -1117,7 +1490,16 @@ function navigationPayloadFromKnown(
     case "workspace_operation_failed":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "epic":
-      return { kind: "epic", epicId: known.epicId };
+      // TUI agent-stopped rows use the persisted `epic` payload shape, but
+      // their actionable entity is the terminal agent itself. The canvas
+      // addresses that record through the same chat-shaped route used for
+      // `terminal-agent` tiles, so retain `tuiAgentId` instead of degrading
+      // the click to the owning epic.
+      return {
+        kind: "chat",
+        epicId: known.epicId,
+        chatId: known.tuiAgentId,
+      };
     case "approval":
       return {
         kind: "approval",

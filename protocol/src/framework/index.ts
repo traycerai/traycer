@@ -148,6 +148,7 @@ export type {
 } from "./ws-protocol";
 
 export {
+  RPC_REQUEST_TIMEOUT_FATAL_CODE,
   clientFrameSchema,
   clientOpenFrameSchema,
   clientRequestFrameSchema,

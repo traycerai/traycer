@@ -27,6 +27,7 @@ import {
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
 /**
  * Landing-surface durability for the rate-limit switch banner.
@@ -113,6 +114,7 @@ function claudeState(
     providerId,
     enabled: true,
     disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     selected: { kind: "bundled" },
     candidates: [],
     auth: {
@@ -171,7 +173,6 @@ function createLandingToolbarStore(
       },
       reasoning: "",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: false,
@@ -216,7 +217,6 @@ function LandingRateLimitBannerHarness(props: {
     permission: toolbarState.permission,
     reasoning: toolbarState.reasoning,
     serviceTier: toolbarState.serviceTier,
-    agentMode: toolbarState.agentMode,
   });
 
   return (
@@ -671,7 +671,6 @@ describe("Landing rate-limit banner durability", () => {
           permission: toolbarStore.getState().permission,
           reasoning: toolbarStore.getState().reasoning,
           serviceTier: toolbarStore.getState().serviceTier,
-          agentMode: toolbarStore.getState().agentMode,
         }).profileId,
       ).toBe("work");
       // Task checkbox never appears on landing (affectedChatCount 0).
@@ -738,7 +737,6 @@ describe("Landing rate-limit banner durability", () => {
           permission: toolbarStore.getState().permission,
           reasoning: toolbarStore.getState().reasoning,
           serviceTier: toolbarStore.getState().serviceTier,
-          agentMode: toolbarStore.getState().agentMode,
         }).profileId,
       ).toBe("second");
     });

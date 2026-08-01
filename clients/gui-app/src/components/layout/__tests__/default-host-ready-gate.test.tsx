@@ -79,6 +79,8 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
     errorMessage: null,
     retrying: false,
     retry: () => undefined,
+    degraded: false,
+    unreachable: false,
   },
 };
 
@@ -320,10 +322,9 @@ describe("<HostReadyGate />", () => {
         canManageHost: true,
         provisioningError: new Error("restart failed"),
         compatibility: {
+          ...PRESENTATION.compatibility,
           status: "incompatible",
           errorMessage: "host 1.0.0 < required 1.1.0",
-          retrying: false,
-          retry: () => undefined,
         },
       },
     );

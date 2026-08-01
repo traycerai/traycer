@@ -84,6 +84,14 @@ describe("<RootErrorBoundary />", () => {
           revealLog: () => Promise.reject(new Error("log unavailable")),
           submitReport: () => Promise.reject(new Error("submit unavailable")),
           tailLog: () => Promise.reject(new Error("log unavailable")),
+          freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+          discardFrozenEvidence: () => Promise.resolve(),
+          readFrozenLogTail: () => Promise.reject(new Error("log unavailable")),
+          saveDiagnosticBundle: () =>
+            Promise.reject(new Error("bundle unavailable")),
+          getFingerprintOccurrence: () => Promise.resolve(null),
+          buildPublicDraft: () =>
+            Promise.reject(new Error("public draft unavailable")),
         },
       },
     );
@@ -106,16 +114,16 @@ describe("<RootErrorBoundary />", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Report issue" }),
     );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Submit Report" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Send report" }));
 
     expect(
-      await screen.findByText("Failed to submit report. Please try again."),
+      await screen.findByText(
+        "Your report could not be sent. Nothing was lost - it is still here.",
+      ),
     ).not.toBeNull();
     expect(screen.getByTestId("app-error-screen")).not.toBeNull();
     expect(
-      screen.getByRole("heading", { name: "Report an Issue" }),
+      screen.getByRole("heading", { name: "Report an issue" }),
     ).not.toBeNull();
   });
 });

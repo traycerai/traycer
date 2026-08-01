@@ -10,7 +10,10 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
+import {
+  installLegendListViewportMetrics,
+  settleLegendList,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -139,7 +142,6 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { DEFAULT_AGENT_MODE } from "@/components/home/data/landing-options";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __getChatSessionRegistryForTests,
@@ -208,7 +210,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   permissionMode: "supervised",
   reasoningEffort: "medium",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
@@ -217,7 +219,7 @@ const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   permissionMode: "full_access",
   reasoningEffort: "low",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const INITIAL_HANDOFF_CONTENT: JsonContent = {
@@ -235,7 +237,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   permissionMode: "supervised",
   reasoningEffort: "high",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
@@ -244,7 +246,7 @@ const SESSION_SETTINGS: ChatRunSettings = {
   permissionMode: "full_access",
   reasoningEffort: "low",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 
@@ -645,12 +647,12 @@ function skippedInterviewAssistantMessage(): Message {
 
 function runningActiveTurn(): ChatActiveTurn {
   return {
+    agentMode: "regular",
     sameTurnSteeringSupported: false,
     turnId: "turn-active",
     status: "running",
     harnessId: "codex",
     model: "gpt-live",
-    agentMode: "regular",
     profileId: null,
     userMessageId: "message-1",
     startedAt: 3,
@@ -706,39 +708,35 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
   return (
     <TestRouterProvider>
-      <VirtuosoMessageListTestingContext.Provider
-        value={{ itemHeight: 120, viewportHeight: 900 }}
-      >
-        <QueryClientProvider client={queryClient}>
-          <RunnerHostProvider
-            runnerHost={
-              new MockRunnerHost({
-                signInUrl: "https://example.com",
-                authnBaseUrl: "https://auth.example.com",
-                localHost: null,
-                hosts: [],
-                workspaceFolderPickerPaths: undefined,
-                hasLocalHost: undefined,
-                traycerCli: undefined,
-              })
-            }
-          >
-            <TooltipProvider>
-              <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {chatVisible ? (
-                    <ChatTile
-                      node={CHAT_ARTIFACT}
-                      viewTabId="tab-test"
-                      isActive
-                    />
-                  ) : null}
-                </TabHostProvider>
-              </TestEpicSessionWrapper>
-            </TooltipProvider>
-          </RunnerHostProvider>
-        </QueryClientProvider>
-      </VirtuosoMessageListTestingContext.Provider>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider
+          runnerHost={
+            new MockRunnerHost({
+              signInUrl: "https://example.com",
+              authnBaseUrl: "https://auth.example.com",
+              localHost: null,
+              hosts: [],
+              workspaceFolderPickerPaths: undefined,
+              hasLocalHost: undefined,
+              traycerCli: undefined,
+            })
+          }
+        >
+          <TooltipProvider>
+            <TestEpicSessionWrapper epicId={EPIC_ID}>
+              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                {chatVisible ? (
+                  <ChatTile
+                    node={CHAT_ARTIFACT}
+                    viewTabId="tab-test"
+                    isActive
+                  />
+                ) : null}
+              </TabHostProvider>
+            </TestEpicSessionWrapper>
+          </TooltipProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
     </TestRouterProvider>
   );
 }
@@ -747,6 +745,10 @@ async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
     expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
   });
+  // LegendList needs a few frames (plus its scroll-finish fallback) to
+  // bootstrap its initial scroll position and measure rows in jsdom before
+  // any message content actually mounts - see legend-list-test-environment.ts.
+  await settleLegendList();
   await waitFor(() => {
     expect(screen.getByText("Host chat content")).not.toBeNull();
   });
@@ -801,6 +803,7 @@ function registerWaitingChatHandoff(): void {
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    installLegendListViewportMetrics();
     window.localStorage.clear();
     useAuthStore.setState({
       status: "signed-in",
@@ -828,9 +831,6 @@ describe("<ChatTile />", () => {
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
     useSettingsStore.setState({
-      // Reset the mode alongside the model so a test that pins defaultAgentMode
-      // (see the epic-bucket toolbar test) can't leak into later tests.
-      defaultAgentMode: DEFAULT_AGENT_MODE,
       defaultSelection: {
         harnessId: "codex",
         modelSlug: "gpt-5-codex",
@@ -845,6 +845,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();
@@ -986,12 +987,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "claude",
           model: "haiku",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1146,12 +1147,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
           model: "gpt-live",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1260,12 +1261,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
           model: "gpt-live",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1698,13 +1699,6 @@ describe("<ChatTile />", () => {
   });
 
   it("toolbar changes inside an epic update that epic bucket immediately", async () => {
-    // This tile starts fresh (globalLastRunSettings stays null), so the composer
-    // seeds agentMode from the settings default. Pin it to the fixture's mode so
-    // the assertion doesn't ride on whatever the app-wide default happens to be.
-    useSettingsStore.setState({
-      defaultAgentMode: UPDATED_QUEUE_SETTINGS.agentMode,
-    });
-
     renderChatTile();
 
     await waitForChatTileLoaded();
@@ -2229,12 +2223,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: QUEUED_SETTINGS.harnessId,
           model: QUEUED_SETTINGS.model,
-          agentMode: QUEUED_SETTINGS.agentMode,
           profileId: null,
           userMessageId: "message-active",
           startedAt: 4,

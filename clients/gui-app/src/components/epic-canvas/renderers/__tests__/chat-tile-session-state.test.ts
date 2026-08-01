@@ -7,7 +7,10 @@ import type {
   ChatQueueState,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatMessage } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage,
+  InterviewSegment,
+} from "@/stores/composer/chat-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const toastSuccess = vi.hoisted(() =>
@@ -38,6 +41,8 @@ import {
   canModifyChatMessages,
   chatActivityIndicator,
   chatMessageEditingForInlineEdit,
+  findPendingInterview,
+  findUnanswerableInterviews,
   resolvedTurnStatus,
   showRestoreResultToast,
   type InlineEditState,
@@ -251,6 +256,7 @@ function expectToastAction(
 }
 
 const ACTIVE_TURN: ChatActiveTurn = {
+  agentMode: "regular",
   sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
@@ -258,7 +264,6 @@ const ACTIVE_TURN: ChatActiveTurn = {
   model: "codex-test",
   reasoningEffort: null,
   serviceTier: null,
-  agentMode: "epic",
   profileId: null,
   userMessageId: "message-1",
   startedAt: 0,
@@ -771,5 +776,125 @@ describe("canModifyChatMessages", () => {
         }),
       }),
     ).toBe(false);
+  });
+});
+
+// ── Escape hatch: host-pending interviews with no answerable card ────────────
+
+function interviewMessage(
+  id: string,
+  segments: ReadonlyArray<{
+    readonly blockId: string;
+    readonly status: InterviewSegment["status"];
+  }>,
+): ChatMessage {
+  return {
+    ...MESSAGE,
+    id,
+    role: "assistant",
+    persistentMessageId: id,
+    segments: segments.map((segment) => ({
+      id: segment.blockId,
+      kind: "interview",
+      status: segment.status,
+      toolName: "AskUserQuestion",
+      title: null,
+      description: null,
+      questions: [],
+      answers: [],
+      error: null,
+      forkedWithoutAnswer: false,
+    })),
+  };
+}
+
+describe("findUnanswerableInterviews", () => {
+  it("flags a host-pending block the transcript already settled", () => {
+    // The phantom-interview shape: the harness errored the AskUserQuestion, the
+    // block persisted as `errored`, but the pending wait was rehydrated from a
+    // dangling `interview.requested`. No card renders, yet sends are rejected.
+    const messages = [
+      interviewMessage("m-1", [
+        { blockId: "settled-block", status: "errored" },
+      ]),
+    ];
+
+    expect(
+      findUnanswerableInterviews(messages, [
+        { blockId: "settled-block", requestedAt: 10 },
+      ]),
+    ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
+  });
+
+  it("flags a host-pending block that is absent from the transcript", () => {
+    expect(
+      findUnanswerableInterviews(
+        [],
+        [{ blockId: "ghost-block", requestedAt: 7 }],
+      ),
+    ).toEqual([{ blockId: "ghost-block", requestedAt: 7 }]);
+  });
+
+  it("leaves an answerable streaming block to the interview card", () => {
+    const messages = [
+      interviewMessage("m-1", [
+        { blockId: "streaming-block", status: "streaming" },
+      ]),
+    ];
+    const pending = [{ blockId: "streaming-block", requestedAt: 10 }];
+
+    // The two derivations partition the host's pending set - a block routed to
+    // the card must never also raise the escape hatch.
+    expect(findUnanswerableInterviews(messages, pending)).toEqual([]);
+    expect(
+      findPendingInterview(messages, (id) => id === "streaming-block")?.blockId,
+    ).toBe("streaming-block");
+  });
+
+  it("separates a stuck block from an answerable one in the same chat", () => {
+    const messages = [
+      interviewMessage("m-1", [
+        { blockId: "settled-block", status: "errored" },
+      ]),
+      interviewMessage("m-2", [
+        { blockId: "streaming-block", status: "streaming" },
+      ]),
+    ];
+
+    expect(
+      findUnanswerableInterviews(messages, [
+        { blockId: "settled-block", requestedAt: 10 },
+        { blockId: "streaming-block", requestedAt: 20 },
+      ]),
+    ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
+  });
+
+  it("orders stuck blocks oldest first", () => {
+    expect(
+      findUnanswerableInterviews(
+        [],
+        [
+          { blockId: "newer-block", requestedAt: 20 },
+          { blockId: "older-block", requestedAt: 10 },
+        ],
+      ).map((interview) => interview.blockId),
+    ).toEqual(["older-block", "newer-block"]);
+  });
+
+  it("returns one stable empty reference so the composer memo cannot churn", () => {
+    // `renderedMessages` changes on every streaming token; a fresh `[]` here
+    // would re-identify the composer's props each token.
+    const first = findUnanswerableInterviews([], []);
+    const second = findUnanswerableInterviews(
+      [
+        interviewMessage("m-1", [
+          { blockId: "streaming-block", status: "streaming" },
+        ]),
+      ],
+      [{ blockId: "streaming-block", requestedAt: 10 }],
+    );
+
+    expect(first).toEqual([]);
+    expect(second).toBe(first);
   });
 });

@@ -6,6 +6,12 @@ import {
   applyDesktopLogLevel,
   readDesktopLogLevelSync,
 } from "./desktop-log-level";
+import {
+  BEARER_PATTERN,
+  SENSITIVE_INLINE_VALUE_PATTERN,
+  SENSITIVE_KEY_PATTERN,
+  SENSITIVE_QUERY_PARAM_PATTERN,
+} from "./sensitive-text-patterns";
 
 export type SafeLogValue =
   | string
@@ -21,13 +27,6 @@ const MAX_LOG_STRING_LENGTH = 1_000;
 const MAX_LOG_DEPTH = 4;
 const MAX_LOG_ARRAY_ITEMS = 20;
 const MAX_LOG_OBJECT_KEYS = 40;
-const SENSITIVE_KEY_PATTERN =
-  /(?:token|secret|password|authorization|cookie|credential|verifier|refresh|bearer|api[_-]?key|client[_-]?secret)/i;
-const SENSITIVE_QUERY_PARAM_PATTERN =
-  /([?&](?:access_token|refresh_token|id_token|token|code|code_verifier|password|secret|client_secret|api_key|authorization)=)([^&#\s]+)/gi;
-const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const SENSITIVE_INLINE_VALUE_PATTERN =
-  /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|code[_-]?verifier|password|secret|client[_-]?secret|api[_-]?key|authorization|cookie|credential)\b\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)/gi;
 
 /**
  * Configures `electron-log` so the desktop shell, the renderer, and any

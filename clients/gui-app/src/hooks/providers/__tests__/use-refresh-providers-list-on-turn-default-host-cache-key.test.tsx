@@ -11,7 +11,8 @@ import type { HostRpcRegistry } from "@/lib/host";
  * invalidates the same providers.list query key that
  * `useProvidersListForClient` → `useHostQuery` populate for the default host.
  *
- * Both sides build `queryKeys.hostMethod(hostId, "providers.list", {})` —
+ * Both sides build
+ * `queryKeys.hostMethod(hostId, "providers.list", { native: null })` —
  * the list reader with `readiness.hostId` from the default HostClient, the
  * refresh hook with `useReactiveActiveHostId()` (same active-host source).
  *
@@ -59,7 +60,7 @@ function providersListQueryKey(hostId: string | null) {
   return queryKeys.hostMethod<HostRpcRegistry, "providers.list">(
     hostId,
     "providers.list",
-    {},
+    { native: null },
   );
 }
 
@@ -106,7 +107,7 @@ describe("useRefreshProvidersListOnTurnDefaultHost cache-key coherence", () => {
       "host",
       "default-host-a",
       "providers.list",
-      {},
+      { native: null },
     ]);
 
     fireTurn("claude");
@@ -168,6 +169,10 @@ describe("useRefreshProvidersListOnTurnDefaultHost cache-key coherence", () => {
       queryKey: providersListQueryKey(null),
     });
     // Sanity: the public key builder used by the list query is identical.
-    expect(providersListQueryKey(null)).toEqual(["host", "providers.list", {}]);
+    expect(providersListQueryKey(null)).toEqual([
+      "host",
+      "providers.list",
+      { native: null },
+    ]);
   });
 });

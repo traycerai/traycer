@@ -57,8 +57,12 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => openTransportStub,
 }));
 
+// `null` support is "still negotiating", which keeps the notification feed -
+// and therefore the tab's indicator derivation - on the local host path these
+// tests already stub.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  useStreamMethodSupport: () => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({

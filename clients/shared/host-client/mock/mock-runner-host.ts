@@ -9,6 +9,8 @@ import type {
   IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationForegroundDisplay,
+  NotificationForegroundAppLocal,
   IRunnerHost,
   ISecureStorage,
   ITokenStore,
@@ -126,6 +128,7 @@ export class MockRunnerHost implements IRunnerHost {
     readonly payload: unknown;
     readonly replaceKey: string | null;
     readonly deliveryKey: string | null;
+    readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
   readonly tokenStoreEntries: Map<string, StoredCredentials> = new Map();
@@ -145,6 +148,9 @@ export class MockRunnerHost implements IRunnerHost {
   >();
   private readonly notificationClickHandlers = new Set<
     (payload: unknown) => void
+  >();
+  private readonly notificationForegroundDisplayHandlers = new Set<
+    (display: NotificationForegroundDisplay) => void
   >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
@@ -228,9 +234,14 @@ export class MockRunnerHost implements IRunnerHost {
     return fetchRegisteredHostsViaHttp(this.authnBaseUrl, bearerToken);
   }
 
-  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
-    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
-    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken);
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above. Owning the
+    // request in-process, it can hand the caller's signal straight to `fetch`
+    // and abort the real request.
+    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken, signal);
   }
 
   async revokeUserSession(
@@ -410,6 +421,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: stored.token,
         refreshToken: stored.refreshToken,
+        clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") {
@@ -463,6 +475,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: legacy.token,
         refreshToken: legacy.refreshToken,
+        clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") return "retryable";
@@ -520,6 +533,7 @@ export class MockRunnerHost implements IRunnerHost {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      foregroundAppLocal: NotificationForegroundAppLocal | null,
     ): Promise<void> => {
       this.notificationsSent.push({
         title,
@@ -527,6 +541,7 @@ export class MockRunnerHost implements IRunnerHost {
         payload,
         replaceKey,
         deliveryKey,
+        foregroundAppLocal,
       });
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
@@ -537,7 +552,25 @@ export class MockRunnerHost implements IRunnerHost {
         },
       };
     },
+    onForegroundDisplay: (
+      handler: (display: NotificationForegroundDisplay) => void,
+    ): Disposable => {
+      this.notificationForegroundDisplayHandlers.add(handler);
+      return {
+        dispose: () => {
+          this.notificationForegroundDisplayHandlers.delete(handler);
+        },
+      };
+    },
   };
+
+  emitForegroundNotificationDisplay(
+    display: NotificationForegroundDisplay,
+  ): void {
+    for (const handler of this.notificationForegroundDisplayHandlers) {
+      handler(display);
+    }
+  }
 
   onLocalHostChange(
     handler: (snapshot: LocalHostSnapshot | null) => void,

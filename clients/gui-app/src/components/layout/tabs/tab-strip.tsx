@@ -35,7 +35,7 @@ import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   executeTabSplitCommand,
@@ -83,7 +83,7 @@ function TabStripBody() {
     () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
     [allTabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: indicatorEpicIds,
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
@@ -250,7 +250,7 @@ function TabStripBody() {
   const canCloseOtherTabs = headerItemIds.length > 1;
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <div
         role="tablist"
         aria-label="Open tabs"

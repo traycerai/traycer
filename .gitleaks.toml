@@ -10,10 +10,25 @@ title = "Traycer gitleaks config"
 useDefault = true
 
 [[allowlists]]
-description = "Virtuoso message-list testing license key — a public dummy key (its payload decodes to 'TEST;ex9999999999999'), used only to satisfy @virtuoso.dev/message-list in gui-app unit tests."
+description = "Stable scrollStateKey identifiers in chat-messages unit tests. These exact strings are cache-key test IDs, not credentials; require both the precise source path and value."
+condition = "AND"
 regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+]
 regexes = [
-  '''eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==''',
+  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|s4b-reachability-key|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup|t18-pin-c-exhaust)$''',
+]
+
+[[allowlists]]
+description = "Historical message-list license unit-test fixture. Its payload identifies it as a public test key, not a production credential; require both the exact source path and value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+]
+regexes = [
+  '''^eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==$''',
 ]
 
 [[allowlists]]
@@ -47,4 +62,15 @@ paths = [
 ]
 regexes = [
   '''^dGhlIHNhbXBsZSBub25jZQ==$''',
+]
+
+[[allowlists]]
+description = "JWT-shaped scrubber fixture. This exact dummy value verifies redaction of JWTs in user text and logs; require both its precise test path and full value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/app/__tests__/support-scrubber\.test\.ts$''',
+]
+regexes = [
+  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9[.]eyJzdWIiOiIxMjM0NTY3ODkwIn0[.]dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U$''',
 ]

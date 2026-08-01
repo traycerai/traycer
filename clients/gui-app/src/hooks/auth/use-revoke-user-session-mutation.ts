@@ -9,6 +9,7 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { StepUpRequiredError } from "@/lib/auth/step-up-flow";
 import { useHostBinding } from "@/lib/host";
 import { authMutationKeys, authQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 export interface RevokeUserSessionInput {
   readonly familyId: string;
@@ -17,6 +18,7 @@ export interface RevokeUserSessionInput {
 
 interface RevokeUserSessionMutationContext {
   readonly auth: AuthService | null;
+  readonly userId: string | null;
 }
 
 function unwrapRevokeUserSessionResult(
@@ -52,6 +54,7 @@ export function useAuthRevokeUserSession(
     mutationKey: authMutationKeys.revokeUserSession(familyId),
     onMutate: (): RevokeUserSessionMutationContext => ({
       auth: binding === null ? null : binding.auth,
+      userId: useAuthStore.getState().contextMetadata?.userId ?? null,
     }),
     mutationFn: async (
       input: RevokeUserSessionInput,
@@ -66,11 +69,11 @@ export function useAuthRevokeUserSession(
       return unwrapRevokeUserSessionResult(result);
     },
     onSuccess: (_data, _variables, context) => {
-      if (context.auth === null) {
+      if (context.auth === null || context.userId === null) {
         return;
       }
       void queryClient.invalidateQueries({
-        queryKey: authQueryKeys.userSessions(context.auth),
+        queryKey: authQueryKeys.userSessions(context.auth, context.userId),
       });
     },
   });

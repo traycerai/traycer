@@ -108,9 +108,19 @@ export interface IRunnerHost {
   /**
    * Fetches the signed-in user's account sessions from authn-v3. Desktop shells
    * run this in Electron main for the same renderer-origin CORS reason as token
-   * validation. Never throws: transport failures collapse into the result.
+   * validation. Transport failures collapse into the result rather than
+   * throwing; a cancellation via `signal` is the one case that may reject.
+   *
+   * `signal` is the reading TanStack query's cancellation. It matters beyond
+   * saving a request: the caller's repair path spends a single-use refresh
+   * rotation, so a list nobody is waiting on must stop before it gets there.
+   * Shells that own the request in-process abort it for real; shells that run it
+   * behind an IPC boundary settle the caller and let the bounded request finish.
    */
-  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult>;
 
   /**
    * Revokes one session family. Callers pass the user's normal session bearer
@@ -883,8 +893,33 @@ export interface INotificationHost {
     payload: unknown,
     replaceKey: string | null,
     deliveryKey: string | null,
+    foregroundAppLocal: NotificationForegroundAppLocal | null,
   ): Promise<void>;
   onClick(handler: (payload: unknown) => void): Disposable;
+  onForegroundDisplay(
+    handler: (display: NotificationForegroundDisplay) => void,
+  ): Disposable;
+}
+
+/**
+ * App-local data that must cross renderer realms when another Traycer window
+ * owns the foreground. `entry` stays unknown at the shell boundary; gui-app
+ * validates it before merging it into the focused renderer's store.
+ */
+export interface NotificationForegroundAppLocal {
+  readonly userId: string;
+  readonly entry: unknown;
+}
+
+/** Plain-data main -> renderer relay used instead of an OS notification while
+ * another Traycer window is focused. */
+export interface NotificationForegroundDisplay {
+  readonly title: string;
+  readonly body: string;
+  readonly payload: unknown;
+  readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
 export interface ITrayState {

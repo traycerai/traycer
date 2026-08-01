@@ -1,13 +1,21 @@
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
+import type {
+  NotificationForegroundAppLocal,
+  NotificationForegroundDisplay,
+} from "@traycer-clients/shared/platform/runner-host";
 import { createElement } from "react";
 import { toast } from "sonner";
 import {
   rowFromAppLocalEntry,
+  rowFromCloudFeedRow,
   rowFromHostEntry,
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationEntryV21 } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntryV21,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
   notificationEntityMatchesPresence,
@@ -22,17 +30,62 @@ export interface NotificationDisplayTarget {
   readonly onToastClick: (row: MergedNotificationRow) => void;
 }
 
+interface NativeNotificationDisplayOptions {
+  readonly deliveryKey: string | null;
+  readonly originHostId: string | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
+}
+
+export function displayForwardedForegroundNotification(
+  display: NotificationForegroundDisplay,
+  target: {
+    readonly playChime: () => void;
+    readonly onToastClick: (payload: unknown) => void;
+  },
+): void {
+  const actionable = display.payload !== null;
+  const title = actionable
+    ? createElement(
+        "button",
+        {
+          type: "button",
+          "aria-label": `${display.title} ${display.body}`,
+          "data-notification-toast-action": "",
+          className: "min-w-0 text-left",
+          onClick: () => target.onToastClick(display.payload),
+        },
+        createElement(
+          "span",
+          { className: "block font-medium leading-normal" },
+          display.title,
+        ),
+        createElement(
+          "span",
+          {
+            className:
+              "mt-0.5 block text-sm leading-snug text-muted-foreground",
+          },
+          display.body,
+        ),
+      )
+    : display.title;
+  toast(title, {
+    description: actionable ? undefined : display.body,
+    id: display.replaceKey ?? undefined,
+  });
+  target.playChime();
+}
+
 export function displayNotificationRows(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
-  void displayNotificationRowsAwaitNative(
-    rows,
-    target,
-    null,
+  void displayNotificationRowsAwaitNative(rows, target, {
+    deliveryKey: null,
     originHostId,
-  ).catch(() => {
+    foregroundAppLocal: null,
+  }).catch(() => {
     // The feed remains authoritative; a failed native toast is non-critical.
   });
 }
@@ -40,8 +93,7 @@ export function displayNotificationRows(
 async function displayNotificationRowsAwaitNative(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
-  deliveryKey: string | null,
-  originHostId: string | null,
+  options: NativeNotificationDisplayOptions,
 ): Promise<void> {
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
@@ -51,7 +103,7 @@ async function displayNotificationRowsAwaitNative(
       : buildNotificationActivationEnvelope({
           route: content.payload,
           feed: { source: content.row.source, id: content.row.sourceId },
-          originHostId,
+          originHostId: options.originHostId,
         });
   let nativeDisplay: Promise<void>;
   try {
@@ -60,7 +112,8 @@ async function displayNotificationRowsAwaitNative(
       body: content.body,
       payload: nativePayload,
       replaceKey: content.replaceKey,
-      deliveryKey,
+      deliveryKey: options.deliveryKey,
+      foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
     renderNotificationToast(content, target);
@@ -138,16 +191,46 @@ export function displayHostChannelEmission(
   );
 }
 
+/** Whole cloud snapshots carry no emission frame, so accepted post-baseline
+ * entryId diffs are the arrival edge. Display each row with its own origin:
+ * unlike a v1 channel batch, one snapshot can contain entries from several
+ * hosts and every native activation envelope must retain the correct one. */
+export function displayCloudSnapshotArrivals(
+  entries: ReadonlyArray<HostNotificationsCloudFeedRow>,
+  target: NotificationDisplayTarget,
+): void {
+  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  for (const entry of entries) {
+    const entity = notificationEntityFromHostEntry(entry.entry);
+    if (
+      focusedEntity !== null &&
+      entity !== null &&
+      notificationEntityMatchesPresence(entity, focusedEntity)
+    ) {
+      continue;
+    }
+    displayNotificationRows(
+      [rowFromCloudFeedRow(entry)],
+      target,
+      entry.originHostId,
+    );
+  }
+}
+
 export function displayAppLocalNotification(
   entry: AppLocalNotificationEntry,
   target: NotificationDisplayTarget,
   deliveryKey: string,
+  userId: string,
 ): Promise<void> {
   return displayNotificationRowsAwaitNative(
     [rowFromAppLocalEntry(entry)],
     target,
-    deliveryKey,
-    null,
+    {
+      deliveryKey,
+      originHostId: null,
+      foregroundAppLocal: { userId, entry },
+    },
   );
 }
 

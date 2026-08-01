@@ -56,8 +56,8 @@ import {
 } from "@/stores/notifications/notification-indicator-state";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
-import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
+import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -180,14 +180,15 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { resolveProfileAccentDot } from "@/components/worktree/worktree-owner-settings-model";
+import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -195,6 +196,9 @@ import {
   NotificationIndicatorIcon,
   type IndicatorRunningKind,
 } from "@/components/notifications/notification-indicator-icon";
+import { useEpicStore } from "@/hooks/use-epic-store";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -582,8 +586,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // Two independent narrowings, kept separate on purpose. `originRootIds` is
   // the origin filter's result and feeds the "no matches" empty state and
   // forced expansion; `rootIds` additionally drops archived roots and is what
-  // actually renders. Collapsing them would make an all-archived tree claim
-  // "No agents use this interface", which is false.
+  // actually renders. Collapsing them would make an all-archived tree show the
+  // Interface-filter empty state instead of the archived one, blaming a filter
+  // that is not hiding anything.
   const originRootIds = useMemo(
     () => applyVisibleFilter(allRootIds, originVisibleIds),
     [allRootIds, originVisibleIds],
@@ -688,7 +693,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         .sort(),
     [tree, visibleIds],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds: indicatorChatIds,
     enabled: indicatorChatIds.length > 0,
@@ -745,8 +750,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         // Names the INTERFACE as the thing with no matches. "No agents match"
         // would imply the Task has none at all, when the filter is only hiding
         // the other interface.
-        title="No agents use this interface."
-        description={null}
+        title="No matches for the current filters."
+        description="The Interface filter is hiding the other agents."
         testId="epic-chat-sidebar-filter-empty"
       />
     );
@@ -802,7 +807,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   }
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <SidebarArchiveSupportedContext.Provider value={canArchive}>
         <SidebarViewerContext.Provider value={isViewer}>
           <SidebarSortContext.Provider value={comparator}>
@@ -1339,13 +1344,13 @@ function ChatNodeShellBody(
   // "New child agent" opens the shared New Conversation modal seeded with this
   // row as the parent - the same action the standalone hover "+" used to
   // trigger, now consolidated into the row menu (right-click + ⋯) so there is a
-  // single hover affordance. Forcing chat mode mirrors `NewConversationModalAction`.
+  // single hover affordance. It preserves the modal's remembered interface,
+  // matching the top-level new-agent trigger.
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
-    useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
     openNewConversationModal({
       epicId,
       tabId,
@@ -1782,6 +1787,12 @@ function SidebarAgentHarnessIcon(props: {
   readonly harnessId: ProviderId;
 }) {
   const TerminalIcon = EPIC_NODE_ICONS.terminal;
+  const tuiAgent = useEpicStore((state) =>
+    Object.hasOwn(state.tuiAgents.byId, props.nodeId)
+      ? state.tuiAgents.byId[props.nodeId]
+      : null,
+  );
+  const managedProfileId = tuiAgent?.profileId ?? null;
   return (
     <TooltipWrapper
       label="TUI terminal agent"
@@ -1794,16 +1805,59 @@ function SidebarAgentHarnessIcon(props: {
         data-agent-surface="tui"
         className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
       >
-        <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
+        {managedProfileId === null ? (
+          <ProfileBadgedHarnessIcon
+            harnessId={props.harnessId}
+            harnessName={props.harnessId}
+            profileAccentDot={null}
+            iconClassName="size-3.5"
+            className={undefined}
+            testId={`sidebar-agent-profile-mark-${props.nodeId}`}
+          />
+        ) : (
+          <ManagedProfileSidebarHarnessIcon
+            nodeId={props.nodeId}
+            harnessId={props.harnessId}
+            hostId={tuiAgent?.hostId ?? null}
+            profileId={managedProfileId}
+          />
+        )}
         <TerminalIcon
           aria-hidden="true"
           data-testid={`sidebar-agent-surface-${props.nodeId}`}
           data-agent-surface="tui"
-          className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
+          className="pointer-events-none absolute -top-1.5 -right-1 size-2 text-muted-foreground"
           strokeWidth={3}
         />
       </span>
     </TooltipWrapper>
+  );
+}
+
+function ManagedProfileSidebarHarnessIcon(props: {
+  readonly nodeId: string;
+  readonly harnessId: ProviderId;
+  readonly hostId: string | null;
+  readonly profileId: string;
+}) {
+  const hostClient = useHostClientForHostId(props.hostId);
+  const providersList = useProvidersListForClient(hostClient, {
+    enabled: true,
+    subscribed: true,
+  });
+  const profiles = harnessProfiles(
+    providersList.data?.providers ?? null,
+    props.harnessId,
+  );
+  return (
+    <ProfileBadgedHarnessIcon
+      harnessId={props.harnessId}
+      harnessName={props.harnessId}
+      profileAccentDot={resolveProfileAccentDot(props.profileId, profiles)}
+      iconClassName="size-3.5"
+      className={undefined}
+      testId={`sidebar-agent-profile-mark-${props.nodeId}`}
+    />
   );
 }
 

@@ -6,6 +6,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   HostRpcError,
+  RetryableTransportError,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -19,6 +20,7 @@ import {
   hostRpcRegistry,
   HostRuntimeProvider,
   useHostCompatibility,
+  type HostCompatibility,
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
@@ -224,15 +226,41 @@ function mountStartupConsumers(
 function CompatibilityStatusProbe(): ReactNode {
   const compatibility = useHostCompatibility();
   return (
-    <div role="status" aria-label="Host compatibility status">
-      {compatibility.status}
-    </div>
+    <>
+      <div role="status" aria-label="Host compatibility status">
+        {compatibility.status}
+      </div>
+      <div role="status" aria-label="Host compatibility detail">
+        {compatibilityDetail(compatibility)}
+      </div>
+    </>
   );
+}
+
+/**
+ * The two flags a status alone cannot carry: whether a `compatible` verdict is
+ * being HELD through a failed refetch, and whether a `failed` probe ever
+ * reached the host at all.
+ */
+function compatibilityDetail(compatibility: HostCompatibility): string {
+  if (compatibility.status === "compatible") {
+    return compatibility.degraded ? "degraded" : "live";
+  }
+  if (compatibility.status === "failed") {
+    return compatibility.unreachable ? "unreachable" : "rejected";
+  }
+  return "n/a";
 }
 
 function getCompatibilityStatusText(): string | null {
   return screen.getByRole("status", {
     name: "Host compatibility status",
+  }).textContent;
+}
+
+function getCompatibilityDetailText(): string | null {
+  return screen.getByRole("status", {
+    name: "Host compatibility detail",
   }).textContent;
 }
 
@@ -505,9 +533,123 @@ describe("HostCompatibilityProvider startup consumers", () => {
     await waitFor(() => {
       expect(getCompatibilityStatusText()).toBe("failed");
     });
+    // The host ANSWERED and the answer was an error, so this is a rejection,
+    // not an unreachable host - the surface may say "compatibility" here.
+    expect(getCompatibilityDetailText()).toBe("rejected");
     expect(methods).toEqual(["host.status", "host.status", "host.status"]);
     expect(getTaskContexts).not.toHaveBeenCalled();
     expect(listHarnesses).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("reports a first-probe transport failure as unreachable, not as a compatibility verdict", async () => {
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => {
+        throw new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "fetch failed",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      getTaskContexts,
+      listHarnesses,
+      onMethod: () => undefined,
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("failed");
+    });
+    expect(getCompatibilityDetailText()).toBe("unreachable");
+    queryClient.clear();
+  });
+
+  // traycer#860: the host was alive and completing agent turns for the whole
+  // session. A stream availability recovery invalidated the host-scoped
+  // queries, the compat refetch failed under machine load, and the gate tore
+  // the entire workspace down and told the user the host had not started.
+  it("holds a compatible verdict when a later host.status refetch fails", async () => {
+    let probes = 0;
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => {
+        probes += 1;
+        if (probes === 1) return compatibleHostStatus;
+        throw new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "host did not answer the dial",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      getTaskContexts,
+      listHarnesses,
+      onMethod: () => undefined,
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("compatible");
+    });
+    expect(getCompatibilityDetailText()).toBe("live");
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityDetailText()).toBe("degraded");
+    });
+    // The verdict - and therefore every mounted host-backed surface - survives.
+    expect(getCompatibilityStatusText()).toBe("compatible");
+    expect(probes).toBeGreaterThan(1);
+    queryClient.clear();
+  });
+
+  it("still reports a genuine incompatible verdict that arrives after a compatible one", async () => {
+    let probes = 0;
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => {
+        probes += 1;
+        if (probes === 1) return compatibleHostStatus;
+        throw new HostRpcError({
+          code: "INCOMPATIBLE",
+          message: "Incompatible methods: epic.listTasks",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      getTaskContexts,
+      listHarnesses,
+      onMethod: () => undefined,
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("compatible");
+    });
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    // Holding a prior verdict must never swallow a real one: a host that was
+    // replaced or updated under the same id says INCOMPATIBLE, and that wins.
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("incompatible");
+    });
     queryClient.clear();
   });
 

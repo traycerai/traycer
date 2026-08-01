@@ -15,7 +15,6 @@ interface ComposerToolbarProps {
   store: ComposerToolbarStore;
   onAttachImages: (files: ReadonlyArray<File>) => void;
   showNextTurnPermissionNote: boolean;
-  showAgentModeTooltip: boolean;
   canSubmit: boolean;
   attachmentPending: boolean;
   onSubmit: () => void;
@@ -48,7 +47,6 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     store,
     onAttachImages,
     showNextTurnPermissionNote,
-    showAgentModeTooltip,
     canSubmit,
     attachmentPending,
     onSubmit,
@@ -66,14 +64,12 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   // Left-group slices. The store is the single source for harness-level
   // permission capabilities (no parallel `useGuiHarnessesQuery` here).
   const permission = useStore(store, (s) => s.permission);
-  const agentMode = useStore(store, (s) => s.agentMode);
   const supportedPermissionModes = useStore(
     store,
     (s) => s.supportedPermissionModes,
   );
   const harnessLabel = useStore(store, (s) => s.harnessLabel);
   const setPermission = useStore(store, (s) => s.setPermission);
-  const setAgentMode = useStore(store, (s) => s.setAgentMode);
 
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.
@@ -102,12 +98,9 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             onPermissionChange={setPermission}
             supportedPermissionModes={supportedPermissionModes}
             harnessLabel={harnessLabel}
-            agentMode={agentMode}
-            onAgentModeChange={setAgentMode}
             showNextTurnPermissionNote={
               showNextTurnPermissionNote ? !settingsLocked : false
             }
-            showAgentModeTooltip={showAgentModeTooltip}
             settingsLocked={settingsLocked}
           />
           <ComposerToolbarRight

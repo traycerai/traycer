@@ -806,12 +806,14 @@ export function mergeLandingDraftWorkspaceFolders(
     if (
       existing === null ||
       existing.name !== folder.name ||
+      existing.hostId !== folder.hostId ||
       !sameRepoIdentifier(existing.repoIdentifier, folder.repoIdentifier)
     ) {
       accumulator.folderInfoByPath[path] = {
         path,
         name: folder.name,
         repoIdentifier: copyRepoIdentifier(folder.repoIdentifier),
+        hostId: folder.hostId,
       };
       accumulator.changed = true;
     }
@@ -914,10 +916,15 @@ function parseWorkspaceFolderInfo(
     return null;
   }
   if (value.path !== expectedPath) return null;
+  const hostId =
+    typeof value.hostId === "string" && value.hostId.length > 0
+      ? value.hostId
+      : null;
   return {
     path: value.path,
     name: value.name,
     repoIdentifier: parseRepoIdentifier(value.repoIdentifier),
+    hostId,
   };
 }
 
@@ -975,6 +982,7 @@ function copyWorkspaceFolderInfoByPath(
         path: info.path,
         name: info.name,
         repoIdentifier: copyRepoIdentifier(info.repoIdentifier),
+        hostId: info.hostId,
       },
     ]),
   );
@@ -1019,6 +1027,7 @@ function sameWorkspaceFolderInfoByPath(
     return (
       aInfo.path === bInfo.path &&
       aInfo.name === bInfo.name &&
+      aInfo.hostId === bInfo.hostId &&
       sameRepoIdentifier(aInfo.repoIdentifier, bInfo.repoIdentifier)
     );
   });
@@ -1054,6 +1063,7 @@ function workspaceFolderInfoByPathToDesktopValue(
       {
         path: info.path,
         name: info.name,
+        hostId: info.hostId,
         repoIdentifier:
           info.repoIdentifier === null
             ? null

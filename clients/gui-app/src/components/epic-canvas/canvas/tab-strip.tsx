@@ -12,6 +12,7 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FileDiff,
   FilePlus,
+  GitPullRequest,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -57,6 +58,8 @@ import {
   isDiffTileRef,
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
+  isPrDetailTileRef,
+  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
@@ -68,7 +71,7 @@ import {
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
@@ -232,14 +235,14 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds,
     enabled: chatIds.length > 0,
   });
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <div
         ref={stripRef}
         data-testid="tab-strip"
@@ -920,8 +923,13 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (isDiffTileRef(props.tab)) {
+  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isPrDetailTileRef(props.tab)) {
+    return (
+      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+    );
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;

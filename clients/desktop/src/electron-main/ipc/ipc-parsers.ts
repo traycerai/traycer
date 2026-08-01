@@ -45,6 +45,24 @@ export function assertString(
   }
 }
 
+export function assertNumber(
+  value: unknown,
+  context: string,
+): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} requires a finite number argument`);
+  }
+}
+
+export function assertInteger(
+  value: unknown,
+  context: string,
+): asserts value is number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${context} requires an integer argument`);
+  }
+}
+
 /**
  * Parses the `{ token, refreshToken }` pair the renderer hands to
  * `tokenStore.signIn` over IPC. Fail-closed: a non-string field throws so a
@@ -393,7 +411,8 @@ export function parseDesktopAuthSession(
 }
 
 export function parseSupportLogTarget(value: unknown): SupportLogTarget {
-  return value === "host" ? "host" : "desktop";
+  if (value === "host" || value === "desktop") return value;
+  throw new Error('supportLogTarget must be "desktop" or "host"');
 }
 
 /**

@@ -58,9 +58,12 @@ export function TabNavigationRouteBridge(): null {
         {
           pathname: input.location.pathname,
           state: input.location.state,
-          search: Object.fromEntries(
-            new URLSearchParams(input.location.search),
-          ),
+          // History exposes the raw query string, but navigation restoration
+          // needs the same parsed values the router uses. In particular, the
+          // default parser JSON-decodes multi-select arrays; URLSearchParams
+          // would leave them as JSON-looking strings and double-encode them on
+          // reactivation.
+          search: router.options.parseSearch(input.location.search),
         },
         input.action.type,
         router.navigate,

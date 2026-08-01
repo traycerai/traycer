@@ -52,10 +52,14 @@ export function useRefreshProvidersListOnTurn(
       }
       lastInvalidatedAtRef.current = now;
       void queryClient.invalidateQueries({
+        // Exact CLASSIC key, not the method scope: `providers.list` is also
+        // the carrier for the native (MCP/plugins/skills) queries, and a turn
+        // completion says nothing about those. A scope-wide invalidation would
+        // refetch every native list on every turn.
         queryKey: queryKeys.hostMethod<HostRpcRegistry, "providers.list">(
           hostId,
           "providers.list",
-          {},
+          { native: null },
         ),
       });
     });

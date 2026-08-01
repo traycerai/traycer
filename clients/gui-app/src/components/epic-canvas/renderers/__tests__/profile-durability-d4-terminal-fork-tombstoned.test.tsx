@@ -52,6 +52,18 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   }),
 }));
 
+// This suite's dialog target is always plain-fork intent, so the bulk
+// fork-admission preflight this hook backs is never invoked - stubbed purely
+// so the dialog's unconditional `useValidateTuiForkProfile` call doesn't hit
+// the partially-mocked `use-host-query` module below (which only implements
+// `useHostQuery`, not the mutation-lifecycle helper this hook also imports).
+vi.mock("@/hooks/agent/use-validate-tui-fork-profile-mutation", () => ({
+  useValidateTuiForkProfile: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
     readonly client: unknown;
@@ -240,6 +252,12 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
@@ -269,6 +287,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("tombstoned-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -302,6 +321,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("work-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -338,6 +358,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("work-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -371,6 +392,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("work-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -413,6 +435,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
           target={{
             sourceAgent: sourceAgentWithProfile("work-uuid"),
             workspaceSeed: emptyWorkspaceSeed(),
+            intent: "fork",
           }}
           epicId="epic-test"
           tabId="tab-test"
@@ -453,6 +476,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
           target={{
             sourceAgent: sourceAgentWithProfile("work-uuid"),
             workspaceSeed: emptyWorkspaceSeed(),
+            intent: "fork",
           }}
           epicId="epic-test"
           tabId="tab-test"

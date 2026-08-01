@@ -49,7 +49,6 @@ describe("commitProfileSelection", () => {
         },
         reasoning: "high",
         serviceTier: "fast",
-        agentMode: "regular",
       },
       onSettingsChange: (settings) =>
         emitted.push({
@@ -117,7 +116,6 @@ describe("commitSelection - provider switch", () => {
         },
         reasoning: "high",
         serviceTier: "",
-        agentMode: "regular",
       },
       onSettingsChange: (settings) =>
         emitted.push({

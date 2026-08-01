@@ -96,6 +96,18 @@ export const RunnerHostInvoke = {
   supportRevealLog: "runnerHost:support:log:reveal",
   supportSubmitReport: "runnerHost:support:report:submit",
   supportTailLog: "runnerHost:support:log:tail",
+  supportFreezeEvidence: "runnerHost:support:evidence:freeze",
+  supportDiscardFrozenEvidence: "runnerHost:support:evidence:discard",
+  supportReadFrozenLogTail: "runnerHost:support:evidence:log:tail",
+  supportSaveDiagnosticBundle: "runnerHost:support:diagnosticBundle:save",
+  // Per-install report ledger (T3.5). Read-only surface for the dialog's
+  // "Nth time on this install" strip; sightings write via freezeEvidence,
+  // filed reports write on delivered submit - neither is renderer-writable.
+  supportGetFingerprintOccurrence:
+    "runnerHost:support:ledger:fingerprintOccurrence:get",
+  // Ticket 09 / T6: the sole main-process producer of public (GitHub-bound)
+  // text, always behind the deep scrubber.
+  supportBuildPublicDraft: "runnerHost:support:publicDraft:build",
   serviceInstall: "runnerHost:service:install",
   serviceUninstall: "runnerHost:service:uninstall",
   serviceStart: "runnerHost:service:start",
@@ -253,6 +265,8 @@ export const RunnerHostEvent = {
   // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
   systemResumed: "runnerHost:event:systemResumed",
   notificationClick: "runnerHost:event:notificationClick",
+  notificationForegroundDisplay:
+    "runnerHost:event:notificationForegroundDisplay",
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   hostPickerChange: "runnerHost:event:hostPickerChange",
   quitRequested: "runnerHost:event:quitRequested",

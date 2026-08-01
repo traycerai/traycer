@@ -9,9 +9,11 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { StepUpRequiredError } from "@/lib/auth/step-up-flow";
 import { useHostBinding } from "@/lib/host";
 import { authMutationKeys, authQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface RevokeAllSessionsMutationContext {
   readonly auth: AuthService | null;
+  readonly userId: string | null;
 }
 
 function unwrapRevokeAllSessionsResult(
@@ -42,6 +44,7 @@ export function useAuthRevokeAllSessions(): UseMutationResult<
     mutationKey: authMutationKeys.revokeAllSessions(),
     onMutate: (): RevokeAllSessionsMutationContext => ({
       auth: binding === null ? null : binding.auth,
+      userId: useAuthStore.getState().contextMetadata?.userId ?? null,
     }),
     mutationFn: async (): Promise<RevokeAllSessionsResponse> => {
       if (binding === null) {
@@ -51,11 +54,11 @@ export function useAuthRevokeAllSessions(): UseMutationResult<
       return unwrapRevokeAllSessionsResult(result);
     },
     onSuccess: (_data, _variables, context) => {
-      if (context.auth === null) {
+      if (context.auth === null || context.userId === null) {
         return;
       }
       void queryClient.invalidateQueries({
-        queryKey: authQueryKeys.userSessions(context.auth),
+        queryKey: authQueryKeys.userSessions(context.auth, context.userId),
       });
       // Sign-out-everywhere also revokes host sessions server-side, so the
       // Remote Host registry list must refetch to reflect it.

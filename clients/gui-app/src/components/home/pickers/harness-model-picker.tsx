@@ -97,6 +97,12 @@ import {
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
+import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import {
+  paneActivationDeferProps,
+  runAfterPaneActivationFocusIntent,
+  usePaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -150,6 +156,14 @@ interface HarnessModelPickerProps {
   /** The exact host where the next run executes. This is explicit so usage
    *  comparison can never silently fall back to the renderer-default host. */
   runTargetHostId: string | null;
+  /**
+   * Per-row admission override for the active provider's profile strip,
+   * keyed by `profileCommitId`. `null` for every caller except the TUI
+   * continue-under-another-profile dialog, which overlays its bulk fork-
+   * admission preflight verdicts here so an unshared profile renders
+   * disabled with its rejection reason as a tooltip.
+   */
+  profileAdmission: ReadonlyMap<string | null, ProfileRowAdmission> | null;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -162,8 +176,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     registerActivation,
     createProfileHostId,
     runTargetHostId,
+    profileAdmission,
   } = props;
   const activityEnabled = useSurfaceActivity();
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const selection = useStore(store, (s) => s.selection);
   const selectedModel = useStore(store, (s) => s.selectedModel);
   const reasoning = useStore(store, (s) => s.reasoning);
@@ -236,8 +252,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
 
   useEffect(() => {
     if (activityEnabled || !visibleOpen) return;
-    closeOnly();
-  }, [activityEnabled, closeOnly, visibleOpen]);
+    return runAfterPaneActivationFocusIntent(
+      paneActivationFocusIntent,
+      closeOnly,
+    );
+  }, [activityEnabled, closeOnly, paneActivationFocusIntent, visibleOpen]);
 
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: activityEnabled,
@@ -562,6 +581,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
     [profilesByHarnessId, resolvedActiveProviderId],
   );
+  // The browsed provider's full CLI state, for the panel's ambient-auth line
+  // (which credential a single-profile provider is actually running on - e.g.
+  // Copilot riding the GitHub CLI's login). Same `providers.list` response the
+  // rail already reads for degraded/profile state - no extra query.
+  const activeProviderState = useMemo(
+    () =>
+      providersQuery.data?.providers.find(
+        (provider) =>
+          providerIdToGuiHarnessId(provider.providerId) ===
+          resolvedActiveProviderId,
+      ) ?? null,
+    [providersQuery.data, resolvedActiveProviderId],
+  );
   // Which profile each harness's rail dot reflects: the active provider's
   // browsed profile, plus the composer's already-committed selection's
   // profile when browsing a DIFFERENT provider (so its dot doesn't silently
@@ -777,6 +809,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningActionable,
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
+    activeProviderProfileAdmission: profileAdmission,
     onProfileChange: handleProfileChange,
   });
 
@@ -832,6 +865,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
           align={undefined}
         >
           <HarnessModelTrigger
+            {...paneActivationDeferProps}
             selection={selection}
             label={presentation.label}
             reasoningLabel={presentation.reasoningLabel}
@@ -862,6 +896,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         activeProfileId={activePanelProfileId}
         activeProfileIdByHarnessId={activeProfileIdByHarnessId}
         activeProviderProfiles={activeProviderProfiles}
+        activeProviderState={activeProviderState}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}
         preparingByHarnessId={preparingByHarnessId}
@@ -890,6 +925,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         runTargetHostId={runTargetHostId}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
+        profileAdmission={profileAdmission}
       />
     </Popover>
   );
@@ -1024,12 +1060,16 @@ function degradedHarnessIdsFromProviderStates(
   );
 }
 
+// The definitive "this ambient account cannot run a turn" verdict - the same
+// predicate the composer's send gate reads, so the rail's degraded treatment
+// and the send gate cannot drift. Since `railHarnessDegraded` applies this set
+// regardless of availability, membership must stay limited to the definitive
+// signed-out verdict: a missing API key is NOT one (`requiresApiKey` handles
+// it under `!available`, and a keyless provider's auth probe reports its own
+// definitive `unauthenticated` anyway), and folding it in here would degrade
+// live providers on a transient probe state.
 function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
-  return (
-    provider.enabled &&
-    (isProviderAmbientSignedOut(provider) ||
-      (provider.apiKey.supported && !provider.apiKey.configured))
-  );
+  return provider.enabled && isProviderAmbientSignedOut(provider);
 }
 
 function profilesByHarnessIdFromProviderStates(

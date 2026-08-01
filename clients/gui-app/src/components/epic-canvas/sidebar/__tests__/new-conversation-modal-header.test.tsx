@@ -1,6 +1,8 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 interface HeaderTestState {
   chats: { byId: Record<string, { readonly title: string }> };
@@ -20,13 +22,49 @@ vi.mock("@/hooks/use-epic-store", () => ({
     selector(testState),
 }));
 
-const { NewConversationModalHeader } =
+const { NewConversationModalAction, NewConversationModalHeader } =
   await import("../new-conversation-modal");
 
 afterEach(() => {
   cleanup();
   testState.chats = { byId: {} };
   testState.tuiAgents = { byId: {} };
+  useNewConversationModalStore.getState().resetForTests();
+  useNewConversationModalOpenStore.getState().close();
+});
+
+describe("<NewConversationModalAction />", () => {
+  it("preserves the remembered terminal interface when opening the modal", () => {
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode("epic-1", "terminal");
+
+    render(
+      <NewConversationModalAction
+        epicId="epic-1"
+        tabId="tab-1"
+        parentId={null}
+        size="icon-sm"
+        disabled={false}
+        disabledTooltip={null}
+        triggerLabel="New agent"
+        triggerTestId="new-agent"
+        actionRevealClassName=""
+        onBeforeOpen={undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "New agent" }));
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.composerMode,
+    ).toBe("terminal");
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: "epic-1",
+      tabId: "tab-1",
+    });
+  });
 });
 
 describe("<NewConversationModalHeader />", () => {

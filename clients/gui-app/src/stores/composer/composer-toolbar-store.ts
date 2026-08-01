@@ -1,5 +1,10 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  modelMatchIsCovered,
+  modelsForHarness,
+  resolveModelBySlug,
+} from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 
 import {
   findDefaultModel,
@@ -7,7 +12,6 @@ import {
   normalizePermissionMode,
   normalizeReasoningForModel,
   normalizeServiceTierForModel,
-  type AgentMode,
   type HarnessModelSelection,
   type HarnessOption,
   type ModelOption,
@@ -21,7 +25,7 @@ import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
- * Per-composer toolbar state (model/permission/reasoning/tier/agent-mode).
+ * Per-composer toolbar state (model/permission/reasoning/tier).
  *
  * One store instance is created per composer surface (held in `useState`,
  * mirroring `createComposerPickerStore`), so toggling model / provider /
@@ -49,7 +53,6 @@ export interface ComposerToolbarValues {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
-  readonly agentMode: AgentMode;
 }
 
 export interface ComposerToolbarCatalog {
@@ -94,20 +97,20 @@ interface ComposerToolbarDerived {
   readonly permission: PermissionMode;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
-  readonly agentMode: AgentMode;
   /** Permission modes the selected harness honors; `null` while the catalog
    *  is loading or the harness is unknown (picker keeps every option enabled). */
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
   /** Display label of the selected harness, for picker copy. */
   readonly harnessLabel: string | null;
   /**
-   * True only when the resolved model slug is a real, loaded model of the
-   * selected harness. The surface emit is NOT gated on this - live-settings /
-   * last-run propagate immediately. It is the signal the memory-recording
-   * wrapper reads at WRITE time, so an unvalidated or stale remembered slug -
-   * sourced from memory, not a loaded list - is never written to memory before
-   * the catalog proves it valid. An empty / unresolved slug is never a loaded
-   * model, so is never confirmed.
+   * True only when the loaded catalog of the selected harness covers the
+   * resolved model slug - by exact slug OR by alias, since a held alias is a
+   * valid runnable selection and not a dead one. The surface emit is NOT gated
+   * on this - live-settings / last-run propagate immediately. It is the signal
+   * the memory-recording wrapper reads at WRITE time, so an unvalidated or
+   * stale remembered slug - sourced from memory, not a loaded list - is never
+   * written to memory before the catalog proves it valid. An empty / unresolved
+   * slug is covered by neither pass, so is never confirmed.
    */
   readonly selectionCatalogConfirmed: boolean;
 }
@@ -144,7 +147,6 @@ export interface ComposerToolbarActions {
   readonly applyComposerSelection: (input: ApplyComposerSelectionInput) => void;
   readonly setReasoning: (next: ReasoningLevel) => void;
   readonly setServiceTier: (next: ServiceTier) => void;
-  readonly setAgentMode: (next: AgentMode) => void;
   /**
    * Replace the raw values when the seed identity changes (draft swap,
    * settings restored from persistence). No-op when `seedKey` matches the
@@ -254,9 +256,6 @@ export function createComposerToolbarStore(
       setServiceTier: (next) => {
         update({ serviceTier: next });
       },
-      setAgentMode: (next) => {
-        update({ agentMode: next });
-      },
 
       applySeed: (seedKey, values) => {
         const state = get();
@@ -305,7 +304,6 @@ function settingsFromDerived(derived: ComposerToolbarDerived): ChatRunSettings {
     // site shared with the picker display); the codex-adapter still re-filters
     // on the wire as defense-in-depth.
     serviceTier: derived.serviceTier,
-    agentMode: derived.agentMode,
   });
 }
 
@@ -348,16 +346,16 @@ function deriveToolbarState(
           modelSlug: resolvedSlug,
           profileId: availabilitySelection.profileId,
         };
-  // True ONLY when the resolved slug is a real, loaded model of this harness.
-  // The surface emit is NOT gated on this (live-settings propagate immediately);
-  // it is the signal the `recordingOnSettingsChange` wrapper reads at write time
-  // so an unvalidated / stale remembered slug is never written to memory before
-  // the catalog proves it valid. Once loaded, the resolved FALLBACK slug
-  // (delisted case) is what becomes confirmed, letting the memory write
-  // self-heal a dead slug.
+  // True ONLY when the loaded catalog covers the resolved slug - by exact slug
+  // or by alias. The surface emit is NOT gated on this (live-settings propagate
+  // immediately); it is the signal the `recordingOnSettingsChange` wrapper reads
+  // at write time so an unvalidated / stale remembered slug is never written to
+  // memory before the catalog proves it valid. Once loaded, the resolved
+  // FALLBACK slug (delisted case) is what becomes confirmed, letting the memory
+  // write self-heal a dead slug.
   const selectionCatalogConfirmed =
     catalogLoadedForHarness &&
-    modelExists(models, selection.harnessId, resolvedSlug);
+    modelCoveredByCatalog(models, selection.harnessId, resolvedSlug);
   const selectedModel = findSelectedModel(models, selection);
   // Harness-level capabilities (currently just supportedPermissionModes) come
   // from `listGuiHarnesses`. `null` covers both "catalog still loading" and
@@ -386,7 +384,6 @@ function deriveToolbarState(
       values.serviceTier,
       selectedModel,
     ),
-    agentMode: values.agentMode,
     supportedPermissionModes,
     harnessLabel: selectedHarness?.label ?? null,
     selectionCatalogConfirmed,
@@ -480,14 +477,18 @@ function sameCatalog(
   );
 }
 
-function modelExists(
+// Whether the loaded catalog covers this slug by EITHER pass. Exact-only
+// membership would answer "no" for a held alias - a selection that renders,
+// runs, and is exactly what the user asked for - and so would suppress every
+// downstream memory write for it. Coverage and write-permission are different
+// questions; `resolveModelSlug` answers the second.
+function modelCoveredByCatalog(
   models: ReadonlyArray<ModelOption>,
   harnessId: ProviderId,
   modelSlug: string,
 ): boolean {
-  return models.some(
-    (candidate) =>
-      candidate.harnessId === harnessId && candidate.slug === modelSlug,
+  return modelMatchIsCovered(
+    resolveModelBySlug(modelsForHarness(models, harnessId), modelSlug),
   );
 }
 
@@ -498,15 +499,39 @@ function modelExists(
 //   slug stays for display), so a valid selection is never reset mid-load;
 // - loaded but empty / absent -> first model (an empty slug resolves to the
 //   preferred model; a non-empty-but-absent slug was DELISTED).
+//
+// This is the store's MUTATING model lookup: whatever it returns can be written
+// back into the raw sticky `values.selection.modelSlug` by `healedValues`. Only
+// a slug the catalog CANNOT resolve at all is rewritten:
+//
+//   - Any alias match holds the slug verbatim. Rewriting it to the matched
+//     row's slug looks like a repair and is the opposite: rows are keyed by
+//     entitlement-decorated names that themselves float, so healing a pinned
+//     `claude-sonnet-5` onto the row `sonnet` trades a version pin for a
+//     pointer that follows the account to the next Sonnet. Ambiguity makes it
+//     worse (`default` and `opus[1m]` tie, so first-in-order picks by catalog
+//     accident) but is not what makes it wrong. Holding costs nothing: the
+//     read-only `findSelectedModel` resolves the same alias, so the row renders,
+//     answers capability questions, and runs - only the stored string is left
+//     alone. See the `alias` variant of `ModelMatch`.
+//   - `none` - loaded, and no row claims the slug by either pass - is the
+//     genuinely delisted case, and heals to the preferred model.
 function resolveModelSlug(
   harnessId: ProviderId,
   modelSlug: string,
   models: ReadonlyArray<ModelOption>,
   catalogLoadedForHarness: boolean,
 ): string {
-  if (modelSlug.length > 0 && modelExists(models, harnessId, modelSlug)) {
-    return modelSlug;
+  if (modelSlug.length === 0) {
+    return catalogLoadedForHarness
+      ? (findDefaultModel(models)?.slug ?? "")
+      : "";
   }
+  const match = resolveModelBySlug(
+    modelsForHarness(models, harnessId),
+    modelSlug,
+  );
+  if (modelMatchIsCovered(match)) return modelSlug;
   if (!catalogLoadedForHarness) return modelSlug;
   return findDefaultModel(models)?.slug ?? "";
 }

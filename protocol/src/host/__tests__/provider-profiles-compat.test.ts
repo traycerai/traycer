@@ -23,7 +23,7 @@ import {
 // import alone asserts the new `providers.startLogin@1.1` /
 // `providers.setEnabled@2.1` lines and their bridges are well-formed.
 import {
-  providersAwaitLoginDowngradeV2ToV1,
+  providersAwaitLoginDowngradeV21ToV10,
   providersSetEnabledDowngradeV2ToV1,
 } from "@traycer/protocol/host/registry";
 import { prepareTuiLaunchRequestSchema } from "@traycer/protocol/host/agent/tui/unary-schemas";
@@ -325,13 +325,17 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
 
   it("downgradeProviderCliStateListToV20 never leaks profile identity to a v2.0 caller", () => {
     // Latest major carries profiles[]; the path from latest → v2.0 must strip
-    // them. Use 6 explicitly - providers.list latest after the omp freeze is
-    // v6.0 (`cli-v1.1.8` shipped v5.0, so that line is frozen).
+    // them. The major is spelled out because `downgradeResponseAcrossMajors`
+    // resolves it at the type level, so it cannot be read off the registry at
+    // runtime - it has to be bumped by hand every time a release freezes the
+    // current line (v5.0 at `cli-v1.1.8`, v6.0 at `cli-v1.1.9`, so v7.0 now).
+    // The latest major also carries `nativeCapabilities` and `native`, which
+    // this downgrade strips alongside `profiles`.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       2,
-      { providers: [stateWithProfile] },
+      { providers: [stateWithProfile], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -386,9 +390,9 @@ describe("providers.list v3.0 line predates profiles[]", () => {
   it("latest -> v3.0 downgrade never leaks profile identity to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       3,
-      { providers: [stateWithProfile] },
+      { providers: [stateWithProfile], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -461,14 +465,17 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
     expect(upgradedNull.existingProfileId).toBeNull();
   });
 
-  it("upgrades a released 2.0 awaitLogin request to 2.1 with profileId: null", () => {
+  it("upgrades a released 2.0 awaitLogin request to 2.1 with profileId: null and mcpAuth: null", () => {
     const upgraded = upgradeRequestToVersion(
       hostRpcRegistry["providers.awaitLogin"],
       { major: 2, minor: 0 },
       { major: 2, minor: 1 },
       { providerId: "claude-code" },
     );
-    expect(upgraded).toEqual({ providerId: "claude-code", profileId: null });
+    expect(upgraded).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+    });
   });
 
   it("2.1 -> 1.0 downgrade still strips profiles and profile identity", () => {
@@ -515,7 +522,7 @@ describe("providers.startLogin@1.1 (create profile / re-login to a profile)", ()
 
 describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
   it("drops profileId before the strict v1.0 request parse", () => {
-    const downgraded = providersAwaitLoginDowngradeV2ToV1.downgradeRequest({
+    const downgraded = providersAwaitLoginDowngradeV21ToV10.downgradeRequest({
       providerId: "claude-code",
       profileId: "profile-1",
     });
@@ -537,7 +544,7 @@ describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
 });
 
 describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
-  it("upgrades a v2.0 request to v2.1 with profileAction defaulted to null", () => {
+  it("upgrades a v2.0 request to v2.1 with profileAction/native defaulted to null", () => {
     const upgraded = upgradeRequestToVersion(
       hostRpcRegistry["providers.setEnabled"],
       { major: 2, minor: 0 },
@@ -609,7 +616,11 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
       hostRpcRegistry["providers.setEnabled"],
       2,
       1,
-      { providerId: "codex", enabled: false, profileAction: null },
+      {
+        providerId: "codex",
+        enabled: false,
+        profileAction: null,
+      },
     );
     expect(downgraded).toEqual({
       ok: true,

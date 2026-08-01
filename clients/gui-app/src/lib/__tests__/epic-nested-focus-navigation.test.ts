@@ -10,6 +10,10 @@ import {
   consumeNestedRoutePrimaryEditorFocus,
   resetNestedRouteDomFocusForTests,
 } from "@/lib/nested-route-dom-focus";
+import {
+  resetNestedFocusNavigationIntentsForTests,
+  shouldDeferNestedRouteApplication,
+} from "@/lib/nested-focus-navigation-intent";
 
 interface CapturedNavigateOptions {
   readonly search: (prev: Record<string, unknown>) => unknown;
@@ -38,7 +42,10 @@ function firstNavigateOptions(
 }
 
 describe("navigateNestedFocus", () => {
-  beforeEach(resetNestedRouteDomFocusForTests);
+  beforeEach(() => {
+    resetNestedRouteDomFocusForTests();
+    resetNestedFocusNavigationIntentsForTests();
+  });
 
   it("pushes a nested search patch for persistent desktop history", () => {
     const history = createPersistentMemoryHistory(
@@ -67,6 +74,15 @@ describe("navigateNestedFocus", () => {
       focusPaneId: "pane-1",
       focusTileInstanceId: "tile-1",
     });
+    expect(shouldDeferNestedRouteApplication("epic-1", "tab-1", null)).toBe(
+      true,
+    );
+    expect(
+      shouldDeferNestedRouteApplication("epic-1", "tab-1", {
+        paneId: "pane-1",
+        tileInstanceId: "tile-1",
+      }),
+    ).toBe(false);
   });
 
   it("does not navigate duplicate focus targets", () => {

@@ -19,6 +19,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
 const runtimeMock = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
@@ -42,6 +43,7 @@ function pendingProvider(): ProviderCliState {
     providerId,
     enabled: true,
     disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     selected: { kind: "bundled" },
     candidates: [],
     auth: {
@@ -81,7 +83,10 @@ describe("useRefreshProviders", () => {
           return `req-${String(requestSeq)}`;
         },
         handlers: {
-          "providers.list": () => ({ providers: [pendingProvider()] }),
+          "providers.list": () => ({
+            providers: [pendingProvider()],
+            native: null,
+          }),
         },
       }),
     });
@@ -96,7 +101,7 @@ describe("useRefreshProviders", () => {
     const queryKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
       mockLocalHostEntry.hostId,
       "providers.list",
-      {},
+      { native: null },
     );
     const coordinator = getConditionPollEpisodeCoordinator(queryClient);
     const interval = coordinator.refetchIntervalFor("providers.list");

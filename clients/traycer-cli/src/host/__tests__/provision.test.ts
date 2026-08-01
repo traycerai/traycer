@@ -190,6 +190,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
     lifecycle: {
       beforeSwap: async () => {},
       afterSwap: async () => {},
+      swapLockRecovery: null,
     },
   };
 }

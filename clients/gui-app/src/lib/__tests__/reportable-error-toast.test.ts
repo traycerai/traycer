@@ -3,6 +3,7 @@ import { fireEvent, render } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import type { ExternalToast } from "sonner";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const errorToast = vi.hoisted(() =>
   vi.fn<(message: ReactNode, options: ExternalToast | undefined) => string>(
@@ -42,6 +43,7 @@ afterEach(() => {
     activeDialog: null,
     reportIssueAvailable: false,
     reportIssueContext: null,
+    reportIssueDraftContext: null,
     reportIssueDraftId: 0,
   });
 });
@@ -113,6 +115,22 @@ describe("reportableErrorToast", () => {
 
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
     expect(useDesktopDialogStore.getState().reportIssueContext).toBeNull();
+  });
+
+  it("tracks report_issue_opened when the toast report action is used", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    track.mockClear();
+
+    reportableErrorToast("Couldn't load", undefined, SAFE_CONTEXT);
+    clickErrorReportAction();
+
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.ReportIssueOpened, {
+      source: "notification",
+    });
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual(
+      SAFE_CONTEXT,
+    );
   });
 
   it("preserves an explicitly composed cancel slot", () => {

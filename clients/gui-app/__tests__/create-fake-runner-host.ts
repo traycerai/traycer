@@ -45,6 +45,7 @@ export function createFakeRunnerHost(
     },
     notifications: {
       show: () => Promise.resolve(),
+      onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
     },
     tray: {

@@ -52,6 +52,12 @@ function providerStateWith(
     managedInstallState,
     versionVisibility: null,
     advisory: null,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
   };
 }
 

@@ -18,12 +18,15 @@ export const authQueryKeys = {
     "registered-hosts",
     authService,
   ],
-  // Devices & Sessions account-security list, keyed to the live AuthService
-  // instance so sign-out/cross-user invalidation drops it with other auth data.
-  userSessions: (authService: object): readonly unknown[] => [
+  // Devices & Sessions account-security list, keyed to both the live
+  // AuthService and signed-in user. An AuthService survives account changes,
+  // so the user id is required to keep an old account's promise/cache from
+  // becoming visible to its replacement.
+  userSessions: (authService: object, userId: string): readonly unknown[] => [
     "auth",
     "user-sessions",
     authService,
+    userId,
   ],
   // Stable, disabled key for when no `AuthService` binding is available yet
   // (mirrors `uiQueryKeys.hostPickerMissing`).

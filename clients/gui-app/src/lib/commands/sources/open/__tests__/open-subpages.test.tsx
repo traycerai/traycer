@@ -181,6 +181,14 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           title: "shell one",
           cwd: "/work/repo",
         },
+        {
+          sessionId: "term-signin",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionKind: "terminal",
+          status: "running",
+          title: "Copilot sign-in",
+          cwd: "~",
+        },
       ],
     },
   }),
@@ -209,6 +217,10 @@ import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-s
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewTerminalModalOpenStore } from "@/stores/epics/new-terminal-modal-open-store";
+import {
+  recordProviderLoginTerminal,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
 
 const navigateNestedFocusSpy = vi.fn<NavigateNestedFocus>();
 
@@ -266,6 +278,10 @@ afterEach(() => {
   useNewConversationModalOpenStore.getState().close();
   useNewConversationModalStore.getState().resetForTests();
   useNewTerminalModalOpenStore.getState().close();
+  useProviderLoginTerminalsStore.setState(
+    useProviderLoginTerminalsStore.getInitialState(),
+    true,
+  );
 });
 
 describe("Agents opener sub-page", () => {
@@ -404,6 +420,34 @@ describe("Terminals opener sub-page", () => {
     expect(existing.ref.id).toBe("term-1");
     expect(existing.ref.type).toBe("terminal");
     expect(existing.navigateNestedFocus).toBe(navigateNestedFocusSpy);
+  });
+
+  // A sign-in terminal reopened from the palette must carry its origin too -
+  // `terminal.list` cannot say who created a session, so without this the
+  // eviction-recreate path (correct for an ordinary shell) would spawn a bare
+  // prompt under the sign-in session's id once the host lost the PTY.
+  it("carries provider-login origin for a recorded sign-in session, and leaves an unrecorded one plain", () => {
+    recordProviderLoginTerminal({
+      hostId: "default-host",
+      sessionId: "term-signin",
+      providerId: "copilot",
+    });
+    const items = renderItems(useTerminalsOpenerItems);
+
+    runById(items, "open:terminals:term-signin");
+    const signInOpened = lastTileOpen();
+    if (signInOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(signInOpened.ref.origin).toBe("provider-login");
+    expect(signInOpened.ref.originProviderId).toBe("copilot");
+
+    runById(items, "open:terminals:term-1");
+    const plainOpened = lastTileOpen();
+    if (plainOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(plainOpened.ref.origin).toBeUndefined();
   });
 });
 

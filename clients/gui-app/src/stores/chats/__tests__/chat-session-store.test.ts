@@ -1611,12 +1611,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -1709,12 +1709,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -1783,12 +1783,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -1877,12 +1877,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3182,12 +3182,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3361,12 +3361,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5.4",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3433,12 +3433,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-2",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-2",
         startedAt: 6,
@@ -3471,12 +3471,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-local",
         status: "starting",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3535,12 +3535,12 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-local",
           status: "starting",
           harnessId: "claude",
           model: "claude-sonnet",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 3,
@@ -3563,12 +3563,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-provider",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3699,12 +3699,12 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-split",
           status: "running",
           harnessId: "claude",
           model: "claude-sonnet",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-split-run",
           startedAt: 3,
@@ -3843,12 +3843,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet-4",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 1,
@@ -4695,12 +4695,12 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
     chatId: CHAT_ID,
     runStatus: "running",
     activeTurn: {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
       model: "gpt-5-codex",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "message-1",
       startedAt: 3,
@@ -4820,6 +4820,60 @@ describe("blockDelta coalescing", () => {
     harness.manual.runAll();
     expect(liveText(harness.handle)).toBe("");
   });
+
+  it("publishes a pending interview only once its streaming block is observable", () => {
+    // The host emits the interview's `blockDelta` before the
+    // `interviewRequested` frame, but the delta sits in the coalescing buffer
+    // until the next tick. If the pending id lands first, a host-pending
+    // interview is briefly visible with no `streaming` segment - which
+    // `findUnanswerableInterviews` reads as permanently stuck and offers to
+    // dismiss, cancelling a live question mid-Q&A.
+    const harness = createCoalesceHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "interview.requested",
+        blockId: "interview-1",
+        timestamp: 10,
+        toolName: "AskUserQuestion",
+        questions: [],
+      },
+    });
+    // Still buffered: nothing has reached the store yet.
+    expect(harness.manual.pendingCount()).toBe(1);
+
+    callbacks.onInterviewRequested({
+      kind: "interviewRequested",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-1",
+      requestedAt: 10,
+    });
+
+    // Read BEFORE any coordinator tick - this is the window the renderer would
+    // have rendered the escape hatch in.
+    const state = harness.handle.store.getState();
+    expect(state.pendingInterviews).toEqual([
+      { blockId: "interview-1", requestedAt: 10 },
+    ]);
+    const streamingInterviewIds = (
+      state.liveAssistantMessage?.blocks ?? []
+    ).flatMap((block) =>
+      block.type === "interview" && block.status === "streaming"
+        ? [block.blockId]
+        : [],
+    );
+    expect(streamingInterviewIds).toEqual(["interview-1"]);
+    // The consuming frame drained the buffer, so the tick has nothing left.
+    expect(harness.manual.pendingCount()).toBe(0);
+  });
 });
 
 describe("surface visibility rollup", () => {
@@ -4881,12 +4935,12 @@ describe("in-flight block finalization on stop / steer", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId,
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -5393,12 +5447,12 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-live-auth-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-live-1",
         startedAt: 3,
@@ -5459,6 +5513,159 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       },
     ]);
     expect(harness.nudgeCount()).toBe(1);
+  });
+});
+
+describe("localProvenanceMessageIds (chat-scroller-refactor decision #8/#9, review round 3)", () => {
+  // The chat transcript's anchor classifier anchors a new/replaced user row
+  // UNCONDITIONALLY iff its id is in this registry, otherwise gates it on
+  // `isFollowingEnd`. A queued send (turn running) has NO optimistic
+  // transcript row until the host drains the queue - that drain must ride
+  // the SAME gated path as any other passive arrival (a queued flush, an
+  // A2A row), never anchor unconditionally. Registration must therefore
+  // mirror `shouldRenderSendAsPendingUserMessage` exactly, not fire
+  // unconditionally on every successful dispatch.
+  it("registers provenance for an idle send (creates the optimistic pendingUserMessage row)", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    expect(harness.handle.store.getState().localProvenanceMessageIds.size).toBe(
+      0,
+    );
+
+    const sent = harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    expect(sent).not.toBeNull();
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+
+    // Idle send renders an optimistic row same-frame (ticket-1 binding
+    // finding) AND registers provenance for it.
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([
+      expect.objectContaining({ messageId: frame.messageId }),
+    ]);
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has(frame.messageId),
+    ).toBe(true);
+  });
+
+  it("does NOT register provenance for a queued send (turn running, no optimistic transcript row)", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    expect(harness.handle.store.getState().localProvenanceMessageIds.size).toBe(
+      0,
+    );
+
+    const sent = harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    expect(sent).not.toBeNull();
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+
+    // Send-while-running becomes an optimistic QUEUED item (queue surface),
+    // not a transcript row - and must NOT be locally provenanced. Its
+    // eventual flush into the transcript is a passive arrival gated on
+    // `isFollowingEnd` like any other queued flush.
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    expect(harness.handle.store.getState().queue.items).toHaveLength(1);
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has(frame.messageId),
+    ).toBe(false);
+    expect(harness.handle.store.getState().localProvenanceMessageIds.size).toBe(
+      0,
+    );
+  });
+
+  it("registers the replacement message minted by editUserMessage", () => {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [persistedUserMessage("message-edit-target")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-edit-target",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    expect(result).not.toBeNull();
+    if (result === null) throw new Error("Expected edit result");
+
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has(result.messageId),
+    ).toBe(true);
+  });
+
+  it("registers the pre-minted message sent by sendSeededUserMessage", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+
+    const result = harness.handle.store.getState().sendSeededUserMessage({
+      clientActionId: "seeded-action",
+      messageId: "seeded-message",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+    });
+    expect(result).not.toBeNull();
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has("seeded-message"),
+    ).toBe(true);
+  });
+
+  it("consumes existing local provenance and leaves an absent id as a no-op", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    harness.handle.store.getState().sendSeededUserMessage({
+      clientActionId: "consume-action",
+      messageId: "consume-message",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+    });
+
+    const beforeAbsentConsume =
+      harness.handle.store.getState().localProvenanceMessageIds;
+    harness.handle.store.getState().consumeLocalProvenance("absent-message");
+    expect(harness.handle.store.getState().localProvenanceMessageIds).toBe(
+      beforeAbsentConsume,
+    );
+
+    harness.handle.store.getState().consumeLocalProvenance("consume-message");
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has("consume-message"),
+    ).toBe(false);
   });
 });
 

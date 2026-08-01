@@ -87,6 +87,18 @@ jobs:
           restore-keys: |
             nx-${{ runner.os }}-${{ matrix.project }}-
       - run: bun install --frozen-lockfile
+      # The host-v1.1.5 oracle in `provider-native-schemas.test.ts` regenerates
+      # the checked-in fixture straight from the tag and deep-equals the two.
+      # `actions/checkout` fetches no tags, so without this it skips itself and
+      # the check never runs anywhere: `guarded-files-tripwire` only catches a
+      # hand-edit to the fixture, NOT a generator that has drifted away from it.
+      #
+      # A shallow single-tag fetch is enough — the tag's commit arrives with a
+      # complete tree, so the blobs the oracle reads are all present (~2s, ~6MB;
+      # a full `fetch-depth: 0` clone would buy nothing here).
+      - name: Fetch the host-v1.1.5 tag the schema oracle regenerates from
+        if: matrix.project == '@traycer/protocol'
+        run: git fetch --depth=1 origin tag host-v1.1.5
       - name: Test
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false ${{ matrix.test_args }}
 

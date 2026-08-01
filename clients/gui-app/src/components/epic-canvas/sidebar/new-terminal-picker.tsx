@@ -28,14 +28,25 @@ import {
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 
 interface NewTerminalPickerProps {
   readonly epicId: string;
   readonly tabId: string;
+  readonly onBeforeOpen: (() => void) | undefined;
 }
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const { epicId, onBeforeOpen, tabId } = props;
+  const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
+  const setIsOpen = useCallback(
+    (open: boolean) => setMenuOpen(tabId, "terminals", "create", open),
+    [setMenuOpen, tabId],
+  );
   // The picker's `PopoverContent` (a modal Radix popover) un-presents by
   // unmounting when its pane is backgrounded, which silently resets the cmdk
   // folder-search query inside `WorktreeFolderListBody` while the root stays
@@ -52,26 +63,29 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     (s) => s.prepareOpenTileInTabFocusTarget,
   );
 
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      // `PopoverContent` mounts `NewTerminalPickerBody` only while open, so the
+      // explicit-row reset and double-launch latch that used to be reset here
+      // now start fresh with the body itself. Only the caller hook remains.
+      if (open) onBeforeOpen?.();
+      setIsOpen(open);
+    },
+    [onBeforeOpen, setIsOpen],
+  );
+
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
-      navigateNested(props.epicId, props.tabId, () =>
-        prepareOpenTileInTabFocusTarget(
-          props.tabId,
-          buildTerminalTileRef(target),
-        ),
+      navigateNested(epicId, tabId, () =>
+        prepareOpenTileInTabFocusTarget(tabId, buildTerminalTileRef(target)),
       );
       setIsOpen(false);
     },
-    [
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      props.epicId,
-      props.tabId,
-    ],
+    [navigateNested, prepareOpenTileInTabFocusTarget, epicId, tabId, setIsOpen],
   );
 
   return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
+    <Popover open={isOpen} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -94,10 +108,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         {isOpen ? (
-          <NewTerminalPickerBody
-            epicId={props.epicId}
-            onLaunch={handleLaunch}
-          />
+          <NewTerminalPickerBody epicId={epicId} onLaunch={handleLaunch} />
         ) : null}
       </PopoverContent>
     </Popover>

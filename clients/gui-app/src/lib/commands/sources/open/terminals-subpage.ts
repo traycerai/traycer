@@ -11,6 +11,7 @@ import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useHostClient } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import {
   deriveTitleSourceFromSessionTitle,
   terminalSessionTitle,
@@ -53,8 +54,16 @@ export function useTerminalsOpenerItems(
         });
       },
     });
-    const existing = sessions.map((session) =>
-      openerExistingLeaf(
+    const existing = sessions.map((session) => {
+      // A host-created sign-in terminal must carry its origin here too, or the
+      // eviction-recreate below - correct for an ordinary shell - spawns a bare
+      // prompt under the sign-in session's id and label. `terminal.list` cannot
+      // tell us; the renderer's record of host-created sign-in terminals can.
+      const signInProviderId = providerLoginTerminalProviderId(
+        defaultHostId,
+        session.sessionId,
+      );
+      return openerExistingLeaf(
         "terminals",
         ctx,
         {
@@ -70,6 +79,12 @@ export function useTerminalsOpenerItems(
           // Recorded so an eviction-recreate lands back in the session's
           // directory - same as the sidebar's open-existing path.
           cwd: session.cwd,
+          ...(signInProviderId === null
+            ? {}
+            : {
+                origin: "provider-login" as const,
+                originProviderId: signInProviderId,
+              }),
         },
         // `terminal.list` is always issued against the active host's client
         // (`useHostClient()` above) - there is no cross-host terminal listing
@@ -77,8 +92,8 @@ export function useTerminalsOpenerItems(
         // can never legitimately apply until that plumbing exists (flagged
         // back per T22's scope - inventing it is a separate, larger change).
         null,
-      ),
-    );
+      );
+    });
     return [newTerminal, ...existing];
   }, [ctx, defaultHostId, scope.epicId, sessionsData]);
 }

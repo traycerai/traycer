@@ -5,6 +5,7 @@ import {
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -141,6 +142,11 @@ interface PreloadBridge {
   verifyStepUpChallenge(bearerToken: string, code: string): Promise<unknown>;
   onAuthCallback(handler: () => void): {
     dispose: () => void;
+  };
+  notifications: {
+    onForegroundDisplay(
+      handler: (display: DesktopNotificationForegroundDisplay) => void,
+    ): { dispose: () => void };
   };
   tokenStore: {
     get(): Promise<string | null>;
@@ -321,6 +327,91 @@ describe("preload auth-callback replay", () => {
 
     fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
     expect(observed).toBe(1);
+  });
+});
+
+describe("preload foreground-notification buffering", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("delivers a notification received before GUI subscription exactly once", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+    const display: DesktopNotificationForegroundDisplay = {
+      title: "Traycer",
+      body: "Background agent failed",
+      payload: null,
+      replaceKey: "app-local:host.error:failure-1",
+      deliveryKey: "user-1:host.error:failure-1:40",
+      foregroundAppLocal: {
+        userId: "user-1",
+        entry: { id: "host.error:failure-1", updatedAt: 40 },
+      },
+    };
+
+    fakeElectron.emit(RunnerHostEvent.notificationForegroundDisplay, display);
+
+    const observed: DesktopNotificationForegroundDisplay[] = [];
+    const first = bridge.notifications.onForegroundDisplay((value) => {
+      observed.push(value);
+    });
+    expect(observed).toEqual([display]);
+    first.dispose();
+
+    const second = bridge.notifications.onForegroundDisplay((value) => {
+      observed.push(value);
+    });
+    expect(observed).toEqual([display]);
+
+    fakeElectron.emit(RunnerHostEvent.notificationForegroundDisplay, display);
+    expect(observed).toEqual([display, display]);
+    second.dispose();
+  });
+
+  it("logs each oldest display dropped when the preload buffer is full", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    for (let index = 0; index < 21; index++) {
+      fakeElectron.emit(RunnerHostEvent.notificationForegroundDisplay, {
+        title: "Traycer",
+        body: `Background agent ${index} failed`,
+        payload: null,
+        replaceKey: null,
+        deliveryKey: `user-1:failure-${index}`,
+        foregroundAppLocal: null,
+      });
+    }
+
+    expect(warn).toHaveBeenCalledWith(
+      "[preload] dropped buffered foreground notification display",
+      { deliveryKey: "user-1:failure-0" },
+    );
+    warn.mockRestore();
+
+    const observed: DesktopNotificationForegroundDisplay[] = [];
+    const subscription = bridge.notifications.onForegroundDisplay((display) => {
+      observed.push(display);
+    });
+    expect(observed).toHaveLength(20);
+    expect(observed[0]?.deliveryKey).toBe("user-1:failure-1");
+    subscription.dispose();
   });
 });
 

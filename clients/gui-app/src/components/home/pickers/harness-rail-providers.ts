@@ -209,13 +209,30 @@ export function visibleRailHarnesses(
   );
 }
 
+/**
+ * A provider the picker treats as "needs attention": visible but browse-only,
+ * sorted below the ready providers, never auto-committed.
+ *
+ * Signed-out membership (`degradedHarnessIds`, derived from
+ * `isProviderAmbientSignedOut`) degrades REGARDLESS of `harness.available`.
+ * Availability is a binary-resolution/CLI probe that never consults auth, so
+ * an installed provider whose ambient account is signed out still reports
+ * `available: true` while every turn on it would bounce off the send gate -
+ * which reads the same signed-out predicate. Gating this arm on
+ * `!harness.available` is what let the rail offer a fully-lit, selectable tab
+ * for a provider the composer would then refuse to run.
+ *
+ * The API-key arm stays availability-gated: `requiresApiKey` means the
+ * provider authenticates BY key, and the point of degrading it is to keep an
+ * unavailable entry visible for its add-key CTA rather than hiding the row.
+ */
 export function railHarnessDegraded(
   harness: HarnessOption,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): boolean {
   return (
-    !harness.available &&
-    (harness.requiresApiKey || degradedHarnessIds.has(harness.id))
+    degradedHarnessIds.has(harness.id) ||
+    (!harness.available && harness.requiresApiKey)
   );
 }
 

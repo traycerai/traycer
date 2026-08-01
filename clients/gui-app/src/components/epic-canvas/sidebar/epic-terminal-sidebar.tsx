@@ -76,8 +76,13 @@ import {
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
 } from "@/stores/epics/canvas/store";
+import {
+  useEpicLeftPanelStore,
+  useLeftPanelSectionCollapsed,
+} from "@/stores/epics/left-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -191,7 +196,20 @@ function TerminalsPanelBodyLive(props: {
  * every host list update.
  */
 export function TerminalsPanelActions(props: LeftPanelSlotProps) {
-  return <NewTerminalPicker epicId={props.epicId} tabId={props.tabId} />;
+  const collapsed = useLeftPanelSectionCollapsed("terminals");
+  const setPanelSectionCollapsed = useEpicLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
+  const expandBeforeOpen = useCallback(() => {
+    if (collapsed) setPanelSectionCollapsed("terminals", false);
+  }, [collapsed, setPanelSectionCollapsed]);
+  return (
+    <NewTerminalPicker
+      epicId={props.epicId}
+      tabId={props.tabId}
+      onBeforeOpen={expandBeforeOpen}
+    />
+  );
 }
 
 interface TerminalSidebarBodyProps {
@@ -563,6 +581,15 @@ function makeTerminalRef(
   hostId: string,
   instanceId: string,
 ): EpicTerminalRef {
+  // `terminal.list` cannot say who created a session, so a sign-in terminal
+  // reopened from here would otherwise become an ordinary tile that believes it
+  // owns the PTY - and re-creates the id as a bare shell once the host loses
+  // it. The renderer's own record of host-created sign-in terminals supplies
+  // what the wire does not.
+  const signInProviderId = providerLoginTerminalProviderId(
+    hostId,
+    session.sessionId,
+  );
   return {
     id: session.sessionId,
     instanceId,
@@ -571,5 +598,11 @@ function makeTerminalRef(
     titleSource: deriveTitleSourceFromSessionTitle(session.title),
     hostId,
     cwd: session.cwd,
+    ...(signInProviderId === null
+      ? {}
+      : {
+          origin: "provider-login" as const,
+          originProviderId: signInProviderId,
+        }),
   };
 }

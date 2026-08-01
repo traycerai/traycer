@@ -384,6 +384,26 @@ export type MessageSegment =
        */
       model: SetupCardViewModel;
       viewTabId: string;
+      /**
+       * Ticket 13 (decision #28): the raw triggering message id this card is
+       * associated with (`SetupCardRow.triggeringMessageId`) - `null` only
+       * for the genesis card or a defensive creating-event-without-id shape.
+       * A card whose trigger never became (or no longer is) an anchor
+       * target - queued/steered/branched/deleted - keeps this id but FLOATS
+       * by `createdAt` instead of interleaving (`rendered-messages.ts`'s
+       * `floatingCards`), so it can land directly above a completely
+       * unrelated row by coincidence. Anchor-target substitution must
+       * verify this identity against the row it's evaluating, not just
+       * array adjacency, which a floating card can satisfy by chance.
+       */
+      anchorMessageId: string | null;
+      /**
+       * Ticket 13 (decision #28): true only for the pinned genesis card
+       * (the chat's back-filled initial worktree, unconditionally unshifted
+       * to row index 0 - it has no triggering send to match against, so it
+       * substitutes for whatever the chat's first row is).
+       */
+      isGenesisPin: boolean;
     };
 
 export interface InterviewSegment {

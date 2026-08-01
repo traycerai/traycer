@@ -10,6 +10,7 @@ import {
 } from "@/lib/epic-nested-focus-route";
 import { getHistoryController } from "@/lib/persistent-history";
 import { requestNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
+import { beginNestedFocusNavigation } from "@/lib/nested-focus-navigation-intent";
 
 export interface NestedFocusLocation {
   readonly pathname: string;
@@ -75,6 +76,7 @@ function navigateNestedFocusWithDomRestore(
   if (restorePrimaryEditor) {
     requestNestedRoutePrimaryEditorFocus(epicId, tabId, target);
   }
+  beginNestedFocusNavigation(epicId, tabId, target);
 
   void router.navigate({
     to: "/epics/$epicId/$tabId",
