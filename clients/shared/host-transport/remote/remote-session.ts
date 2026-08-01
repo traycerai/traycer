@@ -1090,15 +1090,28 @@ export class RemoteSession<
       this.handleConnectionLost(generation, "session-fatal-retryable");
       return;
     }
-    if (details.code === "UNAUTHORIZED" && this.options.auth !== null) {
-      this.handleUnauthorizedSessionFatal(
-        generation,
-        details,
-        this.options.auth,
-      );
+    const auth = this.revalidator();
+    if (details.code === "UNAUTHORIZED" && auth !== null) {
+      this.handleUnauthorizedSessionFatal(generation, details, auth);
       return;
     }
     this.goTerminalFatal(details);
+  }
+
+  /**
+   * The wired revalidator, or `null` when there is none to call.
+   *
+   * `auth` is a REQUIRED option typed `StreamAuthRevalidator | null`, but this
+   * transport is also driven from untyped entry points (the connect-path E2E
+   * harness, ad-hoc probes) that can omit the property entirely. A bare
+   * `!== null` check waves that `undefined` straight through into
+   * `auth.revalidateForReconnect()`, and the resulting TypeError is thrown
+   * inside a floating promise on the reconnect path - so a session that should
+   * have failed cleanly with the host's own UNAUTHORIZED message instead dies
+   * as an unhandled rejection with no diagnostic. Normalize once, here.
+   */
+  private revalidator(): StreamAuthRevalidator | null {
+    return this.options.auth ?? null;
   }
 
   private handleUnauthorizedSessionFatal(

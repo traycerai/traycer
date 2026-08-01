@@ -42,7 +42,7 @@ import {
   type OutboundMessage,
   type ReassembledMessage,
 } from "../chunker";
-import { RemoteSession } from "../remote-session";
+import { RemoteSession, type RemoteSessionOptions } from "../remote-session";
 import { RemoteStreamClient } from "../remote-stream-client";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
@@ -304,8 +304,17 @@ function buildSession(
   lease: MutableBearerLease,
   auth: StreamAuthRevalidator | null,
 ): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
+  return new RemoteSession(buildSessionOptions(relay, lease, auth));
+}
+
+/** The options `buildSession` uses, exposed so a test can drop a field. */
+function buildSessionOptions(
+  relay: FakeRelayHost,
+  lease: MutableBearerLease,
+  auth: StreamAuthRevalidator | null,
+): RemoteSessionOptions<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
   let nextRequestId = 0;
-  return new RemoteSession({
+  return {
     hostId: "host-1",
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: relay.hostStaticPublicKey,
@@ -320,7 +329,7 @@ function buildSession(
     streamRegistry: emptyStreamRegistry,
     webSocketFactory: relay.factory,
     requestId: () => `req-${(nextRequestId += 1)}`,
-  });
+  };
 }
 
 describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
@@ -427,6 +436,47 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         expect(revalidate).not.toHaveBeenCalled();
         expect(relay.errors).toEqual([]);
       } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "closes cleanly when the consumer wired NO revalidator at all (not just null)",
+    async () => {
+      // `auth` is required by the type, but untyped consumers (the connect-path
+      // E2E harness, ad-hoc probes) can omit it entirely. An `undefined`
+      // sliding past a `!== null` check calls `.revalidateForReconnect()` on
+      // nothing, and the TypeError lands in a floating promise on the reconnect
+      // path — the session dies as an unhandled rejection instead of closing
+      // with the host's own UNAUTHORIZED reason.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("dead-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const rejections: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        rejections.push(reason);
+      };
+      process.on("unhandledRejection", onUnhandled);
+
+      // Build with the property ABSENT, exactly as an untyped caller would.
+      const options = buildSessionOptions(relay, lease, null);
+      delete (options as { auth?: unknown }).auth;
+      const session = new RemoteSession(options);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        // Degrades exactly like `auth: null`: terminal, no crash.
+        expect(relay.openBearers).toEqual(["dead-token"]);
+        expect(relay.errors).toEqual([]);
+        await Promise.resolve();
+        expect(rejections).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
         session.close();
       }
     },
