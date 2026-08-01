@@ -80,7 +80,11 @@ export function buildComposerExtensions(
       linkOnPaste: true,
     }),
     Placeholder.configure({
-      placeholder: () => args.getPlaceholder(),
+      // An empty code block is still an empty editor to Tiptap. Returning the
+      // composer hint there makes it render as monospaced code inside the new
+      // block; placeholders belong only on ordinary prompt paragraphs.
+      placeholder: ({ node }) =>
+        node.type.name === "paragraph" ? args.getPlaceholder() : "",
       includeChildren: false,
       emptyEditorClass: "is-editor-empty",
     }),
