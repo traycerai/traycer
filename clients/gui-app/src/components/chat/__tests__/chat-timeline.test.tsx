@@ -14,7 +14,9 @@ import type {
   ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
+import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
+import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -65,6 +67,25 @@ const VIEWPORT_WIDTH_PX = 800;
 
 function mountedMessageRows(container: HTMLElement): NodeListOf<Element> {
   return container.querySelectorAll(MESSAGE_ROW_SELECTOR);
+}
+
+/** Ticket 23 panel-resize tests: a distinct-position rect, overriding the
+ *  shared `installLegendListViewportMetrics()` shim's uniform (0,0)-origin
+ *  stub on a specific element so visible vs. off-screen rows are
+ *  distinguishable (see `chat-timeline-panel-resize-snapshot.test.ts` for
+ *  the same rationale on the pure module). */
+function rectOf(top: number, height: number): DOMRect {
+  return {
+    top,
+    bottom: top + height,
+    left: 0,
+    right: VIEWPORT_WIDTH_PX,
+    width: VIEWPORT_WIDTH_PX,
+    height,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  };
 }
 
 function rowIds(container: HTMLElement): ReadonlyArray<string> {
@@ -1031,5 +1052,164 @@ describe("ChatTimeline", () => {
         navigationHighlightedMessageId: "message-0",
       });
     }).not.toThrow();
+  });
+
+  describe("panel-resize freeze (ticket 23 D20 port)", () => {
+    const PANEL_RESIZING_CLASS = "traycer-panel-resizing";
+
+    afterEach(() => {
+      // Defensive: a test that throws before its own stop() must not leak
+      // the class/markers into a later test.
+      document.documentElement.classList.remove(PANEL_RESIZING_CLASS);
+    });
+
+    it("every row carries the marker-scoped freeze selector targeting only unmarked rows", async () => {
+      const messages = [makeMessage(0, "user")];
+      const { container } = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(container).length).toBe(1);
+      });
+
+      const row = container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      expect(row?.className).toContain(
+        "[.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
+      );
+    });
+
+    it("marks exactly the geometrically visible rows at drag start and clears every marker at drag end", async () => {
+      const messages = [
+        makeMessage(0, "user"),
+        makeMessage(1, "assistant"),
+        makeMessage(2, "user"),
+      ];
+      const { container, listRef } = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(container).length).toBe(messages.length);
+      });
+
+      const scrollNode = listRef.current?.getScrollableNode();
+      if (!scrollNode) throw new Error("scroll node not mounted");
+      // Viewport 0..300; row 0 fully inside, row 1 straddles the bottom
+      // edge (counts as visible), row 2 fully below.
+      scrollNode.getBoundingClientRect = () => rectOf(0, 300);
+      const row0 = container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      const row1 = container.querySelector<HTMLElement>(
+        '[data-message-id="message-1"]',
+      );
+      const row2 = container.querySelector<HTMLElement>(
+        '[data-message-id="message-2"]',
+      );
+      if (!row0 || !row1 || !row2) throw new Error("rows not found");
+      row0.getBoundingClientRect = () => rectOf(0, 100);
+      row1.getBoundingClientRect = () => rectOf(250, 100);
+      row2.getBoundingClientRect = () => rectOf(1000, 100);
+
+      const stop = beginPanelResizeInteraction(1, () => undefined);
+
+      expect(
+        document.documentElement.classList.contains(PANEL_RESIZING_CLASS),
+      ).toBe(true);
+      expect(row0.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        "true",
+      );
+      expect(row1.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        "true",
+      );
+      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        false,
+      );
+
+      stop();
+
+      expect(
+        document.documentElement.classList.contains(PANEL_RESIZING_CLASS),
+      ).toBe(false);
+      expect(row0.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        false,
+      );
+      expect(row1.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        false,
+      );
+      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        false,
+      );
+    });
+
+    it("clears this timeline's own markers on unmount, even mid-drag", async () => {
+      const messages = [makeMessage(0, "user"), makeMessage(1, "assistant")];
+      const { container, listRef, unmount } = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(container).length).toBe(messages.length);
+      });
+
+      const scrollNode = listRef.current?.getScrollableNode();
+      if (!scrollNode) throw new Error("scroll node not mounted");
+      scrollNode.getBoundingClientRect = () => rectOf(0, 300);
+      const row = container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      if (!row) throw new Error("row not found");
+      row.getBoundingClientRect = () => rectOf(0, 100);
+
+      const stop = beginPanelResizeInteraction(1, () => undefined);
+      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        "true",
+      );
+
+      expect(() => {
+        unmount();
+      }).not.toThrow();
+
+      expect(row.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        false,
+      );
+
+      // The now-unregistered participant must not be invoked (and must not
+      // throw) when the drag ends afterward.
+      expect(() => {
+        stop();
+      }).not.toThrow();
+    });
+
+    it("registers a fresh timeline as a NEW participant across remounts (no stale registration)", async () => {
+      const messages = [makeMessage(0, "user")];
+      const first = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(first.container).length).toBe(1);
+      });
+      first.unmount();
+
+      const second = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(second.container).length).toBe(1);
+      });
+
+      const scrollNode = second.listRef.current?.getScrollableNode();
+      if (!scrollNode) throw new Error("scroll node not mounted");
+      scrollNode.getBoundingClientRect = () => rectOf(0, 300);
+      const row = second.container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      if (!row) throw new Error("row not found");
+      row.getBoundingClientRect = () => rectOf(0, 100);
+
+      const stop = beginPanelResizeInteraction(1, () => undefined);
+      // Only ONE capture ran for the currently-mounted timeline - the first
+      // (unmounted) instance's participant was unregistered, not left
+      // dangling to double-mark or throw against detached DOM.
+      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        "true",
+      );
+      stop();
+    });
   });
 });

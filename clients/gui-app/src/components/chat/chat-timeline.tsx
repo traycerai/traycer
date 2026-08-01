@@ -24,6 +24,11 @@ import {
   resolveChatTimelineIsAtEnd,
 } from "@/components/chat/chat-scroll-anchoring";
 import { chatTimelineGetItemType } from "@/components/chat/chat-messages-scroll-helpers";
+import { registerPanelResizeParticipant } from "@/lib/layout/panel-resizing-class";
+import {
+  captureChatTimelineVisibleRows,
+  clearChatTimelineVisibleRows,
+} from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import {
   computeStableChatTimelineRows,
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
@@ -379,6 +384,32 @@ export const ChatTimeline = memo(function ChatTimeline({
     onScroll?.();
   }, [listRef, onIsAtEndChange, onScroll]);
 
+  // Ticket 23 (D20 port): registers this mounted timeline as a panel-resize
+  // participant so a divider drag's capture pass (see
+  // `lib/layout/panel-resizing-class.ts`) can mark ITS OWN currently visible
+  // rows right before the freeze class lands - see `ChatTimelineRow`'s own
+  // doc comment for the freeze mechanism. `useLayoutEffect`, not `useEffect`:
+  // registration must be live before the browser can paint a state where a
+  // drag could start. Cleared defensively on unmount (in addition to
+  // unregistering) even though the unmounted DOM is about to be discarded
+  // anyway - matches the ticket's explicit "cleared ... at end/unmount"
+  // contract.
+  useLayoutEffect(() => {
+    const capture = (): void => {
+      const node = listRef.current?.getScrollableNode();
+      if (node) captureChatTimelineVisibleRows(node);
+    };
+    const clear = (): void => {
+      const node = listRef.current?.getScrollableNode();
+      if (node) clearChatTimelineVisibleRows(node);
+    };
+    const unregister = registerPanelResizeParticipant({ capture, clear });
+    return () => {
+      clear();
+      unregister();
+    };
+  }, [listRef]);
+
   if (rows.length === 0) {
     return <ChatEmptyState />;
   }
@@ -554,14 +585,25 @@ function useStableChatTimelineRows(
 }
 
 /**
- * One transcript row. During a panel-resize drag (`traycer-panel-resizing`
- * on `<html>`) every row flips to `content-visibility: hidden`: each
- * pointermove reflows all visible panes, and live rows would re-wrap and
- * re-rasterize every transcript at every intermediate width - a
- * multi-hundred-MB transient spike in the GPU process's tile pool. Hidden
- * rows keep their remembered size (the `auto` intrinsic-size keyword), so
- * LegendList's measurement sees stable heights for the whole drag; one
- * reflow on pointer-up restores content at the final width.
+ * One transcript row. Ticket 23's live profile measured a divider drag
+ * across two heavy transcripts at ~2x the idle frame budget (19.5-24% of
+ * frames over 1.5x budget, 50-75ms long tasks); a count-only ResizeObserver
+ * pass recorded substantial multi-row churn per pointermove (~22 entries in
+ * a typical callback - not literally every mounted row on every event).
+ * During a panel-resize drag (`traycer-panel-resizing` on `<html>`),
+ * `ChatTimeline`'s capture pass (D20 port, wired through
+ * `registerPanelResizeParticipant`) marks each row that was on-screen at
+ * drag START with `data-panel-resize-visible`; only UNMARKED rows flip to
+ * `content-visibility: hidden` below - marked rows stay live and can still
+ * re-render/remeasure normally. The `auto` keyword in the per-role
+ * `contain-intrinsic-size` hints below means a row that was already laid out
+ * before the drag keeps its own last-remembered size once hidden; the
+ * accompanying role length (8rem/4rem/14rem) is only the fallback for a row
+ * that mounts already-frozen, i.e. has no remembered size to fall back on
+ * (CSS Sizing Level 4's "last remembered size" - `auto` prefers it when one
+ * exists, the length is the no-memory fallback, not the other way around).
+ * So LegendList's measured heights survive the freeze untouched and one
+ * reflow on release restores content at the final width.
  */
 const ChatTimelineRow = memo(function ChatTimelineRow({
   message,
@@ -582,7 +624,7 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
       data-message-id={message.id}
       data-navigation-highlighted={isNavigationHighlighted ? "true" : undefined}
       className={cn(
-        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
+        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
         isNavigationHighlighted &&
           "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
         chatTimelineRowSizeHintClassName(message.role),
