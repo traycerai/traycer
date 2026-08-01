@@ -17,9 +17,12 @@ import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
  * the sign-in service, so it rejected its own local GUI for the entire session
  * while Electron's update check succeeded a few feet away (traycer#858).
  *
- * `EnvHttpProxyAgent` reads `HTTP_PROXY`/`http_proxy`, `HTTPS_PROXY`/
- * `https_proxy` and `NO_PROXY`/`no_proxy` itself, including the per-host
- * exclusion list, so this only decides WHETHER to install it.
+ * `EnvHttpProxyAgent` implements the semantics of those variables - notably the
+ * per-host `NO_PROXY` exclusion list - but it reads them from `process.env`
+ * unless each one is passed explicitly. Passing them keeps the injected `env`
+ * the single source of truth, so the test seam exercises the same values the
+ * agent will actually route on rather than whatever the runner happens to
+ * export.
  */
 const PROXY_ENV_VARS = [
   "HTTP_PROXY",
@@ -27,6 +30,18 @@ const PROXY_ENV_VARS = [
   "HTTPS_PROXY",
   "https_proxy",
 ] as const;
+
+/** First non-blank value among `names`, or `""` for "not configured". */
+function readEnv(
+  env: Readonly<Partial<Record<string, string>>>,
+  names: readonly string[],
+): string {
+  for (const name of names) {
+    const value = (env[name] ?? "").trim();
+    if (value.length > 0) return value;
+  }
+  return "";
+}
 
 /**
  * Installs the env-driven proxy dispatcher when the environment asks for one.
@@ -43,6 +58,14 @@ export function installEnvProxyDispatcher(
     (name) => (env[name] ?? "").trim().length > 0,
   );
   if (configured === undefined) return null;
-  setGlobalDispatcher(new EnvHttpProxyAgent());
+  setGlobalDispatcher(
+    new EnvHttpProxyAgent({
+      // Lowercase-first, matching the precedence undici applies when it reads
+      // these itself, so naming them changes only WHERE they are read from.
+      httpProxy: readEnv(env, ["http_proxy", "HTTP_PROXY"]),
+      httpsProxy: readEnv(env, ["https_proxy", "HTTPS_PROXY"]),
+      noProxy: readEnv(env, ["no_proxy", "NO_PROXY"]),
+    }),
+  );
   return configured;
 }
