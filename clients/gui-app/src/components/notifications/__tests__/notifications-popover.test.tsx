@@ -1261,8 +1261,9 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const entry = await screen.findByTestId("notification-entry");
-    const trigger = entry.querySelector("button");
-    if (trigger === null) throw new Error("button not found");
+    const trigger = within(entry).getByRole<HTMLButtonElement>("button", {
+      name: /TUI task/,
+    });
 
     await act(async () => {
       fireEvent.click(trigger);
