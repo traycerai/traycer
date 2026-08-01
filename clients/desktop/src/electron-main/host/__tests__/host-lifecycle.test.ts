@@ -487,12 +487,17 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     );
     // Stand in for the CLI's NDJSON progress stream: events well inside the
     // quiet budget, for three times as long as that budget.
+    let lastProgressAt = Date.now();
     const ticker = setInterval(() => {
+      lastProgressAt = Date.now();
       lifecycle.notifyProvisioningActivity();
     }, 50);
+    const stopTicker = setTimeout(
+      () => clearInterval(ticker),
+      progressWindowMs,
+    );
     const startedAt = Date.now();
     try {
-      setTimeout(() => clearInterval(ticker), progressWindowMs);
       await Promise.race([
         lifecycle.bootstrap(),
         new Promise((_, reject) =>
@@ -506,7 +511,16 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HOST_NOT_READY");
       expect(elapsedMs).toBeGreaterThanOrEqual(progressWindowMs);
+      // ...and the budget is still a BUDGET once progress stops. Outliving the
+      // progress window alone cannot tell "re-armed, then spent the full quiet
+      // budget" apart from "re-armed, then fired the instant the stream went
+      // quiet" - which is the regression a quiet-time deadline can actually
+      // have. Measuring from the last event is what separates them.
+      expect(Date.now() - lastProgressAt).toBeGreaterThanOrEqual(
+        readyTimeoutMs,
+      );
     } finally {
+      clearTimeout(stopTicker);
       clearInterval(ticker);
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
