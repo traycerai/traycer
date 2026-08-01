@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type RefObject,
@@ -316,7 +315,7 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
       }}
     >
       {expanded ? (
-        <div className="relative flex max-h-[60vh] flex-col overflow-hidden rounded-xl border border-border/60 bg-popover shadow-lg">
+        <div className="relative flex max-h-[min(60vh,calc(100cqh_-_1rem))] flex-col overflow-hidden rounded-xl border border-border/60 bg-popover shadow-lg">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -406,7 +405,7 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
 
 /**
  * Configurable transcript-edge turn minimap (decision #20).
- * One evenly spaced strip per HUMAN user turn; hover/focus opens a 22rem
+ * One evenly spaced strip per HUMAN user turn; hover/focus opens a 20rem
  * viewport-capped preview (user text + the turn's last assistant text); a
  * single hit-target control maps pointer Y / arrow keys to the nearest turn.
  * Fine-pointer only; the compact edge target stays visible and interactive
@@ -433,6 +432,8 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     return index === -1 ? null : index;
   });
   const [expanded, setExpanded] = useState(false);
+  const [interactionStarted, setInteractionStarted] = useState(false);
+  const interactionRegionRef = useRef<HTMLDivElement | null>(null);
   const hitStripRef = useRef<HTMLButtonElement | null>(null);
   const proximityMessageIdRef = useRef<string | null>(null);
 
@@ -569,6 +570,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   const updateActiveIndexFromPointer = useCallback(
     (event: ReactMouseEvent<HTMLElement>): void => {
+      setInteractionStarted(true);
       setActiveIndex(resolveActiveIndexFromPointer(event));
     },
     [resolveActiveIndexFromPointer],
@@ -587,6 +589,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const handleHitStripClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>): void => {
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
+      setInteractionStarted(true);
       const nextIndex = resolveActiveIndexFromPointer(event);
       const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
       if (nextItem) {
@@ -600,6 +603,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const handleHitStripKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
+      setInteractionStarted(true);
       if (event.key === "ArrowDown") {
         event.preventDefault();
         moveActiveIndex(1);
@@ -640,14 +644,15 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   const closeInteraction = useCallback((): void => {
     setExpanded(false);
+    setInteractionStarted(false);
     setActiveIndex(null);
   }, []);
 
   const handleInteractionBlur = useCallback(
-    (event: ReactFocusEvent<HTMLDivElement>): void => {
+    (event: FocusEvent): void => {
       if (
         event.relatedTarget instanceof Node &&
-        event.currentTarget.contains(event.relatedTarget)
+        interactionRegionRef.current?.contains(event.relatedTarget) === true
       ) {
         return;
       }
@@ -657,7 +662,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   );
 
   const handleInteractionKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
@@ -672,6 +677,22 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     [closeInteraction, expanded],
   );
 
+  useEffect(() => {
+    const interactionRegion = interactionRegionRef.current;
+    if (interactionRegion === null) return;
+    interactionRegion.addEventListener("focusout", handleInteractionBlur);
+    interactionRegion.addEventListener("keydown", handleInteractionKeyDown);
+    interactionRegion.addEventListener("mouseleave", closeInteraction);
+    return () => {
+      interactionRegion.removeEventListener("focusout", handleInteractionBlur);
+      interactionRegion.removeEventListener(
+        "keydown",
+        handleInteractionKeyDown,
+      );
+      interactionRegion.removeEventListener("mouseleave", closeInteraction);
+    };
+  }, [closeInteraction, handleInteractionBlur, handleInteractionKeyDown]);
+
   const handlePreviewSelect = useCallback(
     (messageId: string): void => {
       const index = items.findIndex((item) => item.id === messageId);
@@ -682,6 +703,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   );
 
   const toggleExpanded = useCallback((): void => {
+    setInteractionStarted(true);
     setExpanded((current) => !current);
   }, []);
 
@@ -690,11 +712,16 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   }
 
   const safeBottomInset = Math.max(0, Math.ceil(bottomInset));
+  const previewVisible = interactionStarted && activeItem !== null;
+  const interactiveWidth = resolveChatTurnMinimapInteractiveWidth(
+    CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
+    previewVisible || expanded,
+  );
 
   return (
     <div
       className={cn(
-        "group/chat-turn-minimap pointer-events-none absolute top-0 z-40 hidden w-18 opacity-100 [@media(pointer:fine)]:block",
+        "group/chat-turn-minimap pointer-events-none absolute top-0 z-40 hidden w-18 opacity-100 [container-type:size] [@media(pointer:fine)]:block",
         side === "left" ? "left-0" : "right-0",
       )}
       data-side={side}
@@ -710,19 +737,21 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
           aria-label="Message minimap controls"
           data-chat-turn-minimap-interaction-region=""
           {...paneActivationDeferProps}
-          onBlur={handleInteractionBlur}
-          onKeyDown={handleInteractionKeyDown}
-          onMouseLeave={closeInteraction}
-          role="toolbar"
+          ref={interactionRegionRef}
+          role="group"
           style={{ height: resolveChatTurnMinimapHeightStyle(items.length) }}
         >
           <button
             aria-label="Message minimap"
             className="pointer-events-auto relative block h-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+            data-chat-turn-minimap-interactive-width={interactiveWidth}
             data-testid="chat-turn-minimap-hit-strip"
             {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
             onClick={handleHitStripClick}
-            onFocus={() => setActiveIndex((current) => current ?? 0)}
+            onFocus={() => {
+              setInteractionStarted(true);
+              setActiveIndex((current) => current ?? 0);
+            }}
             onKeyDown={handleHitStripKeyDown}
             onMouseDown={handleHitStripMouseDown}
             onMouseMove={(event) => {
@@ -730,10 +759,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
             }}
             ref={hitStripRef}
             style={{
-              width: resolveChatTurnMinimapInteractiveWidth(
-                CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-                activeItem !== null || expanded,
-              ),
+              width: interactiveWidth,
             }}
             type="button"
           >
@@ -768,7 +794,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
               );
             })}
           </button>
-          {activeItem === null ? null : (
+          {!previewVisible ? null : (
             <ChatTurnMinimapPreview
               activeItem={activeItem}
               activeItemIndex={resolvedActiveIndex ?? 0}

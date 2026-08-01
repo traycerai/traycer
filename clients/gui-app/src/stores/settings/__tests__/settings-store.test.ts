@@ -58,6 +58,7 @@ describe("useSettingsStore", () => {
   });
 
   it("repairs an invalid persisted chat turn minimap side to right", async () => {
+    useSettingsStore.setState({ chatTurnMinimapSide: "left" });
     window.localStorage.setItem(
       "traycer-gui-app:settings",
       JSON.stringify({

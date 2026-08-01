@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,11 +12,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PaneActivationFocusIntentContext,
   paneActivationDeferProps,
+  resetPaneActivationFocusIntentsForTests,
   usePaneActivationFocusIntent,
   usePaneActivationOwnership,
 } from "@/components/epic-canvas/pane-activation";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  resetPaneActivationFocusIntentsForTests();
+});
 
 function ActivationBoundary(props: {
   readonly active: boolean;
@@ -185,7 +190,9 @@ describe("pane activation ownership", () => {
     fireEvent.pointerDown(button);
     fireEvent.pointerCancel(button);
     fireEvent.click(button);
-    await Promise.resolve();
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
 
     expect(activate).not.toHaveBeenCalled();
   });

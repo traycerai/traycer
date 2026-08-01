@@ -39,6 +39,7 @@ export type TerminalCursorStyle = "block" | "bar" | "underline";
 
 export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
 export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
+export const DEFAULT_CHAT_TURN_MINIMAP_SIDE: ChatTurnMinimapSide = "right";
 
 // Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
 // which never blinks). Bar/underline mirror the chosen shape so the cursor
@@ -295,7 +296,7 @@ export const useSettingsStore = create<SettingsState>()(
       showGlobalResourceMonitor: true,
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
-      chatTurnMinimapSide: "right",
+      chatTurnMinimapSide: DEFAULT_CHAT_TURN_MINIMAP_SIDE,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
       codeFontSize: DEFAULT_CODE_FONT_SIZE,
@@ -417,7 +418,7 @@ export const useSettingsStore = create<SettingsState>()(
           chatTurnMinimapSide:
             persistedMinimapSide === "left" || persistedMinimapSide === "right"
               ? persistedMinimapSide
-              : currentState.chatTurnMinimapSide,
+              : DEFAULT_CHAT_TURN_MINIMAP_SIDE,
         };
       },
     },

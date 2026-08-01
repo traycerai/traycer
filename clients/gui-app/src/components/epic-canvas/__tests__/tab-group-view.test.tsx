@@ -1,5 +1,11 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
@@ -259,12 +265,9 @@ describe("<TabGroupView />", () => {
       expect(testState.mounts.get(SPEC.id)).toBe(1);
     });
 
-    const deferredButton = document.querySelector(
-      `[data-testid="deferred-activation-${SPEC.id}"]`,
-    );
-    if (!(deferredButton instanceof HTMLButtonElement)) {
-      throw new Error("Expected deferred button");
-    }
+    const deferredButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Deferred action",
+    });
 
     fireEvent.pointerDown(deferredButton);
 
@@ -291,12 +294,9 @@ describe("<TabGroupView />", () => {
       expect(testState.mounts.get(SPEC.id)).toBe(1);
     });
 
-    const deferredButton = document.querySelector(
-      `[data-testid="deferred-removal-${SPEC.id}"]`,
-    );
-    if (!(deferredButton instanceof HTMLButtonElement)) {
-      throw new Error("Expected self-removing deferred button");
-    }
+    const deferredButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Deferred action that replaces itself",
+    });
 
     fireEvent.pointerDown(deferredButton);
     expect(
@@ -319,12 +319,9 @@ describe("<TabGroupView />", () => {
     seedCanvasWithActivePane(tabs, SPEC.instanceId, "other-group");
     render(groupView(tabs, SPEC.instanceId, true));
 
-    const button = document.querySelector(
-      `[data-testid="deferred-activation-${SPEC.id}"]`,
-    );
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error("Expected focusable action");
-    }
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Deferred action",
+    });
     button.focus();
 
     await waitFor(() => {

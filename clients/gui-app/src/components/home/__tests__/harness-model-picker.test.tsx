@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
 // actions. This unit test renders the picker bare (no RouterProvider), so stub
@@ -940,6 +941,7 @@ describe("<HarnessModelPicker />", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     cleanup();
+    resetPaneActivationFocusIntentsForTests();
     useKeybindingStore.getState().resetAll();
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();

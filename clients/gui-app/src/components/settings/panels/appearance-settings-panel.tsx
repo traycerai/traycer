@@ -18,6 +18,7 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import {
@@ -202,9 +203,7 @@ export function AppearanceSettingsPanel() {
                   aria-label="Message minimap side"
                   className="w-[min(40vw,8rem)]"
                 >
-                  <span data-slot="select-value">
-                    {chatTurnMinimapSide === "right" ? "Right" : "Left"}
-                  </span>
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="right">Right</SelectItem>

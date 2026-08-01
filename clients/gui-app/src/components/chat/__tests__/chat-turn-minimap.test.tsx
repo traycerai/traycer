@@ -13,6 +13,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
 import {
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
+  CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
 } from "@/components/chat/chat-turn-minimap-logic";
@@ -23,6 +24,7 @@ import { isPaneActivationDeferred } from "@/components/epic-canvas/pane-activati
 import {
   evictChatTurnMinimapActiveEntries,
   evictChatTurnMinimapActiveEntryForChat,
+  saveChatTurnMinimapActiveEntry,
 } from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import { makeMessage } from "./chat-message-fixtures";
 
@@ -458,6 +460,29 @@ describe("ChatTurnMinimap always-on rail", () => {
       `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
     );
   });
+
+  it("keeps a restored active entry collapsed until interaction", async () => {
+    saveChatTurnMinimapActiveEntry(DEFAULT_MINIMAP_IDENTITY, "message-2");
+    renderMinimap({ messages: makeTwoTurnTranscript() });
+    await flushMinimapFrames(2);
+
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    expect(hitStrip.style.width).toBe(
+      `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
+    );
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).toBeNull();
+
+    fireEvent.focus(hitStrip);
+
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).not.toBeNull();
+    expect(
+      hitStrip.getAttribute("data-chat-turn-minimap-interactive-width"),
+    ).toBe(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH);
+  });
 });
 
 describe("ChatTurnMinimap keyboard navigation", () => {
@@ -699,6 +724,9 @@ describe("ChatTurnMinimap mouse interaction", () => {
     });
     expect(collapseButton.getAttribute("data-variant")).toBe("ghost");
     expect(
+      hitStrip.getAttribute("data-chat-turn-minimap-interactive-width"),
+    ).toBe(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH);
+    expect(
       collapseButton.querySelector(".lucide-fold-vertical"),
     ).not.toBeNull();
     const messageCards = document.querySelectorAll(
@@ -726,7 +754,9 @@ describe("ChatTurnMinimap mouse interaction", () => {
     const listScroller = document.querySelector<HTMLElement>(
       "[data-chat-turn-minimap-list-scroll]",
     );
-    expect(expandedPanel?.classList).toContain("max-h-[60vh]");
+    expect(expandedPanel?.classList).toContain(
+      "max-h-[min(60vh,calc(100cqh_-_1rem))]",
+    );
     expect(expandedPanel?.classList).toContain("overflow-hidden");
     expect(listScroller?.classList).toContain("overflow-y-auto");
 

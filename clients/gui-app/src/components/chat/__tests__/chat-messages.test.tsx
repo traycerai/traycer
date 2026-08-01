@@ -2632,6 +2632,8 @@ describe("ChatMessages scroll policy", () => {
     it("stays visible and interactive when an epic canvas tile is narrow", async () => {
       const messages = makeTranscript(20);
       renderChatMessages({ messages, scrollStateKey: "always-on-minimap" });
+      // Retain the narrow rect as a regression guard against reintroducing
+      // width-based minimap gating; current assertions do not derive from it.
       mockNarrowTranscriptWidth(420);
       await settleLegendList();
 
