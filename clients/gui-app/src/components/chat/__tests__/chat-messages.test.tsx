@@ -33,6 +33,7 @@ import {
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   chatTimelineGetItemType,
+  type ChatAnchorDriftRepairOutcome,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import {
   captureChatFreeScrollingOffset,
@@ -185,7 +186,7 @@ vi.mock(
       ...actual,
       applyChatAnchorDriftRepair: (
         ...args: Parameters<typeof actual.applyChatAnchorDriftRepair>
-      ): ReturnType<typeof actual.applyChatAnchorDriftRepair> => {
+      ): ChatAnchorDriftRepairOutcome["kind"] => {
         applyChatAnchorDriftRepairCallCountRef.current += 1;
         return actual.applyChatAnchorDriftRepair(...args);
       },
@@ -2240,9 +2241,17 @@ describe("ChatMessages scroll policy", () => {
       // load-bearing property is still "list state already matches DOM at
       // ancestor capture", not the polyfill itself.
       const originalScrollBy = scrollNode.scrollBy.bind(scrollNode);
+      // `Element.scrollBy`'s overloaded native signature (`(options?)` /
+      // `(x, y)`) genuinely permits fewer arguments than this polyfill
+      // declares - house style bans `?:` (a caller-omittable parameter),
+      // but the caller here is jsdom/LegendList's own internal invocation,
+      // not code this file controls, so the params stay required-typed
+      // (`| undefined`) and the assignment cast documents the real,
+      // load-bearing arity gap instead of a redundant one: every code path
+      // already treats a missing value as `undefined` correctly.
       scrollNode.scrollBy = ((
-        options?: ScrollToOptions | number,
-        yArg?: number,
+        options: ScrollToOptions | number | undefined,
+        yArg: number | undefined,
       ): void => {
         if (typeof options === "number") {
           scrollNode.scrollLeft += options;
@@ -2295,8 +2304,7 @@ describe("ChatMessages scroll policy", () => {
         // weave in this harness, fall through is impossible - the
         // behavioral +1-row assert above would have failed first.
         const synchronizedCaptures = observedAtCapture.filter(
-          (sample) =>
-            Math.abs(sample.listScroll - sample.domScroll) <= 1,
+          (sample) => Math.abs(sample.listScroll - sample.domScroll) <= 1,
         );
         expect(synchronizedCaptures.length).toBeGreaterThan(0);
         for (const sample of synchronizedCaptures) {
@@ -2556,7 +2564,7 @@ describe("ChatMessages scroll policy", () => {
       try {
         rerenderWith({
           scrollRequest: {
-            messageId: targetId!,
+            messageId: targetId,
             blockId: null,
             requestId: 19_001,
           },
@@ -2706,9 +2714,17 @@ describe("ChatMessages scroll policy", () => {
 
       const scrollNode = getScrollNode();
       const originalScrollBy = scrollNode.scrollBy.bind(scrollNode);
+      // `Element.scrollBy`'s overloaded native signature (`(options?)` /
+      // `(x, y)`) genuinely permits fewer arguments than this polyfill
+      // declares - house style bans `?:` (a caller-omittable parameter),
+      // but the caller here is jsdom/LegendList's own internal invocation,
+      // not code this file controls, so the params stay required-typed
+      // (`| undefined`) and the assignment cast documents the real,
+      // load-bearing arity gap instead of a redundant one: every code path
+      // already treats a missing value as `undefined` correctly.
       scrollNode.scrollBy = ((
-        options?: ScrollToOptions | number,
-        yArg?: number,
+        options: ScrollToOptions | number | undefined,
+        yArg: number | undefined,
       ): void => {
         if (typeof options === "number") {
           scrollNode.scrollLeft += options;
@@ -2784,9 +2800,17 @@ describe("ChatMessages scroll policy", () => {
 
       const scrollNode = getScrollNode();
       const originalScrollBy = scrollNode.scrollBy.bind(scrollNode);
+      // `Element.scrollBy`'s overloaded native signature (`(options?)` /
+      // `(x, y)`) genuinely permits fewer arguments than this polyfill
+      // declares - house style bans `?:` (a caller-omittable parameter),
+      // but the caller here is jsdom/LegendList's own internal invocation,
+      // not code this file controls, so the params stay required-typed
+      // (`| undefined`) and the assignment cast documents the real,
+      // load-bearing arity gap instead of a redundant one: every code path
+      // already treats a missing value as `undefined` correctly.
       scrollNode.scrollBy = ((
-        options?: ScrollToOptions | number,
-        yArg?: number,
+        options: ScrollToOptions | number | undefined,
+        yArg: number | undefined,
       ): void => {
         if (typeof options === "number") {
           scrollNode.scrollLeft += options;
@@ -2812,9 +2836,9 @@ describe("ChatMessages scroll policy", () => {
 
         expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
         expect(getScrollNode().dataset.scrollMode).not.toBe("free-scrolling");
-        expect(
-          Math.abs(getScrollNode().scrollTop - scrollBefore),
-        ).toBeLessThan(500);
+        expect(Math.abs(getScrollNode().scrollTop - scrollBefore)).toBeLessThan(
+          500,
+        );
       } finally {
         dispatch.dispose();
         scrollNode.scrollBy = originalScrollBy;
@@ -8666,45 +8690,57 @@ describe("ChatMessages scroll policy", () => {
         top?: number;
         left?: number;
       }> = [];
-      const scrollTopSetter = Object.getOwnPropertyDescriptor(
+      const scrollTopDescriptor = Object.getOwnPropertyDescriptor(
         HTMLElement.prototype,
         "scrollTop",
-      )?.set;
-      const scrollLeftSetter = Object.getOwnPropertyDescriptor(
+      );
+      const scrollLeftDescriptor = Object.getOwnPropertyDescriptor(
         HTMLElement.prototype,
         "scrollLeft",
-      )?.set;
-      if (scrollTopSetter === undefined || scrollLeftSetter === undefined) {
+      );
+      if (
+        scrollTopDescriptor?.set === undefined ||
+        scrollLeftDescriptor?.set === undefined
+      ) {
         throw new Error("expected scrollTop/scrollLeft setters");
       }
-      vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(
-        function (
-          this: HTMLElement,
-          ...args: Array<number | ScrollToOptions | undefined>
-        ): void {
-          const first = args[0];
-          if (typeof first === "number") {
-            const second = args[1];
-            scrollLeftSetter.call(this, first);
-            scrollTopSetter.call(this, typeof second === "number" ? second : 0);
-            return;
-          }
-          if (typeof first !== "object" || first === null) return;
-          if (this === scrollNode) {
-            calls.push({
-              behavior: first.behavior,
-              top: first.top,
-              left: first.left,
-            });
-          }
-          if (typeof first.left === "number") {
-            scrollLeftSetter.call(this, first.left);
-          }
-          if (typeof first.top === "number") {
-            scrollTopSetter.call(this, first.top);
-          }
-        },
-      );
+      // The setter is called on a DIFFERENT element each invocation
+      // (whichever node `scrollTo` fires on), so it cannot be bound to one
+      // fixed `this` up front. Keep the descriptor itself as the stored
+      // reference and reach `.set` only immediately before `.call` inside
+      // these wrappers - never as a standalone extracted method reference.
+      const setScrollTop = (target: HTMLElement, value: number): void => {
+        scrollTopDescriptor.set?.call(target, value);
+      };
+      const setScrollLeft = (target: HTMLElement, value: number): void => {
+        scrollLeftDescriptor.set?.call(target, value);
+      };
+      vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(function (
+        this: HTMLElement,
+        ...args: Array<number | ScrollToOptions | undefined>
+      ): void {
+        const first = args[0];
+        if (typeof first === "number") {
+          const second = args[1];
+          setScrollLeft(this, first);
+          setScrollTop(this, typeof second === "number" ? second : 0);
+          return;
+        }
+        if (typeof first !== "object") return;
+        if (this === scrollNode) {
+          calls.push({
+            behavior: first.behavior,
+            top: first.top,
+            left: first.left,
+          });
+        }
+        if (typeof first.left === "number") {
+          setScrollLeft(this, first.left);
+        }
+        if (typeof first.top === "number") {
+          setScrollTop(this, first.top);
+        }
+      });
       return calls;
     }
 
@@ -8787,7 +8823,6 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-
   // ---------------------------------------------------------------------
   // Ticket 22 (painted-chat lifecycle audit, finding 3): the two-rAF anchor
   // repair (ticket 18's drift re-assert) is keyed to `messages` - a
@@ -8812,9 +8847,7 @@ describe("ChatMessages scroll policy", () => {
     /** Sends, then streams chunks until the turn genuinely overflows the
      *  usable viewport (mirrors ticket 18 pin E's own recipe exactly). */
     async function sendAndOverflowAnchor(
-      rerenderMessages: (
-        messages: ReadonlyArray<ChatMessageModel>,
-      ) => void,
+      rerenderMessages: (messages: ReadonlyArray<ChatMessageModel>) => void,
       history: ReadonlyArray<ChatMessageModel>,
       sendId: string,
       createdAt: number,
@@ -9656,7 +9689,11 @@ describe("ChatMessages scroll policy", () => {
       // alone does not report through `onIsAtEndChange` in this harness (no
       // synthetic 'scroll' event follows it), so mode stays untouched.
       act(() => {
-        list.scrollToEnd({ animated: false });
+        // Intentionally not awaited: this call alone does not report
+        // through `onIsAtEndChange` in this harness (see comment above), so
+        // nothing here depends on its resolution - the very next line reads
+        // the synchronous DOM side effect it already produced.
+        void list.scrollToEnd({ animated: false });
       });
       const trueEnd = scrollNode.scrollTop;
 

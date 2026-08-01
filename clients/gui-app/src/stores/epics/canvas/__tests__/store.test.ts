@@ -1054,7 +1054,7 @@ describe("epic canvas store header tabs", () => {
     if (newTabId === null) throw new Error("expected tear-off tab");
 
     const newCanvas = requireCanvas(newTabId);
-    const newPane = collectPanes(newCanvas.root)[0];
+    const newPane = collectPanes(newCanvas.root).at(0);
     if (newPane === undefined) throw new Error("expected a promoted pane");
 
     expect(newPane.activeTabId).toBe(SPEC_A.instanceId);
