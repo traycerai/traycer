@@ -319,8 +319,16 @@ that deletes a live one.
 **One digest identity.** `sha256` of the document bytes is simultaneously the CAS
 witness, the digest the row holds, and the next head's `parentHeadSha256`. Over
 the document, never the payload: the document is what is stored, and a chain
-anchored on anything else names bytes nobody has. `serializeChatHead` remains for
-payload-only uses and is *not* what anything is addressed by.
+anchored on anything else names bytes nobody has.
+
+There is deliberately **no payload serializer** in the public surface. Two
+functions returning canonical bytes of a head — one stored, one not — is a trap
+that a doc comment does not close: the first version of this module had one,
+warned against hashing it, and this package's own fixture chained on it anyway.
+A publisher following that example would chain on a digest naming bytes the
+server never stored, and report a fork on its own next sync. So there is exactly
+one way to turn a head into bytes. Payload-level assertions compose
+`canonicalJsonStringify(encodeChatHead(record))` explicitly.
 
 A head may not name the same part twice, anywhere across its lists — the server
 refuses one, because "displaced = previous minus current" stops being

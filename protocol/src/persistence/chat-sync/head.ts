@@ -364,11 +364,17 @@ export type ChatHeadRecord = {
 };
 
 /**
- * Domain head -> canonical persisted JSON. Same guarantees as
- * `encodeChatShard`: the major is stamped from the constant, the minor is
- * carried, every residual bag merges back beside its declared fields, and
- * encoding is idempotent so the head's own sha256 - the value the NEXT head
- * carries as its `parentHeadSha256` - is stable across read/write cycles.
+ * Domain head -> canonical persisted JSON for the PAYLOAD.
+ *
+ * Same guarantees as `encodeChatShard`: the major is stamped from the constant,
+ * the minor is carried, every residual bag merges back beside its declared
+ * fields, and encoding is idempotent.
+ *
+ * This is a building block, not a publication API. It is the payload half of a
+ * head document and carries no `parts` envelope, so it is neither what gets
+ * stored nor what a head is addressed by - `encodeChatHeadDocument` wraps it,
+ * and `serializeChatHeadDocument` produces the bytes that travel. Nothing may
+ * hash the result of this function.
  */
 export function encodeChatHead(record: ChatHeadRecord): JsonObject {
   const { core, events, hostPrivate, residual, ...declared } = record;
@@ -415,18 +421,18 @@ function encodeSimpleLevel(level: { readonly residual: JsonObject }): JsonObject
   return mergeResidual({ ...declared }, residual);
 }
 
-/**
- * Canonical bytes for the head PAYLOAD alone, without the tenant envelope.
- *
- * Not what gets stored, and not what anything is addressed by - see
- * `serializeChatHeadDocument`, which is the one public entry point for the
- * bytes that travel. This stays exported for payload-only uses: proving two
- * records encode identically, and tests that care about the record rather than
- * the document.
- */
-export function serializeChatHead(record: ChatHeadRecord): string {
-  return canonicalJsonStringify(encodeChatHead(record));
-}
+// There is deliberately NO `serializeChatHead`. A payload serializer sitting
+// beside `serializeChatHeadDocument` is a trap: both return canonical bytes of
+// a head, only one is stored, and hashing the wrong one produces a lineage
+// digest naming bytes nobody has - a publisher that chained on it would report
+// a fork on its own next sync. The first version of this module had one, with a
+// comment saying not to hash it, and this package's own fixture chained on it
+// anyway. So the misuse is removed structurally rather than warned about: there
+// is exactly one way to turn a head into bytes, and it is the right one.
+//
+// Payload-level assertions (canonical key order, lossless re-emission) compose
+// `canonicalJsonStringify(encodeChatHead(record))` explicitly, which reads as
+// the deliberate act it is.
 
 /** Every part a head names, in the order assembly consumes them. */
 export function listChatHeadParts(head: {

@@ -5,7 +5,7 @@ import type {
   StagedChatPart,
 } from "@traycer/protocol/persistence/chat-sync/assembly";
 import {
-  serializeChatHead,
+  serializeChatHeadDocument,
   type ChatHeadPart,
   type ChatHeadRecord,
 } from "@traycer/protocol/persistence/chat-sync/head";
@@ -293,7 +293,21 @@ function addressBytes(bytes: string): {
 
 export type PublishedChat = {
   readonly head: ChatHeadRecord;
-  readonly headBytes: string;
+  /**
+   * The bytes a publisher actually stores: the head DOCUMENT, envelope and all.
+   * Never the payload - see `headSha256`.
+   */
+  readonly documentBytes: string;
+  /**
+   * The head's identity: sha256 of `documentBytes`.
+   *
+   * This is the CAS witness, the digest the chat row holds, and the value the
+   * NEXT head carries as its `parentHeadSha256` - one value for all three. A
+   * fixture that exposed the payload digest here would teach every consumer to
+   * chain on bytes nobody stores, so the next sync would fail to find the
+   * ancestor it named and report a fork that never happened. This fixture did
+   * exactly that once; hence the emphasis.
+   */
   readonly headSha256: string;
   /** Every part's bytes, keyed by the address the head names it with. */
   readonly bytesByPart: ReadonlyMap<string, string>;
@@ -366,12 +380,14 @@ export function publishChat(options: {
   };
 
   const head = parseHead(wireHead);
-  const headBytes = serializeChatHead(head);
+  // The DOCUMENT, not the payload: these are the bytes a publisher stores and
+  // the digest everything downstream chains on.
+  const documentBytes = serializeChatHeadDocument(head);
 
   return {
     head,
-    headBytes,
-    headSha256: sha256Hex(headBytes),
+    documentBytes,
+    headSha256: sha256Hex(documentBytes),
     bytesByPart,
     fetch: (request) => {
       const bytes = bytesByPart.get(request.part.sha256);

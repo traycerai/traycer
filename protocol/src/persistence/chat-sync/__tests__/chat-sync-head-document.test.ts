@@ -2,8 +2,8 @@ import {
   CHAT_HEAD_PARTS_KEY,
   decodeChatHeadDocument,
   encodeChatHeadDocument,
+  encodeChatHead,
   listChatHeadParts,
-  serializeChatHead,
   serializeChatHeadDocument,
   type ChatHeadRecord,
 } from "@traycer/protocol/persistence/chat-sync/head";
@@ -83,9 +83,10 @@ describe("chat-head document envelope", () => {
   });
 
   it("keeps the payload byte-identical to the record's own encoding", () => {
-    // The envelope is additive: strip it and what is left is exactly what
-    // `serializeChatHead` produces, so nothing about the record's canonical
-    // form is disturbed by wrapping it.
+    // The envelope is additive: strip it and what is left is exactly the
+    // record's own canonical encoding, so nothing about the payload's form is
+    // disturbed by wrapping it. Composed explicitly - there is deliberately no
+    // payload serializer to reach for.
     const document: unknown = JSON.parse(
       serializeChatHeadDocument(graduated.head),
     );
@@ -94,7 +95,7 @@ describe("chat-head document envelope", () => {
     const payload: JsonObject = { ...document };
     delete payload[CHAT_HEAD_PARTS_KEY];
     expect(canonicalJsonStringify(payload)).toBe(
-      serializeChatHead(graduated.head),
+      canonicalJsonStringify(encodeChatHead(graduated.head)),
     );
   });
 });
@@ -121,7 +122,7 @@ describe("chat-head document identity", () => {
     // Worth pinning: chaining on the payload digest would name bytes nobody
     // stores, and the mistake is invisible until a lineage check fails.
     expect(sha256Hex(serializeChatHeadDocument(graduated.head))).not.toBe(
-      sha256Hex(serializeChatHead(graduated.head)),
+      sha256Hex(canonicalJsonStringify(encodeChatHead(graduated.head))),
     );
   });
 
@@ -198,7 +199,9 @@ describe("chat-head document fails closed", () => {
   it("refuses a document with no envelope", () => {
     // Exactly what the server refuses at the door, refused here too so a
     // publisher sees it before the swap rather than after.
-    const result = decodeChatHeadDocument(serializeChatHead(graduated.head));
+    const result = decodeChatHeadDocument(
+      canonicalJsonStringify(encodeChatHead(graduated.head)),
+    );
     expect(result.status).toBe("corrupt");
     if (result.status !== "corrupt") return;
     expect(result.reason).toBe("parts-envelope-missing");

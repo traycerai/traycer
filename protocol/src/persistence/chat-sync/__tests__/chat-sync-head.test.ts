@@ -4,7 +4,7 @@ import {
   encodeChatHead,
   gateChatHeadVersion,
   listChatHeadParts,
-  serializeChatHead,
+  serializeChatHeadDocument,
 } from "@traycer/protocol/persistence/chat-sync/head";
 import {
   canonicalJsonStringify,
@@ -130,7 +130,14 @@ describe("chat-head lineage", () => {
     });
 
     expect(second.head.parentHeadSha256).toBe(first.headSha256);
-    expect(sha256Hex(serializeChatHead(first.head))).toBe(first.headSha256);
+    // The identity a head is chained on is the digest of the bytes that are
+    // STORED - the document, envelope and all. Chaining on the payload digest
+    // would name bytes nobody has, so the next sync would fail to find the
+    // ancestor and report a fork that never happened.
+    expect(sha256Hex(serializeChatHeadDocument(first.head))).toBe(
+      first.headSha256,
+    );
+    expect(sha256Hex(first.documentBytes)).toBe(first.headSha256);
 
     // A fork: same seq, different lineage. Sequence ordering cannot tell these
     // apart; the digest chain can.
@@ -283,8 +290,8 @@ describe("chat-head canonical encoding", () => {
       schemaVersion: wireHead.schemaVersion,
     };
 
-    expect(serializeChatHead(parse(reordered))).toBe(
-      serializeChatHead(parse(wireHead)),
+    expect(canonicalJsonStringify(encodeChatHead(parse(reordered)))).toBe(
+      canonicalJsonStringify(encodeChatHead(parse(wireHead))),
     );
   });
 
@@ -304,7 +311,7 @@ describe("chat-head canonical encoding", () => {
       },
     };
 
-    expect(serializeChatHead(parse(withFutureFields))).toBe(
+    expect(canonicalJsonStringify(encodeChatHead(parse(withFutureFields)))).toBe(
       canonicalJsonStringify(withFutureFields),
     );
   });
@@ -356,8 +363,8 @@ describe("chat-head canonical encoding", () => {
     // move under a reader that merely opened and re-published the chat.
     const twice = encodeChatHead(parse(once));
     expect(twice).toEqual(once);
-    expect(sha256Hex(serializeChatHead(parse(once)))).toBe(
-      sha256Hex(serializeChatHead(parse(twice))),
+    expect(sha256Hex(serializeChatHeadDocument(parse(once)))).toBe(
+      sha256Hex(serializeChatHeadDocument(parse(twice))),
     );
   });
 
