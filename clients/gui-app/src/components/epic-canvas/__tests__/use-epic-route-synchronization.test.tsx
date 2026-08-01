@@ -485,6 +485,58 @@ describe("useEpicRouteSynchronization", () => {
     expect(testState.canvasStore.applyNestedRouteFocus).not.toHaveBeenCalled();
   });
 
+  it("reapplies the route target when an optimistic navigation never commits", async () => {
+    vi.useFakeTimers();
+    try {
+      testState.nestedFocusEnabled = true;
+      setSinglePaneCanvas(
+        "pane-current",
+        [
+          specTile("artifact-a", "tile-a", "Artifact A"),
+          specTile("artifact-b", "tile-b", "Artifact B"),
+        ],
+        "tile-b",
+      );
+      beginNestedFocusNavigation(EPIC_ID, TAB_ID, {
+        paneId: "pane-current",
+        tileInstanceId: "tile-b",
+      });
+
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-current",
+            focusTileInstanceId: "tile-a",
+          },
+        },
+      );
+
+      expect(
+        testState.canvasStore.applyNestedRouteFocus,
+      ).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(testState.canvasStore.applyNestedRouteFocus).toHaveBeenCalledWith(
+        TAB_ID,
+        {
+          paneId: "pane-current",
+          tileInstanceId: "tile-a",
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats a pane-only route as applied when the active pane contains a tile", async () => {
     testState.nestedFocusEnabled = true;
     setSinglePaneCanvas(

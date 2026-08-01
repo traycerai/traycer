@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
   useRouter,
@@ -33,7 +33,7 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
-import { shouldDeferNestedRouteApplication } from "@/lib/nested-focus-navigation-intent";
+import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
@@ -84,6 +84,7 @@ export function useEpicRouteSynchronization(
     (s) => s.applyNestedRouteFocus,
   );
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const [nestedRouteRetryToken, setNestedRouteRetryToken] = useState(0);
   const pendingCreateArtifactIds = useEpicCanvasStore(
     (s) => s.pendingCreateArtifactIds,
   );
@@ -139,8 +140,16 @@ export function useEpicRouteSynchronization(
     if (!hasRestoredCanvas) {
       return;
     }
-    if (shouldDeferNestedRouteApplication(epicId, tabId, nestedRouteTarget)) {
-      return;
+    const deferralMs = getNestedRouteApplicationDeferralMs(
+      epicId,
+      tabId,
+      nestedRouteTarget,
+    );
+    if (deferralMs !== null) {
+      const timeout = window.setTimeout(() => {
+        setNestedRouteRetryToken((token) => token + 1);
+      }, deferralMs);
+      return () => window.clearTimeout(timeout);
     }
 
     if (nestedRouteTarget === null) {
@@ -186,6 +195,7 @@ export function useEpicRouteSynchronization(
     tabId,
     currentNestedTarget,
     applyNestedRouteFocus,
+    nestedRouteRetryToken,
   ]);
 
   // The nested-route target we last moved DOM focus to. This effect re-runs on

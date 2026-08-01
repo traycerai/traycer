@@ -41,18 +41,33 @@ export function shouldDeferNestedRouteApplication(
   tabId: string,
   routeTarget: NestedFocusTarget | null,
 ): boolean {
+  return (
+    getNestedRouteApplicationDeferralMs(epicId, tabId, routeTarget) !== null
+  );
+}
+
+/**
+ * Returns the remaining optimistic window so route synchronization can wake
+ * itself when a router navigation never commits its target.
+ */
+export function getNestedRouteApplicationDeferralMs(
+  epicId: string,
+  tabId: string,
+  routeTarget: NestedFocusTarget | null,
+): number | null {
   const key = pendingKey(epicId, tabId);
   const pending = pendingByTab.get(key);
-  if (pending === undefined) return false;
-  if (Date.now() > pending.expiresAt) {
+  if (pending === undefined) return null;
+  const remainingMs = pending.expiresAt - Date.now();
+  if (remainingMs <= 0) {
     pendingByTab.delete(key);
-    return false;
+    return null;
   }
   if (areNestedFocusTargetsEqual(pending.target, routeTarget)) {
     pendingByTab.delete(key);
-    return false;
+    return null;
   }
-  return true;
+  return remainingMs;
 }
 
 export function resetNestedFocusNavigationIntentsForTests(): void {
