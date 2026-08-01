@@ -1026,6 +1026,66 @@ describe("epic sidebar selection mode", () => {
     });
   });
 
+  it("clears descendants added while an archive request is pending", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+
+    const addedChild = treeNode(
+      "chat-added-child",
+      "chat-root",
+      "Added child",
+      "chat",
+    );
+    testState.tree = {
+      rootIds: testState.tree.rootIds,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "chat-root": ["chat-child", addedChild.id],
+      },
+      nodeById: {
+        ...testState.tree.nodeById,
+        [addedChild.id]: addedChild,
+      },
+    };
+    testState.records = [...testState.records, recordFromNode(addedChild)];
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    fireEvent.click(screen.getByTestId(`epic-sidebar-select-${addedChild.id}`));
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+
+    testState.archivedIds = ["chat-root"];
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Cancel selection" }),
+    ).toBeNull();
+  });
+
   it("hides the bulk archive action when the host lacks archive support", () => {
     seedChatTree();
     testState.archiveSupport = false;

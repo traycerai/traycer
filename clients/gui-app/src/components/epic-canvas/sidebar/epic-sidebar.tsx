@@ -184,6 +184,7 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useCallback,
   type ComponentType,
@@ -1358,6 +1359,10 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
   const archiveChats = useEpicArchiveChats();
   const activeAgentIds = useEpicActiveAgentIds();
   const tree = useEpicTreeIndex();
+  const latestTreeRef = useRef(tree);
+  useEffect(() => {
+    latestTreeRef.current = tree;
+  }, [tree]);
   const epicId = useOpenEpicHandle().epicId;
   const selectedRootIds = useMemo(
     () =>
@@ -1391,16 +1396,24 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
           const successfulRootIds = selectedRootIds.filter(
             (_id, index) => results[index].status === "fulfilled",
           );
-          // Checkboxes stay interactive while the batch is pending. Clear the
-          // whole successful subtree, not only the request-era selection, so a
-          // descendant selected before the response cannot survive until the
-          // later archive projection hides it and leave selection mode at 0.
-          const successfulSubtreeIds = sidebarIdsWithinRoots({
-            ids: Object.keys(tree.nodeById),
-            rootIds: successfulRootIds,
-            tree,
-          });
-          selection.clearSelectedIds(successfulSubtreeIds);
+          // Checkboxes stay interactive while the batch is pending. The union
+          // handles both orderings: the request-era tree still knows a subtree
+          // that projection already removed, while the latest committed tree
+          // includes descendants collaborators added or reparented meanwhile.
+          const latestTree = latestTreeRef.current;
+          const successfulSubtreeIds = new Set([
+            ...sidebarIdsWithinRoots({
+              ids: Object.keys(tree.nodeById),
+              rootIds: successfulRootIds,
+              tree,
+            }),
+            ...sidebarIdsWithinRoots({
+              ids: Object.keys(latestTree.nodeById),
+              rootIds: successfulRootIds,
+              tree: latestTree,
+            }),
+          ]);
+          selection.clearSelectedIds([...successfulSubtreeIds]);
         },
       },
     );
