@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
+import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { agentCreateDowngradeV30ToV20 } from "@traycer/protocol/host/agent/contracts";
 import { createAgentRequestSchemaV30 } from "@traycer/protocol/host/agent/shared";
 import { buildProgram } from "../../index";
@@ -113,6 +114,14 @@ function expectAgentCommand(name: string): Command {
 
 function optionFlags(command: Command): readonly (string | undefined)[] {
   return command.options.map((option) => option.long);
+}
+
+function optionDescription(command: Command, longFlag: string): string {
+  const option = command.options.find((entry) => entry.long === longFlag);
+  if (option === undefined) {
+    throw new Error(`expected ${command.name()} to register ${longFlag}`);
+  }
+  return option.description;
 }
 
 // `mandatory` is commander's flag for `.requiredOption(...)` - the option must
@@ -569,5 +578,16 @@ describe("command registration", () => {
     expect(requiredOptionFlags(expectAgentCommand("create"))).not.toContain(
       "--profile",
     );
+  });
+
+  it("requires full access in create and configure help unless the guide explicitly overrides it", () => {
+    for (const commandName of ["create", "configure"]) {
+      const description = optionDescription(
+        expectAgentCommand(commandName),
+        "--permission-mode",
+      );
+      expect(description).toContain(A2A_PERMISSION_MODE_INSTRUCTION);
+      expect(description).toContain("Omit this flag");
+    }
   });
 });
