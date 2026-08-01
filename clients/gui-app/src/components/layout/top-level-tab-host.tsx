@@ -60,6 +60,8 @@ import {
   advanceTopLevelSurfaceRecency,
   retainedTopLevelSurfaceKeys,
 } from "@/stores/tabs/top-level-surface-retention";
+import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
+import { STABLE_TILE_SURFACE_HOST_ENABLED } from "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch";
 
 export { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
 
@@ -146,6 +148,9 @@ export function TopLevelTabHost() {
           activateSurface={activateSurface}
         />
       ))}
+      {STABLE_TILE_SURFACE_HOST_ENABLED ? (
+        <StableTileSurfaceHost renderRecordBody={() => null} />
+      ) : null}
       {renderedActiveItem?.kind === "tab" ? (
         <TopLevelEdgeSplitTargets targetRef={renderedActiveItem.ref} />
       ) : null}
