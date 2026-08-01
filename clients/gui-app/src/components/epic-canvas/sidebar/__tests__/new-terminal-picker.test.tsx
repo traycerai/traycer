@@ -21,6 +21,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 
 const selectById = vi.fn();
 
@@ -112,7 +113,11 @@ function openPicker(): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
   render(
     <TooltipProvider>
-      <NewTerminalPicker epicId="epic-1" tabId={tabId} />
+      <NewTerminalPicker
+        epicId="epic-1"
+        tabId={tabId}
+        onBeforeOpen={undefined}
+      />
     </TooltipProvider>,
   );
   fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
@@ -129,6 +134,7 @@ describe("<NewTerminalPicker />", () => {
   beforeEach(() => {
     cleanup();
     resetCanvas();
+    usePanelHeaderMenuStore.setState({ openBySurfaceKey: {} });
     selectById.mockClear();
     stubLoadedBindings();
   });
@@ -170,6 +176,26 @@ describe("<NewTerminalPicker />", () => {
     expect(
       screen.getByRole("option", { name: /feature-x/i }).dataset.checked,
     ).toBeUndefined();
+  });
+
+  it("preserves the open picker when its panel header remounts", () => {
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    const picker = (key: string) => (
+      <TooltipProvider>
+        <NewTerminalPicker
+          key={key}
+          epicId="epic-1"
+          tabId={tabId}
+          onBeforeOpen={undefined}
+        />
+      </TooltipProvider>
+    );
+    const { rerender } = render(picker("collapsed-header"));
+
+    fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
+    rerender(picker("expanded-header"));
+
+    expect(screen.getByTestId("new-terminal-picker-popover")).toBeDefined();
   });
 
   it("auto-selects the primary workspace even when it is not the first row", () => {
@@ -449,6 +475,7 @@ describe("<NewTerminalPicker /> focus-loss dismissal (MED4)", () => {
   beforeEach(() => {
     cleanup();
     resetCanvas();
+    usePanelHeaderMenuStore.setState({ openBySurfaceKey: {} });
     stubLoadedBindings();
   });
 
@@ -457,7 +484,11 @@ describe("<NewTerminalPicker /> focus-loss dismissal (MED4)", () => {
       <PaneSurfaceActivityContext.Provider value={{ visible: true, focused }}>
         <PaneVisibilityContext.Provider value>
           <TooltipProvider>
-            <NewTerminalPicker epicId="epic-1" tabId={tabId} />
+            <NewTerminalPicker
+              epicId="epic-1"
+              tabId={tabId}
+              onBeforeOpen={undefined}
+            />
           </TooltipProvider>
         </PaneVisibilityContext.Provider>
       </PaneSurfaceActivityContext.Provider>

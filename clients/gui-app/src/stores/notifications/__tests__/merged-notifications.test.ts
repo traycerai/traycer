@@ -101,6 +101,34 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("targets the terminal agent from TUI completion rows", () => {
+    const entry: HostNotificationEntry = {
+      id: "agent.stopped:tui-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: "tui-1",
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "tui-1",
+      payload: {
+        kind: "epic",
+        epicId: "epic-1",
+        tuiAgentId: "tui-1",
+        agentName: "Terminal agent",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+
+    expect(rowFromHostEntry(entry).payload).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "tui-1",
+    });
+  });
+
   it("uses embedded cloud payload titles when the presentation snapshot is absent", () => {
     const embedded: HostNotificationsCloudFeedRow = {
       entryId: "entry-legacy",
