@@ -70,10 +70,14 @@ import {
   type ChatOriginFilter,
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 
 const TWO_COLUMN_MENU_MIN_AVAILABLE_PX = 520;
 const VIEW_MENU_CONTENT_CLASS =
-  "w-64 min-w-64 max-w-[calc(100vw-1rem)] overflow-y-auto";
+  "w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto";
 const VIEW_MENU_MAX_HEIGHT = "min(70vh, 28rem)";
 
 type ChatViewDetail = "ordering" | "show" | "interface";
@@ -121,10 +125,12 @@ interface ViewMenuState<TDetail extends string> {
 }
 
 function useViewMenuState<TDetail extends string>(
+  tabId: string,
   panelId: LeftPanelId,
   collapsed: boolean,
 ): ViewMenuState<TDetail> {
-  const [open, setOpen] = useState(false);
+  const open = usePanelHeaderMenuOpen(tabId, panelId, "filter");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const [drillIn, setDrillIn] = useState(false);
   const [detail, setDetail] = useState<TDetail | null>(null);
   const [triggerElement, setTriggerElement] =
@@ -144,9 +150,16 @@ function useViewMenuState<TDetail extends string>(
       } else {
         setDetail(null);
       }
-      setOpen(nextOpen);
+      setMenuOpen(tabId, panelId, "filter", nextOpen);
     },
-    [collapsed, panelId, setPanelSectionCollapsed, triggerElement],
+    [
+      collapsed,
+      panelId,
+      setMenuOpen,
+      setPanelSectionCollapsed,
+      tabId,
+      triggerElement,
+    ],
   );
 
   const openDetail = useCallback((nextDetail: TDetail) => {
@@ -444,6 +457,7 @@ function ChatDetailContent(props: {
 
 export function ChatFilterMenu(props: {
   readonly epicId: string;
+  readonly tabId: string;
   readonly collapsed: boolean;
   readonly canArchive: boolean;
   readonly onCollapseAll: () => void;
@@ -464,7 +478,11 @@ export function ChatFilterMenu(props: {
   const filterActive = isChatFilterActive(filter);
   const filterCount = filterActive ? 1 : 0;
   const active = filterActive || showArchived || isSortModeActive(sort);
-  const menu = useViewMenuState<ChatViewDetail>("chats", props.collapsed);
+  const menu = useViewMenuState<ChatViewDetail>(
+    props.tabId,
+    "chats",
+    props.collapsed,
+  );
 
   const detailProps = {
     filterOrigin: filter.origin,
@@ -677,6 +695,7 @@ function ArtifactTypeDetail(props: {
 
 export function ArtifactFilterMenu(props: {
   readonly epicId: string;
+  readonly tabId: string;
   readonly collapsed: boolean;
   readonly onCollapseAll: () => void;
   readonly onMarkAllRead: () => void;
@@ -705,6 +724,7 @@ export function ArtifactFilterMenu(props: {
   const filterCount = artifactFilterCount(filter);
   const active = filterActive || isSortModeActive(sort);
   const menu = useViewMenuState<ArtifactViewDetail>(
+    props.tabId,
     "artifacts",
     props.collapsed,
   );

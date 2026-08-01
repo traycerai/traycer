@@ -147,6 +147,10 @@ import {
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 import { cn } from "@/lib/utils";
 import {
   Download,
@@ -1532,7 +1536,14 @@ function TreePanelActions(props: TreePanelActionsProps) {
     props.epicId,
     props.panelId,
   );
-  const [artifactMenuOpen, setArtifactMenuOpen] = useState(false);
+  const artifactMenuOpen = usePanelHeaderMenuOpen(
+    props.tabId,
+    props.panelId,
+    "create",
+  );
+  const setPanelHeaderMenuOpen = usePanelHeaderMenuStore(
+    (state) => state.setMenuOpen,
+  );
   const setPanelSectionCollapsed = useEpicLeftPanelStore(
     (state) => state.setPanelSectionCollapsed,
   );
@@ -1603,9 +1614,9 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const handleArtifactMenuOpenChange = useCallback(
     (open: boolean) => {
       if (open) expandBeforeOpen();
-      setArtifactMenuOpen(open);
+      setPanelHeaderMenuOpen(props.tabId, props.panelId, "create", open);
     },
-    [expandBeforeOpen],
+    [expandBeforeOpen, props.panelId, props.tabId, setPanelHeaderMenuOpen],
   );
 
   if (props.panelId === "chats") {
@@ -1699,12 +1710,14 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
           />
           <ChatHeaderMoreMenu
             epicId={props.epicId}
+            tabId={props.tabId}
             collapsed={props.collapsed}
           />
         </>
       )}
       <ChatFilterMenu
         epicId={props.epicId}
+        tabId={props.tabId}
         collapsed={props.collapsed}
         canArchive={canArchive}
         onCollapseAll={collapseAll}
@@ -1772,35 +1785,38 @@ function PanelHeaderMoreMenuTrigger(props: {
 }
 
 function useExpandableHeaderMenu(
+  tabId: string,
   panelId: LeftPanelId,
   collapsed: boolean,
 ): {
   readonly open: boolean;
   readonly handleOpenChange: (open: boolean) => void;
 } {
-  const [open, setOpen] = useState(false);
+  const open = usePanelHeaderMenuOpen(tabId, panelId, "more");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const setPanelSectionCollapsed = useEpicLeftPanelStore(
     (state) => state.setPanelSectionCollapsed,
   );
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (nextOpen && collapsed) setPanelSectionCollapsed(panelId, false);
-      setOpen(nextOpen);
+      setMenuOpen(tabId, panelId, "more", nextOpen);
     },
-    [collapsed, panelId, setPanelSectionCollapsed],
+    [collapsed, panelId, setMenuOpen, setPanelSectionCollapsed, tabId],
   );
   return { open, handleOpenChange };
 }
 
 function ChatHeaderMoreMenu(props: {
   readonly epicId: string;
+  readonly tabId: string;
   readonly collapsed: boolean;
 }) {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
   const openCommunicationGraph = useOpenCommunicationGraph(props.epicId);
-  const menu = useExpandableHeaderMenu("chats", props.collapsed);
+  const menu = useExpandableHeaderMenu(props.tabId, "chats", props.collapsed);
   const selectionEnabled = selection.canSelect && connectionStatus !== "closed";
 
   return (
@@ -1840,7 +1856,11 @@ function ArtifactHeaderMoreMenu(props: {
   const selection = useSidebarBulkSelection();
   const searchAvailable = useArtifactSearchAvailable();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
-  const menu = useExpandableHeaderMenu("artifacts", props.collapsed);
+  const menu = useExpandableHeaderMenu(
+    props.tabId,
+    "artifacts",
+    props.collapsed,
+  );
 
   return (
     <DropdownMenu open={menu.open} onOpenChange={menu.handleOpenChange}>
@@ -1909,6 +1929,7 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
       )}
       <ArtifactFilterMenu
         epicId={props.epicId}
+        tabId={props.tabId}
         collapsed={props.collapsed}
         onCollapseAll={collapseAll}
         onMarkAllRead={markAllRead}

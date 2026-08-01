@@ -7,12 +7,18 @@ import {
   ChatFilterMenu,
 } from "../epic-sidebar-filter-menu";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 
 const EPIC_ID = "epic-1";
+const TAB_ID = "tab-1";
 
 afterEach(() => {
   cleanup();
   useLeftPanelStore.setState(useLeftPanelStore.getInitialState(), true);
+  usePanelHeaderMenuStore.setState(
+    usePanelHeaderMenuStore.getInitialState(),
+    true,
+  );
   Object.defineProperty(window, "innerWidth", {
     configurable: true,
     value: 1024,
@@ -32,6 +38,7 @@ describe("<ChatFilterMenu />", () => {
     render(
       <ChatFilterMenu
         epicId={EPIC_ID}
+        tabId={TAB_ID}
         collapsed={false}
         canArchive={canArchive}
         onCollapseAll={() => undefined}
@@ -48,6 +55,7 @@ describe("<ChatFilterMenu />", () => {
     render(
       <ChatFilterMenu
         epicId={EPIC_ID}
+        tabId={TAB_ID}
         collapsed={false}
         canArchive={false}
         onCollapseAll={() => undefined}
@@ -59,11 +67,13 @@ describe("<ChatFilterMenu />", () => {
 
   it("offers the interface axis: All / Chat / Terminal", () => {
     open(false);
-    expect(
-      screen
-        .getByTestId("epic-sidebar-agent-view-menu")
-        .getAttribute("data-side"),
-    ).toBe("right");
+    const menu = screen.getByTestId("epic-sidebar-agent-view-menu");
+    expect(menu.getAttribute("data-side")).toBe("right");
+    expect(menu.className).toContain(
+      "w-[var(--radix-dropdown-menu-content-available-width)]",
+    );
+    expect(menu.className).toContain("max-w-64");
+    expect(menu.className).not.toContain("min-w-64");
     fireEvent.click(screen.getByText("Interface"));
     const options = screen
       .getAllByRole("menuitemradio")
@@ -82,6 +92,7 @@ describe("<ChatFilterMenu />", () => {
     render(
       <ChatFilterMenu
         epicId={EPIC_ID}
+        tabId={TAB_ID}
         collapsed
         canArchive={false}
         onCollapseAll={() => undefined}
@@ -98,6 +109,37 @@ describe("<ChatFilterMenu />", () => {
     expect(
       useLeftPanelStore.getState().panelSectionCollapsedByPanelId.chats,
     ).toBe(false);
+    expect(screen.getByTestId("epic-sidebar-agent-view-menu")).toBeTruthy();
+  });
+
+  it("keeps the view menu open when expansion remounts its header", () => {
+    useLeftPanelStore.getState().setPanelSectionCollapsed("chats", true);
+    const { rerender } = render(
+      <ChatFilterMenu
+        key="collapsed"
+        epicId={EPIC_ID}
+        tabId={TAB_ID}
+        collapsed
+        canArchive={false}
+        onCollapseAll={() => undefined}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Filter agents" }),
+      { button: 0 },
+    );
+    rerender(
+      <ChatFilterMenu
+        key="expanded"
+        epicId={EPIC_ID}
+        tabId={TAB_ID}
+        collapsed={false}
+        canArchive={false}
+        onCollapseAll={() => undefined}
+      />,
+    );
+
     expect(screen.getByTestId("epic-sidebar-agent-view-menu")).toBeTruthy();
   });
 
@@ -182,6 +224,7 @@ describe("<ArtifactFilterMenu />", () => {
     render(
       <ArtifactFilterMenu
         epicId={EPIC_ID}
+        tabId={TAB_ID}
         collapsed={false}
         onCollapseAll={() => undefined}
         onMarkAllRead={() => undefined}

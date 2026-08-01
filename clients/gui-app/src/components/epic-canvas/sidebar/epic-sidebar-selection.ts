@@ -319,10 +319,7 @@ function setSelectableSidebarIds(
   state: SidebarBulkSelectionState,
   ids: readonly string[],
 ): SidebarBulkSelectionState {
-  // Selection captures the visible set at entry. View filters are shared per
-  // Epic, so another tab may change them while this tab is selecting; freezing
-  // here prevents rows from disappearing or reordering mid-operation.
-  if (state.selectionMode || sameStringArray(state.selectableIds, ids)) {
+  if (sameStringArray(state.selectableIds, ids)) {
     return state;
   }
   return {
