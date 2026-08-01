@@ -1,5 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
-import { fireEvent } from "@testing-library/react";
+import { fireEvent, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 import { jsonContentToMarkdown } from "@traycer/protocol/common/json-content-serializer";
@@ -74,13 +74,14 @@ describe("composer Markdown-style input", () => {
 
   it("does not show the composer placeholder inside an empty code block", () => {
     const { editor, element } = makeFixture();
+    const editorView = within(element);
 
-    expect(element.querySelector("p")?.getAttribute("data-placeholder")).toBe(
-      "test",
-    );
+    expect(
+      editorView.getByRole("paragraph").getAttribute("data-placeholder"),
+    ).toBe("test");
     typeText(editor, "```");
 
-    const codeBlock = element.querySelector("pre");
+    const codeBlock = editorView.getByRole("code").parentElement;
     expect(codeBlock).not.toBeNull();
     expect(codeBlock?.getAttribute("data-placeholder")).toBe("");
   });
@@ -125,6 +126,23 @@ describe("composer Markdown-style input", () => {
     ]);
     expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
     expect(editor.state.doc.firstChild?.textContent).toBe("Hello");
+    expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+  });
+
+  it("closes an empty code block with a fence on its first line", () => {
+    const { editor, submitCalls } = makeFixture();
+
+    typeText(editor, "```");
+    expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+
+    typeText(editor, "```");
+
+    expect(submitCalls.count).toBe(0);
+    expect(editor.getJSON().content.map((node) => node.type)).toEqual([
+      "codeBlock",
+      "paragraph",
+    ]);
+    expect(editor.state.doc.firstChild?.textContent).toBe("");
     expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
   });
 

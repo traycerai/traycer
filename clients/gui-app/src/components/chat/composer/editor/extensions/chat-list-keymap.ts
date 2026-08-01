@@ -158,9 +158,13 @@ function handleClosingCodeFence(
   const { $from } = selection;
   if ($from.parent.type.name !== "codeBlock") return false;
   const textBeforeCaret = $from.parent.textContent.slice(0, $from.parentOffset);
-  if (!textBeforeCaret.endsWith("\n``")) return false;
+  const isFirstLineFence =
+    $from.parentOffset === 2 &&
+    textBeforeCaret === "``" &&
+    $from.parent.content.size === $from.parentOffset;
+  if (!isFirstLineFence && !textBeforeCaret.endsWith("\n``")) return false;
 
-  const closingFenceFrom = from - 3;
+  const closingFenceFrom = from - (isFirstLineFence ? 2 : 3);
   const codeBlockEnd = $from.after();
   const paragraphType = editor.schema.nodes.paragraph;
 
