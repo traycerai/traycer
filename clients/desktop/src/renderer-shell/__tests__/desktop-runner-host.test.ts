@@ -116,6 +116,7 @@ function buildFakeBridge(
     },
     notifications: {
       show: async () => undefined,
+      onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: (_handler: (payload: unknown) => void) => ({
         dispose: () => undefined,
       }),

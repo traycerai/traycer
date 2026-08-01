@@ -198,6 +198,32 @@ describe("folder-mapping refresh affordance", () => {
     expect(checked.textContent).toContain("3m");
   });
 
+  it("keeps the folder list scrollable above an inset, fixed refresh footer", async () => {
+    const fixture = renderControl({
+      checkedAt: Date.now(),
+      wired: true,
+      canRefresh: true,
+    });
+    await fixture.openPicker();
+
+    const popover = screen.getByTestId("home-workspace-rows-popover");
+    const scrollRegion = screen.getByTestId("workspace-folder-scroll-region");
+    const footer = screen.getByTestId("workspace-refresh-footer");
+
+    // The sidebar owner card keeps its refresh row outside the metadata scroll
+    // region. The folder picker follows the same structure so the footer does
+    // not need negative margins or sticky offsets inside a padded scroller.
+    expect(popover.className).toContain("overflow-hidden");
+    expect(popover.className).toContain("p-0");
+    expect(scrollRegion.className).toContain("overflow-y-auto");
+    expect(scrollRegion.className).toContain("px-3");
+    expect(scrollRegion.className).toContain("pb-2");
+    expect(footer.className).toContain("shrink-0");
+    expect(footer.className).toContain("px-3");
+    expect(footer.className).not.toContain("sticky");
+    expect(footer.className).not.toContain("-mx-3");
+  });
+
   it("offers no refresh affordance on a surface with nothing to refresh", async () => {
     const fixture = renderControl({
       checkedAt: null,

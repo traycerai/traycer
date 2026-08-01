@@ -59,6 +59,7 @@ export const queryKeys = {
   hostTraycerRateLimitUsage: hostQueryKeys.traycerRateLimitUsage,
   hostEpicTaskContexts: hostQueryKeys.epicTaskContexts,
   cloudEpicTasks: cloudQueryKeys.epicTasks,
+  cloudEpicTasksLastKnown: cloudQueryKeys.epicTasksLastKnown,
   workspaceEntries: uiQueryKeys.workspaceEntries,
   hostPicker: uiQueryKeys.hostPicker,
   hostPickerMissing: uiQueryKeys.hostPickerMissing,

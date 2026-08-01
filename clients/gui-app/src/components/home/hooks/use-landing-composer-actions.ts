@@ -85,7 +85,6 @@ import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-inten
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type {
   PermissionMode,
-  AgentMode,
   HarnessModelSelection,
   ReasoningLevel,
   ServiceTier,
@@ -108,13 +107,11 @@ export interface LandingComposerSubmitArgs {
     readonly reasoning: ReasoningLevel;
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
-    readonly agentMode: AgentMode;
   };
 }
 
 export interface TerminalAgentLaunch {
   readonly harnessId: TuiHarnessId;
-  readonly agentMode: AgentMode;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly terminalAgentArgs: string | null;
@@ -286,7 +283,6 @@ export function useLandingComposerActions(): LandingComposerActions {
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
-        agentMode: toolbar.agentMode,
       });
       if (settings.model.length === 0) {
         draftRuntimeRegistry.complete(attempt);
@@ -604,7 +600,6 @@ export function useLandingComposerActions(): LandingComposerActions {
     ) => {
       const {
         harnessId,
-        agentMode,
         model,
         reasoningEffort,
         terminalAgentArgs,
@@ -691,7 +686,6 @@ export function useLandingComposerActions(): LandingComposerActions {
               harnessId,
               model,
               reasoningEffort,
-              agentMode,
               forkSourceHarnessSessionId: null,
               sourceTuiAgentId: null,
               sourceProfileId: null,

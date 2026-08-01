@@ -26,6 +26,10 @@ import type {
   SupportReportType,
   SupportSubmitReportRequest,
 } from "../../ipc-contracts/window-types";
+import type {
+  DesktopNotificationForegroundAppLocal,
+  DesktopNotificationForegroundDisplay,
+} from "../../ipc-contracts/notification-types";
 import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
@@ -104,12 +108,13 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.notificationShow,
     async (
-      _event,
+      event,
       title: unknown,
       body: unknown,
       payload: unknown,
       replaceKey: unknown,
       deliveryKey: unknown,
+      foregroundAppLocal: unknown,
     ) => {
       assertString(title, "notifications.show");
       assertString(body, "notifications.show");
@@ -121,12 +126,33 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       if (deliveryKey !== null && typeof deliveryKey !== "string") {
         throw new Error("notifications.show requires a delivery key or null");
       }
+      const parsedForegroundAppLocal =
+        parseForegroundAppLocal(foregroundAppLocal);
+      const foregroundDisplay: DesktopNotificationForegroundDisplay = {
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+        foregroundAppLocal: parsedForegroundAppLocal,
+      };
       showNativeNotification({
         title,
         body,
         replaceKey,
         deliveryKey,
         onClick: () => bridge.deliverNotificationClick(payload),
+        onForegroundSuppressed: () => {
+          const delivered = bridge.deliverForegroundNotificationDisplay(
+            readSenderWebContentsId(event),
+            foregroundDisplay,
+          );
+          if (!delivered) {
+            throw new Error(
+              "notifications.show could not reach the focused renderer",
+            );
+          }
+        },
       });
     },
   );
@@ -230,6 +256,27 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       );
     },
   );
+}
+
+function parseForegroundAppLocal(
+  value: unknown,
+): DesktopNotificationForegroundAppLocal | null {
+  if (value === null) return null;
+  if (
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !("userId" in value) ||
+    typeof value.userId !== "string" ||
+    !("entry" in value)
+  ) {
+    throw new Error(
+      "notifications.show requires foreground app-local context or null",
+    );
+  }
+  return {
+    userId: value.userId,
+    entry: value.entry,
+  };
 }
 
 // A draftId is only unique within one renderer realm (`desktop-dialog-store`

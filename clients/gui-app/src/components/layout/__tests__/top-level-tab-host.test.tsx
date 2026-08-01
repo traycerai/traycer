@@ -14,16 +14,47 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
+import { TopLevelSurfaceActivationContext } from "@/components/layout/top-level-surface-activation-context";
 
-vi.mock("@/components/epic-tabs/epic-surface", () => ({
-  EpicSurface: (props: { readonly epicId: string; readonly tabId: string }) => (
-    <input
-      data-epic-id={props.epicId}
-      data-testid={`epic-surface-body-${props.tabId}`}
-      defaultValue={props.tabId}
-    />
-  ),
-}));
+vi.mock("@/components/epic-tabs/epic-surface", async () => {
+  const React = await import("react");
+  const { usePaneActivationFocusIntent } =
+    await import("@/components/epic-canvas/pane-activation");
+  const { usePaneFocused } =
+    await import("@/components/epic-tabs/pane-visibility-context");
+
+  function MockEpicSurface(props: {
+    readonly epicId: string;
+    readonly tabId: string;
+  }) {
+    const focused = usePaneFocused();
+    const focusIntent = usePaneActivationFocusIntent();
+    const primaryRef = React.useRef<HTMLInputElement | null>(null);
+    const previouslyFocusedRef = React.useRef(false);
+    React.useEffect(() => {
+      const newlyFocused = focused && !previouslyFocusedRef.current;
+      previouslyFocusedRef.current = focused;
+      if (!newlyFocused) return;
+      if (focusIntent.shouldYieldAutoFocus()) return;
+      primaryRef.current?.focus();
+    }, [focusIntent, focused]);
+
+    return (
+      <div data-testid={`epic-surface-content-${props.tabId}`}>
+        <input
+          aria-label={`Action ${props.tabId}`}
+          data-epic-id={props.epicId}
+          data-testid={`epic-surface-body-${props.tabId}`}
+          defaultValue={props.tabId}
+        />
+        <input aria-label={`Primary ${props.tabId}`} ref={primaryRef} />
+        <div data-testid={`blank-surface-${props.tabId}`} />
+      </div>
+    );
+  }
+
+  return { EpicSurface: MockEpicSurface };
+});
 
 vi.mock("@/components/home/landing-draft-surface", () => ({
   LandingDraftSurface: () => <div data-testid="draft-surface-body" />,
@@ -66,6 +97,18 @@ const SETTINGS: TabRef = { kind: "settings", id: "settings" };
 
 function surfaceRef(key: TabRef): HTMLElement {
   return screen.getByTestId(`top-level-surface-${key.kind}-${key.id}`);
+}
+
+function activatingHost(left: TabRef, right: TabRef): ReactNode {
+  return (
+    <TopLevelSurfaceActivationContext.Provider
+      value={(tab) => {
+        setSplit(left, right, tab.id === right.id ? "right" : "left");
+      }}
+    >
+      <TopLevelTabHost />
+    </TopLevelSurfaceActivationContext.Provider>
+  );
 }
 
 function seedSources(refs: ReadonlyArray<TabRef>): void {
@@ -215,6 +258,48 @@ describe("<TopLevelTabHost />", () => {
     expect(surfaceRef(EPIC_A)).toBe(epicBefore);
     expect(surfaceRef(DRAFT_A)).toBe(draftBefore);
     expect(surfaceRef(EPIC_A).dataset.focused).toBe("true");
+  });
+
+  it("keeps pointer and keyboard focus on the control that activates a split partner", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    setSplit(EPIC_A, EPIC_B, "left");
+    render(activatingHost(EPIC_A, EPIC_B));
+
+    const action = screen.getByRole("textbox", { name: "Action epic-b" });
+    act(() => {
+      action.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, composed: true }),
+      );
+      action.focus();
+    });
+
+    expect(surfaceRef(EPIC_B).dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(action);
+
+    act(() => setSplit(EPIC_A, EPIC_B, "left"));
+    act(() => action.focus());
+
+    expect(surfaceRef(EPIC_B).dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(action);
+  });
+
+  it("retains primary autofocus for blank top-level surface activation", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    setSplit(EPIC_A, EPIC_B, "left");
+    render(activatingHost(EPIC_A, EPIC_B));
+
+    act(() => {
+      screen
+        .getByTestId("blank-surface-epic-b")
+        .dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, composed: true }),
+        );
+    });
+
+    expect(surfaceRef(EPIC_B).dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Primary epic-b" }),
+    );
   });
 
   it("keeps a body instance and its local value across single-to-split-to-swap", async () => {

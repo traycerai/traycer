@@ -180,7 +180,7 @@ vi.mock("../../runner/runner", async (importOriginal) => {
   };
 });
 
-import { buildProgram } from "../../index";
+import { buildProgram, buildProgramWithAgentRoles } from "../../index";
 
 // Native-packaging follow-up bug: previously `traycer-cli/src/index.ts`
 // only wired up `login`, `logout`, `whoami`, `host start`,
@@ -232,7 +232,20 @@ function expectRunnerFlags(cmd: Command, label: string): void {
   }
 }
 
+function collectOptionFlags(command: Command): Array<string | undefined> {
+  return [
+    ...command.options.map((option) => option.long),
+    ...command.commands.flatMap(collectOptionFlags),
+  ];
+}
+
 describe("traycer CLI entrypoint registration", () => {
+  it("keeps epic and sender context env-only across the entire command tree", () => {
+    const flags = collectOptionFlags(buildProgramWithAgentRoles(true));
+    expect(flags).not.toContain("--epic-id");
+    expect(flags).not.toContain("--sender-agent-id");
+  });
+
   it("registers every command module the Desktop host-management IPC bridge spawns", () => {
     const program = buildProgram();
     // The set below matches the spawn call-sites in

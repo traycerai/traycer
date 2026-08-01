@@ -82,7 +82,6 @@ function createOpts(profile: string | null) {
     surface: "gui",
     harness: "codex",
     model: null,
-    agentMode: null,
     reasoningEffort: null,
     fast: false,
     permissionMode: null,
@@ -339,6 +338,9 @@ describe("agent configure", () => {
       reasoningEffort: "high",
       fastMode: false,
       permissionMode: "supervised",
+      // `agent.configure@3.0` is released and its baseline requires this on the
+      // response, so the CLI still has to decode it - see the schema comment in
+      // `protocol/src/host/agent/profiles.ts`.
       agentMode: "regular",
     },
     warnings: ["Fast mode is not available for 'gpt-5.6-codex'."],
@@ -491,7 +493,8 @@ describe("version skew", () => {
       surface: "gui",
       harnessId: "codex",
       model: null,
-      agentMode: null,
+      // v3.0 is released, so its request still requires the field.
+      agentMode: "regular",
       reasoningEffort: null,
       fastMode: null,
       permissionMode: "full_access",
@@ -538,7 +541,7 @@ describe("command registration", () => {
     expect(optionFlags(expectAgentCommand("create"))).toContain(
       "--permission-mode",
     );
-    expect(optionFlags(expectAgentCommand("list-profiles"))).toContain(
+    expect(optionFlags(expectAgentCommand("list-profiles"))).not.toContain(
       "--epic-id",
     );
     expect(

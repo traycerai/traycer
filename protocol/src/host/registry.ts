@@ -88,6 +88,7 @@ import {
   agentInboxSubscribeV10,
   agentInboxSubscribeV11,
 } from "@traycer/protocol/host/agent/inbox";
+import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
   agentRolesClaimV10,
@@ -5713,6 +5714,20 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         1: {
           contract: agentInboxSubscribeV11,
+        },
+      },
+    },
+  },
+  // Optional host-local activity source reserved for a future explicit local
+  // desktop mode. Every current GUI environment continues using the per-user
+  // notification-room awareness path; entitlement must not select this method.
+  // Older hosts may omit it through ordinary optional-method negotiation.
+  "agent.activity.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentActivitySubscribeV10,
         },
       },
     },

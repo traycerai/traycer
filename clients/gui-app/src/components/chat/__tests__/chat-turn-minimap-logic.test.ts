@@ -1,51 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
-  CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH,
+  CHAT_TURN_MINIMAP_END_HIT_PADDING,
   CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
-  CHAT_TURN_MINIMAP_HIT_STRIP_LEFT,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_ITEM_SPACING,
   CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS,
   CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS,
-  CHAT_TURN_MINIMAP_PERSISTENT_GUTTER,
-  resolveChatTurnMinimapHasPersistentGutter,
   resolveChatTurnMinimapHeightStyle,
-  resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapIndexFromPointer,
   resolveChatTurnMinimapInteractiveWidth,
   resolveChatTurnMinimapRowHeight,
   resolveChatTurnMinimapRowInView,
   resolveChatTurnMinimapRowTop,
+  resolveChatTurnMinimapRowViewportDistance,
   resolveChatTurnMinimapTopPercent,
+  resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
 
-/**
- * Side gutter around the centered content column for a pane of `viewportWidth`.
- * Mirrors the pure math inside the geometry helpers.
- */
-function sideGutter(viewportWidth: number): number {
-  const contentWidth = Math.min(
-    viewportWidth,
-    CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH,
-  );
-  return Math.max(0, (viewportWidth - contentWidth) / 2);
-}
-
-/** Exact viewport width that yields `sideGutter === gutterPx`. */
-function viewportForGutter(gutterPx: number): number {
-  return CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH + gutterPx * 2;
-}
-
 describe("resolveChatTurnMinimapHeightStyle", () => {
-  it("uses (itemCount-1)*spacing as the natural height, capped by the viewport and pane", () => {
+  it("adds endpoint hit padding to the visual track height, capped by the viewport and pane", () => {
     expect(resolveChatTurnMinimapHeightStyle(1)).toBe(
-      `min(1px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
+      `min(${1 + CHAT_TURN_MINIMAP_END_HIT_PADDING * 2}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
     );
     expect(resolveChatTurnMinimapHeightStyle(2)).toBe(
-      `min(${CHAT_TURN_MINIMAP_ITEM_SPACING}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
+      `min(${CHAT_TURN_MINIMAP_ITEM_SPACING + CHAT_TURN_MINIMAP_END_HIT_PADDING * 2}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
     );
     expect(resolveChatTurnMinimapHeightStyle(5)).toBe(
-      `min(${4 * CHAT_TURN_MINIMAP_ITEM_SPACING}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
+      `min(${4 * CHAT_TURN_MINIMAP_ITEM_SPACING + CHAT_TURN_MINIMAP_END_HIT_PADDING * 2}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`,
     );
   });
 });
@@ -65,6 +46,18 @@ describe("resolveChatTurnMinimapTopPercent", () => {
   it("clamps out-of-range indices to the rail ends", () => {
     expect(resolveChatTurnMinimapTopPercent(-3, 4)).toBe(0);
     expect(resolveChatTurnMinimapTopPercent(99, 4)).toBe(100);
+  });
+});
+
+describe("resolveChatTurnMinimapTopStyle", () => {
+  it("insets only the two endpoint strips while preserving even track spacing", () => {
+    expect(resolveChatTurnMinimapTopStyle(0, 5)).toBe(
+      `calc(0% + ${CHAT_TURN_MINIMAP_END_HIT_PADDING}px)`,
+    );
+    expect(resolveChatTurnMinimapTopStyle(2, 5)).toBe("50%");
+    expect(resolveChatTurnMinimapTopStyle(4, 5)).toBe(
+      `calc(100% - ${CHAT_TURN_MINIMAP_END_HIT_PADDING}px)`,
+    );
   });
 });
 
@@ -150,93 +143,57 @@ describe("resolveChatTurnMinimapIndexFromPointer", () => {
       }),
     ).toBe(2);
   });
-});
 
-describe("resolveChatTurnMinimapHasPersistentGutter", () => {
-  it("is false for non-finite, zero, or negative widths", () => {
-    expect(resolveChatTurnMinimapHasPersistentGutter(Number.NaN)).toBe(false);
-    expect(resolveChatTurnMinimapHasPersistentGutter(0)).toBe(false);
-    expect(resolveChatTurnMinimapHasPersistentGutter(-10)).toBe(false);
-  });
+  it("gives the first and last items the extra endpoint padding", () => {
+    const trackHeight = base.railHeight - CHAT_TURN_MINIMAP_END_HIT_PADDING * 2;
+    const halfItemStep = trackHeight / (5 - 1) / 2;
+    const firstInteriorBoundary =
+      base.railTop + CHAT_TURN_MINIMAP_END_HIT_PADDING + halfItemStep;
+    const lastInteriorBoundary =
+      base.railTop +
+      base.railHeight -
+      CHAT_TURN_MINIMAP_END_HIT_PADDING -
+      halfItemStep;
 
-  it("is false when the pane is at or below the content max (no side gutter)", () => {
     expect(
-      resolveChatTurnMinimapHasPersistentGutter(
-        CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH,
-      ),
-    ).toBe(false);
-    expect(
-      resolveChatTurnMinimapHasPersistentGutter(
-        CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH - 100,
-      ),
-    ).toBe(false);
-  });
-
-  it("flips true exactly when side gutter reaches the 48px threshold", () => {
-    const justBelow = viewportForGutter(
-      CHAT_TURN_MINIMAP_PERSISTENT_GUTTER - 1,
-    );
-    const atThreshold = viewportForGutter(CHAT_TURN_MINIMAP_PERSISTENT_GUTTER);
-    const above = viewportForGutter(CHAT_TURN_MINIMAP_PERSISTENT_GUTTER + 1);
-
-    expect(sideGutter(justBelow)).toBe(CHAT_TURN_MINIMAP_PERSISTENT_GUTTER - 1);
-    expect(resolveChatTurnMinimapHasPersistentGutter(justBelow)).toBe(false);
-
-    expect(sideGutter(atThreshold)).toBe(CHAT_TURN_MINIMAP_PERSISTENT_GUTTER);
-    expect(resolveChatTurnMinimapHasPersistentGutter(atThreshold)).toBe(true);
-
-    expect(resolveChatTurnMinimapHasPersistentGutter(above)).toBe(true);
-  });
-});
-
-describe("resolveChatTurnMinimapHitStripWidth", () => {
-  it("is 0 for non-finite, zero, or negative widths", () => {
-    expect(resolveChatTurnMinimapHitStripWidth(Number.NaN)).toBe(0);
-    expect(resolveChatTurnMinimapHitStripWidth(0)).toBe(0);
-    expect(resolveChatTurnMinimapHitStripWidth(-1)).toBe(0);
-  });
-
-  it("is 0 at/below the content max and while gutter is still within the left offset", () => {
-    expect(
-      resolveChatTurnMinimapHitStripWidth(CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH),
+      resolveChatTurnMinimapIndexFromPointer({
+        ...base,
+        itemCount: 5,
+        pointerY: firstInteriorBoundary - 1,
+      }),
     ).toBe(0);
-    // 780px pane → 6px side gutter (M3b integration pin) → clamps to 0
-    expect(resolveChatTurnMinimapHitStripWidth(780)).toBe(0);
-    // sideGutter exactly equals the left offset → still 0 after subtraction
-    const atLeftOffset = viewportForGutter(CHAT_TURN_MINIMAP_HIT_STRIP_LEFT);
-    expect(resolveChatTurnMinimapHitStripWidth(atLeftOffset)).toBe(0);
-  });
-
-  it("scales with gutter then clamps at the 40px max", () => {
-    // First usable pixel: sideGutter = left + 1
-    const onePx = viewportForGutter(CHAT_TURN_MINIMAP_HIT_STRIP_LEFT + 1);
-    expect(resolveChatTurnMinimapHitStripWidth(onePx)).toBe(1);
-
-    // At the persistent-gutter boundary (48px): 48 - 12 = 36
-    const atPersistent = viewportForGutter(CHAT_TURN_MINIMAP_PERSISTENT_GUTTER);
-    expect(resolveChatTurnMinimapHitStripWidth(atPersistent)).toBe(
-      CHAT_TURN_MINIMAP_PERSISTENT_GUTTER - CHAT_TURN_MINIMAP_HIT_STRIP_LEFT,
-    );
-
-    // Exactly at max: left + max → sideGutter = 52 → hit = 40
-    const atMax = viewportForGutter(
-      CHAT_TURN_MINIMAP_HIT_STRIP_LEFT + CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-    );
-    expect(resolveChatTurnMinimapHitStripWidth(atMax)).toBe(
-      CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-    );
-
-    // Well above max stays clamped
-    expect(resolveChatTurnMinimapHitStripWidth(1200)).toBe(
-      CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-    );
+    expect(
+      resolveChatTurnMinimapIndexFromPointer({
+        ...base,
+        itemCount: 5,
+        pointerY: firstInteriorBoundary + 1,
+      }),
+    ).toBe(1);
+    expect(
+      resolveChatTurnMinimapIndexFromPointer({
+        ...base,
+        itemCount: 5,
+        pointerY: lastInteriorBoundary - 1,
+      }),
+    ).toBe(3);
+    expect(
+      resolveChatTurnMinimapIndexFromPointer({
+        ...base,
+        itemCount: 5,
+        pointerY: lastInteriorBoundary + 1,
+      }),
+    ).toBe(4);
   });
 });
 
 describe("resolveChatTurnMinimapInteractiveWidth", () => {
   it("returns the collapsed numeric width when not expanded", () => {
-    expect(resolveChatTurnMinimapInteractiveWidth(0, false)).toBe(0);
-    expect(resolveChatTurnMinimapInteractiveWidth(36, false)).toBe(36);
+    expect(
+      resolveChatTurnMinimapInteractiveWidth(
+        CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
+        false,
+      ),
+    ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
   });
 
   it("returns the expanded rem width once the preview is open", () => {
@@ -337,5 +294,37 @@ describe("resolveChatTurnMinimapRowTop / RowHeight / RowInView", () => {
     expect(resolveChatTurnMinimapRowInView(headerState, 0)).toBe(true);
     // row 1 [200, 260) is well below the band - must read out of view.
     expect(resolveChatTurnMinimapRowInView(headerState, 1)).toBe(false);
+  });
+});
+
+describe("resolveChatTurnMinimapRowViewportDistance", () => {
+  const state = {
+    scroll: 200,
+    scrollLength: 100,
+    positionAtIndex: (index: number): number | undefined =>
+      [50, 220, 400][index],
+    sizeAtIndex: (): number => 50,
+  };
+
+  it("encodes above, intersecting, and below rows in one geometry result", () => {
+    expect(resolveChatTurnMinimapRowViewportDistance(state, 0)).toBe(100);
+    expect(resolveChatTurnMinimapRowViewportDistance(state, 1)).toBe(-1);
+    expect(resolveChatTurnMinimapRowViewportDistance(state, 2)).toBe(100);
+  });
+
+  it("keeps a touching row out of view while reporting zero proximity", () => {
+    expect(
+      resolveChatTurnMinimapRowViewportDistance(
+        {
+          ...state,
+          positionAtIndex: () => 300,
+        },
+        0,
+      ),
+    ).toBe(0);
+  });
+
+  it("returns null when row geometry is unavailable", () => {
+    expect(resolveChatTurnMinimapRowViewportDistance({}, 0)).toBeNull();
   });
 });
