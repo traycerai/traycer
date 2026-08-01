@@ -79,7 +79,7 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     cleanup();
   });
 
-  it("opens a header add menu to the right without collision flipping", async () => {
+  it("opens a header add menu on the configured right side", async () => {
     render(
       <AddNodeDropdown
         open
@@ -103,11 +103,9 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
       </AddNodeDropdown>,
     );
 
-    expect(
-      (await screen.findByTestId("header-add-node-menu")).getAttribute(
-        "data-side",
-      ),
-    ).toBe("right");
+    expect((await screen.findByRole("menu")).getAttribute("data-side")).toBe(
+      "right",
+    );
   });
 
   it("starts an unseeded terminal agent with the populated global workspace", async () => {

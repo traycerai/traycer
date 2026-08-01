@@ -83,6 +83,19 @@ const VIEW_MENU_MAX_HEIGHT = "min(70vh, 28rem)";
 type ChatViewDetail = "ordering" | "show" | "interface";
 type ArtifactViewDetail = "ordering" | "status" | "type" | "read";
 
+const CHAT_DETAIL_LABELS: Readonly<Record<ChatViewDetail, string>> = {
+  ordering: "Ordering",
+  show: "Show",
+  interface: "Interface",
+};
+
+const ARTIFACT_DETAIL_LABELS: Readonly<Record<ArtifactViewDetail, string>> = {
+  ordering: "Ordering",
+  status: "Status",
+  type: "Type",
+  read: "Read state",
+};
+
 const CHAT_ORIGIN_OPTIONS: ReadonlyArray<{
   readonly value: ChatOriginFilter;
   readonly label: string;
@@ -521,7 +534,10 @@ export function ChatFilterMenu(props: {
       >
         {menu.drillIn && menu.detail !== null ? (
           <>
-            <DrillInHeader title={menu.detail} onBack={menu.closeDetail} />
+            <DrillInHeader
+              title={CHAT_DETAIL_LABELS[menu.detail]}
+              onBack={menu.closeDetail}
+            />
             <ChatDetailContent detail={menu.detail} {...detailProps} />
           </>
         ) : (
@@ -775,7 +791,10 @@ export function ArtifactFilterMenu(props: {
       >
         {menu.drillIn && menu.detail !== null ? (
           <>
-            <DrillInHeader title={menu.detail} onBack={menu.closeDetail} />
+            <DrillInHeader
+              title={ARTIFACT_DETAIL_LABELS[menu.detail]}
+              onBack={menu.closeDetail}
+            />
             <ArtifactDetailContent detail={menu.detail} {...detailProps} />
           </>
         ) : (

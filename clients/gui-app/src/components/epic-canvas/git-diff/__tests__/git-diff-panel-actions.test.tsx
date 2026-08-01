@@ -7,6 +7,8 @@ import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 
 interface RefreshHookArgs {
   readonly hostId: string | null;
@@ -52,6 +54,7 @@ describe("<GitDiffPanelActions />", () => {
     testState.refresh.mockResolvedValue(undefined);
     testState.refreshArgs = [];
     useGitPanelStore.setState({ stateByEpicId: {} });
+    usePanelHeaderMenuStore.setState({ openBySurfaceKey: {} });
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     });
@@ -75,8 +78,10 @@ describe("<GitDiffPanelActions />", () => {
     );
 
     openMoreMenu();
-    expect(screen.getByTestId("git-diff-panel-layout-toggle")).toBeDefined();
-    expect(screen.getByTestId("git-diff-panel-refresh")).toBeDefined();
+    expect(
+      screen.getByRole("menuitem", { name: "Switch to tree view" }),
+    ).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "Refresh" })).toBeDefined();
   });
 
   it("toggles list layout from the header action", () => {
@@ -92,7 +97,9 @@ describe("<GitDiffPanelActions />", () => {
     );
 
     openMoreMenu();
-    fireEvent.click(screen.getByTestId("git-diff-panel-layout-toggle"));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Switch to tree view" }),
+    );
 
     expect(useGitPanelStore.getState().stateByEpicId["epic-1"].listLayout).toBe(
       "tree",
@@ -134,7 +141,7 @@ describe("<GitDiffPanelActions />", () => {
     );
 
     openMoreMenu();
-    fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Refresh" }));
 
     expect(testState.refresh).toHaveBeenCalledTimes(1);
   });
@@ -156,7 +163,7 @@ describe("<GitDiffPanelActions />", () => {
     );
 
     openMoreMenu();
-    fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Refresh" }));
 
     expect(testState.refresh).toHaveBeenCalledTimes(1);
     expect(testState.refreshArgs.at(-1)).toEqual({
@@ -164,5 +171,30 @@ describe("<GitDiffPanelActions />", () => {
       rootRunningDir: "/repo",
       ignoreWhitespace: true,
     });
+  });
+
+  it("expands a collapsed panel while preserving the open menu", () => {
+    const { wrapper } = setup();
+    useEpicLeftPanelStore.setState({
+      panelSectionCollapsedByPanelId: { "git-diff": true },
+    });
+    render(
+      <GitDiffPanelActions
+        epicId="epic-1"
+        tabId="tab-1"
+        collapsed
+        mode="normal"
+      />,
+      { wrapper },
+    );
+
+    openMoreMenu();
+
+    expect(
+      useEpicLeftPanelStore.getState().isPanelSectionCollapsed("git-diff"),
+    ).toBe(false);
+    expect(usePanelHeaderMenuStore.getState().openBySurfaceKey).toEqual(
+      expect.objectContaining({ '["tab-1","git-diff","more"]': true }),
+    );
   });
 });

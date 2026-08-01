@@ -1,10 +1,10 @@
-import { useCallback, useState } from "react";
-import { FolderTree, List, MoreHorizontal, RotateCcw } from "lucide-react";
+import { useCallback } from "react";
+import { FolderTree, List, MoreHorizontal } from "lucide-react";
 import type { LeftPanelHeaderSlotProps } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { cn } from "@/lib/utils";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
@@ -18,6 +18,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 
 // Safety cap so a hung host fetch can't wedge the spinning/disabled state.
 const GIT_REFRESH_TIMEOUT_MS = 10_000;
@@ -57,7 +61,8 @@ export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
     externalRefreshing: isRefreshing,
     timeoutMs: GIT_REFRESH_TIMEOUT_MS,
   });
-  const [menuOpen, setMenuOpen] = useState(false);
+  const menuOpen = usePanelHeaderMenuOpen(props.tabId, "git-diff", "more");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const setPanelSectionCollapsed = useEpicLeftPanelStore(
     (state) => state.setPanelSectionCollapsed,
   );
@@ -66,9 +71,9 @@ export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
       if (open && props.collapsed) {
         setPanelSectionCollapsed("git-diff", false);
       }
-      setMenuOpen(open);
+      setMenuOpen(props.tabId, "git-diff", "more", open);
     },
-    [props.collapsed, setPanelSectionCollapsed],
+    [props.collapsed, props.tabId, setMenuOpen, setPanelSectionCollapsed],
   );
 
   return (
@@ -97,7 +102,7 @@ export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
         align="start"
         sideOffset={8}
         avoidCollisions={false}
-        className="min-w-52"
+        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
       >
         <DropdownMenuItem
           onSelect={handleToggleLayout}
@@ -115,15 +120,14 @@ export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
           disabled={selectedRepo === null || refresh.refreshing}
           data-testid="git-diff-panel-refresh"
         >
-          <RotateCcw
-            className={cn("size-4", refresh.refreshing && "animate-spin")}
-          />
-          Refresh
           {refresh.refreshing ? (
-            <span className="ml-auto text-ui-xs text-muted-foreground">
-              Refreshing
-            </span>
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
           ) : null}
+          Refresh
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

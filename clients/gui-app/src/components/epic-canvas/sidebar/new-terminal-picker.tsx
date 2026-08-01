@@ -32,6 +32,10 @@ import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 
 interface NewTerminalPickerProps {
   readonly epicId: string;
@@ -41,7 +45,12 @@ interface NewTerminalPickerProps {
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const { epicId, onBeforeOpen, tabId } = props;
-  const [isOpen, setIsOpen] = useState(false);
+  const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
+  const setIsOpen = useCallback(
+    (open: boolean) => setMenuOpen(tabId, "terminals", "create", open),
+    [setMenuOpen, tabId],
+  );
   // The picker's `PopoverContent` (a modal Radix popover) un-presents by
   // unmounting when its pane is backgrounded, which silently resets the cmdk
   // folder-search query inside `WorktreeFolderListBody` while the root stays
@@ -126,7 +135,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
       }
       setIsOpen(open);
     },
-    [onBeforeOpen],
+    [onBeforeOpen, setIsOpen],
   );
 
   const handleLaunch = useCallback(() => {
@@ -150,6 +159,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     epicId,
     tabId,
     launchTarget,
+    setIsOpen,
   ]);
 
   const handleSelectRow = useCallback((row: WorktreeBindingSelectorRowV12) => {

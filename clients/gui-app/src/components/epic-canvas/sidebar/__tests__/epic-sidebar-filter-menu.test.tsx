@@ -163,6 +163,7 @@ describe("<ChatFilterMenu />", () => {
     fireEvent.click(screen.getByText("Interface"));
 
     expect(screen.getByText("Back")).toBeTruthy();
+    expect(screen.getByText("Interface")).toBeTruthy();
     expect(
       screen.getAllByRole("menuitemradio").map((item) => item.textContent),
     ).toEqual(expect.arrayContaining(["All", "Chat", "Terminal"]));
