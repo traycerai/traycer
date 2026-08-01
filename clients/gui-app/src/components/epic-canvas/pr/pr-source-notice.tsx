@@ -26,13 +26,21 @@ export function PrSourceNoticeHint(props: {
     // staring at an icon they cannot open. They cannot be the same element: a
     // focusable `role="status"` is precisely what `no-noninteractive-tabindex`
     // forbids, and it is right to - a live region is not a control.
+    //
+    // The message is rendered as visually-hidden TEXT, not as the region's
+    // `aria-label`. A live region announces its accessible CONTENT when that
+    // content changes; labelling an empty region gives it nothing to announce,
+    // so the pause would land silently. The button keeps its own `aria-label`
+    // because it is a control, and a control is named by its label.
     <span
       className="flex shrink-0 items-center"
       data-testid="pr-source-notice"
       data-notice-kind={props.notice.kind}
       role="status"
-      aria-label={message}
     >
+      <span className="sr-only" data-testid="pr-source-notice-message">
+        {message}
+      </span>
       <TooltipWrapper label={message} side="bottom" sideOffset={4} align="end">
         <button
           type="button"

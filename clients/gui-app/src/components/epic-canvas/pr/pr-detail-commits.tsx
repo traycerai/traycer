@@ -59,7 +59,12 @@ export function PrDetailCommits(props: {
           <span className="min-w-0 flex-1 truncate">
             {totalCount} commit{totalCount === 1 ? "" : "s"}
           </span>
-          {totalCount > shown.length ? (
+          {props.commits.isTruncated || totalCount > shown.length ? (
+            // `isTruncated` is the contract's own answer; the count comparison
+            // cannot stand in for it. When `totalCount` is null it falls back
+            // to `shown.length`, so the comparison is false on exactly the
+            // truncated-but-uncounted frames - the header would then claim the
+            // list is complete while the footer offers "view all on GitHub".
             <span className="shrink-0">Showing the last {shown.length}</span>
           ) : null}
         </div>

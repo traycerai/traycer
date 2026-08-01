@@ -468,11 +468,16 @@ function resolvePrDetailBannerState(
 }
 
 /**
- * The single staleness hint shown in the header is the OLDEST of the five
+ * The single staleness hint shown in the header is the OLDEST of the six
  * per-section `observedAt` timestamps - the view as a whole is only as fresh
- * as its stalest section. Files and commits are independently timestamped
- * protocol sections, so a cached/mixed frame with differing section freshness
- * is reported honestly rather than trusting one heavy timestamp everywhere.
+ * as its stalest section. Files, commits and review threads are independently
+ * timestamped protocol sections, so a cached/mixed frame with differing
+ * section freshness is reported honestly rather than trusting one heavy
+ * timestamp everywhere.
+ *
+ * Every section carrying an `observedAt` belongs here. Omitting one lets the
+ * header claim the view is fresher than its stalest visible content actually
+ * is, which is the exact dishonesty this hint exists to prevent.
  */
 function oldestObservedAt(data: PrDetailSubscriptionData): number | null {
   return [
@@ -481,6 +486,7 @@ function oldestObservedAt(data: PrDetailSubscriptionData): number | null {
     data.activity.observedAt,
     data.files.observedAt,
     data.commits.observedAt,
+    data.reviewThreads.observedAt,
   ].reduce<number | null>((oldest, candidate) => {
     if (candidate === null) return oldest;
     if (oldest === null) return candidate;

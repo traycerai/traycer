@@ -78,14 +78,25 @@ describe("prSourceNoticeMessage", () => {
 });
 
 describe("PrSourceNoticeHint", () => {
-  it("exposes the same sentence to assistive tech that the tooltip shows", () => {
+  it("puts the sentence in the live region's TEXT, which is what gets announced", () => {
     // One dialect, one place: the host sends structure and no prose, so the
     // pointer affordance and the screen-reader affordance must not be able to
     // drift into saying different things.
+    //
+    // It has to be text content, not the region's `aria-label`. A live region
+    // announces its accessible CONTENT when that content changes; an
+    // `aria-label` on an otherwise-empty region leaves nothing to announce, so
+    // the pause would appear on screen and say nothing at all.
     renderHint({ kind: "rate-limited", retryAt: null });
-    const hint = screen.getByTestId("pr-source-notice");
-    expect(hint.getAttribute("aria-label")).toBe(
-      prSourceNoticeMessage({ kind: "rate-limited", retryAt: null }, null),
+    const expected = prSourceNoticeMessage(
+      { kind: "rate-limited", retryAt: null },
+      null,
+    );
+    const region = screen.getByTestId("pr-source-notice");
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.textContent).toContain(expected);
+    expect(screen.getByTestId("pr-source-notice-message").textContent).toBe(
+      expected,
     );
   });
 

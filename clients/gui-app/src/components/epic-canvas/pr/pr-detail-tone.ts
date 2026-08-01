@@ -73,6 +73,11 @@ export function prChecksTone(counts: PrCheckCounts): PrChecksDotTone {
   if (counts.total === 0) return "none";
   if (counts.failing > 0) return "fail";
   if (counts.pending > 0) return "pending";
+  // `total` counts contexts the three buckets don't (skipped, neutral,
+  // cancelled), so reaching here with `passed === 0` means every check settled
+  // to something none of them names. Claiming "ok" would report a green run
+  // that nothing actually passed. Matches `prChecksSummary`.
+  if (counts.passed === 0) return "none";
   return "ok";
 }
 
@@ -101,5 +106,10 @@ export function formatPrChecksValue(counts: PrCheckCounts): string {
   if (counts.total === 0) return "None reported";
   if (counts.failing > 0) return `${counts.failing} failing`;
   if (counts.pending > 0) return `${counts.pending} running`;
+  // See {@link prChecksTone}: all-skipped/neutral/cancelled would otherwise
+  // read as "0 passed", which states a pass count where nothing passed.
+  if (counts.passed === 0) {
+    return `${counts.total} check${counts.total === 1 ? "" : "s"}`;
+  }
   return `${counts.passed} passed`;
 }
