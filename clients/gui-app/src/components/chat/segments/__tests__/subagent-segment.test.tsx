@@ -344,7 +344,11 @@ describe("<SubagentSegment /> promoted feed", () => {
   });
 
   it("requests measured item-change when promoted card toggles", () => {
-    const requestMeasuredItemChange = vi.fn();
+    const requestMeasuredItemChange = vi.fn(
+      (_anchorElement: HTMLElement | null, mutate: () => void) => {
+        mutate();
+      },
+    );
     render(
       <ChatMeasuredItemChangeContext.Provider value={requestMeasuredItemChange}>
         <SubagentSegment
@@ -374,7 +378,11 @@ describe("<SubagentSegment /> promoted feed", () => {
   });
 
   it("requests measured item-change through the shared card shell", () => {
-    const requestMeasuredItemChange = vi.fn();
+    const requestMeasuredItemChange = vi.fn(
+      (_anchorElement: HTMLElement | null, mutate: () => void) => {
+        mutate();
+      },
+    );
     render(
       <ChatMeasuredItemChangeContext.Provider value={requestMeasuredItemChange}>
         <SubagentSegment

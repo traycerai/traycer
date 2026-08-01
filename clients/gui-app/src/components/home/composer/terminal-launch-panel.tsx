@@ -171,6 +171,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           // panel's own `useProvidersList()` read above.
           createProfileHostId={null}
           runTargetHostId={null}
+          profileAdmission={null}
         />
         <Input
           aria-label="Terminal interface CLI arguments"

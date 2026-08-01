@@ -31,7 +31,7 @@ interface DerivedPinnedTodo {
 /**
  * Derives the pinned todo snapshot from the rendered rows and strips the
  * inline todo/task-tool segments out of them (the pinned stack renders the
- * snapshot instead). The rows are the FULL chat history - Virtuoso windows
+ * snapshot instead). The rows are the FULL chat history - LegendList windows
  * the mounted DOM, not the data - so a todo created in an old turn is always
  * in the walk.
  */

@@ -69,6 +69,24 @@ const baseTuiAgentFields = {
   // agents alike. Defaulted so records persisted before archiving existed
   // parse unchanged.
   archivedAt: z.number().nullable().default(null),
+  // Durable native-fork provenance: the SOURCE harness session id an
+  // `agent.fork`-created record must resume-and-fork from on its FIRST real
+  // launch (headless A2A send or GUI open), since the fork service persists
+  // this record before any provider fork actually runs - `terminalShellArgs`
+  // above is only a cache of that prepare call, never executed. `null` for
+  // an ordinary (non-fork) agent, and once again once the destination
+  // session's provider transcript is observed to exist on disk - the
+  // provider-observable signal that establishment happened, so a launch
+  // path stops re-forking into an already-diverged session. Retained across
+  // a spawn/provider failure (no transcript yet) so a retry always re-forks
+  // instead of silently starting fresh. Additive/defaulted so records
+  // persisted before this field existed still parse. See the durable-fork
+  // decision log (tech plan governing mechanism 1).
+  pendingForkSourceHarnessSessionId: z
+    .string()
+    .nullable()
+    .default(null)
+    .catch(null),
 } as const;
 
 export const claudeTuiAgentSchema = z.object({

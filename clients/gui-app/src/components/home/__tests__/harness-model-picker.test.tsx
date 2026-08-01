@@ -469,6 +469,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import {
   createComposerToolbarStore,
   type ComposerToolbarStore,
@@ -779,6 +780,10 @@ interface RenderPickerInput {
   readonly disabled?: boolean;
   readonly activityEnabled?: boolean;
   readonly createProfileHostId?: string | null;
+  readonly profileAdmission?: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
 }
 
 interface PickerHarness {
@@ -839,6 +844,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           registerActivation={false}
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
+          profileAdmission={resolvedInput.profileAdmission ?? null}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>
@@ -2917,6 +2923,74 @@ describe("<HarnessModelPicker />", () => {
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(selections.at(-1)?.profileId).toBe("work-profile");
+  });
+
+  it("refuses the ⌘⇧ leader digit for an admission-disabled row - the shortcut must not bypass the gate the row itself enforces", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          {
+            profileId: "ambient",
+            kind: "ambient",
+            authType: "oauth",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          },
+          {
+            profileId: "work-profile",
+            kind: "managed",
+            authType: "oauth",
+            label: "Work",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          },
+        ],
+      }),
+    ];
+    const { selections } = renderPicker({
+      profileAdmission: new Map([
+        [
+          "work-profile",
+          { disabled: true, reason: "Can't continue this session under Work." },
+        ],
+      ]),
+    });
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    const baselineSelection = selections.at(-1);
+    // ⌘⇧2 -> the 2nd profile row (Work), which the admission map disables.
+    // A disabled row refuses a click; the digit shortcut must refuse the
+    // same way, or it bypasses the exact gate the row enforces.
+    act(() => {
+      fireLeaderDigit(2, "modShift");
+    });
+
+    expect(selections.at(-1)).toBe(baselineSelection);
   });
 
   it("leaves profiles beyond digit 9 click-only - ⌘⇧ overflow is a no-op", async () => {

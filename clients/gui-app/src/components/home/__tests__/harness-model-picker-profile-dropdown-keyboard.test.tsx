@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState, type KeyboardEvent } from "react";
@@ -17,6 +18,7 @@ import {
   ProfileDropdown,
   type ProfileDropdownShortcutHint,
 } from "@/components/providers/profile-dropdown";
+import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 const PROFILES: ReadonlyArray<ProviderProfile> = [
@@ -111,6 +113,7 @@ function NestedPickerSurface() {
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
+              admissionByProfileId={null}
             />
           )}
         </div>
@@ -160,5 +163,160 @@ describe("nested picker profile-dropdown keyboard ownership", () => {
     fireEvent.keyDown(input, { key: "Escape" });
     expect(input.value).toBe("");
     expect(screen.getByRole("dialog", { name: "Select model" })).not.toBeNull();
+  });
+});
+
+const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
+  {
+    profileId: "ambient",
+    kind: "ambient",
+    authType: "oauth",
+    label: "Terminal account",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  },
+  {
+    profileId: "work",
+    kind: "managed",
+    authType: "oauth",
+    label: "Work",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  },
+  {
+    profileId: "personal",
+    kind: "managed",
+    authType: "oauth",
+    label: "Personal",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  },
+];
+
+const WORK_LOCKED_ADMISSION: ReadonlyMap<string | null, ProfileRowAdmission> =
+  new Map([
+    [
+      "work",
+      { disabled: true, reason: "Can't continue this session under Work." },
+    ],
+  ]);
+
+function OpenProfileDropdownSurface() {
+  const [contentContainer, setContentContainer] =
+    useState<HTMLDivElement | null>(null);
+
+  return (
+    <Popover open onOpenChange={() => undefined}>
+      <PopoverTrigger asChild>
+        <button type="button">Open picker</button>
+      </PopoverTrigger>
+      <PopoverContent role="dialog" aria-label="Select profile">
+        <div ref={setContentContainer}>
+          {contentContainer === null ? null : (
+            <ProfileDropdown
+              providerLabel="Claude"
+              profiles={PROFILES_WITH_MIDDLE_DISABLED}
+              activeProfileId={null}
+              onSelectProfile={vi.fn()}
+              onCreateProfile={vi.fn()}
+              createProfileDisabled={false}
+              createProfileDisabledReason={undefined}
+              shortcutHintForIndex={noShortcutHint}
+              contentContainer={contentContainer}
+              onCloseAutoFocus={null}
+              usagePresentation={null}
+              admissionByProfileId={WORK_LOCKED_ADMISSION}
+            />
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * T5 amend-02 minor: the reviewer's load-bearing gap named the ACTUAL Radix
+ * `DropdownMenu` primitive - `terminal-agent-fork-dialog-real-picker.test.tsx`
+ * mocks it as native `<button disabled>` elements, which don't reproduce
+ * Radix's own roving-tabindex/focus-skip behavior for a disabled item. This
+ * drives the real, unmocked primitive (mirrors the suite above).
+ */
+describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () => {
+  afterEach(() => cleanup());
+
+  it("ArrowDown roving focus skips a disabled row, and Escape still dismisses the menu", async () => {
+    render(<OpenProfileDropdownSurface />);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", {
+        name: "Claude profile: Terminal account, Terminal",
+      }),
+      { button: 0, ctrlKey: false },
+    );
+    const menu = await screen.findByRole("menu");
+    const terminalProfile = screen.getByRole("menuitem", {
+      name: "Terminal account, Terminal",
+    });
+    const workProfile = screen.getByRole("menuitem", {
+      name: /Work.*Can't continue this session under Work\./,
+    });
+    const personalProfile = screen.getByRole("menuitem", { name: "Personal" });
+    expect(workProfile.getAttribute("aria-disabled")).toBe("true");
+    // amend-02 a11y fix: the reason must also be static, always-visible text
+    // inside the row - roving focus never lands on this item, so anything
+    // gated on focus/hover (the aria-label, the tooltip) never reaches
+    // keyboard/AT users.
+    expect(
+      within(workProfile).getByText("Can't continue this session under Work."),
+    ).not.toBeNull();
+
+    terminalProfile.focus();
+    expect(document.activeElement).toBe(terminalProfile);
+
+    // Radix's own roving-tabindex skips a disabled item entirely - focus
+    // lands on Personal (the next ENABLED row), never on Work.
+    fireEvent.keyDown(terminalProfile, { key: "ArrowDown" });
+    await waitFor(() => expect(document.activeElement).toBe(personalProfile));
+    expect(document.activeElement).not.toBe(workProfile);
+
+    // Reverse direction: ArrowUp from Personal must skip back over Work too.
+    fireEvent.keyDown(personalProfile, { key: "ArrowUp" });
+    await waitFor(() => expect(document.activeElement).toBe(terminalProfile));
+
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 });

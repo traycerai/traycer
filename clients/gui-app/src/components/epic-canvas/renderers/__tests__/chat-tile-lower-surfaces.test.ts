@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -35,6 +38,39 @@ describe("composerHasBlockingApprovals", () => {
     expect(
       composerHasBlockingApprovals([approval("plan-approval", "plan")], 1),
     ).toBe(true);
+  });
+});
+
+/**
+ * Ticket 18 rider (orchestrator, revised per review finding: the runtime
+ * half previously mounted a hand-copied structural twin of the measurement
+ * effect, which could not fail for a real production lifecycle defect -
+ * only for a change to the twin itself). The measurement is now extracted
+ * into `useMeasuredElementHeight` (`src/hooks/ui/use-measured-element-
+ * height.ts`), which `chat-tile.tsx` actually imports and calls - its own
+ * `__tests__/use-measured-element-height.test.tsx` is the REAL runtime
+ * coverage (attach/detach, rounding, non-positive-reading guard, all against
+ * the production hook, not a copy). This file pins only that `chat-tile.tsx`
+ * wires that hook's output into `composerOverlayHeight` - full
+ * `ChatTileSessionView` mount (session store + stream + composer) is still
+ * out of scope for this gap-fill.
+ */
+describe("chat-tile lowerSurfacesHeight → composerOverlayHeight (ticket 18 rider)", () => {
+  it("wires useMeasuredElementHeight's output into ChatSessionMessagesSurface as composerOverlayHeight", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, "../chat-tile.tsx"), "utf8");
+
+    // Production wiring snapshot (chat-tile.tsx, the useMeasuredElementHeight
+    // call site + the composerOverlayHeight prop pass).
+    expect(source).toMatch(
+      /import\s*\{\s*useMeasuredElementHeight\s*\}\s*from\s*"@\/hooks\/ui\/use-measured-element-height"/,
+    );
+    expect(source).toMatch(
+      /setElement:\s*setLowerSurfacesElement,\s*\n\s*element:\s*lowerSurfacesElement,\s*\n\s*height:\s*lowerSurfacesHeight,\s*\n\s*\}\s*=\s*useMeasuredElementHeight\(\)/,
+    );
+    expect(source).toMatch(
+      /composerOverlayHeight=\{\s*lowerSurfacesElement === null \? 0 : lowerSurfacesHeight\s*\}/,
+    );
   });
 });
 

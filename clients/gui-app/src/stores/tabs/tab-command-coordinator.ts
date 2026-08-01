@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
+import { evictChatTabPersistenceForEpics } from "@/stores/chats/chat-tab-persistence-eviction";
 import {
   resolveTabIdForEpic,
   resolveTabIdForPhaseMigration,
@@ -1288,6 +1289,19 @@ export class TabCommandCoordinator {
   handleEpicAccessLoss(epicIds: ReadonlyArray<string>): void {
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
+    // Ticket 15 (decision #29): drop every durable chat-key entry under
+    // these epics across all seven per-tab registries - independent of
+    // whether any tab for them is currently open (a chat can leave a
+    // durable entry behind long after its own tab closed).
+    //
+    // Ticket 15 review round 5 (item 2): ONE batched call, not a `forEach`
+    // of the singular per-epic evict - the canvas close sweep below writes
+    // durable state back for whichever of these epics still had open tiles,
+    // so every epic in this access-loss batch must still be fenced by the
+    // time that sweep runs. A `forEach` of independent per-epic tombstones
+    // could FIFO-evict epic 0's fresh fence to make room for epic 500's,
+    // inside this same batch, before the sweep ever reaches epic 0.
+    evictChatTabPersistenceForEpics(epicIds);
     const canvas = useEpicCanvasStore.getState();
     const affected = flattenLayoutRefs(currentLayout()).flatMap<TabRef>(
       (ref) => {
