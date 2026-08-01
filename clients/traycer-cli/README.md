@@ -4,7 +4,7 @@ The npm distribution of the Traycer command line tool.
 
 Traycer Desktop already includes the CLI and runs it behind the scenes, so most people do not need to install this package directly. Install `@traycerai/cli` when you want to manage the local Traycer Host from a terminal, script Traycer workflows, or use the agent/workspace automation surface outside the desktop app.
 
-The npm package is a fully bundled JavaScript build with no runtime npm dependencies. It runs on Node.js 20.18.0 or newer.
+The npm package is a fully bundled JavaScript build with no runtime npm dependencies. It runs on Node.js 20.18.1 or newer.
 
 ## Installation
 
