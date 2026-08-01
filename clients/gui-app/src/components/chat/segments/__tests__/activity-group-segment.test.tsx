@@ -1,13 +1,24 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import {
   deriveActivityGroupCollapsibleKey,
   deriveActivityGroupRenderId,
 } from "@/components/chat/chat-collapsible-key";
+import { chatFindActivityGroupChildHeaderUnitId } from "@/components/chat/chat-find";
 import { ActivityGroupSegment } from "@/components/chat/segments/activity-group-segment";
+import { LIVE_ACTIVITY_WINDOW_EXIT_MS } from "@/components/chat/segments/live-activity-window";
 import type { ActivityGroupModel } from "@/components/chat/chat-activity-groups";
-import type { CommandSegment } from "@/stores/composer/chat-store";
+import type {
+  CommandSegment,
+  ReasoningSegment,
+} from "@/stores/composer/chat-store";
 import {
   useChatCollapsibleTileInstanceId,
   useSetChatFindForcedOpen,
@@ -131,5 +142,145 @@ describe("<ActivityGroupSegment />", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+const REASONING_SEGMENT: ReasoningSegment = {
+  id: "reasoning-1",
+  kind: "reasoning",
+  markdown: "Weighing the two approaches",
+  isStreaming: true,
+  durationMs: null,
+};
+
+const SOLE_REASONING_GROUP: ActivityGroupModel = {
+  id: deriveActivityGroupRenderId(REASONING_SEGMENT.id),
+  segments: [REASONING_SEGMENT],
+  isActive: true,
+  isStreaming: true,
+  label: "Thinking",
+  summary: "Thinking",
+  activeStartedAt: null,
+};
+
+describe("<ActivityGroupSegment /> live window", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows the live window while active and collapsed, so streaming rows are visible without expanding", () => {
+    renderActivityGroup({ ...GROUP, isActive: true, isStreaming: true });
+
+    const window = screen.getByTestId("activity-live-window");
+    expect(window.dataset.shown).toBe("true");
+    // The row is visible WITHOUT the group being open - that is the whole
+    // point. Before this, a collapsed active group rendered nothing at all.
+    expect(screen.getByText("echo hi")).toBeTruthy();
+  });
+
+  it("does not render the window for a settled group", () => {
+    renderActivityGroup(GROUP);
+
+    expect(screen.queryByTestId("activity-live-window")).toBeNull();
+    expect(screen.queryByText("echo hi")).toBeNull();
+  });
+
+  it("withholds children from the window while the group is open, so no find unit renders twice", () => {
+    renderActivityGroup({ ...GROUP, isActive: true, isStreaming: true });
+
+    expect(screen.getAllByText("echo hi")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
+
+    // Still exactly one: the window is exiting (and empty) while
+    // CollapsibleContent now owns the row. Two copies would double-count in
+    // find and paint a highlight the projection never counted.
+    expect(screen.getAllByText("echo hi")).toHaveLength(1);
+  });
+
+  it("keeps the window mounted through its exit so the fold-away can animate, then unmounts", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment
+            group={{ ...GROUP, isActive: true, isStreaming: true }}
+          />
+        </ChatExpansionTestProviders>,
+      );
+      expect(screen.getByTestId("activity-live-window")).toBeTruthy();
+
+      // The turn ends.
+      rerender(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={GROUP} />
+        </ChatExpansionTestProviders>,
+      );
+
+      // Still in the DOM, but marked closed - the grid row is transitioning to
+      // 0fr. Unmounting here instead would snap the height and reproduce the
+      // exact jump this design removes.
+      const exiting = screen.getByTestId("activity-live-window");
+      expect(exiting.dataset.shown).toBe("false");
+      expect(screen.getByText("echo hi")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(LIVE_ACTIVITY_WINDOW_EXIT_MS);
+      });
+
+      expect(screen.queryByTestId("activity-live-window")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("contains its own overscroll so a wheel gesture never chains into the transcript", () => {
+    renderActivityGroup({ ...GROUP, isActive: true, isStreaming: true });
+
+    // Without containment, bottoming out in here chains to the LegendList
+    // transcript, which reads any real gesture as intent to leave the live edge
+    // and strands the reader in free-scrolling.
+    const scroller = screen.getByTestId("activity-live-window-scroller");
+    expect(scroller.className).toContain("overscroll-contain");
+    expect(scroller.className).toContain("max-h-[4lh]");
+  });
+
+  it("renders a sole reasoning child headerless, with no duplicate header and no find anchor", () => {
+    renderActivityGroup(SOLE_REASONING_GROUP);
+
+    // The group summary is the header. A second "Thinking" would be the
+    // duplicate #597 special-cased the lone block away to avoid.
+    expect(screen.getAllByText("Thinking")).toHaveLength(1);
+    expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+
+    // No child find anchor - `chat-find-projection.ts` correspondingly skips
+    // indexing this child. A unit id here with no element to paint would count
+    // matches that can never highlight.
+    const childUnitId = chatFindActivityGroupChildHeaderUnitId(
+      SOLE_REASONING_GROUP.id,
+      REASONING_SEGMENT.id,
+    );
+    expect(
+      document.querySelector(`[data-chat-find-unit="${childUnitId}"]`),
+    ).toBeNull();
+  });
+
+  it("keeps the reasoning child's own header once it is not the group's only content", () => {
+    renderActivityGroup({
+      ...SOLE_REASONING_GROUP,
+      segments: [REASONING_SEGMENT, COMMAND_SEGMENT],
+      label: "Thinking, ran 1 command",
+      summary: "Thinking, ran 1 command",
+    });
+
+    // Two children means the summary no longer describes the reasoning block on
+    // its own, so the child needs its header back - and its find anchor with it.
+    const childUnitId = chatFindActivityGroupChildHeaderUnitId(
+      SOLE_REASONING_GROUP.id,
+      REASONING_SEGMENT.id,
+    );
+    expect(
+      document.querySelector(`[data-chat-find-unit="${childUnitId}"]`),
+    ).not.toBeNull();
   });
 });

@@ -31,10 +31,13 @@ export type ActivitySegment =
   | SubagentSegment
   | ApprovalSegment;
 
-// A completed reasoning block folds into the surrounding activity group (its
-// duration accumulates into the "Thought for Xm Ys" summary clause). A
-// still-streaming one is excluded here - it stands on its own with the live
-// "Thinking" UI until it completes, then the next timeline build absorbs it.
+// Reasoning folds into the surrounding activity group for its whole life -
+// streaming AND completed - and its duration accumulates into the "Thought for
+// Xm Ys" summary clause. Admitting it unconditionally is the point: a block
+// that changed container the instant it stopped streaming (born standalone,
+// absorbed into a COLLAPSED group, so it vanished whole in one frame) is what
+// made #597 jarring enough to revert. Nothing here may depend on `isStreaming`
+// for placement - only for how the row renders itself.
 export type ActivityGroupDetailSegment = ActivitySegment | ReasoningSegment;
 
 export interface ActivityGroupModel {
@@ -79,6 +82,9 @@ export type ChatActivityTimelineItem =
 interface ActivitySummaryCounts {
   // Summed duration of every completed reasoning block folded into the group.
   thinkingDurationMs: number;
+  // A reasoning block in the group is still streaming, so the group's summary
+  // leads with "Thinking" instead of a duration that does not exist yet.
+  thinkingStreaming: boolean;
   exploredFiles: number;
   readFiles: number;
   searched: number;
@@ -167,6 +173,7 @@ const RUN_TOOL_NAMES = new Set(["bash", "shell", "run_command", "command"]);
 function createEmptyCounts(): ActivitySummaryCounts {
   return {
     thinkingDurationMs: 0,
+    thinkingStreaming: false,
     exploredFiles: 0,
     readFiles: 0,
     searched: 0,
@@ -227,17 +234,14 @@ function buildChatActivityTimelineImpl(
 
   const flushRun = (): void => {
     if (run.length === 0) return;
-    // A lone reasoning block has nothing to summarize alongside it - wrapping
-    // it in a group would render its "Thought for Xs" header twice (once as
-    // the group summary, once as the child's own header). Render it as the
-    // plain standalone reasoning segment instead, same as before it could
-    // join a group.
-    if (run.length === 1 && run[0].kind === "reasoning") {
-      const only = run[0];
-      out.push({ kind: "segment", id: only.id, segment: only });
-      run = [];
-      return;
-    }
+    // Every run becomes a group, including a run that is one lone reasoning
+    // block. #597 special-cased that to a standalone segment to avoid rendering
+    // "Thought for Xs" twice (group summary + the child's own header), but a
+    // standalone-vs-group decision that can flip mid-turn - the moment a tool
+    // call joins the lone block - is exactly the container change this design
+    // exists to eliminate. The duplicate header is instead suppressed at render
+    // time: a sole-reasoning group renders its child headerless and lets the
+    // group's own summary line be the header (see `ActivityGroupSegment`).
     const group = activityGroupFromRun(run);
     out.push({ kind: "activity_group", id: group.id, group });
     run = [];
@@ -292,10 +296,9 @@ function buildChatActivityTimelineImpl(
       run.push(segment);
       continue;
     }
-    // Everything else - a still-streaming reasoning block, text, etc. -
-    // stands on its own in chronological position rather than folding into
-    // the activity group. A streaming reasoning block joins the next group
-    // once it completes (isActivitySegment admits completed reasoning).
+    // Everything else - text, errors, plans, etc. - stands on its own in
+    // chronological position rather than folding into the activity group.
+    // Reasoning is NOT in this bucket at any point in its life.
     flushRun();
     out.push({ kind: "segment", id: segment.id, segment });
   }
@@ -331,13 +334,28 @@ function formatAnsweredQuestionsSummary(
   return `Answered ${answered}/${total} questions`;
 }
 
+/**
+ * A group whose entire content is one reasoning block. Such a group renders
+ * that child WITHOUT its own header - the group's summary line ("Thinking" /
+ * "Thought for Xs") already says exactly what the child's header would.
+ *
+ * Shared by the renderer (which suppresses the child header) and the find
+ * projection (which must then NOT index that child: it has no find-unit anchor
+ * to paint, and its text is already indexed once as the group's summary).
+ */
+export function isSoleReasoningGroup(
+  segments: ReadonlyArray<ActivityGroupDetailSegment>,
+): boolean {
+  return segments.length === 1 && segments[0].kind === "reasoning";
+}
+
 export function activityGroupSummary(
   segments: ReadonlyArray<ActivityGroupDetailSegment>,
 ): string {
   const counts = createEmptyCounts();
   segments.forEach((segment) => countActivitySegment(counts, segment));
   const parts = [
-    thinkingPhrase(counts.thinkingDurationMs),
+    thinkingPhrase(counts.thinkingDurationMs, counts.thinkingStreaming),
     countPhrase(counts.exploredFiles, "explored", "file", "files"),
     countPhrase(counts.readFiles, "read", "file", "files"),
     countPhrase(counts.searched, "searched", "place", "places"),
@@ -534,9 +552,10 @@ function isActivitySegment(
     return true;
   }
   if (segment.kind === "approval") return segment.decision !== null;
-  // A streaming reasoning block stays standalone with its live "Thinking" UI;
-  // only a completed one folds into the group.
-  if (segment.kind === "reasoning") return !segment.isStreaming;
+  // Unconditional, streaming included - see `ActivityGroupDetailSegment`. A
+  // reasoning block must occupy the same container from its first token to the
+  // end of the turn.
+  if (segment.kind === "reasoning") return true;
   return false;
 }
 
@@ -585,9 +604,7 @@ function countActivitySegment(
   segment: ActivityGroupDetailSegment,
 ): void {
   if (segment.kind === "reasoning") {
-    if (segment.durationMs !== null) {
-      counts.thinkingDurationMs += segment.durationMs;
-    }
+    countReasoningSegment(counts, segment);
     return;
   }
   if (segment.kind === "command") {
@@ -663,7 +680,35 @@ function countPhrase(
   return `${verb} ${count} ${count === 1 ? singular : plural}`;
 }
 
-function thinkingPhrase(thinkingDurationMs: number): string | null {
+/**
+ * Split out of `countActivitySegment` purely to keep that switch under the
+ * complexity ceiling - reasoning is the one child kind that contributes two
+ * independent facts to the summary rather than a single count.
+ */
+function countReasoningSegment(
+  counts: ActivitySummaryCounts,
+  segment: ReasoningSegment,
+): void {
+  if (segment.isStreaming) counts.thinkingStreaming = true;
+  if (segment.durationMs !== null) {
+    counts.thinkingDurationMs += segment.durationMs;
+  }
+}
+
+/**
+ * Leading clause of a group summary that contains reasoning.
+ *
+ * A still-streaming block has no duration yet, so it reads "thinking" - which
+ * also gives a sole-reasoning group a real label from its very first token
+ * (without it the summary would fall through to the generic "Ran activity"
+ * until the block completed). Streaming wins over the accumulated duration:
+ * while one block streams, a settled earlier one's total is not the headline.
+ */
+function thinkingPhrase(
+  thinkingDurationMs: number,
+  thinkingStreaming: boolean,
+): string | null {
+  if (thinkingStreaming) return "thinking";
   if (thinkingDurationMs <= 0) return null;
   const seconds = Math.max(1, Math.round(thinkingDurationMs / 1000));
   return `thought for ${formatClockDuration(seconds)}`;

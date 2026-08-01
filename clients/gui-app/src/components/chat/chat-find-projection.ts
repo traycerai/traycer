@@ -2,6 +2,7 @@ import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
 import {
   answeredQuestionsSummary,
   buildChatActivityTimeline,
+  isSoleReasoningGroup,
 } from "@/components/chat/chat-activity-groups";
 import {
   deriveA2AReceivedCollapsibleKey,
@@ -226,14 +227,20 @@ function activityGroupSearchUnits(
       text: group.label,
       owningChain: [],
     }),
-    ...group.segments.flatMap((segment) =>
-      activityGroupChildSearchUnits(
-        segment,
-        group.id,
-        [groupKey],
-        tileInstanceId,
-      ),
-    ),
+    // A sole-reasoning group renders its child headerless, so that child has no
+    // find-unit anchor to paint - and its text is already indexed just above as
+    // the group's own summary. Indexing it again would both double-count and
+    // count a match that cannot highlight.
+    ...(isSoleReasoningGroup(group.segments)
+      ? []
+      : group.segments.flatMap((segment) =>
+          activityGroupChildSearchUnits(
+            segment,
+            group.id,
+            [groupKey],
+            tileInstanceId,
+          ),
+        )),
   ]);
 }
 

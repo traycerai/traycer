@@ -11,9 +11,10 @@ import {
   chatFindActivityGroupChildHeaderUnitId,
   chatFindActivityGroupSummaryUnitId,
 } from "@/components/chat/chat-find";
-import type {
-  ActivityGroupModel,
-  ActivityGroupDetailSegment,
+import {
+  isSoleReasoningGroup,
+  type ActivityGroupModel,
+  type ActivityGroupDetailSegment,
 } from "@/components/chat/chat-activity-groups";
 import { Shimmer } from "@/components/ui/shimmer";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ import {
 import { ResolvedApprovalSegment } from "./approval-segment";
 import { CommandSegment } from "./command-segment";
 import { FileChangeSegment } from "./file-change-segment";
+import { LiveActivityWindow } from "./live-activity-window";
 import { ReasoningSegment } from "./reasoning-segment";
 import { LiveElapsed } from "./segment-elapsed";
 import { SubagentSegment } from "./subagent-segment";
@@ -60,6 +62,19 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   );
   const triggerRef = useRef<HTMLButtonElement>(null);
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen, triggerRef);
+  const soleReasoning = isSoleReasoningGroup(group.segments);
+  // Computed here rather than inline in the JSX: `jsx-no-leaked-render`
+  // rewrites an inline `&&` into `? … : null`, which is right for children and
+  // wrong for a boolean prop.
+  const liveWindowShown = group.isActive && !open;
+  const children = group.segments.map((segment) => (
+    <ActivityChildSegment
+      key={segment.id}
+      groupId={group.id}
+      segment={segment}
+      headerless={soleReasoning}
+    />
+  ));
 
   return (
     <Collapsible
@@ -111,15 +126,18 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
           </span>
         ) : null}
       </CollapsibleTrigger>
+      {/* While the run is live and the group is collapsed, the rows show in a
+          bounded window instead of being hidden entirely - you can watch the
+          work without it growing the turn under the run indicator. Children are
+          withheld once the group is open so they never exist in both this
+          window and `CollapsibleContent` at once: a find unit rendered twice
+          would double-count. */}
+      <LiveActivityWindow shown={liveWindowShown}>
+        {open ? null : children}
+      </LiveActivityWindow>
       <CollapsibleContent>
         <div className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3">
-          {group.segments.map((segment) => (
-            <ActivityChildSegment
-              key={segment.id}
-              groupId={group.id}
-              segment={segment}
-            />
-          ))}
+          {children}
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -129,10 +147,17 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
 interface ActivityChildSegmentProps {
   readonly groupId: string;
   readonly segment: ActivityGroupDetailSegment;
+  /**
+   * The group's entire content is this one reasoning block, so the group's
+   * summary line is already its header. Only reasoning honours this - no other
+   * child kind can be a group's sole content and also be fully described by the
+   * group summary.
+   */
+  readonly headerless: boolean;
 }
 
 function ActivityChildSegment(props: ActivityChildSegmentProps) {
-  const { groupId, segment } = props;
+  const { groupId, segment, headerless } = props;
   const headerFindUnitId = chatFindActivityGroupChildHeaderUnitId(
     groupId,
     segment.id,
@@ -205,10 +230,14 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
     case "reasoning":
       return (
         <ReasoningSegment
-          findUnitId={headerFindUnitId}
+          // Headerless renders no anchor element, so it must carry no find unit
+          // id either - `chat-find-projection.ts` skips indexing this child in
+          // exactly that case, and the two must not disagree.
+          findUnitId={headerless ? null : headerFindUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
+          headerless={headerless}
         />
       );
     case "approval":

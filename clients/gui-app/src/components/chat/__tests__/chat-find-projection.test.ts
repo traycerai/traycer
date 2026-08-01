@@ -183,6 +183,65 @@ describe("chat find projection", () => {
     );
   });
 
+  // A lone reasoning block is now a group, and the group's summary label IS the
+  // reasoning label. The child is rendered headerless (no anchor to paint), so
+  // the projection must skip it - otherwise the same words are indexed twice
+  // and find reports two matches where the DOM can only highlight one.
+  it("indexes a sole-reasoning group's label exactly once", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      segments: [
+        {
+          id: "reasoning-sole",
+          kind: "reasoning",
+          markdown: "sole block body",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+
+    expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(1);
+  });
+
+  // The counterpart: once the block has a sibling, the summary no longer
+  // describes it alone, the child regains its header and anchor, and the
+  // projection must index it again.
+  it("indexes the reasoning child once it is no longer the group's only content", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      segments: [
+        {
+          id: "reasoning-with-sibling",
+          kind: "reasoning",
+          markdown: "body",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+        {
+          id: "command-sibling",
+          kind: "command",
+          command: "echo hi",
+          cwd: null,
+          exitCode: 0,
+          isStreaming: false,
+          endState: null,
+          progress: null,
+          startedAt: 0,
+          parentId: null,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+
+    // Once in the group summary ("Thought for 2s, ran 1 command"), once as the
+    // child's own header.
+    expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(2);
+  });
+
   it("indexes the always-visible subagent header (name + type) and dedupes progress", () => {
     const subagentId = "subagent-projection";
     const assistant: ChatMessageModel = {

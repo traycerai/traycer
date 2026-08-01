@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   activityGroupSummary,
   buildChatActivityTimeline,
+  isSoleReasoningGroup,
   latestActivityLabel,
 } from "@/components/chat/chat-activity-groups";
 import type { ChatActivityTimelineItem } from "@/components/chat/chat-activity-groups";
@@ -174,7 +175,13 @@ describe("chat activity grouping", () => {
     expect(timeline[1].segment.kind).toBe("text");
   });
 
-  it("keeps a still-streaming reasoning block standalone, then folds it in once complete", () => {
+  // The invariant the whole design rests on: a reasoning block occupies the
+  // SAME container before and after it stops streaming. #597 shipped the
+  // opposite (standalone while streaming, folded once complete) and had to be
+  // reverted, because the fold happened into a COLLAPSED group - so a block
+  // that had grown for seconds vanished whole in one frame and snapped the run
+  // indicator up behind it.
+  it("keeps a streaming reasoning block in the group it will still be in once complete", () => {
     const streamingTimeline = buildCompleteTimeline([
       commandSegment("command-1", "pwd", false),
       reasoningSegment("reasoning-1", true, null),
@@ -182,12 +189,16 @@ describe("chat activity grouping", () => {
 
     expect(streamingTimeline.map((item) => item.kind)).toEqual([
       "activity_group",
-      "segment",
     ]);
-    if (streamingTimeline[1]?.kind !== "segment") {
-      throw new Error("Expected the streaming reasoning block to stand alone");
+    if (streamingTimeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected the streaming reasoning block to be grouped");
     }
-    expect(streamingTimeline[1].segment.kind).toBe("reasoning");
+    expect(
+      streamingTimeline[0].group.segments.map((segment) => segment.kind),
+    ).toEqual(["command", "reasoning"]);
+    // No duration yet, so the summary leads with the live clause instead of
+    // falling through to a duration that does not exist.
+    expect(streamingTimeline[0].group.summary).toBe("Thinking, ran 1 command");
 
     const completedTimeline = buildCompleteTimeline([
       commandSegment("command-1", "pwd", false),
@@ -198,23 +209,60 @@ describe("chat activity grouping", () => {
       "activity_group",
     ]);
     if (completedTimeline[0]?.kind !== "activity_group") {
-      throw new Error("Expected the completed reasoning to fold in");
+      throw new Error("Expected the completed reasoning to stay grouped");
     }
+    // Same container, same children - only the summary's leading clause moved
+    // from "Thinking" to a settled duration.
+    expect(
+      completedTimeline[0].group.segments.map((segment) => segment.kind),
+    ).toEqual(["command", "reasoning"]);
     expect(completedTimeline[0].group.summary).toBe(
       "Thought for 3s, ran 1 command",
     );
   });
 
-  it("renders a lone completed reasoning block as a plain segment, not a group", () => {
-    const timeline = buildCompleteTimeline([
+  // A lone reasoning block is the commonest shape there is (think, then
+  // answer). #597 special-cased it to a standalone segment to avoid a duplicate
+  // "Thought for Xs" header, but that decision flips the instant a tool call
+  // joins it - another mid-turn container change. It is a group from the first
+  // token; the duplicate header is suppressed at render time instead.
+  it("groups a lone reasoning block, streaming and completed alike", () => {
+    const streaming = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", true, null),
+    ]);
+    expect(streaming.map((item) => item.kind)).toEqual(["activity_group"]);
+    if (streaming[0]?.kind !== "activity_group") {
+      throw new Error("Expected a group around the streaming lone block");
+    }
+    expect(streaming[0].group.summary).toBe("Thinking");
+    expect(isSoleReasoningGroup(streaming[0].group.segments)).toBe(true);
+
+    const completed = buildCompleteTimeline([
       reasoningSegment("reasoning-1", false, 3000),
     ]);
-
-    expect(timeline.map((item) => item.kind)).toEqual(["segment"]);
-    if (timeline[0]?.kind !== "segment") {
-      throw new Error("Expected a plain reasoning segment, not a group");
+    expect(completed.map((item) => item.kind)).toEqual(["activity_group"]);
+    if (completed[0]?.kind !== "activity_group") {
+      throw new Error("Expected a group around the completed lone block");
     }
-    expect(timeline[0].segment.kind).toBe("reasoning");
+    expect(completed[0].group.summary).toBe("Thought for 3s");
+    expect(isSoleReasoningGroup(completed[0].group.segments)).toBe(true);
+  });
+
+  // Guards the `thinkingStreaming` precedence: one block still running must not
+  // let an earlier settled block's total become the headline, or the summary
+  // would claim a finished duration while thinking is visibly still going.
+  it("prefers the live clause over an accumulated duration while any block streams", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 4000),
+      toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
+      reasoningSegment("reasoning-2", true, null),
+    ]);
+
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected one activity group");
+    }
+    expect(timeline[0].group.summary).toBe("Thinking, read 1 file");
+    expect(isSoleReasoningGroup(timeline[0].group.segments)).toBe(false);
   });
 
   it("keeps streaming activity active with a stable summary label", () => {

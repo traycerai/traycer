@@ -18,6 +18,13 @@ interface ReasoningSegmentProps {
   markdown: string;
   isStreaming: boolean;
   durationMs: number | null;
+  /**
+   * Render the trace body with no header row of its own. Set by a group whose
+   * only content is this reasoning block: the group's summary line already
+   * reads "Thinking" / "Thought for Xs", so a second identical header would be
+   * a duplicate, and the group's own disclosure owns visibility.
+   */
+  headerless: boolean;
 }
 
 interface ReasoningContentProps {
@@ -59,7 +66,7 @@ function ReasoningContent(props: ReasoningContentProps) {
 }
 
 export function ReasoningSegment(props: ReasoningSegmentProps) {
-  const { findUnitId, markdown, isStreaming, durationMs } = props;
+  const { findUnitId, markdown, isStreaming, durationMs, headerless } = props;
   // `expanded` shows the full trace. Default (false) means the streaming tail
   // preview while thinking, or the collapsed "Thought for Xs" line once done. A
   // click toggles and sticks for the segment's lifetime.
@@ -101,6 +108,21 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   const showTail = isStreaming && !expanded;
   const bodyShown = isStreaming || expanded;
   const label = isStreaming ? "Thinking" : reasoningSummaryLabel(durationMs);
+
+  // Headerless: body only, and deliberately the FULL content rather than
+  // `ReasoningTail`. The parent that sets this (a sole-reasoning group's live
+  // window, or its expanded body) already bounds and tail-pins the region, and
+  // nesting a second `overflow-y-auto` inside it would fight the outer one for
+  // the wheel and give the reader two scroll positions to reconcile.
+  if (headerless) {
+    return (
+      <ReasoningContent
+        markdown={markdown}
+        className="py-1 text-ui-sm leading-6 text-muted-foreground"
+        isStreaming={isStreaming}
+      />
+    );
+  }
 
   let body: ReactNode = null;
   if (bodyShown) {
