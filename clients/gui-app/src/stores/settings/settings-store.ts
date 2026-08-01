@@ -32,12 +32,15 @@ import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
+export type ChatTurnMinimapSide = "left" | "right";
+export type ChatTurnMinimapPlacement = ChatTurnMinimapSide | "hide";
 // Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
 // surface doesn't take a value import from `@xterm/xterm`.
 export type TerminalCursorStyle = "block" | "bar" | "underline";
 
 export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
 export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
+export const DEFAULT_CHAT_TURN_MINIMAP_SIDE: ChatTurnMinimapPlacement = "right";
 
 // Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
 // which never blinks). Bar/underline mirror the chosen shape so the cursor
@@ -86,6 +89,8 @@ export interface SettingsState {
    * reliable context-window data still render nothing.
    */
   pinContextUsageBreakdown: boolean;
+  /** Transcript edge used by the turn minimap, or `hide` to disable it. */
+  chatTurnMinimapSide: ChatTurnMinimapPlacement;
   pointerCursors: boolean;
   uiFontSize: number;
   codeFontSize: number;
@@ -149,6 +154,7 @@ export interface SettingsState {
   setShowGlobalResourceMonitor: (value: boolean) => void;
   setShowNavigatorResourceStats: (value: boolean) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
+  setChatTurnMinimapSide: (value: ChatTurnMinimapPlacement) => void;
   setPointerCursors: (value: boolean) => void;
   setUiFontSize: (value: number) => void;
   setCodeFontSize: (value: number) => void;
@@ -185,6 +191,7 @@ type PersistedSettingsState = Pick<
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
   | "pinContextUsageBreakdown"
+  | "chatTurnMinimapSide"
   | "pointerCursors"
   | "uiFontSize"
   | "codeFontSize"
@@ -253,6 +260,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     showGlobalResourceMonitor: state.showGlobalResourceMonitor,
     showNavigatorResourceStats: state.showNavigatorResourceStats,
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
+    chatTurnMinimapSide: state.chatTurnMinimapSide,
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
     codeFontSize: state.codeFontSize,
@@ -289,6 +297,7 @@ export const useSettingsStore = create<SettingsState>()(
       showGlobalResourceMonitor: true,
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
+      chatTurnMinimapSide: DEFAULT_CHAT_TURN_MINIMAP_SIDE,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
       codeFontSize: DEFAULT_CODE_FONT_SIZE,
@@ -321,6 +330,7 @@ export const useSettingsStore = create<SettingsState>()(
         "showNavigatorResourceStats",
       ),
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
+      setChatTurnMinimapSide: makeSetter(set, "chatTurnMinimapSide"),
       setPointerCursors: makeSetter(set, "pointerCursors"),
       setUiFontSize: makeClampedFontSizeSetter(
         set,
@@ -397,6 +407,7 @@ export const useSettingsStore = create<SettingsState>()(
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
           : {};
+        const persistedMinimapSide = persisted.chatTurnMinimapSide;
         const merged: SettingsState = { ...currentState, ...persisted };
         return {
           ...merged,
@@ -405,6 +416,12 @@ export const useSettingsStore = create<SettingsState>()(
             worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
               ? merged.worktreeBranchPrefix
               : DEFAULT_WORKTREE_BRANCH_PREFIX,
+          chatTurnMinimapSide:
+            persistedMinimapSide === "left" ||
+            persistedMinimapSide === "right" ||
+            persistedMinimapSide === "hide"
+              ? persistedMinimapSide
+              : DEFAULT_CHAT_TURN_MINIMAP_SIDE,
         };
       },
     },

@@ -1,5 +1,13 @@
 import "../../../../__tests__/test-browser-apis";
-import { act, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import {
@@ -10,6 +18,8 @@ import type {
   EpicCanvasTileRef,
   TileLayoutNode,
 } from "@/stores/epics/canvas/types";
+import type { EpicCanvasStore } from "@/stores/epics/canvas/store";
+import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import {
   DEFAULT_LEFT_PANEL_GROUPS,
@@ -19,14 +29,24 @@ import {
   requestNestedRoutePrimaryEditorFocus,
   resetNestedRouteDomFocusForTests,
 } from "@/lib/nested-route-dom-focus";
+import {
+  beginNestedFocusNavigation,
+  resetNestedFocusNavigationIntentsForTests,
+  shouldDeferNestedRouteApplication,
+} from "@/lib/nested-focus-navigation-intent";
+import {
+  resetPaneActivationFocusIntentsForTests,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
 
-interface CanvasStoreSlice {
-  readonly renameTab: Mock;
-  readonly openTileInTab: Mock;
-  readonly applyNestedRouteFocus: Mock;
-  readonly closeCanvasTab: Mock;
-  readonly pendingCreateArtifactIds: ReadonlySet<string>;
-}
+type CanvasStoreSlice = Pick<
+  EpicCanvasStore,
+  | "renameTab"
+  | "openTileInTab"
+  | "applyNestedRouteFocus"
+  | "closeCanvasTab"
+  | "pendingCreateArtifactIds"
+>;
 
 interface TestState {
   activeArtifactId: string | null;
@@ -36,6 +56,7 @@ interface TestState {
     readonly name: string;
   } | null;
   nestedFocusEnabled: boolean;
+  useRealCanvasStore: boolean;
   navigate: Mock;
   canvasActivePaneId: string | null;
   canvasRoot: TileLayoutNode | null;
@@ -52,6 +73,7 @@ const testState = vi.hoisted<TestState>(() => ({
   activeArtifactId: null,
   autoOpenTarget: null,
   nestedFocusEnabled: false,
+  useRealCanvasStore: false,
   navigate: vi.fn(),
   canvasActivePaneId: null,
   canvasRoot: null,
@@ -88,18 +110,32 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   }),
 }));
 
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useActiveEpicArtifactId: () => testState.activeArtifactId,
-  useEpicCanvas: () => ({
-    root: testState.canvasRoot,
-    activePaneId: testState.canvasActivePaneId,
-    tilesByInstanceId: testState.canvasTiles,
-    sizesByGroupId: {},
-  }),
-  useEpicCanvasStore: <T,>(selector: (store: CanvasStoreSlice) => T): T =>
-    selector(testState.canvasStore),
-  useEpicTab: () => null,
-}));
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/epics/canvas/store")>();
+  return {
+    ...actual,
+    useActiveEpicArtifactId: (tabId: string) =>
+      testState.useRealCanvasStore
+        ? actual.useActiveEpicArtifactId(tabId)
+        : testState.activeArtifactId,
+    useEpicCanvas: (tabId: string) =>
+      testState.useRealCanvasStore
+        ? actual.useEpicCanvas(tabId)
+        : {
+            root: testState.canvasRoot,
+            activePaneId: testState.canvasActivePaneId,
+            tilesByInstanceId: testState.canvasTiles,
+            sizesByGroupId: {},
+          },
+    useEpicCanvasStore: <T,>(selector: (store: CanvasStoreSlice) => T): T =>
+      testState.useRealCanvasStore
+        ? actual.useEpicCanvasStore(selector)
+        : selector(testState.canvasStore),
+    useEpicTab: (tabId: string) =>
+      testState.useRealCanvasStore ? actual.useEpicTab(tabId) : null,
+  };
+});
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => testState.records,
@@ -126,6 +162,8 @@ const THREAD_FOCUS_INTENT: EpicRouteFocusIntent = {
 
 function resetStores(): void {
   resetNestedRouteDomFocusForTests();
+  resetNestedFocusNavigationIntentsForTests();
+  resetPaneActivationFocusIntentsForTests();
   window.localStorage.clear();
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
@@ -145,6 +183,7 @@ function resetStores(): void {
   });
   testState.activeArtifactId = null;
   testState.nestedFocusEnabled = false;
+  testState.useRealCanvasStore = false;
   testState.navigate.mockClear();
   testState.canvasActivePaneId = null;
   testState.autoOpenTarget = {
@@ -155,12 +194,28 @@ function resetStores(): void {
   testState.canvasRoot = null;
   testState.canvasTiles = {};
   testState.records = [];
-  testState.canvasStore.renameTab.mockClear();
-  testState.canvasStore.openTileInTab.mockClear();
-  testState.canvasStore.applyNestedRouteFocus.mockClear();
-  testState.canvasStore.closeCanvasTab.mockClear();
+  vi.mocked(testState.canvasStore.renameTab).mockClear();
+  vi.mocked(testState.canvasStore.openTileInTab).mockClear();
+  vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
+  vi.mocked(testState.canvasStore.closeCanvasTab).mockClear();
   testState.openEpicState.setLastFocusedArtifactId.mockClear();
   testState.openEpicState.setLastFocusedThreadId.mockClear();
+}
+
+function PaneActivationOriginBoundary(props: { readonly children: ReactNode }) {
+  const activation = usePaneActivationOwnership({
+    active: false,
+    activate: () => undefined,
+  });
+  return (
+    <div
+      onFocusCapture={activation.onFocusCapture}
+      onPointerCancelCapture={activation.onPointerCancelCapture}
+      onPointerDownCapture={activation.onPointerDownCapture}
+    >
+      {props.children}
+    </div>
+  );
 }
 
 function specTile(
@@ -397,6 +452,132 @@ describe("useEpicRouteSynchronization", () => {
     });
     expect(testState.navigate).not.toHaveBeenCalled();
     expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale route target undo an in-flight local pane navigation", () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [
+        specTile("artifact-a", "tile-a", "Artifact A"),
+        specTile("artifact-b", "tile-b", "Artifact B"),
+      ],
+      "tile-b",
+    );
+    beginNestedFocusNavigation(EPIC_ID, TAB_ID, {
+      paneId: "pane-current",
+      tileInstanceId: "tile-b",
+    });
+
+    const view = renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: "pane-current",
+          focusTileInstanceId: "tile-a",
+        },
+      },
+    );
+
+    expect(testState.canvasStore.applyNestedRouteFocus).not.toHaveBeenCalled();
+
+    view.rerender({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: "pane-current",
+      focusTileInstanceId: "tile-b",
+    });
+
+    expect(
+      shouldDeferNestedRouteApplication(EPIC_ID, TAB_ID, {
+        paneId: "pane-current",
+        tileInstanceId: "tile-b",
+      }),
+    ).toBe(false);
+    expect(testState.canvasStore.applyNestedRouteFocus).not.toHaveBeenCalled();
+  });
+
+  it("reapplies the route target when an optimistic navigation never commits", async () => {
+    vi.useFakeTimers();
+    let unmountHook: (() => void) | null = null;
+    const { useEpicCanvasStore: realCanvasStore } = await vi.importActual<
+      typeof import("@/stores/epics/canvas/store")
+    >("@/stores/epics/canvas/store");
+    try {
+      testState.nestedFocusEnabled = true;
+      testState.useRealCanvasStore = true;
+      testState.records = [{ id: "artifact-a" }, { id: "artifact-b" }];
+      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
+      const realStore = realCanvasStore.getState();
+      const realTabId = realStore.openEpicTab(EPIC_ID, "Route retry");
+      realStore.openTileInTab(
+        realTabId,
+        specTile("artifact-a", "tile-a", "Artifact A"),
+      );
+      realStore.openTileInTab(
+        realTabId,
+        specTile("artifact-b", "tile-b", "Artifact B"),
+      );
+      const before = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (before === undefined) throw new Error("Expected seeded canvas");
+      const paneId = before.activePaneId;
+      if (paneId === null) throw new Error("Expected seeded active pane");
+      expect(getCurrentNestedFocusTarget(before)).toEqual({
+        paneId,
+        tileInstanceId: "tile-b",
+      });
+      beginNestedFocusNavigation(EPIC_ID, realTabId, {
+        paneId,
+        tileInstanceId: "tile-b",
+      });
+
+      const view = renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: realTabId,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: paneId,
+            focusTileInstanceId: "tile-a",
+          },
+        },
+      );
+      unmountHook = view.unmount;
+
+      const deferred = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (deferred === undefined) throw new Error("Expected deferred canvas");
+      expect(getCurrentNestedFocusTarget(deferred)).toEqual({
+        paneId,
+        tileInstanceId: "tile-b",
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      const applied = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (applied === undefined) throw new Error("Expected applied canvas");
+      expect(getCurrentNestedFocusTarget(applied)).toEqual({
+        paneId,
+        tileInstanceId: "tile-a",
+      });
+    } finally {
+      unmountHook?.();
+      testState.useRealCanvasStore = false;
+      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
+      vi.useRealTimers();
+    }
   });
 
   it("treats a pane-only route as applied when the active pane contains a tile", async () => {
@@ -636,7 +817,7 @@ describe("useEpicRouteSynchronization", () => {
       );
     });
 
-    testState.canvasStore.openTileInTab.mockClear();
+    vi.mocked(testState.canvasStore.openTileInTab).mockClear();
     hook.rerender({
       ...THREAD_FOCUS_INTENT,
       epicId: "route-sync-epic-b",
@@ -800,6 +981,65 @@ describe("useEpicRouteSynchronization", () => {
 
       expect(document.activeElement).toBe(editorEl);
     } finally {
+      paneEl.remove();
+    }
+  });
+
+  it("preserves a newly opened portalled control while applying its pane route focus", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+
+    const paneEl = document.createElement("div");
+    paneEl.setAttribute("data-group-id", "pane-current");
+    paneEl.setAttribute("data-active", "true");
+    paneEl.tabIndex = -1;
+    const tileEl = document.createElement("div");
+    tileEl.setAttribute("data-tab-instance-id", "tile-current");
+    tileEl.setAttribute("data-selected", "true");
+    tileEl.tabIndex = -1;
+    paneEl.appendChild(tileEl);
+    document.body.appendChild(paneEl);
+
+    const portalInput = document.createElement("input");
+    portalInput.setAttribute("aria-label", "Portalled picker search");
+    document.body.appendChild(portalInput);
+    const activationView = render(
+      <PaneActivationOriginBoundary>
+        <button type="button">Open model picker</button>
+      </PaneActivationOriginBoundary>,
+      { container: tileEl },
+    );
+
+    try {
+      fireEvent.pointerDown(
+        screen.getByRole("button", { name: "Open model picker" }),
+      );
+      portalInput.focus();
+
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-current",
+            focusTileInstanceId: "tile-current",
+          },
+        },
+      );
+
+      await flushFocusRestore();
+      expect(document.activeElement).toBe(portalInput);
+    } finally {
+      activationView.unmount();
+      portalInput.remove();
       paneEl.remove();
     }
   });

@@ -22,6 +22,7 @@ function resetSettingsStore(): void {
     showGlobalResourceMonitor: true,
     showNavigatorResourceStats: false,
     pinContextUsageBreakdown: false,
+    chatTurnMinimapSide: "right",
     quoteReplyEnabled: true,
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -37,6 +38,51 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().artifactIconColors).toEqual(
       DEFAULT_EPIC_NODE_ICON_COLORS,
     );
+  });
+
+  it("defaults the chat turn minimap to the right side", () => {
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
+  });
+
+  it("persists and rehydrates the chat turn minimap side", async () => {
+    useSettingsStore.getState().setChatTurnMinimapSide("left");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"chatTurnMinimapSide":"left"');
+
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
+  });
+
+  it("persists and rehydrates a hidden chat turn minimap", async () => {
+    useSettingsStore.getState().setChatTurnMinimapSide("hide");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"chatTurnMinimapSide":"hide"');
+
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
+  });
+
+  it("repairs an invalid persisted chat turn minimap side to right", async () => {
+    useSettingsStore.setState({ chatTurnMinimapSide: "left" });
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { chatTurnMinimapSide: "top" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
   });
 
   it("updates the global artifact icon color mode", () => {
