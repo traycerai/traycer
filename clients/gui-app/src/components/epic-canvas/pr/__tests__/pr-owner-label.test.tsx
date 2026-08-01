@@ -316,8 +316,33 @@ describe("PrOwnerBadges overflow hierarchy", () => {
     expect(ownerRow("chat-3").style.paddingLeft).toBe("40px");
     // Its own root, not a child of the lineage it happens to follow.
     expect(ownerRow("chat-4").style.paddingLeft).toBe("8px");
-    // One `<ul role="group">` per level that actually has children.
-    expect(document.querySelectorAll('ul[role="group"]')).toHaveLength(2);
+    // One nested `<ul>` per level that actually has children.
+    expect(
+      document.querySelectorAll('[data-testid="pr-owner-child-group"]'),
+    ).toHaveLength(2);
+  });
+
+  /**
+   * `role="tree"` advertises a composite widget - roving focus, arrow-key
+   * navigation, selection - and this list implements none of it: the rows are
+   * plain buttons and the forest never collapses. Nesting is carried by the
+   * `<ul>`/`<li>` structure instead, so the announced interaction cannot
+   * promise more than the markup delivers.
+   */
+  it("announces a plain nested list rather than an unimplemented tree widget", () => {
+    parentByNodeId = { "chat-1": null, "chat-2": "chat-1" };
+    renderBadges(chatOwners(12));
+    fireEvent.click(screen.getByTestId("pr-owner-overflow"));
+
+    expect(screen.queryByRole("tree")).toBeNull();
+    expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
+    const list = screen.getByTestId("pr-owner-overflow-list");
+    expect(list.tagName).toBe("UL");
+    expect(list.getAttribute("aria-label")).toBe("Chats this PR came from");
+    // The nesting itself survives the role removal.
+    expect(
+      list.querySelectorAll('[data-testid="pr-owner-child-group"]'),
+    ).toHaveLength(1);
   });
 
   it("lists every owner exactly once however the tree nests them", () => {

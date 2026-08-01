@@ -30,15 +30,30 @@ export function buildPrOwnerTree(
   owners: readonly PrOwnerRef[],
   tree: EpicTreeIndex,
 ): readonly PrOwnerTreeNode[] {
+  // An owner's IDENTITY is the pair, matching how the host dedupes its own
+  // owner set and how the caller keys the chips. Collapsing on `ownerId` alone
+  // would be a narrower key than the producer's, so two owners the host
+  // considers distinct could lose a row here while the `+N` on the trigger -
+  // counted from the undeduplicated array - still promised it.
   const present = new Map<string, PrOwnerRef>();
   for (const owner of owners) {
-    if (!present.has(owner.ownerId)) present.set(owner.ownerId, owner);
+    const key = prOwnerKey(owner);
+    if (!present.has(key)) present.set(key, owner);
+  }
+  // Parent links are between NODES, so the ancestor walk needs a second index
+  // keyed by node id alone. First owner wins, which only matters in the case
+  // the identity key exists to allow: one node id under two kinds.
+  const ownerByNodeId = new Map<string, PrOwnerRef>();
+  for (const owner of present.values()) {
+    if (!ownerByNodeId.has(owner.ownerId)) {
+      ownerByNodeId.set(owner.ownerId, owner);
+    }
   }
 
   const childrenOf = new Map<string, PrOwnerRef[]>();
   const roots: PrOwnerRef[] = [];
   for (const owner of present.values()) {
-    const parentId = nearestOwnerAncestor(owner.ownerId, present, tree);
+    const parentId = nearestOwnerAncestor(owner.ownerId, ownerByNodeId, tree);
     if (parentId === null) {
       roots.push(owner);
       continue;
@@ -54,12 +69,12 @@ export function buildPrOwnerTree(
   // from silently vanishing out of a list whose whole job is completeness.
   const emitted = new Set<string>();
   const build = (owner: PrOwnerRef): PrOwnerTreeNode => {
-    emitted.add(owner.ownerId);
+    emitted.add(prOwnerKey(owner));
     const children = childrenOf.get(owner.ownerId) ?? [];
     return {
       owner,
       children: children
-        .filter((child) => !emitted.has(child.ownerId))
+        .filter((child) => !emitted.has(prOwnerKey(child)))
         .map(build),
     };
   };
@@ -69,10 +84,18 @@ export function buildPrOwnerTree(
   // member emits the rest of its ring, and a snapshot taken before the loop
   // would still hold them and emit each a second time.
   for (const owner of present.values()) {
-    if (emitted.has(owner.ownerId)) continue;
+    if (emitted.has(prOwnerKey(owner))) continue;
     forest.push(build(owner));
   }
   return forest;
+}
+
+/**
+ * The owner's identity - the same `ownerKind:ownerId` pair the host dedupes its
+ * owner set on, and the same one the chips and rows use as their React key.
+ */
+export function prOwnerKey(owner: PrOwnerRef): string {
+  return `${owner.ownerKind}:${owner.ownerId}`;
 }
 
 /**
@@ -81,14 +104,14 @@ export function buildPrOwnerTree(
  */
 function nearestOwnerAncestor(
   ownerId: string,
-  present: ReadonlyMap<string, PrOwnerRef>,
+  ownerByNodeId: ReadonlyMap<string, PrOwnerRef>,
   tree: EpicTreeIndex,
 ): string | null {
   if (!Object.hasOwn(tree.nodeById, ownerId)) return null;
   const walked = new Set<string>([ownerId]);
   let current: string | null = tree.nodeById[ownerId].parentId;
   while (current !== null && !walked.has(current)) {
-    if (present.has(current)) return current;
+    if (ownerByNodeId.has(current)) return current;
     walked.add(current);
     if (!Object.hasOwn(tree.nodeById, current)) return null;
     current = tree.nodeById[current].parentId;

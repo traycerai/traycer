@@ -21,6 +21,7 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import {
   buildPrOwnerTree,
+  prOwnerKey,
   type PrOwnerTreeNode,
 } from "@/components/epic-canvas/pr/pr-owner-tree";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
@@ -29,13 +30,13 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useChatById,
-  useEpicAgentNodeIds,
   useEpicNodeHostId,
   useEpicTerminalAgent,
   useEpicTreeIndex,
   type EpicChatProjection,
   type EpicTuiAgentProjection,
 } from "@/lib/epic-selectors";
+import { usePresentPrOwners } from "@/hooks/pr/use-present-pr-owners";
 import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
 
@@ -236,7 +237,7 @@ function ResolvedPrOwnerBadges(props: {
     >
       {visible.map((owner) => (
         <PrOwnerBadge
-          key={`${owner.ownerKind}:${owner.ownerId}`}
+          key={prOwnerKey(owner)}
           owner={owner}
           epicId={props.epicId}
           fallbackHostId={props.fallbackHostId}
@@ -252,33 +253,6 @@ function ResolvedPrOwnerBadges(props: {
       ) : null}
     </span>
   );
-}
-
-/**
- * The owners this epic can still resolve, dropping any whose node is gone.
- *
- * A PR's owner set is host-side state that OUTLIVES its nodes: worktree
- * bindings cascade on epic delete but not on chat delete, so a PR keeps naming
- * chats the user removed months ago. Those used to render as bare "Removed
- * chat" text wedged between pills - a row that reads as broken, for an entry
- * with no title, no tile, and nothing to click.
- *
- * Filtered HERE rather than by having each chip render null, so the counts
- * derived from this list stay true: the three visible chips are three real
- * ones, `+N` counts what the popover will actually list, and the collection
- * noun is decided by owners that exist.
- */
-function usePresentPrOwners(
-  owners: readonly PrOwnerRef[],
-): readonly PrOwnerRef[] {
-  const presentIds = useEpicAgentNodeIds();
-  return useMemo(() => {
-    const present = new Set(presentIds);
-    const resolvable = owners.filter((owner) => present.has(owner.ownerId));
-    // Identity-stable when nothing was dropped - the common case, and the one
-    // where a fresh array would re-render every chip on every projection tick.
-    return resolvable.length === owners.length ? owners : resolvable;
-  }, [owners, presentIds]);
 }
 
 /**
@@ -342,15 +316,19 @@ function PrOwnerOverflow(props: {
         {/* `min-h-0` so this flex child may shrink below its content height -
             the default `min-height: auto` would push the list back out to full
             height and defeat the cap above. */}
+        {/* A plain nested list, NOT `role="tree"`. That role advertises a
+            composite widget - roving focus, arrow-key navigation, selection -
+            and this list has none of it: every row is a plain button, the
+            forest is permanently expanded, and nothing is ever selected. The
+            nesting is the whole message, and `<ul>`/`<li>` already carry it. */}
         <ul
-          role="tree"
           aria-label={`${nouns.capitalized} this PR came from`}
           className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-1"
           data-testid="pr-owner-overflow-list"
         >
           {forest.map((node) => (
             <PrOwnerTreeItem
-              key={`${node.owner.ownerKind}:${node.owner.ownerId}`}
+              key={prOwnerKey(node.owner)}
               node={node}
               depth={0}
               epicId={props.epicId}
@@ -441,9 +419,10 @@ function PrOwnerBadge(props: {
 const MAX_OWNER_TREE_INDENT_DEPTH = 5;
 
 /**
- * One owner and its owner-descendants, nested exactly the way the sidebar's
- * agent tree nests them - same `<ul role="group">` + rail + indent arithmetic,
- * so the two surfaces render one hierarchy rather than two dialects of it.
+ * One owner and its owner-descendants, nested with the sidebar agent tree's
+ * rail and indent arithmetic so the two surfaces render one hierarchy rather
+ * than two dialects of it. The sidebar's `role="tree"` is deliberately NOT
+ * carried over - see the list element for why.
  */
 function PrOwnerTreeItem(props: {
   readonly node: PrOwnerTreeNode;
@@ -455,16 +434,7 @@ function PrOwnerTreeItem(props: {
   const indentDepth = Math.min(props.depth, MAX_OWNER_TREE_INDENT_DEPTH);
   const hasChildren = props.node.children.length > 0;
   return (
-    // `aria-selected={false}`: nothing in this list carries a selected state
-    // (unlike the sidebar tree, where the open tile is selected), but the role
-    // requires the attribute. `aria-expanded` stays OFF a leaf - the whole
-    // forest is always expanded, so "false" would announce a collapsed subtree
-    // that does not exist.
-    <li
-      role="treeitem"
-      aria-selected={false}
-      aria-expanded={hasChildren ? true : undefined}
-    >
+    <li>
       <PrOwnerRow
         owner={props.node.owner}
         depth={indentDepth}
@@ -474,11 +444,11 @@ function PrOwnerTreeItem(props: {
       />
       {hasChildren ? (
         // `relative` is what `TreeGroupGuide` positions its rail against.
-        <ul role="group" className="relative">
+        <ul className="relative" data-testid="pr-owner-child-group">
           <TreeGroupGuide parentDepth={indentDepth} />
           {props.node.children.map((child) => (
             <PrOwnerTreeItem
-              key={`${child.owner.ownerKind}:${child.owner.ownerId}`}
+              key={prOwnerKey(child.owner)}
               node={child}
               depth={props.depth + 1}
               epicId={props.epicId}
