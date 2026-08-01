@@ -56,8 +56,12 @@ import {
   type TopLevelSurfaceActivator,
   useTopLevelSurfaceActivator,
 } from "./top-level-surface-activation-context";
+import {
+  advanceTopLevelSurfaceRecency,
+  retainedTopLevelSurfaceKeys,
+} from "@/stores/tabs/top-level-surface-retention";
 
-export const MAX_RETAINED_TOP_LEVEL_SURFACES = 5;
+export { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
 
 type SurfacePlacement =
   | { readonly kind: "hidden" }
@@ -232,23 +236,15 @@ function useMountedSurfaceKeys(
 
   if (activeSignature !== seenActiveSignature) {
     setSeenActiveSignature(activeSignature);
-    setRecency((previous) => [
-      ...activeRefKeys,
-      ...previous.filter((key) => !activeRefKeys.includes(key)),
-    ]);
+    setRecency((previous) =>
+      advanceTopLevelSurfaceRecency(activeRefKeys, previous),
+    );
   }
 
-  return useMemo(() => {
-    const available = new Set(availableRefKeys);
-    const ordered = [
-      ...activeRefKeys,
-      ...recency.filter(
-        (key) => available.has(key) && !activeRefKeys.includes(key),
-      ),
-    ];
-    const retained = new Set(ordered.slice(0, MAX_RETAINED_TOP_LEVEL_SURFACES));
-    return availableRefKeys.filter((key) => retained.has(key));
-  }, [activeRefKeys, availableRefKeys, recency]);
+  return useMemo(
+    () => retainedTopLevelSurfaceKeys(availableRefKeys, activeRefKeys, recency),
+    [activeRefKeys, availableRefKeys, recency],
+  );
 }
 
 function FillableSplitSlots(props: {
