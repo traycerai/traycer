@@ -2,7 +2,7 @@ import {
   useHostMethodSupport,
   useHostSupportsMethod,
 } from "@/hooks/host/use-host-supports-method";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 
 /**
  * The archive RPC's method name, shared by the capability gate and the mutation
@@ -19,17 +19,17 @@ export const SET_CHAT_ARCHIVED_METHOD = "epic.setChatArchived";
  * (row hover button, row-menu entry, "Show archived") has to disappear on such
  * a host instead of offering an action that cannot work.
  *
- * Scoped to the tab's lifetime-bound host, matching `useEpicArchiveChat`'s
- * `useTabHostClient()`. The app-wide active host can change while the tab stays
- * open, so reading its manifest here could expose an action that the actual tab
- * host does not support (or hide one that it does).
+ * Scoped to the surrounding Epic session's owning host, matching
+ * `useEpicArchiveChat`. The sidebar is a sibling of the canvas and therefore
+ * sits outside every tile-level `TabHostProvider`; its writes belong to the
+ * same host that owns the Epic stream, not to any individual chat tile.
  *
  * Fails closed while the host's manifest is still unknown - see
  * {@link useHostSupportsMethod}.
  */
 export function useChatArchiveSupported(): boolean {
-  const tabHostId = useTabHostId();
-  return useHostSupportsMethod(tabHostId, SET_CHAT_ARCHIVED_METHOD);
+  const epicHostId = useEpicSessionHostId();
+  return useHostSupportsMethod(epicHostId, SET_CHAT_ARCHIVED_METHOD);
 }
 
 /**
@@ -50,6 +50,6 @@ export function useChatArchiveSupported(): boolean {
  * moment later, which is worse than the toggle appearing late.
  */
 export function useChatArchiveSupportState(): boolean | null {
-  const tabHostId = useTabHostId();
-  return useHostMethodSupport(tabHostId, SET_CHAT_ARCHIVED_METHOD);
+  const epicHostId = useEpicSessionHostId();
+  return useHostMethodSupport(epicHostId, SET_CHAT_ARCHIVED_METHOD);
 }

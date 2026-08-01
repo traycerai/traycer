@@ -16,6 +16,12 @@ export const EpicSessionContext = createContext<OpenEpicStoreHandle | null>(
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
 
+export function getEpicSessionHandleHostId(
+  handle: OpenEpicStoreHandle,
+): string | null {
+  return handleHostIds.get(handle) ?? null;
+}
+
 /**
  * Registry is module-scoped so background Epic tabs survive route transitions
  * - a tab that is navigated away from but kept open in the tab strip stays

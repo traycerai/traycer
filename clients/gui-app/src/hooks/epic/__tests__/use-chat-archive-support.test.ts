@@ -6,8 +6,8 @@ const { useHostMethodSupport, useHostSupportsMethod } = vi.hoisted(() => ({
   useHostSupportsMethod: vi.fn(() => false),
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "tab-host-test",
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "epic-session-host-test",
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -26,26 +26,26 @@ beforeEach(() => {
 });
 
 describe("chat archive capability routing", () => {
-  it("checks affordance support against the tab-bound host", () => {
+  it("checks affordance support against the Epic session host", () => {
     useHostSupportsMethod.mockReturnValue(true);
 
     const { result } = renderHook(() => useChatArchiveSupported());
 
     expect(result.current).toBe(true);
     expect(useHostSupportsMethod).toHaveBeenCalledWith(
-      "tab-host-test",
+      "epic-session-host-test",
       SET_CHAT_ARCHIVED_METHOD,
     );
   });
 
-  it("checks tri-state support against the tab-bound host", () => {
+  it("checks tri-state support against the Epic session host", () => {
     useHostMethodSupport.mockReturnValue(false);
 
     const { result } = renderHook(() => useChatArchiveSupportState());
 
     expect(result.current).toBe(false);
     expect(useHostMethodSupport).toHaveBeenCalledWith(
-      "tab-host-test",
+      "epic-session-host-test",
       SET_CHAT_ARCHIVED_METHOD,
     );
   });

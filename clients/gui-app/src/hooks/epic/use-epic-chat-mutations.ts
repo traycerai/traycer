@@ -25,6 +25,8 @@ import {
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
@@ -276,9 +278,10 @@ export function useEpicRenameChat() {
  * both the `chats` and `tuiAgents` maps, so a separate TUI variant would be the
  * same call with the same arguments under a second name.
  *
- * Tab-host scoped via `useTabHostClient()`. A tab keeps its `hostId` for life,
- * even when the app-wide active host changes, so archive writes must follow the
- * tab binding rather than whichever host is currently selected elsewhere.
+ * Scoped to the surrounding Epic session's owning host. The sidebar is outside
+ * every tile-level `TabHostProvider`, so archive writes must follow the Epic
+ * stream that projected these rows instead of borrowing an individual tile's
+ * lifetime-bound host.
  *
  * No optimistic write and no cache invalidation, also matching rename: the
  * archive flag lives in the epic Y.Doc, so the host's write replicates back
@@ -304,7 +307,9 @@ function useEpicArchiveChatMutation(
   HostRpcError,
   SetChatArchivedRequest
 > {
-  const client = useTabHostClient();
+  const epicHostId = useEpicSessionHostId();
+  const resolvedClient = useHostClientForHostId(epicHostId);
+  const client = epicHostId === null ? null : resolvedClient;
   return useHostMutation<
     HostRpcRegistry,
     "epic.setChatArchived",
