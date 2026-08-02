@@ -2255,25 +2255,17 @@ function buildOwnerProcessSearchProjection(input: {
     ...ownerMetadataSearchTerms(input.row, input.label),
   ];
   const ownerMatches = matchesResourceSearch(input.searchQuery, ownerTerms);
-  const matchingRootRows = input.processRows.rootRows.filter((root) =>
-    matchesResourceSearch(input.searchQuery, [
+  const filteredRows = input.processRows.rootRows.flatMap((root) => {
+    const rootMatches = matchesResourceSearch(input.searchQuery, [
       ...ownerTerms,
       ...processSearchTerms(root.process),
-    ]),
-  );
-  const filteredRows =
-    matchingRootRows.length > 0
-      ? filterProcessDisplayRowsForSearch(
-          matchingRootRows,
-          input.searchQuery,
-          ownerTerms,
-        )
-      : filterOwnerProcessRowsForSearch(
-          input.processRows,
-          input.searchQuery,
-          false,
-          ownerTerms,
-        ).rows;
+    ]);
+    return filterProcessDisplayRowsForSearch(
+      rootMatches ? [root] : root.children,
+      input.searchQuery,
+      ownerTerms,
+    );
+  });
   return {
     rows: ownerMatches
       ? input.processRows

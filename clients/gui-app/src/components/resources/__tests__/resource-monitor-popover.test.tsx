@@ -639,6 +639,61 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Terminal Alpha")).toBeNull();
   });
 
+  it("preserves root and descendant matches across separate roots", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              rootPids: [100, 200],
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "shared-shell",
+                  command: "/bin/shared-shell",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node unrelated.js",
+                }),
+                resourceProcess({
+                  pid: 200,
+                  rootPid: 200,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 201,
+                  parentPid: 200,
+                  rootPid: 200,
+                  name: "worker",
+                  command: "shared worker",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "shared" } },
+    );
+
+    expect(
+      screen.getByText("/bin/shared-shell (1 sub-process)"),
+    ).not.toBeNull();
+    expect(screen.getByText("shared worker")).not.toBeNull();
+  });
+
   it("matches across the host header and process metadata", () => {
     const stub = installStubFactory();
     renderPopover();
