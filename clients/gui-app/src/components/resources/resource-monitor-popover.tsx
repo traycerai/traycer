@@ -2166,13 +2166,6 @@ function matchesResourceSearch(
   return normalized.split(/\s+/).every((token) => haystack.includes(token));
 }
 
-function processMatchesSearch(
-  process: ResourceProcessSnapshotWire,
-  searchQuery: string,
-): boolean {
-  return matchesResourceSearch(searchQuery, processSearchTerms(process));
-}
-
 function processSearchTerms(
   process: ResourceProcessSnapshotWire,
 ): readonly (string | number | null)[] {
@@ -2441,7 +2434,8 @@ function desktopAppMatchesSearch(
   searchQuery: string,
 ): boolean {
   if (
-    matchesResourceSearch(searchQuery, ["Traycer Desktop", "Main", "Renderer"])
+    matchesResourceSearch(searchQuery, ["Traycer Desktop", "Main"]) ||
+    matchesResourceSearch(searchQuery, ["Traycer Desktop", "Renderer"])
   ) {
     return true;
   }
@@ -2449,16 +2443,23 @@ function desktopAppMatchesSearch(
     app.other.cpuPercent > 0 ||
     app.other.rssBytes > 0 ||
     app.other.processCount > 0;
-  return showOther && matchesResourceSearch(searchQuery, ["Other"]);
+  return (
+    showOther &&
+    matchesResourceSearch(searchQuery, ["Traycer Desktop", "Other"])
+  );
 }
 
 function hostAppMatchesSearch(
   app: AppResourceUsage,
   searchQuery: string,
 ): boolean {
+  if (matchesResourceSearch(searchQuery, ["Traycer Host"])) return true;
   return (
-    matchesResourceSearch(searchQuery, ["Traycer Host"]) ||
-    (app.process !== null && processMatchesSearch(app.process, searchQuery))
+    app.process !== null &&
+    matchesResourceSearch(searchQuery, [
+      "Traycer Host",
+      ...processSearchTerms(app.process),
+    ])
   );
 }
 
@@ -2469,7 +2470,10 @@ function otherResourcesMatchSearch(
   return (
     matchesResourceSearch(searchQuery, ["Other"]) ||
     other.processes.some((process) =>
-      processMatchesSearch(process, searchQuery),
+      matchesResourceSearch(searchQuery, [
+        "Other",
+        ...processSearchTerms(process),
+      ]),
     )
   );
 }
@@ -2483,7 +2487,12 @@ function matchingOtherRootPids(
   }
   const matchingRootPids = new Set<number>();
   for (const process of processes) {
-    if (processMatchesSearch(process, searchQuery)) {
+    if (
+      matchesResourceSearch(searchQuery, [
+        "Other",
+        ...processSearchTerms(process),
+      ])
+    ) {
       matchingRootPids.add(process.rootPid);
     }
   }

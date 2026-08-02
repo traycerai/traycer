@@ -599,6 +599,22 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Resource Task")).toBeNull();
   });
 
+  it("matches across the host header and process metadata", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app() }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Host traycer-host" } },
+    );
+
+    expect(screen.getByText("Traycer Host")).not.toBeNull();
+  });
+
   it("reveals matching descendants beneath a matching process", () => {
     const stub = installStubFactory();
     renderPopover();
@@ -1065,7 +1081,7 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.change(
       screen.getByRole("searchbox", { name: "Search resources" }),
       {
-        target: { value: "child" },
+        target: { value: "Other child" },
       },
     );
     expect(
@@ -1893,6 +1909,12 @@ describe("ResourceMonitorPopover", () => {
                 cpu: { percentCPUUsage: 2 },
                 memory: { workingSetSize: 300 * 1024 },
               },
+              {
+                pid: 12,
+                type: "GPU",
+                cpu: { percentCPUUsage: 1 },
+                memory: { workingSetSize: 200 * 1024 },
+              },
             ],
           }),
         },
@@ -1946,6 +1968,15 @@ describe("ResourceMonitorPopover", () => {
     );
     expect(screen.getByText("Main")).not.toBeNull();
     expect(screen.queryByText("Renderer")).toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "traycer other" },
+      },
+    );
+    expect(screen.getByText("Other")).not.toBeNull();
+    expect(screen.queryByText("Main")).toBeNull();
   });
 
   it("pins an expanded owner row beneath its sticky section header", () => {
