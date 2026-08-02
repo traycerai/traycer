@@ -243,9 +243,13 @@ describe("ComposerBody overlay utility visibility", () => {
     renderComposerBody({
       composerMode: "chat",
       paste: makePaste(),
-      stashControl: <div data-testid="stash-utility-rail">Stash 2</div>,
+      stashControl: (
+        <div role="status" aria-label="Stashed prompts">
+          Stash 2
+        </div>
+      ),
     });
-    const stash = screen.getByTestId("stash-utility-rail");
+    const stash = screen.getByRole("status", { name: "Stashed prompts" });
     expect(
       stash.closest('[data-testid="composer-utility-overlay"]'),
     ).not.toBeNull();
@@ -258,8 +262,14 @@ describe("ComposerBody overlay utility visibility", () => {
     renderComposerBody({
       composerMode: "terminal",
       paste: makePaste(),
-      stashControl: <div data-testid="stash-utility-rail">Stash 2</div>,
+      stashControl: (
+        <div role="status" aria-label="Stashed prompts">
+          Stash 2
+        </div>
+      ),
     });
-    expect(screen.queryByTestId("stash-utility-rail")).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Stashed prompts" }),
+    ).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -398,6 +399,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
           resolveDigest = () => resolve(new ArrayBuffer(32));
         }),
     );
+    onTestFinished(() => digestSpy.mockRestore());
 
     const { result, unmount } = renderHook(() =>
       useLandingComposerPaste({
@@ -438,8 +440,6 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     ]);
     expect(again).not.toBeNull();
     again?.release();
-
-    digestSpy.mockRestore();
   });
 
   it("creates no reservation for an empty accepted batch or a full-budget rejection", async () => {

@@ -162,7 +162,6 @@ export async function restoreThroughLanding(
 export function makeEditorHandle(options: {
   ready?: boolean;
   content?: JsonContent;
-  selection?: DraftSelection | null;
 }): {
   readonly handle: ComposerPromptEditorHandle;
   readonly editorRef: { current: ComposerPromptEditorHandle | null };

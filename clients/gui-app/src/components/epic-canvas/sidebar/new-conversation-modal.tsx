@@ -630,12 +630,10 @@ export function NewConversationModalBody(props: {
   const readPromptStashImage = useCallback(
     async (hash: string) => {
       if (hasPastedImageBytes?.(hash) !== true) return null;
-      try {
-        const bytes = await fetchEpicImage(hash, new AbortController().signal);
-        return new Uint8Array(bytes);
-      } catch {
-        return null;
-      }
+      // Capture deliberately survives composer unmount, so this read is not
+      // coupled to component-lifecycle cancellation.
+      const bytes = await fetchEpicImage(hash, new AbortController().signal);
+      return new Uint8Array(bytes);
     },
     [fetchEpicImage, hasPastedImageBytes],
   );

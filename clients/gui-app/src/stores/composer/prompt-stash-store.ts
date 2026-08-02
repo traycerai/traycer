@@ -33,9 +33,9 @@ let hydration: Promise<void> | null = null;
 // store.
 //
 // A local save/delete result is authoritative and must never be suppressed
-// by an intervening read's token - it is applied purely by revision. It also
-// bumps the token itself, invalidating any in-flight read so a stale one
-// that resolves afterward cannot later overwrite the mutation it raced.
+// by an intervening read's token - it is applied purely by revision. It does
+// not invalidate in-flight reads: the revision gate already rejects older
+// snapshots, while a peer read that committed later must remain eligible.
 let issuedLoadToken = 0;
 let appliedRevision = -1;
 
@@ -54,7 +54,6 @@ function applyMutationResult(
   rows: ReadonlyArray<PromptStashRow>,
   revision: number,
 ): void {
-  issuedLoadToken += 1;
   if (revision <= appliedRevision) return;
   appliedRevision = revision;
   usePromptStashStore.setState({ rows });

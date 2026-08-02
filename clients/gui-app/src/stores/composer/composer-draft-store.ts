@@ -89,6 +89,16 @@ function ensureDraft(
   return drafts[taskId] ?? EMPTY_COMPOSER_DRAFT;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasDraftMap(
+  value: unknown,
+): value is { readonly drafts: Partial<Record<string, DraftState>> } {
+  return isRecord(value) && isRecord(value.drafts);
+}
+
 export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
     (set, get) => ({
@@ -153,6 +163,24 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.composerDraft)),
+      // Synchronous localStorage hydration can finish during `create(...)`,
+      // before an `onFinishHydration` subscriber can be registered. Normalize
+      // at the merge boundary so legacy revisions are safe on initial import.
+      merge: (persistedState, currentState) => {
+        if (!hasDraftMap(persistedState)) {
+          return currentState;
+        }
+        const drafts: Partial<Record<string, DraftState>> = {};
+        for (const [taskId, value] of Object.entries(persistedState.drafts)) {
+          if (value === undefined) continue;
+          drafts[taskId] = {
+            ...value,
+            resetEpoch: value.resetEpoch + 1,
+            revision: normalizedLegacyRevision(value),
+          };
+        }
+        return { ...currentState, drafts };
+      },
     },
   ),
 );
@@ -177,22 +205,6 @@ function normalizedLegacyRevision(rawDraft: unknown): number {
     : 0;
 }
 
-useComposerDraftStore.persist.onFinishHydration(() => {
-  useComposerDraftStore.setState((current) => {
-    const entries = Object.entries(current.drafts);
-    if (entries.length === 0) return current;
-    const bumped: Partial<Record<string, DraftState>> = {};
-    for (const [taskId, draft] of entries) {
-      if (draft === undefined) continue;
-      bumped[taskId] = {
-        ...draft,
-        resetEpoch: draft.resetEpoch + 1,
-        revision: normalizedLegacyRevision(draft),
-      };
-    }
-    return { drafts: bumped };
-  });
-});
 export function readComposerDraftSnapshot(
   taskId: string | undefined,
 ): DraftState {

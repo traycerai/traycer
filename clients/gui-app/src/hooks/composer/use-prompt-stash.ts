@@ -15,6 +15,7 @@ import {
   buildPromptStashSnapshot,
   materializePromptStashEntry,
   PromptStashImagePreparationError,
+  PromptStashImageUnavailableError,
   type PromptStashImageResolver,
 } from "@/lib/composer/prompt-stash-content";
 import type {
@@ -351,7 +352,7 @@ function stashFailureDescription(error: unknown): string {
   if (error instanceof PromptStashImagePreparationError) {
     return `${error.message} The composer was left unchanged.`;
   }
-  if (error instanceof Error && error.message.includes("not available")) {
+  if (error instanceof PromptStashImageUnavailableError) {
     return "An attached image is still syncing. Wait for it to finish and try again.";
   }
   return "The composer was left unchanged because durable storage did not complete.";
@@ -365,10 +366,7 @@ function restoreFailureDescription(error: unknown): string {
   if (error instanceof PromptStashCorruptBlobError) {
     return "An attached image is damaged. The stash was kept intact.";
   }
-  if (
-    error instanceof PromptStashMissingBlobError ||
-    (error instanceof Error && error.message.includes("missing"))
-  ) {
+  if (error instanceof PromptStashMissingBlobError) {
     return "An attached image could not be read. The stash was kept intact.";
   }
   return "The stash was kept intact. Try again after storage recovers.";

@@ -44,20 +44,23 @@ describe("prompt-stash-repository codec", () => {
     // recoverable identity and stay invisible; an identifiable broken record
     // surfaces as unavailable rather than disappearing.
     const db = await openDb(DB_NAME, undefined, undefined);
-    const tx = db.transaction("entries", "readwrite");
-    await requestToPromise(
-      tx.objectStore("entries").put({
-        id: "",
-        createdAt: 50,
-        content: textDoc("bad"),
-        blobHashes: [],
-      }),
-    );
-    await requestToPromise(
-      tx.objectStore("entries").put({ notAnEntry: true, id: "x" }),
-    );
-    await transactionComplete(tx);
-    db.close();
+    try {
+      const tx = db.transaction("entries", "readwrite");
+      await requestToPromise(
+        tx.objectStore("entries").put({
+          id: "",
+          createdAt: 50,
+          content: textDoc("bad"),
+          blobHashes: [],
+        }),
+      );
+      await requestToPromise(
+        tx.objectStore("entries").put({ notAnEntry: true, id: "x" }),
+      );
+      await transactionComplete(tx);
+    } finally {
+      db.close();
+    }
 
     const loaded = await repo.loadPromptStashSnapshot();
     expect(loaded.rows).toEqual([

@@ -2,7 +2,7 @@
  * Shared harness for prompt-stash ownership-transfer matrix split suites.
  * Drives real production surface adapters through usePromptStash + repository.
  */
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
@@ -133,6 +133,7 @@ export function makeEditorHandle(
   readonly handle: EditorHandle;
   readonly editorRef: { current: EditorHandle | null };
   readonly setContents: Array<{
+    method: "setContent" | "syncContent";
     content: JsonContent;
     selection: { from: number; to: number } | null;
   }>;
@@ -142,6 +143,7 @@ export function makeEditorHandle(
   let ready = options?.ready ?? true;
   let content = options?.content ?? emptyDoc();
   const setContents: Array<{
+    method: "setContent" | "syncContent";
     content: JsonContent;
     selection: { from: number; to: number } | null;
   }> = [];
@@ -160,12 +162,20 @@ export function makeEditorHandle(
     },
     setContent: (next, nextSelection) => {
       content = next;
-      setContents.push({ content: next, selection: nextSelection });
+      setContents.push({
+        method: "setContent",
+        content: next,
+        selection: nextSelection,
+      });
       options?.onSetContent?.(next, nextSelection);
     },
     syncContent: (next, nextSelection) => {
       content = next;
-      setContents.push({ content: next, selection: nextSelection });
+      setContents.push({
+        method: "syncContent",
+        content: next,
+        selection: nextSelection,
+      });
       options?.onSetContent?.(next, nextSelection);
     },
     insertImageAttachments: () => undefined,
@@ -229,6 +239,16 @@ export async function loadHarness(): Promise<Harness> {
 
   await promptStashStore.usePromptStashStore.getState().hydrate();
 
+  // Register cleanup as soon as the module-level resources exist so a failed
+  // assertion cannot leak runtimes, reservations, modal drafts, or mounts into
+  // the next ownership-transfer case.
+  onTestFinished(() => {
+    testing.cleanup();
+    modalStore.useNewConversationModalStore.getState().resetForTests();
+    draftRuntime.draftRuntimeRegistry.resetForTesting();
+    landingBudget.resetLandingImageBudgetReservationsForTesting();
+  });
+
   return {
     testing,
     repo,
@@ -275,10 +295,12 @@ export function expectBytesEqual(
 
 export function firstSetContent(
   setContents: ReadonlyArray<{
+    method: "setContent" | "syncContent";
     content: JsonContent;
     selection: { from: number; to: number } | null;
   }>,
 ): {
+  method: "setContent" | "syncContent";
   content: JsonContent;
   selection: { from: number; to: number } | null;
 } {
@@ -351,6 +373,6 @@ export async function awaitStashComplete(
       expect(hook.current.pulseEpoch).toBeGreaterThan(priorEpoch);
       expect(hook.current.saving).toBe(false);
     },
-    { timeout: 5000 },
+    { timeout: 4000 },
   );
 }

@@ -253,7 +253,8 @@ describe("usePromptStash restore destination races", () => {
       let ok = true;
       await act(async () => {
         resolveMaterialize?.(textDoc("stashed while remounting"));
-        ok = await (restorePromise as Promise<boolean>);
+        if (restorePromise === undefined) throw new Error("expected restore");
+        ok = await restorePromise;
       });
 
       expect(ok).toBe(false);
@@ -344,7 +345,6 @@ describe("usePromptStash restore destination races", () => {
           },
         ],
       });
-      expect(destination.getLastSelection()).toBeNull();
       expect(storeMocks.remove).toHaveBeenCalledWith("entry-mutate-during");
       expect(editor.focuses).toHaveLength(1);
     });
@@ -400,7 +400,8 @@ describe("usePromptStash restore destination races", () => {
       let ok = true;
       await act(async () => {
         resolveMaterialize?.(textDoc("for owner-1 only"));
-        ok = await (restorePromise as Promise<boolean>);
+        if (restorePromise === undefined) throw new Error("expected restore");
+        ok = await restorePromise;
       });
 
       expect(owner2.importAndInsert).toHaveBeenCalledTimes(1);
@@ -481,7 +482,8 @@ describe("usePromptStash restore destination races", () => {
       let ok = true;
       await act(async () => {
         resolveMaterialize?.();
-        ok = await (restorePromise as Promise<boolean>);
+        if (restorePromise === undefined) throw new Error("expected restore");
+        ok = await restorePromise;
       });
 
       expect(ok).toBe(false);

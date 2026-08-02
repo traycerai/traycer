@@ -296,6 +296,8 @@ describe("importPromptStashContentToLanding", () => {
 
     const images = collectImageNodes(result.content);
     expect(images).toHaveLength(2);
+    expect(images[0]?.attrs?.id).not.toBe("a");
+    expect(images[1]?.attrs?.id).not.toBe("b");
     const first = requireDefined(images[0], "first node");
     const second = requireDefined(images[1], "second node");
     expect(first.attrs?.id).not.toBe("node-a");
@@ -482,10 +484,9 @@ describe("importPromptStashContentToLanding", () => {
     expect(failed).toBeNull();
 
     const again = reserveLandingImageBudget("draft-1", [
-      { hash: stashHash, bytes: big.byteLength },
+      { hash: "post-failure", bytes: LANDING_IMAGE_BUDGET_BYTES },
     ]);
     const againOk = requireDefined(again, "again");
-    expect(big.byteLength).toBeLessThan(LANDING_IMAGE_BUDGET_BYTES);
     againOk.release();
   });
 });

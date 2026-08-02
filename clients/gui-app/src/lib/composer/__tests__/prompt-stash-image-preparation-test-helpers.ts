@@ -4,6 +4,7 @@
 import { vi, type Mock } from "vitest";
 
 import type {
+  CanonicalImageMimeType,
   PromptStashDecodedImage,
   PromptStashImageCodec,
 } from "@/lib/composer/prompt-stash-image-preparation";
@@ -25,7 +26,7 @@ export type EncodeArgs = {
 
 export type DecodeArgs = {
   readonly bytes: ImageBytes;
-  readonly mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  readonly mimeType: CanonicalImageMimeType;
 };
 
 export interface EncodeCall {

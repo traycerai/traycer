@@ -7,8 +7,11 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
  * change. `clearIfUnchanged` only clears when both still match at that later
  * point, so an edit made while the stash was saving is never erased.
  */
+export type PromptStashSurface =
+  "chat" | "landing" | "new-conversation" | "test";
+
 export interface PromptStashSourceToken {
-  readonly surface: string;
+  readonly surface: PromptStashSurface;
   readonly identity: string;
   readonly revision: number;
 }

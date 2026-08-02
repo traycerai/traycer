@@ -87,6 +87,7 @@ function indexedDBFactory(): IDBFactory {
 
 function openDb(): Promise<IDBDatabase> {
   dbPromise ??= new Promise((resolve, reject) => {
+    let settled = false;
     const request = indexedDBFactory().open(
       PROMPT_STASH_DB_NAME,
       PROMPT_STASH_DB_VERSION,
@@ -109,6 +110,11 @@ function openDb(): Promise<IDBDatabase> {
     };
     request.onsuccess = () => {
       const db = request.result;
+      if (settled) {
+        db.close();
+        return;
+      }
+      settled = true;
       // Lets a `deleteDatabase` call from this or another window (see
       // `lib/persist/wipe.ts`) proceed instead of sitting in `onblocked`
       // behind a connection this module never explicitly closes. Also
@@ -119,9 +125,22 @@ function openDb(): Promise<IDBDatabase> {
         db.close();
         dbPromise = null;
       };
+      db.onclose = () => {
+        dbPromise = null;
+      };
       resolve(db);
     };
+    request.onblocked = () => {
+      if (settled) return;
+      settled = true;
+      dbPromise = null;
+      reject(
+        new Error("The prompt stash database is blocked by another window."),
+      );
+    };
     request.onerror = () => {
+      if (settled) return;
+      settled = true;
       // Re-arm on failure too: caching a rejected promise would make every
       // later operation reject forever, even after a transient open error
       // (e.g. a momentary quota/permission issue) has since cleared.

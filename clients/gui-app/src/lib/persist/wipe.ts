@@ -100,7 +100,15 @@ async function enumeratedComposerBlobDatabaseNames(
     );
     return [];
   }
-  const databases = await factory.databases();
+  let databases: readonly IDBDatabaseInfo[];
+  try {
+    databases = await factory.databases();
+  } catch (error: unknown) {
+    appLogger.warn("[persist] composer blob database enumeration failed", {
+      error: describeLogError(error),
+    });
+    return [];
+  }
   return databases
     .map((db) => db.name)
     .filter(

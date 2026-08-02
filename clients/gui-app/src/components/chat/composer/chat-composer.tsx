@@ -406,6 +406,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     async (hash: string) => {
       const state = openEpicHandle.store.getState();
       if (!state.hasAttachmentBytes(hash)) return null;
+      // Capture deliberately survives composer unmount, so this read is not
+      // coupled to component-lifecycle cancellation.
       const bytes = await state.readAttachmentBytes(
         hash,
         new AbortController().signal,

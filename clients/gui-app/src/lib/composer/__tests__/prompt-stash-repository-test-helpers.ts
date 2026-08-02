@@ -8,6 +8,8 @@ import type {
   PromptStashEntry,
   PromptStashImageBlob,
   PromptStashManifest,
+  PromptStashRestoreBlob,
+  PromptStashRestoreRead,
   PromptStashSnapshot,
 } from "@/lib/composer/prompt-stash-codec";
 import { installFreshIndexedDb } from "./prompt-stash-fake-idb";
@@ -252,19 +254,11 @@ export function entryRow(entry: PromptStashEntry) {
   return { kind: "entry" as const, entry };
 }
 
-export function restoreBlobsOk(result: {
-  readonly status: "ok" | "missing" | "corrupt";
-  readonly blobs?: ReadonlyMap<
-    string,
-    {
-      readonly bytes: Uint8Array;
-      readonly byteLength: number;
-      readonly mimeType: string;
-    }
-  >;
-}) {
+export function restoreBlobsOk(
+  result: PromptStashRestoreRead,
+): ReadonlyMap<string, PromptStashRestoreBlob> {
   expect(result.status).toBe("ok");
-  if (result.status !== "ok" || result.blobs === undefined) {
+  if (result.status !== "ok") {
     throw new Error("expected restore blobs status ok");
   }
   return result.blobs;

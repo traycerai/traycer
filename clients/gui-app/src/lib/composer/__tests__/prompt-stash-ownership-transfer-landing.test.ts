@@ -125,6 +125,7 @@ describe("prompt-stash ownership transfer: landing", () => {
     });
     expect(ok).toBe(true);
     const restored = firstSetContent(editor.setContents).content;
+    expect(firstSetContent(editor.setContents).method).toBe("setContent");
     const attrs = findImageAttrs(restored);
     expect(attrs).toHaveLength(1);
     expect(attrs[0]?.id).not.toBe("src-a");

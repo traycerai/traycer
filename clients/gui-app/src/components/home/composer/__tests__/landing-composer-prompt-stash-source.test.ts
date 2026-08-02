@@ -484,6 +484,44 @@ describe("landing composer prompt-stash source CAS", () => {
     setSnapshotSpy.mockRestore();
   });
 
+  it("does not clear a ready editor after its bound runtime is replaced", () => {
+    const draftId = "landing-replaced-ready-editor";
+    useLandingDraftStore.getState().createDraftWithId(draftId, null);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(draftId, textDoc("original capture"), null);
+    const oldRuntime = draftRuntimeRegistry.attach(draftId);
+    if (oldRuntime === null) throw new Error("expected old runtime");
+
+    const onClear = vi.fn();
+    const editorRef: { current: ComposerPromptEditorHandle | null } = {
+      current: makeEditorHandle({ onClear }),
+    };
+    const unboundRuntime = createStore<DraftRuntimeState>(() => ({
+      content: EMPTY_DRAFT_RUNTIME_CONTENT,
+      selection: null,
+      contentRevision: 0,
+      attachmentRoots: new Set(),
+      isSubmitting: false,
+    }));
+    const { result } = renderLandingSource({
+      stashIdentity: landingStashIdentity(draftId, null),
+      runtimeStore: oldRuntime.store,
+      draftId,
+      unboundRuntime,
+      editorRef,
+    });
+    const snapshot = result.current.capture();
+    if (snapshot === null) throw new Error("expected snapshot");
+
+    draftRuntimeRegistry.detach(draftId);
+    const replacement = draftRuntimeRegistry.attach(draftId);
+    if (replacement === null) throw new Error("expected replacement runtime");
+
+    expect(result.current.clearIfUnchanged(snapshot.token)).toBe(false);
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
   it("clears via live editor when ready and revision unchanged", () => {
     const draftId = "landing-bound-live-clear";
     useLandingDraftStore.getState().createDraftWithId(draftId, null);

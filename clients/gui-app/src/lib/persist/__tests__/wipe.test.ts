@@ -403,6 +403,30 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("still deletes prompt stash and reloads when database enumeration rejects", async () => {
+    const deleteDatabase = vi.fn((_name: string) => {
+      const { request, fire } = fakeDeleteRequest();
+      queueMicrotask(fire);
+      return request;
+    });
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value: {
+        databases: vi.fn(() => Promise.reject(new Error("enumeration failed"))),
+        deleteDatabase,
+      },
+    });
+
+    await expect(
+      clearAllPersistedStores({ hostClear: null }),
+    ).resolves.toBeUndefined();
+
+    expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
+    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("no-ops gracefully and still reloads when `indexedDB` itself is absent", async () => {
     Object.defineProperty(globalThis, "indexedDB", {
       configurable: true,

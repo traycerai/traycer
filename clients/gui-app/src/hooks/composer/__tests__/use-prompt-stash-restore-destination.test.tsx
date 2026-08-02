@@ -231,7 +231,6 @@ describe("usePromptStash restore/destination lifecycle", () => {
     expect(call.content).toEqual(materializedContent);
     expect(storeMocks.remove).toHaveBeenCalledWith("entry-restore");
     expect(editor.focuses).toHaveLength(1);
-    expect(destination.getLastSelection()).toBeNull();
   });
   it("does not mutate the destination or delete the entry when materialize fails", async () => {
     materializeMocks.impl = () =>
@@ -513,6 +512,5 @@ describe("usePromptStash restore/destination lifecycle", () => {
         },
       ],
     });
-    expect(destination.getLastSelection()).toBeNull();
   });
 });

@@ -87,22 +87,23 @@ export function useLandingPromptStashSource(args: {
         if (runtimeStore.getState().contentRevision !== token.revision) {
           return false;
         }
-        const handle = editorRef.current;
-        if (handle !== null && handle.isReady()) {
-          handle.clear();
-          return true;
-        }
+        let canonicalRuntime = null;
         if (draftId !== null) {
-          const canonicalRuntime = draftRuntimeRegistry.getOrHydrate(draftId);
-          // A replaced runtime is stale even when its numeric revision
-          // matches - only mutate the exact store the token was verified
-          // against above.
+          canonicalRuntime = draftRuntimeRegistry.getOrHydrate(draftId);
           if (
             canonicalRuntime === null ||
             canonicalRuntime.store !== runtimeStore
           ) {
             return false;
           }
+        }
+        const handle = editorRef.current;
+        if (handle !== null && handle.isReady()) {
+          handle.clear();
+          return true;
+        }
+        if (draftId !== null) {
+          if (canonicalRuntime === null) return false;
           canonicalRuntime.setSnapshot(EMPTY_DRAFT_RUNTIME_CONTENT, null);
           return true;
         }

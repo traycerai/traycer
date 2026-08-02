@@ -15,10 +15,10 @@ import type {
 import type {
   PromptStashSourceAdapter,
   PromptStashSourceSnapshot,
+  PromptStashSurface,
   PromptStashSourceToken,
 } from "@/lib/composer/prompt-stash-source";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
-import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 
 export function textDoc(text: string): JsonContent {
   return {
@@ -83,7 +83,7 @@ export function makeSource(
         content?: JsonContent;
         revision?: number;
         identity?: string;
-        surface?: string;
+        surface?: PromptStashSurface;
         clearIfUnchanged?: (token: PromptStashSourceToken) => boolean;
       }
     | undefined,
@@ -150,7 +150,6 @@ export interface MutableDestination extends PromptStashDestinationAdapter {
   getEditorGeneration: () => object;
   setLatestContent: (content: JsonContent) => void;
   getLatestContent: () => JsonContent;
-  getLastSelection: () => DraftSelection | null;
   getInserts: () => readonly InsertedPayload[];
 }
 
@@ -180,7 +179,6 @@ export function makeDestination(
   let editorGeneration: object =
     options?.editorGeneration ?? Object.freeze({ generation: "default" });
   let latestContent = options?.latestContent ?? emptyDoc();
-  let lastSelection: DraftSelection | null = null;
   const inserts: InsertedPayload[] = [];
 
   const captureIdentity: Mock<
@@ -204,7 +202,6 @@ export function makeDestination(
           args.content,
         );
         latestContent = nextContent;
-        lastSelection = null;
       }
       return Promise.resolve(options.importResult);
     }
@@ -218,7 +215,6 @@ export function makeDestination(
     }
     const nextContent = appendPromptStashContent(latestContent, args.content);
     latestContent = nextContent;
-    lastSelection = null;
     inserts.push({
       identity: args.identity,
       content: args.content,
@@ -251,14 +247,12 @@ export function makeDestination(
       latestContent = next;
     },
     getLatestContent: () => latestContent,
-    getLastSelection: () => lastSelection,
     getInserts: () => inserts,
   };
 }
 
 export function makeEditor(initial: {
   content: JsonContent;
-  selection?: { from: number; to: number } | null;
   ready?: boolean;
 }): {
   readonly handle: ComposerPromptEditorHandle;

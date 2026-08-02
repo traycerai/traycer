@@ -430,6 +430,49 @@ describe("usePromptStashStore", () => {
     peer.close();
   });
 
+  it("preserves a newer peer reload that starts before an older local save completes", async () => {
+    const initial = [entry("a", 1, "a")];
+    let resolveSave: ((value: PromptStashManifest) => void) | undefined;
+    let resolvePeerLoad: ((value: PromptStashManifest) => void) | undefined;
+    const pendingSave = new Promise<PromptStashManifest>((resolve) => {
+      resolveSave = resolve;
+    });
+    const pendingPeerLoad = new Promise<PromptStashManifest>((resolve) => {
+      resolvePeerLoad = resolve;
+    });
+
+    let loadCount = 0;
+    const { usePromptStashStore } = await loadStore({
+      load: async () => {
+        loadCount += 1;
+        return loadCount === 1 ? manifest(initial, 1) : pendingPeerLoad;
+      },
+    });
+    await usePromptStashStore.getState().hydrate();
+
+    repoMocks.savePromptStashSnapshot.mockReturnValueOnce(pendingSave);
+    const savePromise = usePromptStashStore.getState().save({
+      entry: entry("local", 2, "local"),
+      imagesByHash: new Map(),
+    });
+
+    const peer = new FakeBroadcastChannel(PROMPT_STASH_CHANNEL);
+    peer.postMessage({ type: "changed", revision: 3 });
+    await vi.waitFor(() => expect(loadCount).toBe(2));
+
+    const localRows = [entry("local", 2, "local"), ...initial];
+    resolveSave?.(manifest(localRows, 2));
+    await savePromise;
+    expect(usePromptStashStore.getState().rows).toEqual(asRows(localRows));
+
+    const peerRows = [entry("peer", 3, "peer"), ...localRows];
+    resolvePeerLoad?.(manifest(peerRows, 3));
+    await vi.waitFor(() => {
+      expect(usePromptStashStore.getState().rows).toEqual(asRows(peerRows));
+    });
+    peer.close();
+  });
+
   it("does not regress when an earlier-issued hydrate/reload resolves after a later one", async () => {
     let resolveFirst: ((value: PromptStashManifest) => void) | undefined;
     let resolveSecond: ((value: PromptStashManifest) => void) | undefined;

@@ -61,9 +61,9 @@ export interface ComposerPromptEditorHandle {
   readonly clear: () => void;
   /**
    * Replace the document and notify the owner via the normal `onDocumentChange`
-   * signal (a real editor-level document mutation) - used by a destination
-   * adapter (prompt-stash restore) that has no other way to tell its owning
-   * store the content changed. See {@link syncContent} for the opposite case.
+   * signal (a real editor-level document mutation). The landing and new-
+   * conversation prompt-stash destinations use this path; chat records its
+   * canonical replacement first and then uses {@link syncContent}.
    */
   readonly setContent: (
     content: JsonContent,
@@ -152,14 +152,17 @@ export interface ComposerPromptEditorProps {
    */
   readonly onDocumentChange: (
     content: JsonContent,
-    selection: { from: number; to: number },
+    selection: { readonly from: number; readonly to: number },
   ) => void;
   /**
    * Caret/selection moved with no document mutation. Deliberately carries no
    * `content` - a selection-only event must never serialize the document (it
    * can carry multi-megabyte inline images), so this never calls `getJSON()`.
    */
-  readonly onSelectionChange: (selection: { from: number; to: number }) => void;
+  readonly onSelectionChange: (selection: {
+    readonly from: number;
+    readonly to: number;
+  }) => void;
   readonly onSubmit: (source: ChatComposerSubmitSource) => void;
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
   readonly onDragOver: DragEventHandler<HTMLElement>;

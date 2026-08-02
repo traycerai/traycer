@@ -176,13 +176,16 @@ function webpChunk(name: string, data: readonly number[]): number[] {
 
 /**
  * Minimal structurally valid static WebP (VP8 payload).
- * Total size = 20 + dataLen + (dataLen % 2) so every length ≥ 20 is reachable.
+ * RIFF chunks are word-aligned, so only even total lengths are reachable.
  */
 export function staticWebpBytesOfSize(
   byteLength: number,
 ): Uint8Array<ArrayBuffer> {
   if (byteLength < 20) {
     throw new Error(`Static WebP fixture too small: ${byteLength}`);
+  }
+  if (byteLength % 2 !== 0) {
+    throw new Error(`Static WebP fixture size must be even: ${byteLength}`);
   }
   const need = byteLength - 20;
   const dataLen = need % 2 === 0 ? need : need - 1;
@@ -208,6 +211,9 @@ export function animatedWebpBytesOfSize(
 ): Uint8Array<ArrayBuffer> {
   if (byteLength < 38 + 1) {
     throw new Error(`Animated WebP fixture too small: ${byteLength}`);
+  }
+  if (byteLength % 2 !== 0) {
+    throw new Error(`Animated WebP fixture size must be even: ${byteLength}`);
   }
   const need = byteLength - 38;
   const anmfData = need % 2 === 0 ? need : need - 1;

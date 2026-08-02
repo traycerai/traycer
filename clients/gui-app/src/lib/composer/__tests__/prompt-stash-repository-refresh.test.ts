@@ -156,6 +156,41 @@ describe("prompt-stash-repository refresh", () => {
     ).toEqual(["recovered"]);
   });
 
+  it("rejects a blocked open and re-arms the cached connection promise", async () => {
+    const realFactory = new FakeIDBFactory();
+    let blockOnce = true;
+    function blockedRequest(): IDBOpenDBRequest {
+      const request = realFactory.open(`${DB_NAME}:blocked-request`);
+      queueMicrotask(() => request.dispatchEvent(new Event("blocked")));
+      return request;
+    }
+    const testFactory: IDBFactory = {
+      open(name: string, version: number | undefined): IDBOpenDBRequest {
+        if (name === DB_NAME && blockOnce) {
+          blockOnce = false;
+          return blockedRequest();
+        }
+        return version === undefined
+          ? realFactory.open(name)
+          : realFactory.open(name, version);
+      },
+      deleteDatabase: (name) => realFactory.deleteDatabase(name),
+      cmp: (first, second) => realFactory.cmp(first, second),
+      databases: () => realFactory.databases(),
+    };
+    globalThis.indexedDB = testFactory;
+    globalThis.IDBKeyRange = FakeIDBKeyRange;
+
+    const repo = await loadRepo();
+    await expect(repo.loadPromptStashSnapshot()).rejects.toThrow(
+      "blocked by another window",
+    );
+    await expect(repo.loadPromptStashSnapshot()).resolves.toEqual({
+      rows: [],
+      revision: 0,
+    });
+  });
+
   it("re-arms dbPromise after versionchange closes the cached connection", async () => {
     const repo = await loadRepo();
     await repo.savePromptStashSnapshot(

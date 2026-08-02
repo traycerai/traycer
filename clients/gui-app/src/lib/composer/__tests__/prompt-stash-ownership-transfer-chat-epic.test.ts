@@ -423,11 +423,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
       .getState()
       .setSnapshot(taskB, emptyDoc(), null);
     const editorB = makeEditorHandle({ content: emptyDoc() });
-    const epicBResolver = vi.fn((hash: string) => {
-      // Epic B cannot resolve epic A hashes.
-      if (hash === epicAHash) return Promise.resolve(null);
-      return Promise.resolve(null);
-    });
+    const epicBResolver = vi.fn((_hash: string) => Promise.resolve(null));
 
     const { result: restoreHook } = renderHook(() =>
       h.usePromptStash({
@@ -460,7 +456,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
     expect(attrs[0]?.id).not.toBe("epic-img");
     // Epic A hash never appears on the restored node.
     expect(JSON.stringify(restored)).not.toContain(epicAHash);
-    expect(epicBResolver).not.toHaveBeenCalledWith(epicAHash);
+    expect(epicBResolver).not.toHaveBeenCalled();
 
     cleanup();
   });

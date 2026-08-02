@@ -7,7 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import type { PromptStashController } from "@/hooks/composer/use-prompt-stash";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
@@ -751,9 +751,20 @@ describe("PromptStashControl", () => {
     const remove = vi.fn(() => Promise.resolve(undefined));
     const restore = vi.fn(() => Promise.resolve(true));
     const writeText = vi.fn(() => Promise.resolve(undefined));
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
+    });
+    onTestFinished(() => {
+      if (originalClipboard === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+        return;
+      }
+      Object.defineProperty(navigator, "clipboard", originalClipboard);
     });
 
     const withText = {

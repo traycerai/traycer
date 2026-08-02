@@ -44,6 +44,13 @@ export class PromptStashImagePreparationError extends Error {
   }
 }
 
+export class PromptStashImageUnavailableError extends Error {
+  constructor() {
+    super("A prompt image is not available on this device yet.");
+    this.name = "PromptStashImageUnavailableError";
+  }
+}
+
 const MAX_INLINE_IMAGE_BASE64_LENGTH =
   Math.ceil((PROMPT_STASH_IMAGE_MAX_BYTES * 4) / 3) + 4;
 
@@ -157,7 +164,7 @@ async function resolveImageSource(args: {
   }
   const bytes = await args.readHashImage(args.sourceHash);
   if (bytes === null) {
-    throw new Error("A prompt image is not available on this device yet.");
+    throw new PromptStashImageUnavailableError();
   }
   return bytes;
 }
@@ -180,7 +187,7 @@ export async function materializePromptStashEntry(
     }
     const blob = blobs.get(hash);
     if (blob === undefined) {
-      throw new Error("A stashed image is missing from durable storage.");
+      throw new PromptStashMissingBlobError();
     }
     // The node's own declared MIME/size can diverge from what the verified
     // blob actually is (the entry and its blob store having drifted apart) -

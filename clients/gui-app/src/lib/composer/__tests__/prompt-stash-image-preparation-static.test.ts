@@ -442,7 +442,7 @@ describe("prompt-stash-image-preparation static codecs/compression", () => {
       expect(call).toBeGreaterThan(1);
     });
   });
-  it("documents ICC/color-profile loss as non-observable through the public API", () => {
+  it("pins the static and total prompt-stash image byte limits", () => {
     expect(PROMPT_STASH_STATIC_IMAGE_MAX_BYTES).toBe(975 * 1024);
     expect(PROMPT_STASH_IMAGE_MAX_BYTES).toBe(5 * 1024 * 1024);
   });

@@ -163,6 +163,7 @@ describe("usePromptStash capture/source CAS", () => {
     resetActivePromptStashForTests();
     materializeMocks.impl = null;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("does not clear the source when durable save fails", async () => {
@@ -246,17 +247,16 @@ describe("usePromptStash capture/source CAS", () => {
       await import("@/lib/composer/__tests__/prompt-stash-image-fixtures");
     const imageBytes = twoFrameGifBytesOfSize(64);
     const bitmapClose = vi.fn(() => undefined);
-    Object.defineProperty(globalThis, "createImageBitmap", {
-      configurable: true,
-      writable: true,
-      value: vi.fn(() =>
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(() =>
         Promise.resolve({
           width: 16,
           height: 16,
           close: bitmapClose,
         }),
       ),
-    });
+    );
     const hash = await sha256Hex(imageBytes);
     const stashContent = imageDoc({
       id: "img-hash",
@@ -309,13 +309,10 @@ describe("usePromptStash capture/source CAS", () => {
     const { structurallyAnimatedGifWithCorruptLzw } =
       await import("@/lib/composer/__tests__/prompt-stash-image-fixtures");
     const imageBytes = structurallyAnimatedGifWithCorruptLzw(128);
-    Object.defineProperty(globalThis, "createImageBitmap", {
-      configurable: true,
-      writable: true,
-      value: vi.fn(() =>
-        Promise.reject(new Error("codec unreadable animated GIF")),
-      ),
-    });
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(() => Promise.reject(new Error("codec unreadable animated GIF"))),
+    );
     const hash = await sha256Hex(imageBytes);
     const stashContent = imageDoc({
       id: "img-corrupt-anim",

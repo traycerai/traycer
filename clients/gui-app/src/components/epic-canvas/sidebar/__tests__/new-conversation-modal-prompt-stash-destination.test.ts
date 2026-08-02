@@ -9,7 +9,6 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { useNewConversationPromptStashDestination } from "@/components/epic-canvas/sidebar/use-new-conversation-prompt-stash-adapters";
-import type { PromptStashDestinationIdentity } from "@/lib/composer/prompt-stash-destination";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 
@@ -154,6 +153,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
       editorRef: editor.editorRef,
     });
     const captured = result.current.captureIdentity();
+    if (captured === null) throw new Error("expected capture");
     expect(captured).toEqual({
       surface: "new-conversation",
       identity: epicId,
@@ -162,7 +162,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
 
     editor.unmount();
     const insertResult = await result.current.importAndInsert({
-      identity: captured as PromptStashDestinationIdentity,
+      identity: captured,
       content: textDoc("should not insert"),
     });
     expect(insertResult).toEqual({ status: "stale" });

@@ -39,7 +39,7 @@ function idbStringKey(key: IDBValidKey): string {
 }
 
 vi.mock("idb-keyval", () => ({
-  createStore: vi.fn(() => Promise.reject(new Error("unused"))),
+  createStore: vi.fn(() => () => undefined),
   get: vi.fn((key: IDBValidKey) =>
     Promise.resolve(idbData.get(idbStringKey(key))),
   ),
