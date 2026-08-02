@@ -393,47 +393,43 @@ export function LandingComposer(props: LandingComposerProps) {
       const acceptedBytes = decoded.filter(
         (bytes): bytes is Uint8Array<ArrayBuffer> => bytes !== null,
       );
-      // One budget reservation for the whole paste, held until every accepted
-      // image's background ingest job below settles (success or failure) -
-      // mirroring the file-drop path in `use-landing-composer-paste.ts`. The
-      // hash isn't known yet, so each image reserves anonymously (see
-      // `landing-image-budget.ts`).
-      const reservation =
-        acceptedBytes.length === 0
-          ? null
-          : reserveLandingImageBudget(
-              draftId,
-              acceptedBytes.map((bytes) => ({
-                hash: null,
-                bytes: bytes.byteLength,
-              })),
-            );
-      const budgetOk = acceptedBytes.length === 0 || reservation !== null;
-      if (acceptedBytes.length > 0 && reservation === null) {
+      // Reserve atomically as a batch, but retain one handle per image so an
+      // unmounted job releases its own anonymous charge before that image's
+      // remount re-entry acquires the now-hash-aware reservation. Holding one
+      // aggregate handle until the slowest sibling settles can transiently
+      // double-charge earlier images near the cap.
+      const reservations: LandingImageBudgetReservation[] = [];
+      for (const bytes of acceptedBytes) {
+        const reservation = reserveLandingImageBudget(draftId, [
+          { hash: null, bytes: bytes.byteLength },
+        ]);
+        if (reservation === null) break;
+        reservations.push(reservation);
+      }
+      const budgetOk = reservations.length === acceptedBytes.length;
+      if (!budgetOk) {
+        for (const reservation of reservations) reservation.release();
+        reservations.length = 0;
         scheduleLandingImageReconcile();
       }
-      // Released once every job started below has settled - never partially,
-      // and never if the budget rejected the whole batch (nothing was reserved).
-      let remainingJobs = budgetOk ? acceptedBytes.length : 0;
-      const releaseReservationShare = (): void => {
-        remainingJobs -= 1;
-        if (remainingJobs <= 0) reservation?.release();
-      };
       // Count ONLY undecodable images toward the generic "corrupted or too large"
       // toast. A valid image blocked solely by the aggregate budget is already
       // covered by `reserveLandingImageBudget`'s own accurate budget toast, so
       // adding this one would double-toast it with a false cause — matching the
       // shared file-paste path, which returns after the budget toast.
       let corruptedCount = 0;
+      let acceptedIndex = 0;
       const outcomes = decoded.map((bytes): PastedComposerImageOutcome => {
         if (bytes === null) {
           corruptedCount += 1;
           return { kind: "rejected" };
         }
         if (!budgetOk) return { kind: "rejected" };
+        const reservation = reservations[acceptedIndex];
+        acceptedIndex += 1;
         const id = uuidv4();
         startPendingImageIngest(id, bytes, {
-          onSettled: releaseReservationShare,
+          onSettled: () => reservation.release(),
           reserveAfterStore: false,
         });
         return { kind: "accepted", id };

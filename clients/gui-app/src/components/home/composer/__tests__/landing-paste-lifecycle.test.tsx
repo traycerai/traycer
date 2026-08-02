@@ -749,6 +749,68 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     });
   });
 
+  it("releases each pasted image reservation before staggered remount re-entry", async () => {
+    const bytesA = bytesOf([1, 2, 3]);
+    const bytesB = bytesOf([4, 5, 6]);
+    const hashA = await sha256Hex(bytesA);
+    const hashB = await sha256Hex(bytesB);
+    const competing = reserveLandingImageBudget("near-cap", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - 6 },
+    ]);
+    expect(competing).not.toBeNull();
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+    await waitFor(() => {
+      expect(setGates.has(hashA)).toBe(true);
+      expect(setGates.has(hashB)).toBe(true);
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // Settle only A. Its original job must release A's anonymous share before
+    // the remounted job reserves the hash-aware share; B remains fully pending
+    // and keeps its own reservation throughout.
+    setGates.get(hashA)?.release();
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms).toHaveLength(2);
+      expect(atoms[0]?.hash).toBe(hashA);
+      expect(atoms[0]?.b64content).toBeNull();
+      expect(atoms[1]?.hash).toBeNull();
+      expect(atoms[1]?.b64content).not.toBeNull();
+    });
+
+    setGates.get(hashB)?.release();
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms[1]?.hash).toBe(hashB);
+      expect(atoms[1]?.b64content).toBeNull();
+    });
+    competing?.release();
+  });
+
   it("re-reserves a pending image after an inactive gap and rejects it when capacity was consumed", async () => {
     const bytes = bytesOf([6, 6, 6]);
     const hash = await sha256Hex(bytes);
