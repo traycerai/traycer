@@ -113,6 +113,13 @@ interface TestState {
   archivedIds: readonly string[];
   archiveMutate: Mock;
   archiveBatchPending: boolean;
+  /**
+   * `useEpicArchiveChat().isPending` - the PER-ROW mutation. Distinct from
+   * `archiveBatchPending`, which drives the bulk `useEpicArchiveChats` hook
+   * only; a row's own hard-disabled-while-in-flight state is unreachable
+   * through that one.
+   */
+  archiveRowPending: boolean;
   archiveMutateAsync: Mock<
     (input: {
       readonly epicId: string;
@@ -172,6 +179,7 @@ const testState = vi.hoisted<TestState>(() => ({
   archivedIds: [],
   archiveMutate: vi.fn(),
   archiveBatchPending: false,
+  archiveRowPending: false,
   archiveMutateAsync: vi.fn(),
   rowHostId: "host-1",
   rowHostEntry: { hostId: "host-1" },
@@ -320,7 +328,11 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     readonly onSelect: () => void;
     readonly "data-testid": string;
     readonly disabled: boolean;
-    readonly "aria-disabled": boolean;
+    // `undefined` is not padding: a HARD-disabled entry OMITS the key entirely
+    // so Radix's own derived `aria-disabled` survives, and only a soft-disabled
+    // one spreads `true`. Declaring it as a required boolean would describe a
+    // shape the production component never emits.
+    readonly "aria-disabled": boolean | undefined;
     readonly "aria-describedby": string | undefined;
   }) => (
     <button
@@ -421,7 +433,7 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicArchiveChat: () => ({
     mutate: testState.archiveMutate,
     mutateAsync: testState.archiveMutateAsync,
-    isPending: false,
+    isPending: testState.archiveRowPending,
   }),
   useEpicCreateChat: () => ({
     mutate: testState.createChatMutate,
@@ -805,6 +817,7 @@ describe("epic sidebar selection mode", () => {
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
     testState.archiveBatchPending = false;
+    testState.archiveRowPending = false;
     testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
@@ -3864,7 +3877,11 @@ describe("chat row archive", () => {
     // Soft-disabled, so Radix `disabled` is false and no `data-disabled`
     // pointer-events trap applies - which is what lets the tooltip trigger sit
     // on the item and keeps the item directly under the menu.
-    expect(item.matches(":disabled")).toBe(false);
+    //
+    // `data-disabled` carries the whole assertion. A `:disabled` check would
+    // read like a second one but could never fail here: this item is real
+    // Radix, so it is a `<div role="menuitem">`, and CSS `:disabled` matches
+    // only form elements. See `isMenuItemUnavailable` below.
     expect(item.hasAttribute("data-disabled")).toBe(false);
     expect(item.parentElement).toBe(
       screen.getByTestId("epic-sidebar-context-rename-chat-root")
@@ -3910,12 +3927,21 @@ describe("chat row archive", () => {
     // A transient in-flight mutation is hard-disabled and carries no reason.
     // Pointing `aria-describedby` at an element that does not exist would be
     // worse than omitting it, so the id must be absent, not empty.
+    //
+    // Driven through `archiveRowPending`, the PER-ROW hook. Clearing
+    // `activeAgentIds` alone would leave the entry fully ENABLED, so the
+    // assertion would hold for a row that is not disabled at all - passing
+    // without ever reaching the state named in the title.
     seedChatTree();
     testState.activeAgentIds = new Set();
+    testState.archiveRowPending = true;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     const item = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    // Genuinely unavailable...
+    expect(isMenuItemUnavailable(item)).toBe(true);
+    // ...and hard-disabled, so Radix keeps its own ARIA rather than ours.
     expect(item.getAttribute("aria-describedby")).toBeNull();
   });
 });

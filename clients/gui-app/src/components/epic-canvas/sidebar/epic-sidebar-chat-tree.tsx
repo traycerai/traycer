@@ -2484,7 +2484,13 @@ interface ChatRowArchiveDecision {
  * keeps its two arms disjoint under test; this is the same split one surface
  * earlier, where the user actually is.
  */
-function archiveBlockedReason(running: IndicatorRunningKind): string {
+function archiveBlockedReason(
+  // Excludes the idle tier rather than trusting the caller's `running !== false`
+  // guard. Without it a future caller could pass an idle row and silently get
+  // the background-items copy, which describes a state that is not blocked at
+  // all - a wrong explanation, not a missing one.
+  running: Exclude<IndicatorRunningKind, false>,
+): string {
   if (running === "turn") {
     // Hedged, because this tier is NOT "a turn is running". `chatActivityIndicator`
     // deliberately maps a detached subagent or workflow fleet outliving its turn
@@ -2556,15 +2562,20 @@ function chatRowArchiveState(args: {
   readonly hasChildren: boolean;
   readonly expanded: boolean;
 }): ChatRowArchiveDecision {
-  const blocksArchive = !args.isArchived && args.status.running !== false;
+  // The tier that BLOCKS, or `false` for none. Carrying the narrowed value
+  // rather than a separate boolean is what lets `archiveBlockedReason` refuse
+  // the idle tier by type: a bare `blocksArchive` flag proves nothing to the
+  // compiler about `status.running` at the call below.
+  const blockingRun: IndicatorRunningKind = args.isArchived
+    ? false
+    : args.status.running;
   const slotMayShowRollup = args.hasChildren && !args.expanded;
   return {
     entry: {
       isArchived: args.isArchived,
-      disabled: blocksArchive || args.archivePending,
-      disabledTooltip: blocksArchive
-        ? archiveBlockedReason(args.status.running)
-        : null,
+      disabled: blockingRun !== false || args.archivePending,
+      disabledTooltip:
+        blockingRun === false ? null : archiveBlockedReason(blockingRun),
     },
     showButton:
       args.canMutate &&
