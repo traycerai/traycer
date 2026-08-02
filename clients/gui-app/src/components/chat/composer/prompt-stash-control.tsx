@@ -322,7 +322,7 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
           side="top"
           align="end"
           sideOffset={6}
-          className="w-[calc(100vw-2rem)] max-w-lg gap-0 overflow-hidden p-0"
+          className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg gap-0 overflow-hidden p-0"
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={handleCloseAutoFocus}
         >
@@ -330,13 +330,13 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
             loop
             value={selectedId ?? ""}
             onValueChange={setHighlightedId}
-            className="rounded-lg bg-transparent p-0"
+            className="max-h-full min-h-0 rounded-lg bg-transparent p-0"
           >
             <div className="flex h-8 items-center gap-1.5 border-b border-border/60 px-2.5 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground">
               <Bookmark className="size-3" aria-hidden />
               <span>Stashed prompts</span>
             </div>
-            <CommandList ref={listRef} className="max-h-60">
+            <CommandList ref={listRef} className="min-h-0 max-h-none">
               <CommandGroup className="p-1">
                 {rows.map((row) =>
                   row.kind === "entry" ? (

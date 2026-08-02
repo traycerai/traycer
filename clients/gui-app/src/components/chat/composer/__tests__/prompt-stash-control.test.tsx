@@ -233,6 +233,9 @@ describe("PromptStashControl", () => {
     );
 
     expect(popover?.className).toContain("max-w-lg");
+    expect(popover?.className).toContain(
+      "--radix-popover-content-available-height",
+    );
     expect(popover?.className).toContain("p-0");
     expect(row?.className).toContain("min-h-9");
     expect(row?.className).toContain("py-1.5");
