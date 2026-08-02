@@ -26,8 +26,8 @@ interface SidebarBulkSelectionState {
   readonly selectionMode: boolean;
   readonly selectedIds: ReadonlySet<string>;
   readonly selectableIds: readonly string[];
-  /** A settled mutation may leave its last selection for projection to prune. */
-  readonly exitOnSelectablePrune: boolean;
+  /** Settled mutation roots whose later projection may prune the last selection. */
+  readonly exitOnSelectablePruneIds: ReadonlySet<string>;
   readonly pendingDeleteIds: readonly string[] | null;
   readonly deletePending: boolean;
 }
@@ -43,7 +43,10 @@ type SidebarBulkSelectionAction =
   | { readonly type: "closeDelete" }
   | { readonly type: "setDeletePending"; readonly pending: boolean }
   | { readonly type: "clearSelected"; readonly ids: readonly string[] }
-  | { readonly type: "armSelectablePruneExit" }
+  | {
+      readonly type: "armSelectablePruneExit";
+      readonly ids: readonly string[];
+    }
   | { readonly type: "reset" };
 
 export interface SidebarBulkSelectionValue {
@@ -67,20 +70,21 @@ export interface SidebarBulkSelectionValue {
   readonly closeDeleteDialog: () => void;
   readonly setDeletePending: (pending: boolean) => void;
   readonly clearSelectedIds: (ids: readonly string[]) => void;
-  /** Exit if a later selectable-id projection removes the final selection. */
-  readonly armSelectablePruneExit: () => void;
+  /** Exit if projection of these mutation roots removes the final selection. */
+  readonly armSelectablePruneExit: (ids: readonly string[]) => void;
   readonly resetSelection: () => void;
 }
 
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
 const EMPTY_SELECTABLE_IDS: readonly string[] = Object.freeze([]);
+const EMPTY_SELECTABLE_PRUNE_IDS: ReadonlySet<string> = new Set();
 const EMPTY_TREE_IDS: readonly string[] = Object.freeze([]);
 
 const INITIAL_SELECTION_STATE: SidebarBulkSelectionState = {
   selectionMode: false,
   selectedIds: EMPTY_SELECTED_IDS,
   selectableIds: EMPTY_SELECTABLE_IDS,
-  exitOnSelectablePrune: false,
+  exitOnSelectablePruneIds: EMPTY_SELECTABLE_PRUNE_IDS,
   pendingDeleteIds: null,
   deletePending: false,
 };
@@ -155,8 +159,8 @@ export function SidebarBulkSelectionProvider(
     dispatch({ type: "clearSelected", ids });
   }, []);
 
-  const armSelectablePruneExit = useCallback(() => {
-    dispatch({ type: "armSelectablePruneExit" });
+  const armSelectablePruneExit = useCallback((ids: readonly string[]) => {
+    dispatch({ type: "armSelectablePruneExit", ids });
   }, []);
 
   const resetSelection = useCallback(() => {
@@ -304,7 +308,7 @@ function sidebarBulkSelectionReducer(
     return setSelectableSidebarIds(state, action.ids);
   }
   if (action.type === "armSelectablePruneExit") {
-    return armSelectablePruneExit(state);
+    return armSelectablePruneExit(state, action.ids);
   }
   switch (action.type) {
     case "enter":
@@ -314,7 +318,7 @@ function sidebarBulkSelectionReducer(
         ...state,
         selectionMode: false,
         selectedIds: new Set(),
-        exitOnSelectablePrune: false,
+        exitOnSelectablePruneIds: EMPTY_SELECTABLE_PRUNE_IDS,
         pendingDeleteIds: null,
       };
     case "toggle": {
@@ -324,8 +328,8 @@ function sidebarBulkSelectionReducer(
         ...state,
         selectionMode: true,
         selectedIds: nextSelectedIds,
-        exitOnSelectablePrune: retainSelectablePruneExit(
-          state.exitOnSelectablePrune,
+        exitOnSelectablePruneIds: retainSelectablePruneExitIds(
+          state.exitOnSelectablePruneIds,
           nextSelectedIds,
         ),
         pendingDeleteIds: null,
@@ -341,7 +345,7 @@ function sidebarBulkSelectionReducer(
       return {
         ...state,
         selectedIds: new Set(),
-        exitOnSelectablePrune: false,
+        exitOnSelectablePruneIds: EMPTY_SELECTABLE_PRUNE_IDS,
       };
     case "requestDelete":
       if (action.ids.length === 0) return state;
@@ -359,22 +363,29 @@ function sidebarBulkSelectionReducer(
 
 function armSelectablePruneExit(
   state: SidebarBulkSelectionState,
+  ids: readonly string[],
 ): SidebarBulkSelectionState {
   if (
     !state.selectionMode ||
     state.selectedIds.size === 0 ||
-    state.exitOnSelectablePrune
+    ids.length === 0
   ) {
     return state;
   }
-  return { ...state, exitOnSelectablePrune: true };
+  const selectableIdSet = new Set(state.selectableIds);
+  const nextIds = ids.reduce<Set<string>>((result, id) => {
+    if (selectableIdSet.has(id)) result.add(id);
+    return result;
+  }, new Set(state.exitOnSelectablePruneIds));
+  if (nextIds.size === state.exitOnSelectablePruneIds.size) return state;
+  return { ...state, exitOnSelectablePruneIds: nextIds };
 }
 
-function retainSelectablePruneExit(
-  armed: boolean,
+function retainSelectablePruneExitIds(
+  ids: ReadonlySet<string>,
   selectedIds: ReadonlySet<string>,
-): boolean {
-  return selectedIds.size > 0 && armed;
+): ReadonlySet<string> {
+  return selectedIds.size > 0 ? ids : EMPTY_SELECTABLE_PRUNE_IDS;
 }
 
 function setSelectableSidebarIds(
@@ -384,9 +395,15 @@ function setSelectableSidebarIds(
   if (sameStringArray(state.selectableIds, ids)) {
     return state;
   }
-  const nextSelectedIds = selectedIdsVisibleIn(ids, state.selectedIds);
+  const nextSelectedIds = idsVisibleIn(ids, state.selectedIds);
+  const nextSelectablePruneIds = idsVisibleIn(
+    ids,
+    state.exitOnSelectablePruneIds,
+  );
+  const archiveProjectionSettled =
+    nextSelectablePruneIds.size < state.exitOnSelectablePruneIds.size;
   const projectionPrunedLastSelection =
-    state.exitOnSelectablePrune &&
+    archiveProjectionSettled &&
     state.selectedIds.size > 0 &&
     nextSelectedIds.size === 0;
   return {
@@ -394,9 +411,7 @@ function setSelectableSidebarIds(
     selectableIds: ids,
     selectedIds: nextSelectedIds,
     selectionMode: projectionPrunedLastSelection ? false : state.selectionMode,
-    exitOnSelectablePrune: projectionPrunedLastSelection
-      ? false
-      : state.exitOnSelectablePrune,
+    exitOnSelectablePruneIds: nextSelectablePruneIds,
   };
 }
 
@@ -436,19 +451,19 @@ function clearSelectedIds(
     ...state,
     selectedIds: nextSelectedIds,
     selectionMode: nextSelectionMode,
-    exitOnSelectablePrune: nextSelectionMode
-      ? state.exitOnSelectablePrune
-      : false,
+    exitOnSelectablePruneIds: nextSelectionMode
+      ? state.exitOnSelectablePruneIds
+      : EMPTY_SELECTABLE_PRUNE_IDS,
     pendingDeleteIds: null,
   };
 }
 
-function selectedIdsVisibleIn(
+function idsVisibleIn(
   selectableIds: readonly string[],
-  selectedIds: ReadonlySet<string>,
+  candidateIds: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const selectableIdSet = new Set(selectableIds);
-  return [...selectedIds].reduce<Set<string>>((next, id) => {
+  return [...candidateIds].reduce<Set<string>>((next, id) => {
     if (selectableIdSet.has(id)) next.add(id);
     return next;
   }, new Set());

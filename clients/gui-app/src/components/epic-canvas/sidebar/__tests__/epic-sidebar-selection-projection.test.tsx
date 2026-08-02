@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -110,6 +110,7 @@ function ProjectionSelectionProbe() {
   const tree = useEpicTreeIndex();
   const archivedIds = useEpicArchivedNodeIds();
   const selection = useSidebarBulkSelection();
+  const [peerHidden, setPeerHidden] = useState(false);
   const hiddenIds = useMemo(
     () =>
       new Set(
@@ -124,12 +125,13 @@ function ProjectionSelectionProbe() {
   const selectableIds = useMemo(
     () =>
       Object.keys(tree.nodeById).filter((id) => {
+        if (peerHidden && id === PEER_ID) return false;
         const type = tree.nodeById[id].type;
         return (
           (type === "chat" || type === "terminal-agent") && !hiddenIds.has(id)
         );
       }),
-    [hiddenIds, tree],
+    [hiddenIds, peerHidden, tree],
   );
   const setSelectableIds = selection.setSelectableIds;
   useEffect(() => {
@@ -151,10 +153,13 @@ function ProjectionSelectionProbe() {
         type="button"
         onClick={() => {
           selection.clearSelectedIds([ROOT_ID]);
-          selection.armSelectablePruneExit();
+          selection.armSelectablePruneExit([ROOT_ID]);
         }}
       >
         Settle archive response
+      </button>
+      <button type="button" onClick={() => setPeerHidden(true)}>
+        Hide peer
       </button>
       <output data-testid="selection-mode">
         {selection.selectionMode ? "selecting" : "idle"}
@@ -178,6 +183,14 @@ function projectArchivedReparent(handle: OpenEpicStoreHandle): void {
     peer.set("parentId", ROOT_ID);
     root.set("archivedAt", 2);
   });
+}
+
+function projectArchivedRoot(handle: OpenEpicStoreHandle): void {
+  const chats: unknown = handle.doc.getMap("epic").get("chats");
+  if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+  const root: unknown = chats.get(ROOT_ID);
+  if (!(root instanceof Y.Map)) throw new Error("expected root chat");
+  root.set("archivedAt", 2);
 }
 
 afterEach(() => {
@@ -217,6 +230,53 @@ describe("sidebar selection projection reconciliation", () => {
         expect(screen.getByTestId("selectable-count").textContent).toBe("0");
         expect(screen.getByTestId("selected-count").textContent).toBe("0");
         expect(screen.getByTestId("selection-mode").textContent).toBe("idle");
+      });
+    } finally {
+      view.unmount();
+      handle.dispose();
+    }
+  });
+
+  it("does not let a settled archive projection exit a later unrelated prune", async () => {
+    const handle = createSession();
+    const view = render(
+      <EpicSessionContext.Provider value={handle}>
+        <SidebarBulkSelectionProvider panelId="chats" collapsed={false}>
+          <ProjectionSelectionProbe />
+        </SidebarBulkSelectionProvider>
+      </EpicSessionContext.Provider>,
+    );
+    try {
+      await waitFor(() => {
+        expect(screen.getByTestId("selectable-count").textContent).toBe("2");
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Enter selection" }));
+      fireEvent.click(screen.getByRole("button", { name: "Select root" }));
+      fireEvent.click(screen.getByRole("button", { name: "Select peer" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Settle archive response" }),
+      );
+
+      act(() => {
+        projectArchivedRoot(handle);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("selectable-count").textContent).toBe("1");
+        expect(screen.getByTestId("selected-count").textContent).toBe("1");
+        expect(screen.getByTestId("selection-mode").textContent).toBe(
+          "selecting",
+        );
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Hide peer" }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("selectable-count").textContent).toBe("0");
+        expect(screen.getByTestId("selected-count").textContent).toBe("0");
+        expect(screen.getByTestId("selection-mode").textContent).toBe(
+          "selecting",
+        );
       });
     } finally {
       view.unmount();

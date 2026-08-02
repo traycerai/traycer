@@ -1417,7 +1417,7 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
           // event that removes the final selection. Arm that one projection
           // path so it exits instead of leaving a zero-selected toolbar.
           if (successfulRootIds.length > 0) {
-            selection.armSelectablePruneExit();
+            selection.armSelectablePruneExit(successfulRootIds);
           }
         },
       },
