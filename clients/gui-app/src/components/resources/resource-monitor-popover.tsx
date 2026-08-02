@@ -20,6 +20,7 @@ import {
   Cpu,
   ListChecks,
   Monitor,
+  Search,
   Server,
   X,
 } from "lucide-react";
@@ -36,6 +37,12 @@ import { displayTitle } from "@/lib/display-title";
 import { useRegisteredEpicLiveArtifactTitle } from "@/lib/epic-selectors";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
@@ -239,6 +246,24 @@ interface OwnerProcessRows {
   readonly treeRssBytes: number;
 }
 
+interface ResourceSearchProjection {
+  readonly desktopApp: DesktopAppResourceUsage | null;
+  readonly hostApp: AppResourceUsage | null;
+  readonly other: OtherResourceUsage | null;
+  readonly taskRows: readonly TaskDisplayRow[];
+  readonly visibleOwnerKeys: ReadonlySet<string>;
+  readonly active: boolean;
+  readonly noResults: boolean;
+}
+
+interface KillTargetIndexInput {
+  readonly owners: readonly OwnerResourceUsage[];
+  readonly other: OtherResourceUsage | null;
+  readonly defaultHostId: string | null;
+  readonly visibleOwnerKeys: ReadonlySet<string>;
+  readonly searchQuery: string;
+}
+
 const NO_EXPANDED_PROCESSES: ReadonlySet<string> = new Set();
 
 // For process rows that can never expand (e.g. the host's single root process).
@@ -371,6 +396,7 @@ function useResourceKillSelection(
 
 function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const [sortOption, setSortOption] = useState<ResourceSortOption>("tab");
+  const [searchQuery, setSearchQuery] = useState("");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [expandedOwners, setExpandedOwners] = useState<Set<string>>(
     () => new Set(),
@@ -386,15 +412,6 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const dismissingSortMenuRef = useRef(false);
   const projection = useGlobalResourceProjection();
-  const killTargetIndex = useMemo(
-    () =>
-      buildKillTargetIndex(projection.owners, projection.other, defaultHostId),
-    [projection.owners, projection.other, defaultHostId],
-  );
-  const killSelection = useResourceKillSelection(
-    killTargetIndex.live,
-    killTargetIndex.topLevel,
-  );
   const resourcesVersion = useStreamMethodSchemaVersion("resources.subscribe");
   const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const canvas = useResourceCanvasSnapshot();
@@ -446,6 +463,45 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       recordByOwner,
       sortOption,
     ],
+  );
+  const search = useMemo(
+    () =>
+      buildResourceSearchProjection({
+        desktopApp,
+        hostApp: projection.app,
+        other: supportsHostTree ? projection.other : null,
+        taskRows,
+        searchQuery,
+      }),
+    [
+      desktopApp,
+      projection.app,
+      projection.other,
+      searchQuery,
+      supportsHostTree,
+      taskRows,
+    ],
+  );
+  const killTargetIndex = useMemo(
+    () =>
+      buildKillTargetIndex({
+        owners: projection.owners,
+        other: search.other,
+        defaultHostId,
+        visibleOwnerKeys: search.visibleOwnerKeys,
+        searchQuery,
+      }),
+    [
+      defaultHostId,
+      projection.owners,
+      search.other,
+      search.visibleOwnerKeys,
+      searchQuery,
+    ],
+  );
+  const killSelection = useResourceKillSelection(
+    killTargetIndex.live,
+    killTargetIndex.topLevel,
   );
 
   const toggleOwner = (key: string): void => {
@@ -651,6 +707,8 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
             </div>
           </div>
 
+          <ResourceSearchInput value={searchQuery} onChange={setSearchQuery} />
+
           {summary === null ? (
             <div className="mt-4 text-ui-xs text-muted-foreground">
               Waiting for resource data.
@@ -694,26 +752,28 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
         </div>
 
         <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
-          {desktopApp === null ? null : (
+          {search.desktopApp === null ? null : (
             <DesktopAppResourceSection
-              app={desktopApp}
+              app={search.desktopApp}
               sortOption={sortOption}
+              searchQuery={searchQuery}
             />
           )}
-          {projection.app === null ? null : (
-            <HostAppResourceSection app={projection.app} />
+          {search.hostApp === null ? null : (
+            <HostAppResourceSection app={search.hostApp} />
           )}
           {summary === null ? null : (
             <div className="py-1">
-              {taskRows.length === 0 ? (
+              {!search.active && search.taskRows.length === 0 ? (
                 <div className="px-3.5 py-4 text-center text-ui-xs text-muted-foreground">
                   No active task process trees.
                 </div>
               ) : (
-                taskRows.map((task) => (
+                search.taskRows.map((task) => (
                   <TaskResourceSection
                     key={task.entry.epicId}
                     task={task}
+                    searchQuery={searchQuery}
                     expandedOwners={expandedOwners}
                     expandedProcesses={expandedProcesses}
                     sortOption={sortOption}
@@ -724,9 +784,10 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                   />
                 ))
               )}
-              {!supportsHostTree || projection.other === null ? null : (
+              {search.other === null ? null : (
                 <OtherResourceSection
-                  other={projection.other}
+                  other={search.other}
+                  searchQuery={searchQuery}
                   expandedProcesses={expandedProcesses}
                   sortOption={sortOption}
                   onToggleProcess={toggleProcess}
@@ -734,6 +795,11 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                   killHostId={defaultHostId}
                 />
               )}
+              {search.noResults ? (
+                <div className="px-3.5 py-6 text-center text-ui-xs text-muted-foreground">
+                  No resources match “{searchQuery.trim()}”.
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -821,6 +887,41 @@ function useResourceCanvasSnapshot(): CanvasResourceSnapshot {
   );
 }
 
+function ResourceSearchInput(props: {
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+}) {
+  return (
+    <InputGroup className="mt-3 h-7">
+      <InputGroupAddon align="inline-start">
+        <Search className="size-3.5" aria-hidden />
+      </InputGroupAddon>
+      <InputGroupInput
+        type="text"
+        role="searchbox"
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+        placeholder="Search resources…"
+        aria-label="Search resources"
+        autoComplete="off"
+        spellCheck={false}
+        className="text-ui-sm"
+      />
+      {props.value.length > 0 ? (
+        <InputGroupAddon align="inline-end">
+          <InputGroupButton
+            size="icon-xs"
+            aria-label="Clear resource search"
+            onClick={() => props.onChange("")}
+          >
+            <X />
+          </InputGroupButton>
+        </InputGroupAddon>
+      ) : null}
+    </InputGroup>
+  );
+}
+
 function MetricBlock(props: {
   readonly label: string;
   readonly value: string;
@@ -840,6 +941,7 @@ function MetricBlock(props: {
 function DesktopAppResourceSection(props: {
   readonly app: DesktopAppResourceUsage;
   readonly sortOption: ResourceSortOption;
+  readonly searchQuery: string;
 }) {
   const showOther =
     props.app.other.cpuPercent > 0 ||
@@ -850,7 +952,11 @@ function DesktopAppResourceSection(props: {
       { label: "Main", usage: props.app.main },
       { label: "Renderer", usage: props.app.renderer },
       ...(showOther ? [{ label: "Other", usage: props.app.other }] : []),
-    ],
+    ].filter(
+      (group) =>
+        matchesResourceSearch(props.searchQuery, ["Traycer Desktop"]) ||
+        matchesResourceSearch(props.searchQuery, [group.label]),
+    ),
     props.sortOption,
   );
 
@@ -1039,6 +1145,7 @@ function buildEpicTitleById(
 
 function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
+  readonly searchQuery: string;
   readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
@@ -1049,6 +1156,7 @@ function TaskResourceSection(props: {
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
+  const taskMatchesSearch = taskRowMatchesSearch(props.task, props.searchQuery);
 
   useLayoutEffect(() => {
     const header = headerRef.current;
@@ -1092,6 +1200,7 @@ function TaskResourceSection(props: {
           <OwnerTreeRow
             key={key}
             row={row}
+            searchQuery={taskMatchesSearch ? "" : props.searchQuery}
             expanded={props.expandedOwners.has(key)}
             expandedProcesses={props.expandedProcesses}
             sortOption={props.sortOption}
@@ -1109,6 +1218,7 @@ function TaskResourceSection(props: {
 
 function OtherResourceSection(props: {
   readonly other: OtherResourceSnapshotWire;
+  readonly searchQuery: string;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
   readonly onToggleProcess: (key: string) => void;
@@ -1121,12 +1231,22 @@ function OtherResourceSection(props: {
   // need; the per-root breakdown (provider servers, probes, misc children)
   // is inspect-on-demand, matching collapsed-by-default owner trees.
   const [expanded, setExpanded] = useState(false);
-  const processRows = buildProcessRows(
+  const allProcessRows = buildProcessRows(
     props.other.processes,
     props.expandedProcesses,
     props.other,
     props.sortOption,
   );
+  const sectionMatchesSearch = matchesResourceSearch(props.searchQuery, [
+    "Other",
+  ]);
+  const processRows = sectionMatchesSearch
+    ? allProcessRows
+    : filterOwnerProcessRowsForSearch(allProcessRows, props.searchQuery, true);
+  const searchForcesExpanded =
+    normalizeResourceSearch(props.searchQuery).length > 0 &&
+    !sectionMatchesSearch;
+  const visibleExpanded = expanded || searchForcesExpanded;
 
   useLayoutEffect(() => {
     const header = headerRef.current;
@@ -1150,14 +1270,20 @@ function OtherResourceSection(props: {
       >
         <button
           type="button"
-          aria-expanded={expanded}
+          aria-expanded={visibleExpanded}
           aria-label={
-            expanded ? "Collapse other processes" : "Expand other processes"
+            visibleExpanded
+              ? "Collapse other processes"
+              : "Expand other processes"
           }
-          onClick={() => setExpanded((previous) => !previous)}
+          onClick={() => {
+            if (!searchForcesExpanded) {
+              setExpanded((previous) => !previous);
+            }
+          }}
           className="flex min-w-0 items-center gap-1 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
-          {expanded ? (
+          {visibleExpanded ? (
             <ChevronDown className="size-3.5 shrink-0" />
           ) : (
             <ChevronRight className="size-3.5 shrink-0" />
@@ -1175,7 +1301,7 @@ function OtherResourceSection(props: {
           <span className={ROW_ACTION_SLOT} />
         </div>
       </div>
-      {!expanded
+      {!visibleExpanded
         ? null
         : processRows.rootRows.map((processRow) => (
             <ProcessTreeRow
@@ -1372,24 +1498,20 @@ function OwnerRowKillCell(props: {
  * (descendant process rows are excluded - killing an owner already takes its
  * whole tree, and counting children would double-count).
  */
-function buildKillTargetIndex(
-  owners: readonly OwnerResourceUsage[],
-  other: OtherResourceUsage | null,
-  defaultHostId: string | null,
-): {
+function buildKillTargetIndex(input: KillTargetIndexInput): {
   readonly live: ReadonlySet<string>;
   readonly topLevel: ReadonlyMap<string, KillTarget>;
 } {
   const live = new Set<string>();
   const topLevel = new Map<string, KillTarget>();
-  for (const owner of owners) {
+  for (const owner of input.owners) {
     const key = ownerKey(
       owner.owner.epicId,
       owner.owner.kind,
       owner.owner.ownerId,
     );
     live.add(key);
-    if (owner.rootPids.length > 0) {
+    if (owner.rootPids.length > 0 && input.visibleOwnerKeys.has(key)) {
       topLevel.set(key, {
         key,
         hostId: owner.owner.hostId,
@@ -1398,12 +1520,23 @@ function buildKillTargetIndex(
     }
     for (const process of owner.processes) live.add(processRowKey(process));
   }
-  if (other !== null && defaultHostId !== null) {
-    for (const process of other.processes) {
+  if (input.other !== null && input.defaultHostId !== null) {
+    for (const process of input.other.processes) {
       const key = processRowKey(process);
       live.add(key);
-      if (process.rootPid === process.pid) {
-        topLevel.set(key, { key, hostId: defaultHostId, pids: [process.pid] });
+      if (
+        process.rootPid === process.pid &&
+        otherRootMatchesSearch(
+          input.other.processes,
+          process.pid,
+          input.searchQuery,
+        )
+      ) {
+        topLevel.set(key, {
+          key,
+          hostId: input.defaultHostId,
+          pids: [process.pid],
+        });
       }
     }
   }
@@ -1458,6 +1591,7 @@ function OwnerProviderIcon(props: { readonly harnessId: string | null }) {
 
 function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
+  readonly searchQuery: string;
   readonly expanded: boolean;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
@@ -1484,10 +1618,18 @@ function OwnerTreeRow(props: {
     props.row.snapshot,
     props.sortOption,
   );
-  const visibleCpuPercent = props.expanded
+  const processSearch = buildOwnerProcessSearchProjection(
+    props.row,
+    label,
+    processRows,
+    props.searchQuery,
+  );
+  const visibleProcessRows = processSearch.rows;
+  const visibleExpanded = props.expanded || processSearch.forcesExpanded;
+  const visibleCpuPercent = visibleExpanded
     ? processRows.selfCpuPercent
     : processRows.treeCpuPercent;
-  const visibleRssBytes = props.expanded
+  const visibleRssBytes = visibleExpanded
     ? processRows.selfRssBytes
     : processRows.treeRssBytes;
   const harnessId = props.row.snapshot.harnessId;
@@ -1512,17 +1654,17 @@ function OwnerTreeRow(props: {
         className={cn(
           "group relative flex items-center pr-3.5 transition-colors hover:bg-muted/50",
           selected && "bg-muted/40",
-          props.expanded && "sticky z-10 bg-popover",
+          visibleExpanded && "sticky z-10 bg-popover",
         )}
-        style={props.expanded ? { top: props.stickyTop } : undefined}
+        style={visibleExpanded ? { top: props.stickyTop } : undefined}
       >
         <OwnerRowLeadingCell
           kill={kill}
           canKill={canKill}
           target={killTarget}
           label={label}
-          canExpand={processRows.canExpand}
-          expanded={props.expanded}
+          canExpand={visibleProcessRows.canExpand}
+          expanded={visibleExpanded}
           onToggle={props.onToggle}
         />
         <button
@@ -1567,9 +1709,9 @@ function OwnerTreeRow(props: {
           label={label}
         />
       </div>
-      {!props.expanded
+      {!visibleExpanded
         ? null
-        : processRows.rows.map((processRow) => (
+        : visibleProcessRows.rows.map((processRow) => (
             <ProcessTreeRow
               key={processRowKey(processRow.process)}
               processRow={processRow}
@@ -1941,6 +2083,249 @@ function buildTaskRows(input: {
     ];
   });
   return sortTaskRows(rows, input.sortOption);
+}
+
+function normalizeResourceSearch(searchQuery: string): string {
+  return searchQuery.trim().toLocaleLowerCase();
+}
+
+function matchesResourceSearch(
+  searchQuery: string,
+  terms: readonly (string | number | null)[],
+): boolean {
+  const normalized = normalizeResourceSearch(searchQuery);
+  if (normalized.length === 0) return true;
+  const haystack = terms
+    .map((term) => (term === null ? "" : String(term)))
+    .join(" ")
+    .toLocaleLowerCase();
+  return normalized.split(/\s+/).every((token) => haystack.includes(token));
+}
+
+function processMatchesSearch(
+  process: ResourceProcessSnapshotWire,
+  searchQuery: string,
+): boolean {
+  return matchesResourceSearch(searchQuery, [
+    process.name,
+    process.command,
+    process.pid,
+    process.parentPid,
+    process.rootPid,
+  ]);
+}
+
+function taskRowMatchesSearch(
+  task: TaskDisplayRow,
+  searchQuery: string,
+): boolean {
+  return matchesResourceSearch(searchQuery, [task.label, task.entry.epicId]);
+}
+
+function ownerMetadataMatchesSearch(
+  row: OwnerDisplayRow,
+  label: string,
+  searchQuery: string,
+): boolean {
+  const snapshot = row.snapshot;
+  return matchesResourceSearch(searchQuery, [
+    label,
+    ownerKindLabel(snapshot.owner.kind),
+    harnessProviderSubtitle(
+      snapshot.harnessId,
+      snapshot.owner.kind,
+      snapshot.activeProcessName,
+    ),
+    snapshot.owner.ownerId,
+    snapshot.owner.hostId,
+  ]);
+}
+
+function ownerRowMatchesSearch(
+  row: OwnerDisplayRow,
+  searchQuery: string,
+): boolean {
+  return (
+    ownerMetadataMatchesSearch(row, row.label, searchQuery) ||
+    row.snapshot.processes.some((process) =>
+      processMatchesSearch(process, searchQuery),
+    )
+  );
+}
+
+function buildOwnerProcessSearchProjection(
+  row: OwnerDisplayRow,
+  label: string,
+  processRows: OwnerProcessRows,
+  searchQuery: string,
+): { readonly rows: OwnerProcessRows; readonly forcesExpanded: boolean } {
+  const ownerMatches = ownerMetadataMatchesSearch(row, label, searchQuery);
+  return {
+    rows: ownerMatches
+      ? processRows
+      : filterOwnerProcessRowsForSearch(processRows, searchQuery, false),
+    forcesExpanded:
+      normalizeResourceSearch(searchQuery).length > 0 && !ownerMatches,
+  };
+}
+
+function filterTaskRowsForSearch(
+  rows: readonly TaskDisplayRow[],
+  searchQuery: string,
+): TaskDisplayRow[] {
+  if (normalizeResourceSearch(searchQuery).length === 0) return [...rows];
+  return rows.flatMap((task): TaskDisplayRow[] => {
+    if (taskRowMatchesSearch(task, searchQuery)) return [task];
+    const owners = task.owners.filter((owner) =>
+      ownerRowMatchesSearch(owner, searchQuery),
+    );
+    return owners.length === 0 ? [] : [{ ...task, owners }];
+  });
+}
+
+function buildResourceSearchProjection(input: {
+  readonly desktopApp: DesktopAppResourceUsage | null;
+  readonly hostApp: AppResourceUsage | null;
+  readonly other: OtherResourceUsage | null;
+  readonly taskRows: readonly TaskDisplayRow[];
+  readonly searchQuery: string;
+}): ResourceSearchProjection {
+  const desktopApp =
+    input.desktopApp !== null &&
+    desktopAppMatchesSearch(input.desktopApp, input.searchQuery)
+      ? input.desktopApp
+      : null;
+  const hostApp =
+    input.hostApp !== null &&
+    hostAppMatchesSearch(input.hostApp, input.searchQuery)
+      ? input.hostApp
+      : null;
+  const other =
+    input.other !== null &&
+    otherResourcesMatchSearch(input.other, input.searchQuery)
+      ? input.other
+      : null;
+  const taskRows = filterTaskRowsForSearch(input.taskRows, input.searchQuery);
+  const visibleOwnerKeys = new Set(
+    taskRows.flatMap((task) =>
+      task.owners.map((owner) =>
+        ownerKey(
+          owner.snapshot.owner.epicId,
+          owner.snapshot.owner.kind,
+          owner.snapshot.owner.ownerId,
+        ),
+      ),
+    ),
+  );
+  const active = normalizeResourceSearch(input.searchQuery).length > 0;
+  const hasResults =
+    desktopApp !== null ||
+    hostApp !== null ||
+    other !== null ||
+    taskRows.length > 0;
+  return {
+    desktopApp,
+    hostApp,
+    other,
+    taskRows,
+    visibleOwnerKeys,
+    active,
+    noResults: active && !hasResults,
+  };
+}
+
+function desktopAppMatchesSearch(
+  app: DesktopAppResourceUsage,
+  searchQuery: string,
+): boolean {
+  if (
+    matchesResourceSearch(searchQuery, ["Traycer Desktop", "Main", "Renderer"])
+  ) {
+    return true;
+  }
+  const showOther =
+    app.other.cpuPercent > 0 ||
+    app.other.rssBytes > 0 ||
+    app.other.processCount > 0;
+  return showOther && matchesResourceSearch(searchQuery, ["Other"]);
+}
+
+function hostAppMatchesSearch(
+  app: AppResourceUsage,
+  searchQuery: string,
+): boolean {
+  return (
+    matchesResourceSearch(searchQuery, ["Traycer Host"]) ||
+    (app.process !== null && processMatchesSearch(app.process, searchQuery))
+  );
+}
+
+function otherResourcesMatchSearch(
+  other: OtherResourceUsage,
+  searchQuery: string,
+): boolean {
+  return (
+    matchesResourceSearch(searchQuery, ["Other"]) ||
+    other.processes.some((process) =>
+      processMatchesSearch(process, searchQuery),
+    )
+  );
+}
+
+function otherRootMatchesSearch(
+  processes: readonly ResourceProcessSnapshotWire[],
+  rootPid: number,
+  searchQuery: string,
+): boolean {
+  return (
+    matchesResourceSearch(searchQuery, ["Other"]) ||
+    processes.some(
+      (process) =>
+        process.rootPid === rootPid &&
+        processMatchesSearch(process, searchQuery),
+    )
+  );
+}
+
+function filterProcessDisplayRowsForSearch(
+  rows: readonly ProcessDisplayRow[],
+  searchQuery: string,
+): ProcessDisplayRow[] {
+  return rows.flatMap((row): ProcessDisplayRow[] => {
+    if (processMatchesSearch(row.process, searchQuery)) return [row];
+    const children = filterProcessDisplayRowsForSearch(
+      row.children,
+      searchQuery,
+    );
+    if (children.length === 0) return [];
+    return [
+      {
+        ...row,
+        canExpand: true,
+        expanded: true,
+        hiddenCount: 0,
+        children,
+      },
+    ];
+  });
+}
+
+function filterOwnerProcessRowsForSearch(
+  processRows: OwnerProcessRows,
+  searchQuery: string,
+  includeRoots: boolean,
+): OwnerProcessRows {
+  if (normalizeResourceSearch(searchQuery).length === 0) return processRows;
+  const rows = filterProcessDisplayRowsForSearch(
+    includeRoots ? processRows.rootRows : processRows.rows,
+    searchQuery,
+  );
+  return {
+    ...processRows,
+    rows: includeRoots ? processRows.rows : rows,
+    rootRows: includeRoots ? rows : processRows.rootRows,
+    canExpand: rows.length > 0,
+  };
 }
 
 function buildCanvasResourceIndex(

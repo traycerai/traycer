@@ -497,6 +497,90 @@ describe("ResourceMonitorPopover", () => {
     ).toBe("true");
   });
 
+  it("filters tasks and owners with case-insensitive free text", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({}),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-closed",
+              },
+              rootPids: [200],
+              activeProcessName: "bun",
+              processes: [
+                resourceProcess({
+                  pid: 200,
+                  rootPid: 200,
+                  name: "bun",
+                  command: "bun run build",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+    fireEvent.change(search, { target: { value: "BACKGROUND" } });
+
+    expect(screen.getByText("Background Task")).not.toBeNull();
+    expect(screen.getByText("Background Terminal")).not.toBeNull();
+    expect(screen.queryByText("Resource Task")).toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+
+    resourcesKillMock.mutate.mockClear();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [200],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear resource search" }),
+    );
+    expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  it("reveals matching nested processes and reports an empty search", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+
+    fireEvent.change(search, { target: { value: "DEV-SERVER" } });
+    expect(
+      screen.getByText("node dev-server.js (2 sub-processes)"),
+    ).not.toBeNull();
+
+    fireEvent.change(search, { target: { value: "103" } });
+    expect(screen.getByText("make")).not.toBeNull();
+
+    fireEvent.change(search, { target: { value: "not-a-resource" } });
+    expect(
+      screen.getByText("No resources match “not-a-resource”."),
+    ).not.toBeNull();
+    expect(screen.queryByText("Resource Task")).toBeNull();
+  });
+
   it("uses the live chat title when the persisted owner name is untitled", async () => {
     liveArtifactTitleMock.title = "Generated chat title";
     canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
