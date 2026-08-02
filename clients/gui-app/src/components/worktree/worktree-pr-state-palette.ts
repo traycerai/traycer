@@ -49,3 +49,21 @@ export const PR_STATE_TINT_CLASS: Record<WorktreeDisplayedPrState, string> = {
   closed: "text-red-800 dark:text-red-300",
   merged: "text-purple-800 dark:text-purple-300",
 };
+
+/**
+ * The pill's own surface: a borderless state tint under `text-foreground`.
+ * Outline + fill + coloured label stacked three signals for one fact and read
+ * as a warning box rather than a link; the tint alone carries the state, the
+ * glyph above says WHICH state, and the label stays legible foreground text.
+ *
+ * Shared by the chat/owner hover card (`worktree-pr-metadata.tsx`) and the
+ * Epic PR panel row, which renders the same "PR number + state" idea and must
+ * not grow a second dialect of it.
+ */
+export const PR_STATE_PILL_CLASS: Record<WorktreeDisplayedPrState, string> = {
+  open: "border-transparent bg-green-500/10 text-foreground hover:bg-green-500/20",
+  closed:
+    "border-transparent bg-red-500/10 text-foreground hover:bg-red-500/20",
+  merged:
+    "border-transparent bg-purple-500/10 text-foreground hover:bg-purple-500/20",
+};

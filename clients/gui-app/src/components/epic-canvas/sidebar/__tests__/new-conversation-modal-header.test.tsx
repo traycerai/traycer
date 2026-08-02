@@ -50,6 +50,7 @@ describe("<NewConversationModalAction />", () => {
         triggerLabel="New agent"
         triggerTestId="new-agent"
         actionRevealClassName=""
+        onBeforeOpen={undefined}
       />,
     );
 

@@ -20,6 +20,7 @@ import {
   matchDigitAction,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
+import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { SystemTabModalApi } from "@/stores/tabs/use-system-tab-modal";
 
@@ -159,6 +160,23 @@ function panelUiForDraft(draftId: string | null) {
     <TooltipProvider>
       <LandingTerminalGestureProvider draftId={draftId}>
         <LandingTerminalPanel />
+      </LandingTerminalGestureProvider>
+    </TooltipProvider>
+  );
+}
+
+function panelUiInBoxlessPaneAnchor() {
+  return (
+    <TooltipProvider>
+      <LandingTerminalGestureProvider draftId="draft-a">
+        <div className="flex" data-testid="landing-terminal-layout-row">
+          <div
+            data-testid="landing-terminal-pane-anchor"
+            style={{ display: "contents" }}
+          >
+            <LandingTerminalPanel />
+          </div>
+        </div>
       </LandingTerminalGestureProvider>
     </TooltipProvider>
   );
@@ -359,6 +377,64 @@ describe("<LandingTerminalPanel />", () => {
     });
   });
 
+  it("resizes through the boxless split-pane portal anchor", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    render(panelUiInBoxlessPaneAnchor());
+
+    const handle = await screen.findByTestId("landing-terminal-resize-handle");
+    const panel = screen.getByTestId("landing-terminal-panel");
+    const layoutRow = screen.getByTestId("landing-terminal-layout-row");
+    const paneAnchor = screen.getByTestId("landing-terminal-pane-anchor");
+    expect(window.getComputedStyle(paneAnchor).display).toBe("contents");
+    vi.spyOn(paneAnchor, "getBoundingClientRect").mockReturnValue(
+      testRect(0, 0, 0),
+    );
+    vi.spyOn(layoutRow, "getBoundingClientRect").mockReturnValue(
+      testRect(1_000, 800, 0),
+    );
+    vi.spyOn(panel, "getBoundingClientRect").mockReturnValue(
+      testRect(360, 800, 640),
+    );
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 7,
+        clientX: 640,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 7,
+        clientX: 540,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    expect(panel.style.width).toBe("46%");
+    expect(useLandingTerminalStore.getState().panelWidthFraction).toBe(0.36);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerup", {
+        pointerId: 7,
+        clientX: 540,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(useLandingTerminalStore.getState().panelWidthFraction).toBe(0.46);
+  });
+
   it("auto-spawns in the host home when nothing is pinned", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -426,6 +502,9 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
+    expect(useLandingTerminalStore.getState().tabs[0]?.name).toBe(
+      "project · New Terminal",
+    );
 
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
     await waitFor(() => {

@@ -448,6 +448,32 @@ export function openNotificationsStream(
   factory: NotificationsStreamClientFactory,
   onAuthError: (() => void) | null,
 ): () => void {
+  return openNotificationsRoomStream(
+    factory,
+    onAuthError,
+    "document-and-awareness",
+  );
+}
+
+/**
+ * Opens the per-user notification room only for its cross-host activity
+ * awareness. Cloud notification rows have their own authoritative relay, but
+ * activity presence still lives on `notifications.subscribe@1.1`; keeping
+ * this reader separate prevents legacy Y.Doc rows, writes, and connection
+ * status from leaking back into cloud mode.
+ */
+export function openNotificationsAwarenessStream(
+  factory: NotificationsStreamClientFactory,
+  onAuthError: (() => void) | null,
+): () => void {
+  return openNotificationsRoomStream(factory, onAuthError, "awareness-only");
+}
+
+function openNotificationsRoomStream(
+  factory: NotificationsStreamClientFactory,
+  onAuthError: (() => void) | null,
+  mode: "document-and-awareness" | "awareness-only",
+): () => void {
   replica.clearAwareness();
   const targetDoc = replica.getDoc();
   let disposed = false;
@@ -479,6 +505,10 @@ export function openNotificationsStream(
     client = factory({
       onSnapshot: (meta, snapshotBytes) => {
         if (!isCurrent()) return;
+        if (mode === "awareness-only") {
+          reopenScheduler.resetBackoff();
+          return;
+        }
         // `Y.applyUpdate` fires the doc's "update" listener synchronously, so
         // the entries/unreadCount projection runs without us having to call it
         // here. Only `snapshotMeta` needs an explicit setState.
@@ -506,6 +536,7 @@ export function openNotificationsStream(
       },
       onUpdate: (updateBytes) => {
         if (!isCurrent()) return;
+        if (mode === "awareness-only") return;
         Y.applyUpdate(targetDoc, updateBytes, STREAM_ORIGIN);
       },
       onAwareness: (awarenessBytes) => {
@@ -514,7 +545,9 @@ export function openNotificationsStream(
       },
       onConnectionStatus: (status, reason) => {
         if (!isCurrent()) return;
-        useNotificationsStore.setState({ connectionStatus: status });
+        if (mode === "document-and-awareness") {
+          useNotificationsStore.setState({ connectionStatus: status });
+        }
         if (status !== "closed") return;
         reopenScheduler.scheduleAfterClose(reason);
         if (
@@ -533,16 +566,20 @@ export function openNotificationsStream(
   openClient();
 
   const forwardLocal = (update: Uint8Array, origin: unknown): void => {
-    if (origin === LOCAL_ORIGIN) {
+    if (mode === "document-and-awareness" && origin === LOCAL_ORIGIN) {
       currentClient?.applyUpdate(update);
     }
   };
-  targetDoc.on("update", forwardLocal);
+  if (mode === "document-and-awareness") {
+    targetDoc.on("update", forwardLocal);
+  }
 
   return () => {
     disposed = true;
     reopenScheduler.dispose();
-    targetDoc.off("update", forwardLocal);
+    if (mode === "document-and-awareness") {
+      targetDoc.off("update", forwardLocal);
+    }
     currentClient?.close();
     currentClient = null;
   };

@@ -62,6 +62,7 @@ function QuoteHarness(props: { readonly enabled: boolean }) {
           snapshot={snapshot}
           onDismiss={dismiss}
           boundaryRef={NULL_BOUNDARY}
+          bottomOverlayInsetPx={0}
         />
       ) : null}
     </TooltipProvider>

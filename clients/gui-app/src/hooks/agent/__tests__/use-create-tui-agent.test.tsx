@@ -67,11 +67,25 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+// Real `useHostSupportsMethod` fails closed (no negotiated manifest exists
+// under jsdom), which would silently skip the preflight in every test here.
+// Stubbed `true` by default so the ordering test below can actually exercise
+// the preflight-before-worktree path. Individual tests can override via
+// `useTuiForkProfileSupportedMock.mockReturnValue(false)` for the
+// capability-unsupported case. The hook is read on every render, so a
+// one-shot override would revert to `true` mid-test.
+const useTuiForkProfileSupportedMock = vi.hoisted(() => vi.fn(() => true));
+vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
+  VALIDATE_TUI_FORK_PROFILE_METHOD: "agent.tui.validateForkProfile",
+  useTuiForkProfileSupported: () => useTuiForkProfileSupportedMock(),
+}));
+
 import { toast } from "sonner";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgent,
 } from "@/hooks/agent/use-create-tui-agent";
+import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { peekPreparedTerminalAgentLaunch } from "@/stores/terminals/prepared-terminal-agent-launch-store";
 
 const EPIC_ID = "epic-1";
@@ -159,6 +173,8 @@ describe("useCreateTuiAgent", () => {
     hookMocks.markArtifactPendingCreate.mockReset();
     hookMocks.unmarkArtifactPendingCreate.mockReset();
     hookMocks.navigateNested.mockClear();
+    useTuiForkProfileSupportedMock.mockReset();
+    useTuiForkProfileSupportedMock.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -223,8 +239,9 @@ describe("useCreateTuiAgent", () => {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
-          agentMode: "regular",
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           workspaceMode: "inherit",
           worktreeIntent: intent,
@@ -317,8 +334,9 @@ describe("useCreateTuiAgent", () => {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
-          agentMode: "regular",
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           workspaceMode: "inherit",
           worktreeIntent: intent,
@@ -370,8 +388,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -444,8 +463,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -518,8 +538,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: "claude-sonnet-4",
         reasoningEffort: "high",
-        agentMode: "regular",
         forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: null,
         onStatusChange: (nextStatus) => statuses.push(nextStatus),
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -563,6 +584,7 @@ describe("useCreateTuiAgent", () => {
     expect(persistCall).toBeDefined();
     const preparePayload = prepareCall?.payload as {
       readonly forkSourceHarnessSessionId: string | null;
+      readonly forkSourceTuiAgentId: string | null;
       readonly harnessSessionId: string | null;
       readonly terminalAgentArgs: string | null;
     };
@@ -572,16 +594,25 @@ describe("useCreateTuiAgent", () => {
       readonly title: string;
       readonly harnessSessionId: string | null;
       readonly terminalAgentArgs: string | null;
+      readonly forkSourceHarnessSessionId: string | null;
     };
     expect(preparePayload.forkSourceHarnessSessionId).toBe(
       "source-harness-session",
     );
+    expect(preparePayload.forkSourceTuiAgentId).toBe("source-tui-agent-id");
     expect(preparePayload.harnessSessionId).toBeNull();
     expect(preparePayload.terminalAgentArgs).toBe("--allowedTools Edit");
     expect(persistPayload.parentId).toBe("source-parent");
     expect(persistPayload.title).toBe("Fork - Source terminal");
     expect(persistPayload.harnessSessionId).toBe("harness-session-1");
     expect(persistPayload.terminalAgentArgs).toBe("--allowedTools Edit");
+    // Renderer must thread the source into BOTH prepare and create - the
+    // host persists this create-side field as durable retry provenance
+    // (pendingForkSourceHarnessSessionId); if only prepare carried it, the
+    // direct-GUI fork would silently lose retry provenance again.
+    expect(persistPayload.forkSourceHarnessSessionId).toBe(
+      "source-harness-session",
+    );
     if (persistPayload.tuiAgentId === null) {
       throw new Error("fork create did not pass a client-minted tuiAgentId");
     }
@@ -609,6 +640,365 @@ describe("useCreateTuiAgent", () => {
         pendingTuiHarnessId: "claude",
       }),
     );
+
+    queryClient.clear();
+  });
+
+  it("cross-profile fork preflight rejection dispatches NOTHING - no worktree.create, no prepareLaunch, no createTuiAgent, no placeholder", async () => {
+    const calls: CapturedCall[] = [];
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "agent.tui.validateForkProfile") {
+        return Promise.resolve({
+          verdicts: [
+            {
+              targetProfileId: "profile-a",
+              admitted: true,
+              subcode: null,
+              message: null,
+            },
+            {
+              targetProfileId: "profile-b",
+              admitted: false,
+              subcode: "SCOPE_MISMATCH",
+              message:
+                "harness 'claude' source profile 'profile-a' and target profile 'profile-b' do not share a continuation scope.",
+            },
+          ],
+        });
+      }
+      // Every other method is a bug if reached from this test - a rejected
+      // preflight must short-circuit BEFORE any of them dispatch.
+      return Promise.reject(
+        new Error(`unexpected call to ${method} after preflight rejection`),
+      );
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    // An explicit worktree intent is present precisely to prove it is never
+    // dispatched - the preflight must reject BEFORE `dispatchWorktreeIntent`
+    // (tech plan governing mechanism 2, T3 client ordering).
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: WORKSPACE_PATH,
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "traycer/cross-profile-fork",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+
+    let caught: unknown = null;
+    await act(async () => {
+      try {
+        await result.current.create({
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          parentId: "source-parent",
+          title: "Continue - profile-b",
+          placement: { kind: "active-tile" },
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          forkSourceHarnessSessionId: "source-harness-session",
+          sourceTuiAgentId: "source-tui-agent-id",
+          sourceProfileId: "profile-a",
+          onStatusChange: null,
+          workspaceMode: "inherit",
+          worktreeIntent: intent,
+          terminalAgentArgs: null,
+          profileId: "profile-b",
+        });
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(TuiForkProfileRejectedError);
+    expect((caught as TuiForkProfileRejectedError).subcode).toBe(
+      "SCOPE_MISMATCH",
+    );
+
+    const methodOrder = calls.map((call) => call.method);
+    expect(methodOrder).toEqual(["agent.tui.validateForkProfile"]);
+    expect(methodOrder).not.toContain("worktree.create");
+    expect(methodOrder).not.toContain("agent.tui.prepareLaunch");
+    expect(methodOrder).not.toContain("epic.createTuiAgent");
+    // Nothing created: no placeholder tab, no pending-create mark.
+    expect(hookMocks.openTileInTab).not.toHaveBeenCalled();
+    expect(hookMocks.openTileInPane).not.toHaveBeenCalled();
+    expect(hookMocks.markArtifactPendingCreate).not.toHaveBeenCalled();
+    expect(hookMocks.unmarkArtifactPendingCreate).not.toHaveBeenCalled();
+
+    queryClient.clear();
+  });
+
+  it("amend-02: a tombstoned-source fork to ambient is ADMITTED by the real preflight and proceeds through the full create sequence", async () => {
+    // Host-verdict-driven, not a mocked-create-only assertion (T5 amend-02
+    // requirement #4): `sourceProfileId` is a raw, no-longer-live managed
+    // profile and `profileId` (the target) is ambient (`null`) - genuinely
+    // different, so `resolveForkProfilePreflightTarget` must NOT skip the
+    // preflight (unlike the same-profile case below). The mocked verdict
+    // mirrors exactly what `tui-fork-scope-guard-tombstoned-source-
+    // exemption.test.ts` proves the REAL host now returns for
+    // source=tombstoned-partial-overlay, target=ambient: `admitted: true`.
+    const calls: CapturedCall[] = [];
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "agent.tui.validateForkProfile") {
+        return Promise.resolve({
+          verdicts: [
+            {
+              targetProfileId: null,
+              admitted: true,
+              subcode: null,
+              message: null,
+            },
+          ],
+        });
+      }
+      if (method === "agent.tui.prepareLaunch") {
+        return Promise.resolve(startSessionResponse);
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({
+          tuiAgentId:
+            (payload as { tuiAgentId?: string | null }).tuiAgentId ??
+            "server-id",
+        });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Continue - ambient",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "tombstoned-uuid",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        profileId: null,
+      });
+    });
+
+    const methodOrder = calls.map((c) => c.method);
+    // Preflight was genuinely engaged (proves the source identity is not
+    // mistaken for a trivial same-profile skip)...
+    expect(methodOrder).toContain("agent.tui.validateForkProfile");
+    // ...and, admitted, the full sequence actually completes.
+    expect(methodOrder).toContain("agent.tui.prepareLaunch");
+    expect(methodOrder).toContain("epic.createTuiAgent");
+
+    queryClient.clear();
+  });
+
+  it("same-profile fork skips the preflight round trip entirely (no agent.tui.validateForkProfile call)", async () => {
+    const { calls } = setupSequencedMock();
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Fork - same profile",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "profile-a",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        profileId: "profile-a",
+      });
+    });
+
+    expect(calls.map((c) => c.method)).not.toContain(
+      "agent.tui.validateForkProfile",
+    );
+
+    queryClient.clear();
+  });
+
+  it("capability-unsupported host skips preflight on cross-profile fork but still threads forkSourceTuiAgentId onto prepareLaunch", async () => {
+    // Host does not advertise agent.tui.validateForkProfile - client must
+    // fail closed (skip preflight) and defer entirely to prepareLaunch's
+    // authoritative guard. forkSourceTuiAgentId is still sent so the host
+    // can take the exact-id path.
+    useTuiForkProfileSupportedMock.mockReturnValue(false);
+    const { calls } = setupSequencedMock();
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Continue - profile-b (unsupported host)",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "profile-a",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        // Genuinely cross-profile - would preflight if supported.
+        profileId: "profile-b",
+      });
+    });
+
+    const methodOrder = calls.map((c) => c.method);
+    expect(methodOrder).not.toContain("agent.tui.validateForkProfile");
+    expect(methodOrder).toContain("agent.tui.prepareLaunch");
+    const prepareCall = calls.find(
+      (c) => c.method === "agent.tui.prepareLaunch",
+    );
+    expect(prepareCall).toBeDefined();
+    const preparePayload = prepareCall?.payload as {
+      readonly forkSourceTuiAgentId: string | null;
+      readonly profileId: string | null;
+    };
+    expect(preparePayload.forkSourceTuiAgentId).toBe("source-tui-agent-id");
+    expect(preparePayload.profileId).toBe("profile-b");
+
+    queryClient.clear();
+  });
+
+  it("composite isPending is true while the preflight is held, and settles false once the whole create resolves (amend-01 P2)", async () => {
+    const calls: CapturedCall[] = [];
+    const preflightState: {
+      resolve: ((value: unknown) => void) | null;
+    } = { resolve: null };
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "agent.tui.validateForkProfile") {
+        return new Promise<unknown>((resolve) => {
+          preflightState.resolve = resolve;
+        });
+      }
+      if (method === "agent.tui.prepareLaunch") {
+        return Promise.resolve(startSessionResponse);
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({
+          tuiAgentId:
+            (payload as { tuiAgentId?: string | null }).tuiAgentId ??
+            "server-id",
+        });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+    expect(result.current.isPending).toBe(false);
+
+    const createState: {
+      promise: Promise<string | null> | null;
+    } = { promise: null };
+    act(() => {
+      createState.promise = result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Continue - profile-b",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "profile-a",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        // Genuinely cross-profile so the preflight actually fires and holds.
+        profileId: "profile-b",
+      });
+    });
+
+    await waitFor(() => {
+      expect(preflightState.resolve).not.toBeNull();
+    });
+    // The preflight mutation is the ONLY one in flight at this point - if the
+    // composite excluded it, isPending would read false here even though a
+    // resubmission mid-preflight is exactly what the composite exists to
+    // prevent.
+    expect(result.current.isPending).toBe(true);
+    expect(calls.map((c) => c.method)).toEqual([
+      "agent.tui.validateForkProfile",
+    ]);
+
+    const resolvePreflight = preflightState.resolve;
+    const pendingCreate = createState.promise;
+    if (resolvePreflight === null || pendingCreate === null) {
+      throw new Error("preflight did not start");
+    }
+    await act(async () => {
+      resolvePreflight({
+        verdicts: [
+          {
+            targetProfileId: "profile-b",
+            admitted: true,
+            subcode: null,
+            message: null,
+          },
+        ],
+      });
+      await pendingCreate;
+    });
+
+    // The underlying mutations' own `isPending` flags settle on their own
+    // subsequent render tick after their promises resolve.
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+    });
 
     queryClient.clear();
   });
@@ -674,8 +1064,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -757,8 +1148,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -835,8 +1227,9 @@ describe("useCreateTuiAgent", () => {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
-          agentMode: "regular",
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           workspaceMode: "inherit",
           worktreeIntent: intent,
@@ -893,8 +1286,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -933,8 +1327,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -985,8 +1380,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1033,8 +1429,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1110,8 +1507,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1200,8 +1598,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1259,8 +1658,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: intent,
@@ -1304,8 +1704,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,
@@ -1347,8 +1748,9 @@ describe("useCreateTuiAgent", () => {
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
-        agentMode: "regular",
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         workspaceMode: "inherit",
         worktreeIntent: null,

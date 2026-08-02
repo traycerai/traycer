@@ -9,7 +9,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
@@ -37,6 +36,7 @@ import {
   __setChatStreamClientFactoryForTests,
 } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { installLegendListViewportMetrics } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
@@ -308,12 +308,12 @@ function emitChatSnapshot(
       queue: { status: "idle", items: [...queueItems] },
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: true,
         turnId: "turn-1",
         status: "running",
         harnessId: QUEUED_SETTINGS.harnessId,
         model: QUEUED_SETTINGS.model,
-        agentMode: QUEUED_SETTINGS.agentMode,
         profileId: null,
         userMessageId: "message-active",
         startedAt: 1,
@@ -350,6 +350,7 @@ function emitChatSnapshot(
 }
 
 beforeEach(() => {
+  installLegendListViewportMetrics();
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
@@ -529,37 +530,33 @@ function renderChatTile(): void {
   });
   render(
     <TestRouterProvider>
-      <VirtuosoMessageListTestingContext.Provider
-        value={{ itemHeight: 120, viewportHeight: 900 }}
-      >
-        <QueryClientProvider client={queryClient}>
-          <RunnerHostProvider
-            runnerHost={
-              new MockRunnerHost({
-                signInUrl: "https://example.com",
-                authnBaseUrl: "https://auth.example.com",
-                localHost: null,
-                hosts: [],
-                workspaceFolderPickerPaths: undefined,
-                hasLocalHost: undefined,
-                traycerCli: undefined,
-              })
-            }
-          >
-            <TooltipProvider>
-              <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  <ChatTile
-                    node={CHAT_ARTIFACT}
-                    viewTabId="tab-queue-edit-steer"
-                    isActive
-                  />
-                </TabHostProvider>
-              </TestEpicSessionWrapper>
-            </TooltipProvider>
-          </RunnerHostProvider>
-        </QueryClientProvider>
-      </VirtuosoMessageListTestingContext.Provider>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider
+          runnerHost={
+            new MockRunnerHost({
+              signInUrl: "https://example.com",
+              authnBaseUrl: "https://auth.example.com",
+              localHost: null,
+              hosts: [],
+              workspaceFolderPickerPaths: undefined,
+              hasLocalHost: undefined,
+              traycerCli: undefined,
+            })
+          }
+        >
+          <TooltipProvider>
+            <TestEpicSessionWrapper epicId={EPIC_ID}>
+              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                <ChatTile
+                  node={CHAT_ARTIFACT}
+                  viewTabId="tab-queue-edit-steer"
+                  isActive
+                />
+              </TabHostProvider>
+            </TestEpicSessionWrapper>
+          </TooltipProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
     </TestRouterProvider>,
   );
 }

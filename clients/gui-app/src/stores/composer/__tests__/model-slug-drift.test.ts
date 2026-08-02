@@ -63,7 +63,6 @@ function createStore(
       selection: { harnessId: "claude", modelSlug, profileId: null },
       reasoning: "",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange:
       onSettingsChange === null

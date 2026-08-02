@@ -20,6 +20,8 @@ export const TILE_KIND_MANAGED_COMMAND_OUTPUT = "managed-command-output";
  * `CommGraphTileRef`).
  */
 export const TILE_KIND_COMM_GRAPH = "comm-graph";
+export const TILE_KIND_PR_DETAIL = "pr-detail";
+export const TILE_KIND_PR_DIFF = "pr-diff";
 // A "blank" tab: a real strip tab whose body renders the inline opener until
 // content is picked (which replaces it in place).
 export const TILE_KIND_BLANK = "blank";
@@ -37,6 +39,8 @@ export type TileKindId =
   | typeof TILE_KIND_SNAPSHOT_DIFF
   | typeof TILE_KIND_MANAGED_COMMAND_OUTPUT
   | typeof TILE_KIND_COMM_GRAPH
+  | typeof TILE_KIND_PR_DETAIL
+  | typeof TILE_KIND_PR_DIFF
   | typeof TILE_KIND_BLANK;
 
 export const isTileKind = makeLiteralGuard<TileKindId>({
@@ -52,5 +56,7 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_SNAPSHOT_DIFF]: true,
   [TILE_KIND_MANAGED_COMMAND_OUTPUT]: true,
   [TILE_KIND_COMM_GRAPH]: true,
+  [TILE_KIND_PR_DETAIL]: true,
+  [TILE_KIND_PR_DIFF]: true,
   [TILE_KIND_BLANK]: true,
 });

@@ -1,5 +1,5 @@
 /**
- * Ephemeral per-panel "header search" state for the Epic left sidebar.
+ * Ephemeral per-tab, per-panel "header search" state for the Epic left sidebar.
  *
  * A panel that opts in (`supportsHeaderSearch`) trades its whole header row -
  * chevron, icon, title, actions - for a search input while searching, instead
@@ -9,91 +9,141 @@
  *
  * State lives here rather than in `left-panel-store` because none of it should
  * persist: reopening the app should land you in browse mode, never in a
- * half-typed search. `slotByPanelId` holds the header's live portal target, so
- * the owning search component can keep its input, results, refs, and combobox
- * ARIA wiring in ONE component while the input's DOM renders up in the header.
+ * half-typed search. Each retained top-level tab owns a distinct open flag,
+ * query, and live portal target, so a hidden Epic can never steal or clear the
+ * visible Epic's header. The owning search component can still keep its input,
+ * results, refs, and combobox ARIA wiring in ONE component while the input's DOM
+ * renders up in the header.
  */
 import { create } from "zustand";
 import type { LeftPanelId } from "@/stores/epics/left-panel-store";
 
+type SurfaceRecord<T> = Readonly<Partial<Record<string, T>>>;
+
 interface PanelHeaderSearchStore {
-  readonly openByPanelId: Readonly<Partial<Record<LeftPanelId, boolean>>>;
-  readonly queryByPanelId: Readonly<Partial<Record<LeftPanelId, string>>>;
-  readonly slotByPanelId: Readonly<Partial<Record<LeftPanelId, HTMLElement>>>;
+  readonly openBySurfaceKey: SurfaceRecord<boolean>;
+  readonly queryBySurfaceKey: SurfaceRecord<string>;
+  readonly slotBySurfaceKey: SurfaceRecord<HTMLElement>;
 
   /**
    * Enter search mode. `seed` is the character that triggered it for the
    * type-to-filter path (the keystroke would otherwise be swallowed by the
    * focus handoff), or "" when opened from the header icon.
    */
-  readonly openSearch: (panelId: LeftPanelId, seed: string) => void;
-  readonly closeSearch: (panelId: LeftPanelId) => void;
-  readonly setSearchQuery: (panelId: LeftPanelId, query: string) => void;
-  /** Ref-callback sink for the header's portal target; `null` on unmount. */
-  readonly setSearchSlot: (
+  readonly openSearch: (
+    tabId: string,
     panelId: LeftPanelId,
-    element: HTMLElement | null,
+    seed: string,
+  ) => void;
+  readonly closeSearch: (tabId: string, panelId: LeftPanelId) => void;
+  readonly setSearchQuery: (
+    tabId: string,
+    panelId: LeftPanelId,
+    query: string,
+  ) => void;
+  readonly registerSearchSlot: (
+    tabId: string,
+    panelId: LeftPanelId,
+    element: HTMLElement,
+  ) => void;
+  readonly unregisterSearchSlot: (
+    tabId: string,
+    panelId: LeftPanelId,
+    element: HTMLElement,
   ) => void;
 }
 
 function withoutKey<T>(
-  record: Readonly<Partial<Record<LeftPanelId, T>>>,
-  panelId: LeftPanelId,
-): Readonly<Partial<Record<LeftPanelId, T>>> {
-  if (!Object.hasOwn(record, panelId)) return record;
-  const { [panelId]: _dropped, ...rest } = record;
+  record: SurfaceRecord<T>,
+  key: string,
+): SurfaceRecord<T> {
+  if (!Object.hasOwn(record, key)) return record;
+  const { [key]: _dropped, ...rest } = record;
   return rest;
+}
+
+/** One retained top-level Epic tab owns one independent header-search surface. */
+export function panelHeaderSearchSurfaceKey(
+  tabId: string,
+  panelId: LeftPanelId,
+): string {
+  return JSON.stringify([tabId, panelId]);
 }
 
 export const usePanelHeaderSearchStore = create<PanelHeaderSearchStore>(
   (set) => ({
-    openByPanelId: {},
-    queryByPanelId: {},
-    slotByPanelId: {},
+    openBySurfaceKey: {},
+    queryBySurfaceKey: {},
+    slotBySurfaceKey: {},
 
-    openSearch: (panelId, seed) =>
+    openSearch: (tabId, panelId, seed) => {
+      const key = panelHeaderSearchSurfaceKey(tabId, panelId);
       set((state) => ({
-        openByPanelId: { ...state.openByPanelId, [panelId]: true },
-        queryByPanelId: { ...state.queryByPanelId, [panelId]: seed },
-      })),
+        openBySurfaceKey: { ...state.openBySurfaceKey, [key]: true },
+        queryBySurfaceKey: { ...state.queryBySurfaceKey, [key]: seed },
+      }));
+    },
 
-    closeSearch: (panelId) =>
+    closeSearch: (tabId, panelId) => {
+      const key = panelHeaderSearchSurfaceKey(tabId, panelId);
       set((state) => ({
-        openByPanelId: withoutKey(state.openByPanelId, panelId),
-        queryByPanelId: withoutKey(state.queryByPanelId, panelId),
-      })),
+        openBySurfaceKey: withoutKey(state.openBySurfaceKey, key),
+        queryBySurfaceKey: withoutKey(state.queryBySurfaceKey, key),
+      }));
+    },
 
-    setSearchQuery: (panelId, query) =>
+    setSearchQuery: (tabId, panelId, query) => {
+      const key = panelHeaderSearchSurfaceKey(tabId, panelId);
       set((state) => ({
-        queryByPanelId: { ...state.queryByPanelId, [panelId]: query },
-      })),
+        queryBySurfaceKey: { ...state.queryBySurfaceKey, [key]: query },
+      }));
+    },
 
-    setSearchSlot: (panelId, element) =>
+    registerSearchSlot: (tabId, panelId, element) => {
+      const key = panelHeaderSearchSurfaceKey(tabId, panelId);
       set((state) => ({
-        slotByPanelId:
-          element === null
-            ? withoutKey(state.slotByPanelId, panelId)
-            : { ...state.slotByPanelId, [panelId]: element },
-      })),
+        slotBySurfaceKey: { ...state.slotBySurfaceKey, [key]: element },
+      }));
+    },
+
+    unregisterSearchSlot: (tabId, panelId, element) => {
+      const key = panelHeaderSearchSurfaceKey(tabId, panelId);
+      set((state) => {
+        if (state.slotBySurfaceKey[key] !== element) return state;
+        return {
+          slotBySurfaceKey: withoutKey(state.slotBySurfaceKey, key),
+        };
+      });
+    },
   }),
 );
 
-export function usePanelHeaderSearchOpen(panelId: LeftPanelId): boolean {
+export function usePanelHeaderSearchOpen(
+  tabId: string,
+  panelId: LeftPanelId,
+): boolean {
+  const key = panelHeaderSearchSurfaceKey(tabId, panelId);
   return usePanelHeaderSearchStore(
-    (state) => state.openByPanelId[panelId] === true,
+    (state) => state.openBySurfaceKey[key] === true,
   );
 }
 
-export function usePanelHeaderSearchQuery(panelId: LeftPanelId): string {
+export function usePanelHeaderSearchQuery(
+  tabId: string,
+  panelId: LeftPanelId,
+): string {
+  const key = panelHeaderSearchSurfaceKey(tabId, panelId);
   return usePanelHeaderSearchStore(
-    (state) => state.queryByPanelId[panelId] ?? "",
+    (state) => state.queryBySurfaceKey[key] ?? "",
   );
 }
 
 export function usePanelHeaderSearchSlot(
+  tabId: string,
   panelId: LeftPanelId,
 ): HTMLElement | null {
+  const key = panelHeaderSearchSurfaceKey(tabId, panelId);
   return usePanelHeaderSearchStore(
-    (state) => state.slotByPanelId[panelId] ?? null,
+    (state) => state.slotBySurfaceKey[key] ?? null,
   );
 }

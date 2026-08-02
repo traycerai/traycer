@@ -20,6 +20,8 @@ import type {
   HostRestartRequestResult,
   InstallVersionOk,
   MutationOutcome,
+  NotificationForegroundAppLocal,
+  NotificationForegroundDisplay,
   ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
@@ -174,8 +176,12 @@ export interface DesktopPreloadBridge {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      foregroundAppLocal: NotificationForegroundAppLocal | null,
     ): Promise<void>;
     onClick(handler: (payload: unknown) => void): { dispose: () => void };
+    onForegroundDisplay(
+      handler: (display: NotificationForegroundDisplay) => void,
+    ): { dispose: () => void };
   };
   onLocalHostChange(handler: (snapshot: LocalHostSnapshot | null) => void): {
     dispose: () => void;
@@ -624,16 +630,26 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
-      show: (title, body, payload, replaceKey, deliveryKey) =>
+      show: (
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+        foregroundAppLocal,
+      ) =>
         this.bridge.notifications.show(
           title,
           body,
           payload,
           replaceKey,
           deliveryKey,
+          foregroundAppLocal,
         ),
       onClick: (handler) =>
         toDisposable(this.bridge.notifications.onClick(handler)),
+      onForegroundDisplay: (handler) =>
+        toDisposable(this.bridge.notifications.onForegroundDisplay(handler)),
     };
 
     this.tray = {

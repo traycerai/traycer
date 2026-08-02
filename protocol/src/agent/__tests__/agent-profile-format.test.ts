@@ -184,9 +184,7 @@ describe("detailed rate-limit formatting", () => {
       response,
     );
 
-    expect(human).toContain(
-      "period (USAGE_PERIOD_TYPE_WEEKLY): unknown",
-    );
+    expect(human).toContain("period (USAGE_PERIOD_TYPE_WEEKLY): unknown");
     expect(human).toContain(
       "billing period: 2026-07-13T09:30:00.000Z - 2026-07-20T09:30:00.000Z",
     );

@@ -97,6 +97,12 @@ import {
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
+import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import {
+  paneActivationDeferProps,
+  runAfterPaneActivationFocusIntent,
+  usePaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -150,6 +156,14 @@ interface HarnessModelPickerProps {
   /** The exact host where the next run executes. This is explicit so usage
    *  comparison can never silently fall back to the renderer-default host. */
   runTargetHostId: string | null;
+  /**
+   * Per-row admission override for the active provider's profile strip,
+   * keyed by `profileCommitId`. `null` for every caller except the TUI
+   * continue-under-another-profile dialog, which overlays its bulk fork-
+   * admission preflight verdicts here so an unshared profile renders
+   * disabled with its rejection reason as a tooltip.
+   */
+  profileAdmission: ReadonlyMap<string | null, ProfileRowAdmission> | null;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -162,8 +176,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     registerActivation,
     createProfileHostId,
     runTargetHostId,
+    profileAdmission,
   } = props;
   const activityEnabled = useSurfaceActivity();
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const selection = useStore(store, (s) => s.selection);
   const selectedModel = useStore(store, (s) => s.selectedModel);
   const reasoning = useStore(store, (s) => s.reasoning);
@@ -236,8 +252,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
 
   useEffect(() => {
     if (activityEnabled || !visibleOpen) return;
-    closeOnly();
-  }, [activityEnabled, closeOnly, visibleOpen]);
+    return runAfterPaneActivationFocusIntent(
+      paneActivationFocusIntent,
+      closeOnly,
+    );
+  }, [activityEnabled, closeOnly, paneActivationFocusIntent, visibleOpen]);
 
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: activityEnabled,
@@ -790,6 +809,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningActionable,
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
+    activeProviderProfileAdmission: profileAdmission,
     onProfileChange: handleProfileChange,
   });
 
@@ -845,6 +865,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
           align={undefined}
         >
           <HarnessModelTrigger
+            {...paneActivationDeferProps}
             selection={selection}
             label={presentation.label}
             reasoningLabel={presentation.reasoningLabel}
@@ -904,6 +925,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         runTargetHostId={runTargetHostId}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
+        profileAdmission={profileAdmission}
       />
     </Popover>
   );

@@ -429,6 +429,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Read-only cross-profile fork-admission preflight; no host-side state
+  // changes, but each call answers a specific candidate profile so requests
+  // are not superseded by one another.
+  "agent.tui.validateForkProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Generating a title writes the result to the terminal-agent record.
   "agent.tui.generateTitle": {
     mode: "fifo",
@@ -712,6 +720,10 @@ export const HOST_METHOD_POLL_TABLE = {
   "git.getFileDiff": { ...LATEST_SCHEDULING, poll: null },
   "git.getFileDiffs": { ...LATEST_SCHEDULING, poll: null },
   "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // A read of the local checkout, requested when the PR Files tab opens.
+  // No poll: the PR detail stream is what notices a new push, and a re-render
+  // off a changed `headRefOid` re-keys the query on its own.
+  "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Killing a terminal terminates a host PTY session.

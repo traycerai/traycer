@@ -88,6 +88,7 @@ import {
   agentInboxSubscribeV10,
   agentInboxSubscribeV11,
 } from "@traycer/protocol/host/agent/inbox";
+import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
   agentRolesClaimV10,
@@ -142,9 +143,12 @@ import {
   agentTuiTurnEndedV10,
   agentTuiListHarnessesV10,
   agentTuiPrepareLaunchV10,
+  agentTuiPrepareLaunchV11,
+  agentTuiPrepareLaunchUpgradeV10ToV11,
   agentTuiRecordActivityV10,
   agentTuiRecordActivityV11,
   agentTuiRecordActivityUpgradeV10ToV11,
+  agentTuiValidateForkProfileV10,
 } from "@traycer/protocol/host/agent/tui/contracts";
 import {
   commentsListThreadsV10,
@@ -254,18 +258,21 @@ import {
   terminalCreateV20,
   terminalCreateUpgradeV10ToV20,
   terminalKillV10,
-  terminalListDowngradeV21ToV10,
+  terminalListDowngradeV22ToV10,
   terminalListV10,
   terminalListV20,
   terminalListV21,
+  terminalListV22,
   terminalListUpgradeV10ToV20,
   terminalListUpgradeV20ToV21,
+  terminalListUpgradeV21ToV22,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
   terminalSubscribeV13,
   terminalSubscribeV14,
+  terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   hostNotificationHooksSave,
@@ -329,6 +336,11 @@ import {
   gitSubscribeStatusV11,
   gitSubscribeStatusV12,
 } from "@traycer/protocol/host/git-contracts";
+import {
+  prSubscribeListForEpicV10,
+  prSubscribeDetailV10,
+  prGetLocalDiffV10,
+} from "@traycer/protocol/host/pr-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
@@ -3354,15 +3366,40 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "agent.tui.prepareLaunch": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentTuiPrepareLaunchV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: agentTuiPrepareLaunchV11,
+          upgradeFromPreviousVersion: agentTuiPrepareLaunchUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: read-only cross-profile fork-admission
+  // preflight (tech plan governing mechanism 2). The `degrade: unsupported`
+  // strategy EXCLUDES it from the released floor and the released-method-
+  // names snapshot - adding it to the floor would be handshake-fatal for
+  // existing clients. Old peers lack it in their optional manifest; the GUI's
+  // `useHostSupportsMethod` gate hides the cross-profile fork affordance
+  // rather than calling a method the host would reject. Mirrors
+  // `epic.setChatArchived`'s degrade strategy.
+  "agent.tui.validateForkProfile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentTuiValidateForkProfileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "agent.tui.generateTitle": {
     1: {
@@ -4593,7 +4630,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: terminalListV20,
@@ -4603,8 +4640,12 @@ const HOST_RPC_REGISTRY_DEFINITION = {
           contract: terminalListV21,
           upgradeFromPreviousVersion: terminalListUpgradeV20ToV21,
         },
+        2: {
+          contract: terminalListV22,
+          upgradeFromPreviousVersion: terminalListUpgradeV21ToV22,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalListDowngradeV21ToV10 },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV22ToV10 },
     },
   },
   "terminal.rename": {
@@ -5486,6 +5527,25 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
     },
   },
+  // Additive, post-v1.0.0 optional method: a PR's patch read from the local
+  // checkout. A host that predates it simply lacks it and the PR view falls
+  // back to the GitHub-sourced file list (which is all the detail stream ever
+  // carried), so it rides the optional-capability channel
+  // (`degrade: unsupported`) and stays out of the released floor / baseline
+  // surface.
+  "pr.getLocalDiff": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prGetLocalDiffV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 } as const;
 
 export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
@@ -5502,7 +5562,8 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
- * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`, and
+ * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
+ * `pr.subscribeListForEpic@1.0`, `pr.subscribeDetail@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
  * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
@@ -5613,7 +5674,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -5629,6 +5690,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         4: {
           contract: terminalSubscribeV14,
+        },
+        5: {
+          contract: terminalSubscribeV15,
         },
       },
     },
@@ -5735,6 +5799,20 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // Optional host-local activity source reserved for a future explicit local
+  // desktop mode. Every current GUI environment continues using the per-user
+  // notification-room awareness path; entitlement must not select this method.
+  // Older hosts may omit it through ordinary optional-method negotiation.
+  "agent.activity.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentActivitySubscribeV10,
+        },
+      },
+    },
+  },
   // Additive, post-v1.0.0 OPTIONAL stream method: the per-epic communication
   // event log behind the Communication Graph tile. A host that predates it
   // never advertises it, so the tile's per-host subscription degrades to
@@ -5804,6 +5882,26 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: speechDictateV10,
+        },
+      },
+    },
+  },
+  "pr.subscribeListForEpic": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prSubscribeListForEpicV10,
+        },
+      },
+    },
+  },
+  "pr.subscribeDetail": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prSubscribeDetailV10,
         },
       },
     },

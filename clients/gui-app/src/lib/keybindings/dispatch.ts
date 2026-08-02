@@ -47,6 +47,7 @@ import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 
 const SELECTED_GROUP_TAB_SELECTOR =
   '[data-tab-instance-id][data-selected="true"]';
@@ -737,11 +738,36 @@ function focusGroupEditor(groupId: string): boolean {
     SELECTED_GROUP_TAB_SELECTOR,
   );
   const editor =
-    selectedTab?.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
-    selectedTab?.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
-  if (editor === undefined || editor === null) return false;
+    findComposerOrArtifactEditor(selectedTab) ??
+    findComposerOrArtifactEditor(hostedRecordForSelectedTab(selectedTab));
+  if (editor === null) return false;
   editor.focus({ preventScroll: true });
   return true;
+}
+
+function findComposerOrArtifactEditor(
+  scope: HTMLElement | null | undefined,
+): HTMLElement | null {
+  if (scope === null || scope === undefined) return null;
+  return (
+    scope.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+    scope.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR)
+  );
+}
+
+/**
+ * A hosted chat's own composer/editor lives in `StableTileSurfaceHost`'s
+ * plane - `selectedTab` (the pane's tab-body wrapper) only ever contains
+ * `TileSurfaceSlot`'s empty geometry anchor for it. `selectedTab` still
+ * carries the tab's own `data-tab-instance-id`, so no extra plumbing is
+ * needed to locate the hosted record for the same instance.
+ */
+function hostedRecordForSelectedTab(
+  selectedTab: HTMLElement | null | undefined,
+): HTMLElement | null {
+  const instanceId = selectedTab?.dataset.tabInstanceId;
+  if (instanceId === undefined) return null;
+  return findHostedTileElement(document, instanceId);
 }
 
 function focusActiveGroupEditor(router: KeybindingRouter): boolean {

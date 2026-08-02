@@ -12,7 +12,7 @@ import {
 import { type LeftPanelDefinition } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { Button } from "@/components/ui/button";
 import { ChevronRight } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import {
   useEpicLeftPanelStore,
@@ -36,19 +36,49 @@ interface PanelGroupSectionHeaderProps {
  * empty here: the owning panel portals its own input in, keeping that input's
  * state, refs, and combobox ARIA wiring in a single component.
  */
-function PanelHeaderSearchRow(props: { readonly panel: LeftPanelDefinition }) {
-  const setSearchSlot = usePanelHeaderSearchStore((s) => s.setSearchSlot);
+function PanelHeaderSearchRow(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly panel: LeftPanelDefinition;
+  readonly collapsed: boolean;
+}) {
+  const registerSearchSlot = usePanelHeaderSearchStore(
+    (state) => state.registerSearchSlot,
+  );
+  const unregisterSearchSlot = usePanelHeaderSearchStore(
+    (state) => state.unregisterSearchSlot,
+  );
+  const Actions = props.panel.Actions;
   const panelId = props.panel.id;
+  const currentSlotRef = useRef<HTMLDivElement | null>(null);
   const setSlotRef = useCallback(
-    (element: HTMLDivElement | null) => setSearchSlot(panelId, element),
-    [panelId, setSearchSlot],
+    (element: HTMLDivElement | null) => {
+      const previous = currentSlotRef.current;
+      if (previous !== null && previous !== element) {
+        unregisterSearchSlot(props.tabId, panelId, previous);
+      }
+      currentSlotRef.current = element;
+      if (element !== null) {
+        registerSearchSlot(props.tabId, panelId, element);
+      }
+    },
+    [panelId, props.tabId, registerSearchSlot, unregisterSearchSlot],
   );
   return (
     <div
-      ref={setSlotRef}
-      className="flex h-9 shrink-0 items-center px-2"
+      className="@container flex h-9 shrink-0 items-center gap-1 px-2"
       data-testid={`epic-sidebar-header-search-slot-${panelId}`}
-    />
+    >
+      <div ref={setSlotRef} className="min-w-0 flex-1" />
+      {Actions === null ? null : (
+        <Actions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          collapsed={props.collapsed}
+          mode="search"
+        />
+      )}
+    </div>
   );
 }
 
@@ -80,7 +110,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
     ),
     data: dragData,
   });
-  const searchOpen = usePanelHeaderSearchOpen(props.panel.id);
+  const searchOpen = usePanelHeaderSearchOpen(props.tabId, props.panel.id);
   const bulkSelection = useMaybeSidebarBulkSelection();
   // Selection is a panel-wide mode, so its controls own the row instead of
   // competing horizontally with a title that no longer describes the mode.
@@ -94,6 +124,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
           epicId={props.epicId}
           tabId={props.tabId}
           collapsed={collapsed}
+          mode="selection"
         />
       </div>
     );
@@ -106,7 +137,14 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
   // the input in - is unmounted, so swapping would leave an empty row with no
   // input, no chevron, and no way back out.
   if (props.panel.supportsHeaderSearch && searchOpen && !collapsed) {
-    return <PanelHeaderSearchRow panel={props.panel} />;
+    return (
+      <PanelHeaderSearchRow
+        epicId={props.epicId}
+        tabId={props.tabId}
+        panel={props.panel}
+        collapsed={collapsed}
+      />
+    );
   }
   return (
     <div
@@ -161,6 +199,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
           epicId={props.epicId}
           tabId={props.tabId}
           collapsed={collapsed}
+          mode="normal"
         />
       )}
     </div>

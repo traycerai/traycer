@@ -1,7 +1,9 @@
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
+import { evictChatTabPersistenceForEpics } from "@/stores/chats/chat-tab-persistence-eviction";
 import {
+  resolveTabEpicIdentity,
   resolveTabIdForEpic,
   resolveTabIdForPhaseMigration,
   useEpicCanvasStore,
@@ -1067,37 +1069,37 @@ export class TabCommandCoordinator {
     }
     const ref: TabRef = { kind: "epic", id: target.tabId };
     return this.activationForRef(layout, ref, () => {
+      resolveTabEpicIdentity(target.tabId, target.sourceEpicId, target.epicId);
+      // The gate below keeps a failed resolution write-free (no
+      // openTabOrder/activeTabId change), and the read-back after it catches
+      // a listener that raced this same resolution to a different epicId
+      // during `execute`'s synchronous `notify()` (which runs before
+      // `applySources` - see `execute` below): this closure can't return a
+      // value (`resolveMigratedEpicActivation` already returned the
+      // `ResolvedCoordinatedActivation` object bundling it), so a mismatch
+      // throws instead, riding `execute`'s existing catch/record/rethrow
+      // path (the same one a `replaceLayoutForTransaction` failure takes) to
+      // carry the failure out through `activateTab` - before
+      // `replaceLayoutForTransaction` ever runs, so layout/focus stay
+      // untouched.
       useEpicCanvasStore.setState((state) => {
         const current = state.tabsById[target.tabId];
-        if (
-          current === undefined ||
-          (current.epicId !== target.sourceEpicId &&
-            current.epicId !== target.epicId)
-        ) {
+        if (current === undefined || current.epicId !== target.epicId) {
           return state;
         }
-        const mostRecentTabIdByEpicId = {
-          ...state.mostRecentTabIdByEpicId,
-          [target.epicId]: target.tabId,
-        };
-        if (
-          target.sourceEpicId !== target.epicId &&
-          mostRecentTabIdByEpicId[target.sourceEpicId] === target.tabId
-        ) {
-          delete mostRecentTabIdByEpicId[target.sourceEpicId];
-        }
         return {
-          tabsById: {
-            ...state.tabsById,
-            [target.tabId]: { ...current, epicId: target.epicId },
-          },
           openTabOrder: state.openTabOrder.includes(target.tabId)
             ? state.openTabOrder
             : [...state.openTabOrder, target.tabId],
           activeTabId: target.tabId,
-          mostRecentTabIdByEpicId,
         };
       });
+      const final = useEpicCanvasStore.getState().tabsById[target.tabId];
+      if (final === undefined || final.epicId !== target.epicId) {
+        throw new Error(
+          "Tab command migrated-epic activation could not resolve tab epicId",
+        );
+      }
     });
   }
 
@@ -1227,41 +1229,53 @@ export class TabCommandCoordinator {
       projectSourceCompatibility: true,
       applySources: () => {
         this.applyExpectedSourceMutation(() => {
+          resolveTabEpicIdentity(
+            command.tabId,
+            command.phaseId,
+            command.epicId,
+          );
           useEpicCanvasStore.setState((state) => {
             const current = state.tabsById[command.tabId];
+            // Gated on the epicId resolution having ACTUALLY landed (whether
+            // from the call above or a prior one) rather than only on
+            // surfaceMode - keeps the two updates sequenced instead of
+            // trusting they always land together.
             if (
-              current?.surfaceMode?.kind !== "phase-migration" ||
+              current === undefined ||
+              current.epicId !== command.epicId ||
+              current.surfaceMode?.kind !== "phase-migration" ||
               current.surfaceMode.phaseId !== command.phaseId
             ) {
               return state;
-            }
-            const mostRecentTabIdByEpicId = {
-              ...state.mostRecentTabIdByEpicId,
-              [command.epicId]: command.tabId,
-            };
-            if (
-              command.phaseId !== command.epicId &&
-              mostRecentTabIdByEpicId[command.phaseId] === command.tabId
-            ) {
-              delete mostRecentTabIdByEpicId[command.phaseId];
             }
             return {
               tabsById: {
                 ...state.tabsById,
                 [command.tabId]: {
                   ...current,
-                  epicId: command.epicId,
                   surfaceMode: { kind: "epic" },
                 },
               },
-              mostRecentTabIdByEpicId,
             };
           });
         });
       },
       applyRemovals: () => undefined,
     });
-    return true;
+    // Derived from OBSERVED final state, not a claim recorded mid-commit: a
+    // synchronous subscriber re-entering `resolveTabEpicIdentity` during
+    // `execute`'s `notify()` can move this same tab's epicId again before
+    // this frame regains control, which makes any flag captured at write
+    // time stale. A `false` return routes into
+    // `PhaseMigrationController.succeed()`'s existing rejection branch
+    // (status -> "error"), which its `retry()` path already knows how to
+    // resume from.
+    const final = useEpicCanvasStore.getState().tabsById[command.tabId];
+    return (
+      final !== undefined &&
+      final.epicId === command.epicId &&
+      final.surfaceMode?.kind !== "phase-migration"
+    );
   }
 
   closeRef(ref: TabRef): boolean {
@@ -1288,6 +1302,19 @@ export class TabCommandCoordinator {
   handleEpicAccessLoss(epicIds: ReadonlyArray<string>): void {
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
+    // Ticket 15 (decision #29): drop every durable chat-key entry under
+    // these epics across all seven per-tab registries - independent of
+    // whether any tab for them is currently open (a chat can leave a
+    // durable entry behind long after its own tab closed).
+    //
+    // Ticket 15 review round 5 (item 2): ONE batched call, not a `forEach`
+    // of the singular per-epic evict - the canvas close sweep below writes
+    // durable state back for whichever of these epics still had open tiles,
+    // so every epic in this access-loss batch must still be fenced by the
+    // time that sweep runs. A `forEach` of independent per-epic tombstones
+    // could FIFO-evict epic 0's fresh fence to make room for epic 500's,
+    // inside this same batch, before the sweep ever reaches epic 0.
+    evictChatTabPersistenceForEpics(epicIds);
     const canvas = useEpicCanvasStore.getState();
     const affected = flattenLayoutRefs(currentLayout()).flatMap<TabRef>(
       (ref) => {

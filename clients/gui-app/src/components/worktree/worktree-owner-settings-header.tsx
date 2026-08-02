@@ -1,33 +1,35 @@
 import { Fragment, type ReactNode } from "react";
-import type {
-  ProviderProfile,
-  ProviderId as WireProviderId,
-} from "@traycer/protocol/host/provider-schemas";
+import { Zap } from "lucide-react";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
-import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
-import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { AccentDot } from "@/components/providers/accent-dot";
+import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import {
   findPermissionOption,
   type PermissionMode,
-  type ProviderId,
 } from "@/components/home/data/landing-options";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import {
   deriveOwnerSettingsHeader,
   type OwnerSettingsHeaderView,
 } from "@/components/worktree/worktree-owner-settings-model";
+import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useChatById } from "@/lib/epic-selectors";
-
-const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
+import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 
 interface SettingsSegment {
   readonly key: string;
   readonly node: ReactNode;
+}
+
+interface TuiHeaderFields {
+  readonly tuiHarnessId: TuiAgentProjection["harnessId"] | null;
+  readonly tuiModel: string | null;
+  readonly tuiReasoningEffort: string | null;
+  readonly tuiProfileId: string | null;
 }
 
 /**
@@ -42,8 +44,9 @@ interface SettingsSegment {
  * which has no `forceMount`), so nothing here can fire before open: the catalog
  * observer attaches on open and detaches on close.
  *
- * The settings themselves cost nothing - they are a store read - and the
- * profile label is a pure cache read (see below). The catalog is NOT free
+ * The settings themselves cost nothing - they are a store read. Chat profile
+ * labels remain pure cache reads; managed terminal profiles can fetch the same
+ * live provider list their launch/fork surfaces use. The catalog is NOT free,
  * though: `useGuiHarnessesQuery` carries a finite 15-min staleTime, so opening
  * the card on a stale availability query can refetch it, and if that surfaces a
  * newly-available harness with no cached model list the `listModels` fan-out
@@ -59,13 +62,11 @@ export function WorktreeOwnerSettingsHeader(props: {
 }): ReactNode {
   const chat = useChatById(props.ownerId);
   const tuiAgent = useEpicStore((state) =>
-    Object.hasOwn(state.tuiAgents.byId, props.ownerId)
-      ? state.tuiAgents.byId[props.ownerId]
-      : null,
+    selectTuiAgent(state.tuiAgents.byId, props.ownerId),
   );
   const isChat = props.ownerKind === "chat";
-  const chatSettings = isChat ? (chat?.settings ?? null) : null;
-  const hasSubject = isChat ? chatSettings !== null : tuiAgent !== null;
+  const chatSettings = ownerChatSettings(isChat, chat?.settings ?? null);
+  const hasSubject = ownerHasSubject(isChat, chatSettings, tuiAgent);
 
   // The dynamic label source, gated on `hasSubject` so a legacy row with no
   // settings never mounts the catalog fan-out at all. Warm entries render from
@@ -79,26 +80,27 @@ export function WorktreeOwnerSettingsHeader(props: {
   // `profileId` is the AMBIENT profile and now earns its own accent dot, so a
   // subscription gated on `profileId !== null` left ambient chats unable to
   // re-render when the list landed in cache after mount.
-  const profileNeeded = isChat;
+  // Terminal agents only badge managed profiles. Ambient stays the bare
+  // harness mark; a managed id needs the live list for its label and accent,
+  // while an unknown/tombstoned id silently stays bare.
+  const profileActivity = ownerProfileActivity(isChat, tuiAgent);
   const hostClient = useHostClientForHostId(props.hostId);
-  // Profile label is a PURE CACHE READ: `enabled: false` never fires a request,
-  // so the profile row costs no RPC of its own. It resolves only when the chat
-  // host's provider list is already warm (the composer / Settings populated
-  // it); otherwise `deriveOwnerSettingsHeader` omits the row rather than
-  // surfacing the opaque profile id.
+  // Chats preserve their cache-only behavior. A managed terminal profile
+  // actively resolves against this owner's fixed host, so the hover card is
+  // self-sufficient even if no other profile surface warmed the query first.
   const providersList = useProvidersListForClient(hostClient, {
-    enabled: false,
-    subscribed: profileNeeded,
+    enabled: profileActivity.enabled,
+    subscribed: profileActivity.subscribed,
   });
+  const tuiFields = tuiHeaderFields(tuiAgent);
   const view = deriveOwnerSettingsHeader({
     ownerKind: props.ownerKind,
     chatSettings,
-    tuiHarnessId: tuiAgent?.harnessId ?? null,
-    tuiModel: tuiAgent?.model ?? null,
+    ...tuiFields,
     harnesses: catalog.harnesses,
     profiles: harnessProfiles(
       providersList.data?.providers ?? null,
-      chatSettings?.harnessId ?? null,
+      ownerHarnessId(chatSettings, tuiAgent),
     ),
   });
   if (view === null) return null;
@@ -110,32 +112,63 @@ export function WorktreeOwnerSettingsHeader(props: {
   );
 }
 
-/**
- * The chat harness's OWN profiles, or the shared empty list when the provider
- * cache is cold. Scoped rather than flattened across every provider: the accent
- * dot is gated on "this provider has 2+ accounts", and a flattened list crosses
- * that gate as soon as ANY two providers each have one - which would badge a
- * single-account provider on the strength of an unrelated one.
- *
- * The two id spaces are NOT interchangeable despite both being spelled
- * `ProviderId`: the GUI harness id is `claude` where the wire provider id is
- * `claude-code`, so this goes through `guiHarnessIdToProviderId` rather than
- * comparing the two directly (which type-checks nowhere and would silently
- * match zero providers if it did).
- */
-function harnessProfiles(
-  providers: ReadonlyArray<{
-    readonly providerId: WireProviderId;
-    readonly profiles: ReadonlyArray<ProviderProfile>;
-  }> | null,
-  harnessId: ProviderId | null,
-): ReadonlyArray<ProviderProfile> {
-  if (providers === null || harnessId === null) return EMPTY_PROFILES;
-  const providerId = guiHarnessIdToProviderId(harnessId);
-  if (providerId === null) return EMPTY_PROFILES;
-  const provider =
-    providers.find((candidate) => candidate.providerId === providerId) ?? null;
-  return provider === null ? EMPTY_PROFILES : provider.profiles;
+function selectTuiAgent(
+  byId: Readonly<Record<string, TuiAgentProjection>>,
+  ownerId: string,
+): TuiAgentProjection | null {
+  return Object.hasOwn(byId, ownerId) ? byId[ownerId] : null;
+}
+
+function ownerChatSettings(
+  isChat: boolean,
+  settings: ChatRunSettings | null,
+): ChatRunSettings | null {
+  return isChat ? settings : null;
+}
+
+function ownerHasSubject(
+  isChat: boolean,
+  chatSettings: ChatRunSettings | null,
+  tuiAgent: TuiAgentProjection | null,
+): boolean {
+  return isChat ? chatSettings !== null : tuiAgent !== null;
+}
+
+function ownerProfileActivity(
+  isChat: boolean,
+  tuiAgent: TuiAgentProjection | null,
+): { readonly enabled: boolean; readonly subscribed: boolean } {
+  const managedTerminalProfile =
+    tuiAgent !== null && tuiAgent.profileId !== null;
+  return {
+    enabled: !isChat && managedTerminalProfile,
+    subscribed: isChat || managedTerminalProfile,
+  };
+}
+
+function tuiHeaderFields(tuiAgent: TuiAgentProjection | null): TuiHeaderFields {
+  if (tuiAgent === null) {
+    return {
+      tuiHarnessId: null,
+      tuiModel: null,
+      tuiReasoningEffort: null,
+      tuiProfileId: null,
+    };
+  }
+  return {
+    tuiHarnessId: tuiAgent.harnessId,
+    tuiModel: tuiAgent.model,
+    tuiReasoningEffort: tuiAgent.reasoningEffort,
+    tuiProfileId: tuiAgent.profileId,
+  };
+}
+
+function ownerHarnessId(
+  chatSettings: ChatRunSettings | null,
+  tuiAgent: TuiAgentProjection | null,
+): TuiAgentProjection["harnessId"] | ChatRunSettings["harnessId"] | null {
+  if (chatSettings !== null) return chatSettings.harnessId;
+  return tuiAgent === null ? null : tuiAgent.harnessId;
 }
 
 /** Both record kinds carry `updatedAt`; read whichever this owner is. */
@@ -185,7 +218,7 @@ function OwnerSettingsHeaderRows(props: {
   // a doubled one when reasoning is; that bug re-appears with every field
   // added. Here a missing field simply drops out and its neighbours close up.
   const allSegments: ReadonlyArray<SettingsSegment | null> = [
-    view.modelLabel === null
+    view.modelLabel === null && !view.fastMode
       ? null
       : {
           key: "model",
@@ -195,10 +228,19 @@ function OwnerSettingsHeaderRows(props: {
             // so at the card's ceiling this ellipsizes and the short, bounded
             // segments beside it survive intact.
             <span
-              className="min-w-0 truncate font-medium"
+              className="flex min-w-0 items-center gap-1 truncate font-medium"
               data-testid="owner-settings-model"
             >
-              {view.modelLabel}
+              {view.modelLabel === null ? null : (
+                <span className="min-w-0 truncate">{view.modelLabel}</span>
+              )}
+              {view.fastMode ? (
+                <Zap
+                  aria-label="Fast mode"
+                  className="size-3.5 shrink-0 fill-current text-amber-500"
+                  strokeWidth={2}
+                />
+              ) : null}
             </span>
           ),
         },
@@ -221,19 +263,6 @@ function OwnerSettingsHeaderRows(props: {
             </span>
           ),
         },
-    view.fastMode
-      ? {
-          key: "fast-mode",
-          node: (
-            <span
-              className="shrink-0 text-muted-foreground"
-              data-testid="owner-settings-fast-mode"
-            >
-              Fast
-            </span>
-          ),
-        }
-      : null,
     view.permissionMode === null
       ? null
       : {
@@ -293,34 +322,19 @@ function OwnerSettingsHeaderRows(props: {
 function OwnerSettingsHarnessMark(props: {
   readonly view: OwnerSettingsHeaderView;
 }): ReactNode {
-  const { view } = props;
-  const accentDot = view.profileAccentDot;
   return (
-    <span
-      role="img"
-      aria-label={
-        accentDot === null
-          ? view.harnessName
-          : `${view.harnessName}, ${accentDot.label}`
-      }
-      className="relative flex shrink-0 items-center"
-      data-testid="owner-settings-harness-mark"
-    >
-      <HarnessIcon harnessId={view.harnessId} className="size-4 shrink-0" />
-      {accentDot === null ? null : (
-        <AccentDot
-          profileId={accentDot.profileId}
-          accentColor={accentDot.accentColor}
-          label={accentDot.label}
-          variant="corner"
-          size="compact"
-          className={undefined}
-        />
-      )}
-    </span>
+    <ProfileBadgedHarnessIcon
+      harnessId={props.view.harnessId}
+      harnessName={props.view.harnessName}
+      profileAccentDot={props.view.profileAccentDot}
+      iconClassName="size-4 shrink-0"
+      className={undefined}
+      testId="owner-settings-harness-mark"
+    />
   );
 }
 
+/** Terminal-agent mode in the same icon + label grammar as chat permission. */
 /**
  * Permission mode with the icon the rest of the app already uses for it -
  * `ShieldCheck` / `FileCheck2` / `UnlockKeyhole`, resolved through the shared

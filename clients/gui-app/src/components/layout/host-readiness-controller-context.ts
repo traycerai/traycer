@@ -42,6 +42,20 @@ export interface DefaultHostReadinessPresentation {
     readonly errorMessage: string | null;
     readonly retrying: boolean;
     readonly retry: () => void;
+    /**
+     * `compatible` held from an earlier probe whose latest refetch failed. The
+     * surface stays open - the host answered this handshake already - and the
+     * degraded connection is surfaced as a banner instead.
+     */
+    readonly degraded: boolean;
+    /**
+     * `failed` because the probe never reached the host, rather than because
+     * the host rejected the handshake. Drives connection-shaped copy: calling
+     * an unreachable host "incompatible" is what made an offline host
+     * (traycer#858) and a load-stalled host (traycer#860) both read as version
+     * problems.
+     */
+    readonly unreachable: boolean;
   };
 }
 
@@ -76,6 +90,8 @@ const EMPTY_DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
     errorMessage: null,
     retrying: false,
     retry: () => undefined,
+    degraded: false,
+    unreachable: false,
   },
 };
 

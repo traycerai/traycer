@@ -18,7 +18,7 @@ import type { CommandFn } from "../runner/runner";
  * plain RPC, so its stdout carries the complete bodies - the recovery path
  * when a monitored message arrived clipped.
  *
- * `--agent-id` / `--epic-id` default to `$TRAYCER_AGENT_ID` /
+ * `--agent-id` defaults to `$TRAYCER_AGENT_ID`; the epic is always read from
  * `$TRAYCER_EPIC_ID`, so an agent normally runs it with no flags.
  */
 export function buildAgentInboxCommand(opts: {

@@ -959,6 +959,7 @@ describe("useRenderedMessages", () => {
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: {
+            agentMode: "regular",
             sameTurnSteeringSupported: false,
             turnId: "turn-active-profile",
             status: "starting",
@@ -966,7 +967,6 @@ describe("useRenderedMessages", () => {
             model: "claude-sonnet-4-5",
             reasoningEffort: "high",
             serviceTier: null,
-            agentMode: "regular",
             profileId: "work-profile",
             userMessageId: initiatingUser.messageId,
             startedAt: 2000,
@@ -1243,12 +1243,12 @@ describe("useRenderedMessages", () => {
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: {
+            agentMode: "regular",
             sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
             model: "claude-sonnet-4-5",
-            agentMode: "regular",
             profileId: null,
             userMessageId: null,
             startedAt: 1,
@@ -2935,12 +2935,12 @@ describe("useRenderedMessages", () => {
   it("keeps persisted rows stable while only the live row streams", () => {
     const u1 = userMessage("m1");
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 1,
@@ -3127,12 +3127,12 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an approval is pending", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -3193,12 +3193,12 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an interview is pending from snapshot state", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -3239,12 +3239,12 @@ describe("useRenderedMessages", () => {
 
   it("keeps the assistant row id stable from live turn to completion", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3298,12 +3298,12 @@ describe("useRenderedMessages", () => {
 
   it("keeps an accepted pending user before the pre-turn assistant row", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-2",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m2",
       startedAt: 2500,
@@ -3448,12 +3448,12 @@ describe("useRenderedMessages", () => {
       blocks: [fileChangeBlock("/repo/src/app.ts")],
     };
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3655,12 +3655,12 @@ describe("useRenderedMessages", () => {
             serviceTier: null,
           },
           activeTurn: {
+            agentMode: "regular",
             sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
             model: "claude-sonnet-4-5",
-            agentMode: "regular",
             profileId: null,
             userMessageId: null,
             startedAt: 1,
@@ -3682,12 +3682,12 @@ describe("useRenderedMessages", () => {
 
   it("holds back the file change group for the streaming live assistant", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3783,12 +3783,12 @@ function forkEvent(input: {
 }
 
 const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
+  agentMode: "regular",
   sameTurnSteeringSupported: false,
   turnId: "turn-setup",
   status: "running",
   harnessId: "claude",
   model: "claude-sonnet-4-5",
-  agentMode: "regular",
   profileId: null,
   userMessageId: null,
   startedAt: 1,
@@ -5355,12 +5355,12 @@ describe("useRenderedMessages turn.stopped", () => {
 
   it("keeps an event-only stopped boundary behind the active-turn snapshot gate", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-pre-setup",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -5651,12 +5651,12 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
