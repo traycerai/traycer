@@ -6,13 +6,17 @@ import type {
   GuiHarnessId,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  __getOpenEpicRegistryForTests,
+  EpicSessionContext,
+} from "@/lib/registries/epic-session-registry";
 import {
   useEpicChatHarnessId,
   useEpicAgentRoleClaims,
   useEpicAgentRoleClaimsByAgentId,
   useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
+  useRegisteredEpicLiveArtifactTitles,
 } from "@/lib/epic-selectors";
 
 const featureSettings = vi.hoisted(() => ({ enabled: true }));
@@ -33,11 +37,54 @@ const handles: OpenEpicStoreHandle[] = [];
 
 afterEach(() => {
   cleanup();
+  __getOpenEpicRegistryForTests().disposeAll();
   featureSettings.enabled = true;
   for (const handle of handles) {
     handle.dispose();
   }
   handles.length = 0;
+});
+
+describe("useRegisteredEpicLiveArtifactTitles", () => {
+  it("subscribes when a registered handle initially has no title", () => {
+    const registry = __getOpenEpicRegistryForTests();
+    const { result } = renderHook(() =>
+      useRegisteredEpicLiveArtifactTitles([
+        { epicId: "epic-late-handle", artifactId: "chat-1" },
+      ]),
+    );
+    expect(result.current).toEqual([null]);
+
+    const handle = createOpenEpicStore({
+      epicId: "epic-late-handle",
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
+    handle.store.setState({
+      chats: {
+        allIds: ["chat-1"],
+        byId: { "chat-1": { ...chat("chat-1", null), title: "" } },
+      },
+    });
+    act(() => {
+      registry.acquire("epic-late-handle", () => handle);
+    });
+    expect(result.current).toEqual([null]);
+
+    act(() => {
+      handle.store.setState({
+        chats: {
+          allIds: ["chat-1"],
+          byId: {
+            "chat-1": { ...chat("chat-1", null), title: "Generated title" },
+          },
+        },
+      });
+    });
+
+    expect(result.current).toEqual(["Generated title"]);
+  });
 });
 
 describe("useMaybeEpicTuiAgentHarnessId", () => {

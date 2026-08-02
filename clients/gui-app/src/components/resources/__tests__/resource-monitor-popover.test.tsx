@@ -661,6 +661,51 @@ describe("ResourceMonitorPopover", () => {
     expect(killZero.hasAttribute("disabled")).toBe(true);
   });
 
+  it("prunes a selected owner when a live snapshot stops matching", () => {
+    const stub = installStubFactory();
+    const processes = [
+      resourceProcess({
+        pid: 100,
+        rootPid: 100,
+        name: "zsh",
+        command: "/bin/zsh",
+      }),
+    ];
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "unique-match", processes })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "unique-match" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "renamed", processes })],
+        }),
+      );
+    });
+
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
+  });
+
   it("uses the persisted Agent title when the live title is empty", async () => {
     liveArtifactTitleMock.title = "";
     canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {

@@ -255,6 +255,7 @@ interface ResourceSearchProjection {
   readonly other: OtherResourceUsage | null;
   readonly taskRows: readonly TaskDisplayRow[];
   readonly visibleOwnerKeys: ReadonlySet<string>;
+  readonly visibleKillKeys: ReadonlySet<string>;
   readonly active: boolean;
   readonly noResults: boolean;
 }
@@ -264,6 +265,7 @@ interface KillTargetIndexInput {
   readonly other: OtherResourceUsage | null;
   readonly defaultHostId: string | null;
   readonly visibleOwnerKeys: ReadonlySet<string>;
+  readonly visibleKillKeys: ReadonlySet<string>;
   readonly searchQuery: string;
 }
 
@@ -527,12 +529,14 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
         other: search.other,
         defaultHostId,
         visibleOwnerKeys: search.visibleOwnerKeys,
+        visibleKillKeys: search.visibleKillKeys,
         searchQuery,
       }),
     [
       defaultHostId,
       projection.owners,
       search.other,
+      search.visibleKillKeys,
       search.visibleOwnerKeys,
       searchQuery,
     ],
@@ -1566,7 +1570,7 @@ function buildKillTargetIndex(input: KillTargetIndexInput): {
       owner.owner.kind,
       owner.owner.ownerId,
     );
-    live.add(key);
+    if (input.visibleKillKeys.has(key)) live.add(key);
     if (owner.rootPids.length > 0 && input.visibleOwnerKeys.has(key)) {
       topLevel.set(key, {
         key,
@@ -1574,7 +1578,10 @@ function buildKillTargetIndex(input: KillTargetIndexInput): {
         pids: owner.rootPids,
       });
     }
-    for (const process of owner.processes) live.add(processRowKey(process));
+    for (const process of owner.processes) {
+      const processKey = processRowKey(process);
+      if (input.visibleKillKeys.has(processKey)) live.add(processKey);
+    }
   }
   if (input.other !== null && input.defaultHostId !== null) {
     const matchingRootPids = matchingOtherRootPids(
@@ -1583,7 +1590,7 @@ function buildKillTargetIndex(input: KillTargetIndexInput): {
     );
     for (const process of input.other.processes) {
       const key = processRowKey(process);
-      live.add(key);
+      if (input.visibleKillKeys.has(key)) live.add(key);
       if (
         process.rootPid === process.pid &&
         matchingRootPids.has(process.pid)
@@ -2299,6 +2306,12 @@ function buildResourceSearchProjection(input: {
       ),
     ),
   );
+  const visibleKillKeys = buildSearchVisibleKillKeys(
+    taskRows,
+    other,
+    input.searchQuery,
+    input.liveOwnerTitleByKey,
+  );
   const active = normalizeResourceSearch(input.searchQuery).length > 0;
   const hasResults =
     desktopApp !== null ||
@@ -2311,9 +2324,72 @@ function buildResourceSearchProjection(input: {
     other,
     taskRows,
     visibleOwnerKeys,
+    visibleKillKeys,
     active,
     noResults: active && !hasResults,
   };
+}
+
+function buildSearchVisibleKillKeys(
+  taskRows: readonly TaskDisplayRow[],
+  other: OtherResourceUsage | null,
+  searchQuery: string,
+  liveOwnerTitleByKey: ReadonlyMap<string, string | null>,
+): ReadonlySet<string> {
+  const visibleKeys = new Set<string>();
+  for (const task of taskRows) {
+    const taskMatches = taskRowMatchesSearch(task, searchQuery);
+    for (const owner of task.owners) {
+      const snapshotOwner = owner.snapshot.owner;
+      const key = ownerKey(
+        snapshotOwner.epicId,
+        snapshotOwner.kind,
+        snapshotOwner.ownerId,
+      );
+      visibleKeys.add(key);
+      const label = resolvedOwnerLabel(
+        owner,
+        liveOwnerTitleByKey.get(key) ?? null,
+      );
+      const ownerMatches =
+        taskMatches || ownerMetadataMatchesSearch(owner, label, searchQuery);
+      const processKeys = ownerMatches
+        ? owner.snapshot.processes.map(processRowKey)
+        : searchVisibleProcessKeys(owner.snapshot.processes, searchQuery);
+      for (const processKey of processKeys) visibleKeys.add(processKey);
+    }
+  }
+  if (other === null) return visibleKeys;
+  const otherMatches = matchesResourceSearch(searchQuery, ["Other"]);
+  const otherProcessKeys = otherMatches
+    ? other.processes.map(processRowKey)
+    : searchVisibleProcessKeys(other.processes, searchQuery);
+  for (const processKey of otherProcessKeys) visibleKeys.add(processKey);
+  return visibleKeys;
+}
+
+function searchVisibleProcessKeys(
+  processes: readonly ResourceProcessSnapshotWire[],
+  searchQuery: string,
+): ReadonlySet<string> {
+  const processByPid = new Map(
+    processes.map((process) => [process.pid, process]),
+  );
+  const visibleKeys = new Set<string>();
+  for (const process of processes) {
+    if (!processMatchesSearch(process, searchQuery)) continue;
+    let current: ResourceProcessSnapshotWire | undefined = process;
+    const visitedPids = new Set<number>();
+    while (current !== undefined && !visitedPids.has(current.pid)) {
+      visitedPids.add(current.pid);
+      visibleKeys.add(processRowKey(current));
+      current =
+        current.parentPid === null
+          ? undefined
+          : processByPid.get(current.parentPid);
+    }
+  }
+  return visibleKeys;
 }
 
 function desktopAppMatchesSearch(

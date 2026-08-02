@@ -74,6 +74,7 @@ import type {
   OpenEpicStoreHandle,
   SnapshotFetchError,
 } from "@/stores/epics/open-epic/store";
+import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -687,20 +688,27 @@ export function useRegisteredEpicLiveArtifactTitles(
         for (const unsubscribe of unsubscribers) unsubscribe();
       };
     },
-    () =>
-      JSON.stringify(
-        refs.map((ref) =>
-          liveArtifactTitleFromHandle(
-            registry.peek(ref.epicId),
-            ref.artifactId,
-          ),
-        ),
-      ),
-    () => JSON.stringify(refs.map(() => null)),
+    () => registeredArtifactTitlesSnapshot(registry, refs),
+    () => JSON.stringify(refs.map(() => [0, null])),
   );
   return useMemo(
     () => decodeRegisteredArtifactTitles(encodedTitles),
     [encodedTitles],
+  );
+}
+
+function registeredArtifactTitlesSnapshot(
+  registry: OpenEpicSessionRegistry,
+  refs: readonly RegisteredEpicArtifactTitleRef[],
+): string {
+  return JSON.stringify(
+    refs.map((ref) => {
+      const handle = registry.peek(ref.epicId);
+      return [
+        handle === null ? 0 : 1,
+        liveArtifactTitleFromHandle(handle, ref.artifactId),
+      ];
+    }),
   );
 }
 
@@ -709,7 +717,11 @@ function decodeRegisteredArtifactTitles(
 ): readonly (string | null)[] {
   const decoded: unknown = JSON.parse(encodedTitles);
   if (!Array.isArray(decoded)) return [];
-  return decoded.map((title) => (typeof title === "string" ? title : null));
+  return decoded.map((entry) => {
+    if (!Array.isArray(entry)) return null;
+    const title: unknown = entry[1];
+    return typeof title === "string" ? title : null;
+  });
 }
 
 function liveArtifactTitleFromHandle(
