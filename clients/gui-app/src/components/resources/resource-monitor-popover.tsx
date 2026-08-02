@@ -936,28 +936,32 @@ function ResourceSearchInput(props: {
   readonly value: string;
   readonly onChange: (value: string) => void;
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
   return (
     <InputGroup className="mt-3 h-7">
       <InputGroupAddon align="inline-start">
         <Search className="size-3.5" aria-hidden />
       </InputGroupAddon>
       <InputGroupInput
-        type="text"
-        role="searchbox"
+        ref={inputRef}
+        type="search"
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
         placeholder="Search resources…"
         aria-label="Search resources"
         autoComplete="off"
         spellCheck={false}
-        className="text-ui-sm"
+        className="text-ui-sm [&::-webkit-search-cancel-button]:hidden"
       />
       {props.value.length > 0 ? (
         <InputGroupAddon align="inline-end">
           <InputGroupButton
             size="icon-xs"
             aria-label="Clear resource search"
-            onClick={() => props.onChange("")}
+            onClick={() => {
+              props.onChange("");
+              inputRef.current?.focus();
+            }}
           >
             <X />
           </InputGroupButton>
@@ -997,10 +1001,11 @@ function DesktopAppResourceSection(props: {
       { label: "Main", usage: props.app.main },
       { label: "Renderer", usage: props.app.renderer },
       ...(showOther ? [{ label: "Other", usage: props.app.other }] : []),
-    ].filter(
-      (group) =>
-        matchesResourceSearch(props.searchQuery, ["Traycer Desktop"]) ||
-        matchesResourceSearch(props.searchQuery, [group.label]),
+    ].filter((group) =>
+      matchesResourceSearch(props.searchQuery, [
+        "Traycer Desktop",
+        group.label,
+      ]),
     ),
     props.sortOption,
   );
@@ -1304,6 +1309,13 @@ function OtherResourceSection(props: {
     return () => observer.disconnect();
   }, []);
 
+  let toggleLabel = visibleExpanded
+    ? "Collapse other processes"
+    : "Expand other processes";
+  if (searchForcesExpanded) {
+    toggleLabel = "Other processes expanded by search";
+  }
+
   return (
     <div className="border-b border-border/50 py-1 last:border-b-0">
       <div
@@ -1316,17 +1328,10 @@ function OtherResourceSection(props: {
         <button
           type="button"
           aria-expanded={visibleExpanded}
-          aria-label={
-            visibleExpanded
-              ? "Collapse other processes"
-              : "Expand other processes"
-          }
-          onClick={() => {
-            if (!searchForcesExpanded) {
-              setExpanded((previous) => !previous);
-            }
-          }}
-          className="flex min-w-0 items-center gap-1 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          disabled={searchForcesExpanded}
+          aria-label={toggleLabel}
+          onClick={() => setExpanded((previous) => !previous)}
+          className="flex min-w-0 items-center gap-1 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:hover:text-muted-foreground"
         >
           {visibleExpanded ? (
             <ChevronDown className="size-3.5 shrink-0" />
@@ -1475,6 +1480,7 @@ function OwnerRowLeadingCell(props: {
   readonly label: string;
   readonly canExpand: boolean;
   readonly expanded: boolean;
+  readonly forcedExpanded: boolean;
   readonly onToggle: () => void;
 }) {
   const kill = props.kill ?? null;
@@ -1494,15 +1500,20 @@ function OwnerRowLeadingCell(props: {
   if (!props.canExpand) {
     return <span className="ml-3 size-6 shrink-0" />;
   }
+  let toggleLabel = props.expanded
+    ? "Collapse process tree"
+    : "Expand process tree";
+  if (props.forcedExpanded) {
+    toggleLabel = "Process tree expanded by search";
+  }
   return (
     <button
       type="button"
       aria-expanded={props.expanded}
+      disabled={props.forcedExpanded}
       onClick={props.onToggle}
-      className="ml-3 flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-      aria-label={
-        props.expanded ? "Collapse process tree" : "Expand process tree"
-      }
+      className="ml-3 flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground"
+      aria-label={toggleLabel}
     >
       {props.expanded ? (
         <ChevronDown className="size-3.5" />
@@ -1566,16 +1577,16 @@ function buildKillTargetIndex(input: KillTargetIndexInput): {
     for (const process of owner.processes) live.add(processRowKey(process));
   }
   if (input.other !== null && input.defaultHostId !== null) {
+    const matchingRootPids = matchingOtherRootPids(
+      input.other.processes,
+      input.searchQuery,
+    );
     for (const process of input.other.processes) {
       const key = processRowKey(process);
       live.add(key);
       if (
         process.rootPid === process.pid &&
-        otherRootMatchesSearch(
-          input.other.processes,
-          process.pid,
-          input.searchQuery,
-        )
+        matchingRootPids.has(process.pid)
       ) {
         topLevel.set(key, {
           key,
@@ -1705,6 +1716,7 @@ function OwnerTreeRow(props: {
           label={label}
           canExpand={visibleProcessRows.canExpand}
           expanded={visibleExpanded}
+          forcedExpanded={processSearch.forcesExpanded}
           onToggle={props.onToggle}
         />
         <button
@@ -2342,19 +2354,20 @@ function otherResourcesMatchSearch(
   );
 }
 
-function otherRootMatchesSearch(
+function matchingOtherRootPids(
   processes: readonly ResourceProcessSnapshotWire[],
-  rootPid: number,
   searchQuery: string,
-): boolean {
-  return (
-    matchesResourceSearch(searchQuery, ["Other"]) ||
-    processes.some(
-      (process) =>
-        process.rootPid === rootPid &&
-        processMatchesSearch(process, searchQuery),
-    )
-  );
+): ReadonlySet<number> {
+  if (matchesResourceSearch(searchQuery, ["Other"])) {
+    return new Set(processes.map((process) => process.rootPid));
+  }
+  const matchingRootPids = new Set<number>();
+  for (const process of processes) {
+    if (processMatchesSearch(process, searchQuery)) {
+      matchingRootPids.add(process.rootPid);
+    }
+  }
+  return matchingRootPids;
 }
 
 function filterProcessDisplayRowsForSearch(

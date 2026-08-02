@@ -558,6 +558,7 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Clear resource search" }),
     );
+    expect(document.activeElement).toBe(search);
     expect(screen.getByText("Resource Task")).not.toBeNull();
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
   });
@@ -576,6 +577,11 @@ describe("ResourceMonitorPopover", () => {
     expect(
       screen.getByText("node dev-server.js (2 sub-processes)"),
     ).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Process tree expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
 
     fireEvent.change(search, { target: { value: "103" } });
     expect(screen.getByText("make")).not.toBeNull();
@@ -957,6 +963,18 @@ describe("ResourceMonitorPopover", () => {
       screen.getByRole("button", { name: "Expand sub-processes of worker" }),
     );
     expect(screen.getByText("child")).not.toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "child" },
+      },
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Other processes expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("shows compact basename labels for Other roots until expanded", () => {
@@ -1821,6 +1839,15 @@ describe("ResourceMonitorPopover", () => {
         .compareDocumentPosition(screen.getByText("Renderer")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "traycer main" },
+      },
+    );
+    expect(screen.getByText("Main")).not.toBeNull();
+    expect(screen.queryByText("Renderer")).toBeNull();
   });
 
   it("pins an expanded owner row beneath its sticky section header", () => {
