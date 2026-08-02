@@ -2247,15 +2247,33 @@ function buildOwnerProcessSearchProjection(input: {
     ...ownerMetadataSearchTerms(input.row, input.label),
   ];
   const ownerMatches = matchesResourceSearch(input.searchQuery, ownerTerms);
-  return {
-    rows: ownerMatches
-      ? input.processRows
+  const matchingRootRows = input.processRows.rootRows.filter((root) =>
+    matchesResourceSearch(input.searchQuery, [
+      ...ownerTerms,
+      ...processSearchTerms(root.process),
+    ]),
+  );
+  const filteredRows =
+    matchingRootRows.length > 0
+      ? filterProcessDisplayRowsForSearch(
+          matchingRootRows,
+          input.searchQuery,
+          ownerTerms,
+        )
       : filterOwnerProcessRowsForSearch(
           input.processRows,
           input.searchQuery,
           false,
           ownerTerms,
-        ),
+        ).rows;
+  return {
+    rows: ownerMatches
+      ? input.processRows
+      : {
+          ...input.processRows,
+          rows: filteredRows,
+          canExpand: filteredRows.length > 0,
+        },
     forcesExpanded:
       normalizeResourceSearch(input.searchQuery).length > 0 && !ownerMatches,
   };

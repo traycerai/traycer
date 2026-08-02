@@ -599,6 +599,27 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Resource Task")).toBeNull();
   });
 
+  it("reveals an owner structural root when only that process matches", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "/bin/zsh" } },
+    );
+
+    expect(screen.getByText("/bin/zsh (3 sub-processes)")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Process tree expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
   it("matches across the host header and process metadata", () => {
     const stub = installStubFactory();
     renderPopover();
