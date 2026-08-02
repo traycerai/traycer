@@ -1976,6 +1976,50 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   }
 
   /**
+   * Two panes where the target's painted tab must be resolved from its first
+   * live tab because activeTabId is absent or stale. The source keeps a second
+   * tab so splitPaneWithTab does not add a dissolve-survivor target that could
+   * mask the target-pane assertion.
+   */
+  function fallbackActiveSplitCanvas(
+    targetActiveTabId: string | null,
+  ): EpicCanvasState {
+    return {
+      activePaneId: "pane-left",
+      root: {
+        kind: "group",
+        id: "split-fallback-active",
+        direction: "horizontal",
+        children: [
+          {
+            kind: "pane",
+            id: "pane-left",
+            tabInstanceIds: [SPEC_A.instanceId, SPEC_B.instanceId],
+            activeTabId: targetActiveTabId,
+            previewTabId: null,
+            activationHistory: [SPEC_A.instanceId, SPEC_B.instanceId],
+          },
+          {
+            kind: "pane",
+            id: "pane-right",
+            tabInstanceIds: [SPEC_C.instanceId, CHAT_A.instanceId],
+            activeTabId: SPEC_C.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_C.instanceId, CHAT_A.instanceId],
+          },
+        ],
+      },
+      tilesByInstanceId: {
+        [SPEC_A.instanceId]: SPEC_A,
+        [SPEC_B.instanceId]: SPEC_B,
+        [SPEC_C.instanceId]: SPEC_C,
+        [CHAT_A.instanceId]: CHAT_A,
+      },
+      sizesByGroupId: { "split-fallback-active": [0.5, 0.5] },
+    };
+  }
+
+  /**
    * When the flush fires, the pre-mutation tree must still be intact - i.e.
    * the action creator called it BEFORE its own `set()`. The spy records the
    * call either way; this implementation only asserts timing.
@@ -2176,6 +2220,75 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     // sourcePane was not emptied (A remains) and source===target, so no dissolve.
     expect(flushed).toHaveLength(2);
   });
+
+  const newSplitNode: EpicCanvasTileRef = {
+    ...CHAT_A,
+    id: "chat-new-split-node",
+    instanceId: "inst-chat-new-split-node",
+    name: "New split chat",
+  };
+  const fallbackActiveCases: ReadonlyArray<{
+    activeCase: string;
+    activeTabId: string | null;
+  }> = [
+    { activeCase: "null activeTabId", activeTabId: null },
+    { activeCase: "stale activeTabId", activeTabId: "inst-stale-active" },
+  ];
+  const splitTargetCases: ReadonlyArray<{
+    entryPoint: string;
+    expected: ReadonlyArray<string>;
+    invoke: (tabId: string) => void;
+  }> = [
+    {
+      entryPoint: "splitPaneWithNode",
+      expected: [SPEC_A.instanceId],
+      invoke: (tabId) => {
+        useEpicCanvasStore
+          .getState()
+          .splitPaneWithNode(tabId, "pane-left", "bottom", newSplitNode);
+      },
+    },
+    {
+      entryPoint: "splitPaneWithTab",
+      expected: [SPEC_C.instanceId, SPEC_A.instanceId],
+      invoke: (tabId) => {
+        useEpicCanvasStore.getState().splitPaneWithTab(tabId, {
+          sourcePaneId: "pane-right",
+          tabId: SPEC_C.instanceId,
+          targetPaneId: "pane-left",
+          position: "bottom",
+        });
+      },
+    },
+    {
+      entryPoint: "splitPaneEmptyInTab",
+      expected: [SPEC_A.instanceId],
+      invoke: (tabId) => {
+        useEpicCanvasStore
+          .getState()
+          .splitPaneEmptyInTab(tabId, "pane-left", "vertical");
+      },
+    },
+  ];
+  const fallbackSplitTargetCases = fallbackActiveCases.flatMap((activeCase) =>
+    splitTargetCases.map((splitCase) => ({ ...activeCase, ...splitCase })),
+  );
+
+  it.each(fallbackSplitTargetCases)(
+    "$entryPoint flushes the painted first tab for a $activeCase target",
+    ({ activeTabId, expected, invoke }) => {
+      seedHeaderTab(
+        "tab-fallback-active",
+        fallbackActiveSplitCanvas(activeTabId),
+        "epic-t20",
+      );
+
+      invoke("tab-fallback-active");
+
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+      expect(flushSpy).toHaveBeenCalledWith(expected);
+    },
+  );
 
   // ---- splitPaneEmptyInTab ----------------------------------------------
 

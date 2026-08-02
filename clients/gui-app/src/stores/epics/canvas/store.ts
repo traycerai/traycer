@@ -98,6 +98,7 @@ import {
 import {
   findPaneById,
   paneRemovalDissolveHandoffTargets,
+  resolveActivePaneTab,
 } from "@/stores/epics/canvas/tile-tree";
 import {
   isOpenableEpicNodeKind,
@@ -2145,11 +2146,16 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           // dissolve survivors too.
           if (before !== null) {
             const targetPane = findPaneById(before.root, targetPaneId);
+            const targetInstanceId =
+              targetPane === null
+                ? null
+                : resolveActivePaneTab(
+                    targetPane.activeTabId,
+                    targetPane.tabInstanceIds,
+                  );
             const existing = findPaneTabByContentId(before, node.id);
             flushChatTabViewportHandoff([
-              ...(targetPane !== null && targetPane.activeTabId !== null
-                ? [targetPane.activeTabId]
-                : []),
+              ...(targetInstanceId === null ? [] : [targetInstanceId]),
               ...(existing !== null ? [existing.instanceId] : []),
               ...(existing !== null &&
               existing.pane.tabInstanceIds.length === 1 &&
@@ -2203,12 +2209,17 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           // parent. Flush all three defensively before `set()`.
           if (before !== null) {
             const targetPane = findPaneById(before.root, args.targetPaneId);
+            const targetInstanceId =
+              targetPane === null
+                ? null
+                : resolveActivePaneTab(
+                    targetPane.activeTabId,
+                    targetPane.tabInstanceIds,
+                  );
             const sourcePane = findPaneById(before.root, args.sourcePaneId);
             flushChatTabViewportHandoff([
               args.tabId,
-              ...(targetPane !== null && targetPane.activeTabId !== null
-                ? [targetPane.activeTabId]
-                : []),
+              ...(targetInstanceId === null ? [] : [targetInstanceId]),
               ...(sourcePane !== null &&
               sourcePane.tabInstanceIds.length === 1 &&
               args.sourcePaneId !== args.targetPaneId
@@ -2260,8 +2271,15 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const before = canvasForExistingTab(get(), tabId);
           if (before !== null) {
             const targetPane = findPaneById(before.root, targetPaneId);
-            if (targetPane !== null && targetPane.activeTabId !== null) {
-              flushChatTabViewportHandoff([targetPane.activeTabId]);
+            const targetInstanceId =
+              targetPane === null
+                ? null
+                : resolveActivePaneTab(
+                    targetPane.activeTabId,
+                    targetPane.tabInstanceIds,
+                  );
+            if (targetInstanceId !== null) {
+              flushChatTabViewportHandoff([targetInstanceId]);
             }
           }
           set((state) => {
