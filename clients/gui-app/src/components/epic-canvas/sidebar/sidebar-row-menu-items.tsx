@@ -39,14 +39,25 @@ interface SidebarRowMenuItemEntry {
 }
 
 /**
- * Attaches an entry's disabled-reason tooltip.
+ * Attaches an entry's disabled-reason tooltip DIRECTLY to the item, with no
+ * element in between.
  *
- * The extra wrapper element is load-bearing, not decoration. Both
- * `DropdownMenuItem` and `ContextMenuItem` carry `data-disabled:pointer-events-none`,
- * so a trigger placed on the item itself (`TooltipWrapper` uses `asChild`)
- * would sit on a node that receives no hover in exactly the disabled state the
- * tooltip exists to explain. Hosting the trigger one level up keeps hover
- * working while the item stays inert.
+ * An intermediate wrapper used to be necessary: both `DropdownMenuItem` and
+ * `ContextMenuItem` carry `data-disabled:pointer-events-none`, so a trigger on
+ * a hard-disabled item would sit on a node that receives no hover in exactly
+ * the state the tooltip explains. That no longer applies. A tooltip is only
+ * ever rendered for an entry carrying a reason, and every such entry is
+ * SOFT-disabled (see {@link softDisabledProps}) - Radix `disabled` is false, so
+ * `data-disabled` is absent and the item takes hover itself.
+ *
+ * Removing the wrapper is not a simplification, it is the fix. Radix Tooltip
+ * puts `aria-describedby` on its trigger while open, and per ARIA a
+ * `role="presentation"`/`none` is IGNORED on an element carrying any global
+ * ARIA property. So a presentational wrapper stopped being presentational at
+ * the exact moment a keyboard user focused the busy entry and opened its
+ * tooltip - reappearing in the accessibility tree and breaking the
+ * `menu` -> `menuitem` ownership it existed to preserve. With the trigger on
+ * the item, the item stays a direct child of the menu in every state.
  */
 function SidebarRowMenuItemTooltip(props: {
   readonly tooltip: string | null;
@@ -60,17 +71,26 @@ function SidebarRowMenuItemTooltip(props: {
       sideOffset={undefined}
       align={undefined}
     >
-      {/*
-       * `role="none"` keeps the ARIA `menu` -> `menuitem` ownership intact.
-       * Radix's own item collection is unaffected (it queries
-       * `[data-radix-collection-item]` across all descendants), but the
-       * accessibility tree only counts OWNED children, so an unmarked generic
-       * div here would drop the item from the menu's position/count - and
-       * only on the rows that happen to be busy.
-       */}
-      <div role="none">{props.children}</div>
+      {props.children}
     </TooltipWrapper>
   );
+}
+
+/**
+ * The ARIA a soft-disabled item needs, as one object to SPREAD.
+ *
+ * Spread-or-omit rather than `aria-disabled={...}`, because passing `undefined`
+ * is not the same as passing nothing. Radix renders
+ * `"aria-disabled": disabled || undefined` and THEN spreads the caller's props,
+ * and object spread copies a key whose value is `undefined` - so an explicit
+ * `undefined` still wins and deletes the `true` Radix derived. A hard-disabled
+ * item would then be announced as available while being both inert AND skipped
+ * by keyboard navigation. Only a genuinely absent key leaves Radix's value
+ * alone.
+ */
+interface SidebarRowMenuItemAria {
+  readonly "aria-disabled": true;
+  readonly "aria-describedby": string;
 }
 
 /**
@@ -96,7 +116,8 @@ function softDisabledProps(
   reasonIdPrefix: string,
 ): {
   readonly disabled: boolean;
-  readonly ariaDisabled: boolean;
+  readonly softDisabled: boolean;
+  readonly aria: SidebarRowMenuItemAria | null;
   readonly reasonId: string | undefined;
   readonly onSelect: (event: Event) => void;
 } {
@@ -104,15 +125,18 @@ function softDisabledProps(
   if (!explained) {
     return {
       disabled: entry.disabled,
-      ariaDisabled: false,
+      softDisabled: false,
+      aria: null,
       reasonId: undefined,
       onSelect: entry.onSelect,
     };
   }
+  const reasonId = `${reasonIdPrefix}${entry.id}`;
   return {
     disabled: false,
-    ariaDisabled: true,
-    reasonId: `${reasonIdPrefix}${entry.id}`,
+    softDisabled: true,
+    aria: { "aria-disabled": true, "aria-describedby": reasonId },
+    reasonId,
     onSelect: (event: Event) => event.preventDefault(),
   };
 }
@@ -121,19 +145,25 @@ function softDisabledProps(
  * The disabled reason, rendered INSIDE the item and referenced by its
  * `aria-describedby`.
  *
- * The tooltip alone does not reach a screen reader here. `TooltipWrapper` uses
- * `asChild`, so Radix puts the trigger - and the `aria-describedby` it manages
- * while open - on the WRAPPER, while keyboard focus lands on the menu item
- * inside it. ARIA descriptions are not inherited by descendants, so the user
- * hears "Archive, dimmed" and never the reason this whole path exists to
- * expose. Pointing the item at its own always-present copy of the text is what
- * closes that, and it does not depend on the tooltip being open.
+ * The tooltip alone does not carry the reason to a screen reader reliably.
+ * Radix Tooltip only sets `aria-describedby` while the tooltip is OPEN, so a
+ * user arrowing onto the entry can hear "Archive, dimmed" with no reason
+ * attached - and the description would come and go with hover state. This span
+ * is always present, so the item describes itself in every state, independent
+ * of the tooltip.
  *
  * Rendered inside the item rather than as a sibling so it cannot be orphaned
  * by the portal, and so the id stays scoped to the item that owns it. Radix's
  * typeahead reads the item's `textContent`, so it now sees the reason appended
  * to the label - harmless, because matching is prefix-based and the label
  * comes first.
+ *
+ * `aria-hidden` keeps it OUT of the item's accessible NAME. `sr-only` hides it
+ * visually but leaves it in the name-from-content subtree, so without this the
+ * item would be named "Archive" plus the whole refusal - and then announce that
+ * same text again as its description. A node referenced directly by
+ * `aria-describedby` is still traversed for the description even when hidden
+ * (accname), so the relationship survives; only the name is cleaned up.
  */
 function SidebarRowMenuItemReason(props: {
   readonly id: string | undefined;
@@ -141,7 +171,7 @@ function SidebarRowMenuItemReason(props: {
 }) {
   if (props.id === undefined || props.reason === null) return null;
   return (
-    <span id={props.id} className="sr-only">
+    <span id={props.id} className="sr-only" aria-hidden="true">
       {props.reason}
     </span>
   );
@@ -168,9 +198,8 @@ export function SidebarDropdownMenuItems(props: {
       <SidebarRowMenuItemTooltip key={entry.id} tooltip={entry.disabledTooltip}>
         <DropdownMenuItem
           disabled={state.disabled}
-          aria-disabled={state.ariaDisabled}
-          aria-describedby={state.reasonId}
-          className={cn(state.ariaDisabled && "opacity-50")}
+          {...(state.aria ?? {})}
+          className={cn(state.softDisabled && "opacity-50")}
           variant={entry.variant}
           data-testid={entry.testIds.dropdown}
           onSelect={state.onSelect}
@@ -200,9 +229,8 @@ export function SidebarContextMenuItems(props: {
       <SidebarRowMenuItemTooltip key={entry.id} tooltip={entry.disabledTooltip}>
         <ContextMenuItem
           disabled={state.disabled}
-          aria-disabled={state.ariaDisabled}
-          aria-describedby={state.reasonId}
-          className={cn(state.ariaDisabled && "opacity-50")}
+          {...(state.aria ?? {})}
+          className={cn(state.softDisabled && "opacity-50")}
           variant={entry.variant}
           data-testid={entry.testIds.context}
           onSelect={state.onSelect}

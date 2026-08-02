@@ -3328,13 +3328,21 @@ describe("chat row archive", () => {
   });
 
   /**
-   * The tooltip's TRIGGER must sit on the wrapper rather than on the menu item,
-   * because a disabled Radix item carries `data-disabled:pointer-events-none`
-   * and so receives no hover in the one state the tooltip exists to explain.
-   * This asserts the structure that makes that true - the item is nested inside
-   * the tooltip's element, not carrying it. (The `pointer-events` rule itself is
-   * CSS, which jsdom does not evaluate; the mocked tooltip here also renders its
-   * content eagerly, as every other tooltip assertion in this file does.)
+   * The tooltip's trigger sits on the menu ITEM, with no element in between.
+   *
+   * A soft-disabled entry is not Radix-`disabled`, so it carries no
+   * `data-disabled` and takes hover itself - the wrapper that used to be needed
+   * for that is gone. Keeping the item a direct child of the menu is what
+   * preserves `menu` -> `menuitem` ownership: an intermediate
+   * `role="presentation"` element could NOT, because ARIA ignores a
+   * presentational role on any element carrying a global ARIA property, and
+   * Radix Tooltip puts `aria-describedby` on its trigger while open. The
+   * wrapper stopped being presentational exactly when a keyboard user focused
+   * the busy entry and opened its tooltip.
+   *
+   * (The `pointer-events` rule itself is CSS, which jsdom does not evaluate;
+   * the mocked tooltip here renders its content eagerly, as every other tooltip
+   * assertion in this file does.)
    */
   it("explains the refusal, per activity tier (B11)", () => {
     seedChatTree();
@@ -3347,21 +3355,22 @@ describe("chat row archive", () => {
 
     const turnItem = screen.getByTestId("epic-sidebar-archive-item-chat-root");
     expect(isMenuItemUnavailable(turnItem)).toBe(true);
-    const turnWrapper = turnItem.parentElement;
-    if (turnWrapper === null) throw new Error("expected tooltip wrapper");
-    expect(tooltipTextIn(turnWrapper)).toBe(
-      "Can't archive while this agent is working. Wait for the turn to finish, or stop the agent.",
+    expect(tooltipTextIn(turnItem)).toBe(
+      "Can't archive while this agent is working. Stopping it ends a turn, but not a detached subagent or workflow. Wait for it to go idle, or stop it, then archive.",
     );
+    // The `turn` TIER is not "a turn is running": `chatActivityIndicator` maps
+    // a detached subagent or workflow outliving its turn into it, and
+    // `resolvedTurnStatus` reports no active turn for that same state so no
+    // Stop-turn affordance surfaces. An unhedged "stop it" would point at an
+    // action the host early-returns from.
+    expect(tooltipTextIn(turnItem)).toContain("not a detached subagent");
 
     testState.activityTierById = new Map([["chat-root", "background"]]);
     view.rerender(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
-    const bgWrapper = screen.getByTestId(
-      "epic-sidebar-archive-item-chat-root",
-    ).parentElement;
-    if (bgWrapper === null) throw new Error("expected tooltip wrapper");
-    expect(tooltipTextIn(bgWrapper)).toBe(
+    const bgItem = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    expect(tooltipTextIn(bgItem)).toBe(
       "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.",
     );
     // The background arm must never advertise stopping the AGENT as the
@@ -3369,19 +3378,20 @@ describe("chat row archive", () => {
     // tooltip is the only message a soft-disabled entry produces - the host's
     // corrected refusal never fires because `onSelect` is prevented. Getting
     // this wrong sends the user round a loop with nothing to correct it.
-    expect(tooltipTextIn(bgWrapper)).toContain("stop them from its chat");
+    expect(tooltipTextIn(bgItem)).toContain("stop them from its chat");
 
-    // While busy the entry is WRAPPED, so it no longer shares a parent with its
-    // sibling entries...
-    expect(bgWrapper).not.toBe(
+    // No wrapper: a busy entry stays a direct sibling of the other entries, so
+    // the menu owns it in every state. Nesting it under a presentational node
+    // would have un-owned it the moment its tooltip opened.
+    expect(bgItem.parentElement).toBe(
       screen.getByTestId("epic-sidebar-rename-chat-root").parentElement,
     );
 
-    // ...and on an idle row the wrapper is gone entirely: an available action
-    // must carry no explanation. Compared against a sibling entry rather than
-    // by searching for `role="tooltip"`, because an idle row also renders the
-    // hover Archive button, whose own ("Archive <name>") tooltip would satisfy
-    // a looser query and make this pass for the wrong reason.
+    // On an idle row there is no tooltip at all: an available action must carry
+    // no explanation. Scoped to the item's own menu container rather than the
+    // whole row, because an idle row also renders the hover Archive button,
+    // whose own ("Archive <name>") tooltip would satisfy a looser query and
+    // make this pass for the wrong reason.
     testState.activeAgentIds = new Set<string>();
     testState.activityTierById = new Map();
     view.rerender(
@@ -3389,6 +3399,7 @@ describe("chat row archive", () => {
     );
     const idleItem = screen.getByTestId("epic-sidebar-archive-item-chat-root");
     expect(isMenuItemUnavailable(idleItem)).toBe(false);
+    expect(tooltipTextIn(idleItem)).toBeNull();
     expect(idleItem.parentElement).toBe(
       screen.getByTestId("epic-sidebar-rename-chat-root").parentElement,
     );
@@ -3429,21 +3440,27 @@ describe("chat row archive", () => {
     expect(item.matches(":disabled")).toBe(false);
   });
 
-  it("marks the tooltip wrapper as presentational (B11)", () => {
-    // The wrapper sits between `role="menu"` and `role="menuitem"`. Without
-    // `role="none"` it breaks the menu's owned-children relationship, so the
-    // item's announced position/count goes wrong - and only on busy rows.
+  it("puts NOTHING between the menu and a busy item (B11)", () => {
+    // Any element between `role="menu"` and `role="menuitem"` breaks the
+    // owned-children relationship, so the item's announced position/count goes
+    // wrong - and only on busy rows. `role="presentation"` does not rescue it
+    // here: ARIA ignores a presentational role on an element carrying a global
+    // ARIA property, and Radix Tooltip assigns `aria-describedby` to its
+    // trigger while open. A wrapper would therefore un-presentation itself at
+    // the exact moment a keyboard user focused the entry and opened its
+    // tooltip - the one state it was added for.
     seedChatTree();
     testState.activeAgentIds = new Set(["chat-root"]);
     testState.activityTierById = new Map([["chat-root", "turn"]]);
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    const wrapper = screen.getByTestId(
-      "epic-sidebar-archive-item-chat-root",
-    ).parentElement;
-    if (wrapper === null) throw new Error("expected tooltip wrapper");
-    expect(wrapper.getAttribute("role")).toBe("none");
+    const busyItem = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    // Same parent as an entry that has no tooltip: no extra level was
+    // introduced for the busy one.
+    expect(busyItem.parentElement).toBe(
+      screen.getByTestId("epic-sidebar-rename-chat-root").parentElement,
+    );
   });
 
   it("applies the same refusal to the CONTEXT menu entry (B11)", () => {
@@ -3460,9 +3477,15 @@ describe("chat row archive", () => {
 
     const item = screen.getByTestId("epic-sidebar-context-archive-chat-root");
     expect(isMenuItemUnavailable(item)).toBe(true);
-    const wrapper = item.parentElement;
-    if (wrapper === null) throw new Error("expected tooltip wrapper");
-    expect(wrapper.getAttribute("role")).toBe("none");
+    // Soft-disabled, so Radix `disabled` is false and no `data-disabled`
+    // pointer-events trap applies - which is what lets the tooltip trigger sit
+    // on the item and keeps the item directly under the menu.
+    expect(item.matches(":disabled")).toBe(false);
+    expect(item.hasAttribute("data-disabled")).toBe(false);
+    expect(item.parentElement).toBe(
+      screen.getByTestId("epic-sidebar-context-rename-chat-root")
+        .parentElement ?? null,
+    );
   });
 
   it("describes the FOCUSED item with the reason, not just the wrapper (B11)", () => {

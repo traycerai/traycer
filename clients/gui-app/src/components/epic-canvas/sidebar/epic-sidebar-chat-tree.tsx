@@ -2486,7 +2486,14 @@ interface ChatRowArchiveDecision {
  */
 function archiveBlockedReason(running: IndicatorRunningKind): string {
   if (running === "turn") {
-    return "Can't archive while this agent is working. Wait for the turn to finish, or stop the agent.";
+    // Hedged, because this tier is NOT "a turn is running". `chatActivityIndicator`
+    // deliberately maps a detached subagent or workflow fleet outliving its turn
+    // into `"turn"` - it is the agent working, so it earns the busy spinner
+    // rather than the muted background glyph - while `resolvedTurnStatus`
+    // reports no active turn for that same state, precisely so a Stop-turn
+    // affordance does not surface. Promising a stop here would contradict that
+    // and send the user after an action the host early-returns from.
+    return "Can't archive while this agent is working. Stopping it ends a turn, but not a detached subagent or workflow. Wait for it to go idle, or stop it, then archive.";
   }
   return "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.";
 }
