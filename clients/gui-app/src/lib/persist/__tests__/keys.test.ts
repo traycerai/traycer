@@ -8,6 +8,7 @@ import {
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
+  lastLocalHostIdKey,
   lastSelectedHostKey,
   interviewDraftKey,
   interviewDraftKeyPrefix,
@@ -221,6 +222,10 @@ describe("persist key builders — output-preserving against current source", ()
 
   it("emits the app-level last-selected-host localStorage key", () => {
     expect(lastSelectedHostKey()).toBe("traycer-gui-app:last-selected-host");
+  });
+
+  it("emits the machine-level last-local-host-id localStorage key", () => {
+    expect(lastLocalHostIdKey()).toBe("traycer-gui-app:last-local-host-id");
   });
 
   it("has no two catalog entries sharing a leaf", () => {

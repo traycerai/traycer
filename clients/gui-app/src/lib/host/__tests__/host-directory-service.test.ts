@@ -12,10 +12,11 @@ import {
   type HostDirectoryServiceOptions,
 } from "@/lib/host/host-directory-service";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { lastSelectedHostKey } from "@/lib/persist";
+import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
 
 const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
+const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
 
 const localSnapshot: LocalHostSnapshot = {
   hostId: "desktop-pid-123",
@@ -101,6 +102,7 @@ async function flushPromises(): Promise<void> {
 
 beforeEach(() => {
   window.localStorage.removeItem(LAST_SELECTED_HOST_STORAGE_KEY);
+  window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
 });
 
 afterEach(() => {
@@ -108,6 +110,7 @@ afterEach(() => {
     directory.dispose();
   }
   window.localStorage.removeItem(LAST_SELECTED_HOST_STORAGE_KEY);
+  window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
   if (restoreDocumentHidden !== null) {
     restoreDocumentHidden();
     restoreDocumentHidden = null;
@@ -1223,6 +1226,132 @@ describe("HostDirectoryService", () => {
           AnalyticsEvent.HostSelected,
           { source: "direct_ui", host_kind: "local" },
         ],
+      ]);
+    });
+  });
+
+  describe("machine-owned host id vs the registry twin", () => {
+    /**
+     * The registry also lists this machine's own host. During a local restart
+     * (reinstall/update) the local snapshot is null, so without the persisted
+     * machine-id memory the merged directory would serve the registry's
+     * remote-kind twin - "available" by presence lease, dialable on paper,
+     * but reached through the relay. Binding it renders the dead-end
+     * unavailable card and disables the local provisioning lifecycle.
+     */
+    const ownRegistryTwin: HostDirectoryEntry = {
+      hostId: localSnapshot.hostId,
+      label: "hardiks-macbook",
+      kind: "remote",
+      websocketUrl: "wss://relay.traycer.invalid/attach",
+      version: "1.2.2",
+      status: "available",
+    };
+
+    it("keeps the machine's own registry twin out of the directory while the local host is down", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [ownRegistryTwin, secondRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      expect(await directory.list()).toEqual([secondRemoteHostEntry]);
+    });
+
+    it("does not restore a remembered selection onto the twin while the local host is down", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      rememberHostSelection(localSnapshot.hostId);
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await directory.start();
+
+      expect(await directory.list()).toEqual([]);
+      expect(directory.getSelected()).toBeNull();
+    });
+
+    it("re-covers the id through the local arm the moment the host publishes", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await directory.start();
+      expect(await directory.list()).toEqual([]);
+
+      host.setLocalHost(localSnapshot);
+
+      const entries = await directory.list();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        hostId: localSnapshot.hostId,
+        kind: "local",
+        websocketUrl: localSnapshot.websocketUrl,
+      });
+    });
+
+    it("learns the machine's host id from the live snapshot and persists it across launches", async () => {
+      const firstLaunchHost = makeHost(localSnapshot);
+      const firstLaunch = makeDirectory({
+        runnerHost: firstLaunchHost,
+        remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+      });
+      await firstLaunch.start();
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        localSnapshot.hostId,
+      );
+
+      // Next launch: the host is still restarting (no snapshot), but the
+      // learned id already keeps the registry twin out of the directory.
+      const secondLaunchHost = makeHost(null);
+      const secondLaunch = makeDirectory({
+        runnerHost: secondLaunchHost,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await secondLaunch.start();
+      expect(await secondLaunch.list()).toEqual([]);
+    });
+
+    it("leaves other machines' remote hosts untouched", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      expect(await directory.list()).toEqual([
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
       ]);
     });
   });

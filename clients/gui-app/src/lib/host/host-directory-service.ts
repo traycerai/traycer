@@ -17,10 +17,11 @@ import {
   AnalyticsEvent,
   type AnalyticsSource,
 } from "@/lib/analytics";
-import { lastSelectedHostKey } from "@/lib/persist";
+import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
 
 const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
+const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
 
 export interface HostDirectoryServiceOptions {
   readonly runnerHost: IRunnerHost;
@@ -60,6 +61,25 @@ export class HostDirectoryService implements IHostDirectoryService {
   private readonly runnerHost: IRunnerHost;
   private readonly remoteFetcher: RemoteHostFetcher;
   private localEntry: HostDirectoryEntry | null = null;
+  /**
+   * The hostId this MACHINE's local host last published, persisted across
+   * launches. The registry also lists this machine's host, so during a local
+   * restart (reinstall, update, crash recovery) the merged directory would
+   * otherwise serve a remote-kind twin of the local host: "available" by
+   * presence lease, dialable on paper, but reached through the relay - the
+   * one transport that must never be used for the machine's own host. That
+   * twin flips `localTarget` off, which both renders the dead-end
+   * "unavailable" card and DISABLES the local provisioning lifecycle exactly
+   * when it is needed. `snapshot()` therefore keeps remote entries carrying
+   * this id out of the merged directory; the live local entry re-covers the
+   * id the moment the host publishes its metadata.
+   *
+   * Never cleared, only replaced by the next local snapshot: the id is a
+   * durable machine fact, and a stale value can only suppress the remote twin
+   * of a host this machine no longer runs - which no client should relay-dial
+   * from here anyway.
+   */
+  private lastKnownLocalHostId: string | null = loadPersistedLocalHostId();
   private remoteEntries: readonly HostDirectoryEntry[] = [];
   private selected: HostDirectoryEntry | null = null;
   /**
@@ -153,6 +173,10 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.preparePersistedSelectionRestore();
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
       this.localEntry = toLocalEntry(snapshot);
+      if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
+        this.lastKnownLocalHostId = snapshot.hostId;
+        persistLocalHostId(snapshot.hostId);
+      }
       appLogger.debug("[host-directory] local host snapshot changed", {
         hostId: snapshot?.hostId ?? null,
         hasWebsocketUrl: snapshot !== null,
@@ -473,6 +497,14 @@ export class HostDirectoryService implements IHostDirectoryService {
       if (seenHostIds.has(entry.hostId)) {
         continue;
       }
+      // This machine's own host id is served exclusively by the local arm.
+      // While the local host is down/booting the registry twin would be the
+      // only entry for the id - remote-kind and relay-dialed - and binding it
+      // renders the dead-end unavailable card while switching off the local
+      // provisioning lifecycle (see `lastKnownLocalHostId`).
+      if (entry.hostId === this.lastKnownLocalHostId) {
+        continue;
+      }
       entries.push(entry);
       seenHostIds.add(entry.hostId);
     }
@@ -679,6 +711,37 @@ function loadPersistedHostSelection(): string | null {
       error: describeLogError(error),
     });
     return null;
+  }
+}
+
+function loadPersistedLocalHostId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
+    return raw !== null && raw.length > 0 ? raw : null;
+  } catch (error) {
+    appLogger.warn("[host-directory] persisted local host id load failed", {
+      storageKey: LAST_LOCAL_HOST_ID_STORAGE_KEY,
+      error: describeLogError(error),
+    });
+    return null;
+  }
+}
+
+function persistLocalHostId(hostId: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(LAST_LOCAL_HOST_ID_STORAGE_KEY, hostId);
+  } catch (error) {
+    appLogger.warn("[host-directory] persisted local host id write failed", {
+      storageKey: LAST_LOCAL_HOST_ID_STORAGE_KEY,
+      hostId,
+      error: describeLogError(error),
+    });
   }
 }
 
