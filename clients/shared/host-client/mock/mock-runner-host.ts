@@ -88,6 +88,15 @@ export interface MockRunnerHostOptions {
    */
   readonly traycerCli: ITraycerCli | null | undefined;
   readonly hostManagement?: IHostManagement | null;
+  /**
+   * Mirrors `IRunnerHost.getLastKnownLocalHostId()` - the durable host id read
+   * from pid metadata, which still answers while the host is down. Omit it and
+   * the mock derives the id from `localHost`, which is what a machine with a
+   * running host reports. Set it explicitly (usually alongside
+   * `localHost: null`) to model the case the real bridge exists for: a host
+   * that has published metadata before but is not reachable right now.
+   */
+  readonly lastKnownLocalHostId?: string | null;
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
@@ -154,6 +163,8 @@ export class MockRunnerHost implements IRunnerHost {
   >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
+  /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
+  private readonly explicitLastKnownLocalHostId: string | null | undefined;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
   readonly tray: MockTrayState = new MockTrayState();
@@ -203,6 +214,7 @@ export class MockRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.authnBaseUrl;
     this.localHost = options.localHost;
+    this.explicitLastKnownLocalHostId = options.lastKnownLocalHostId;
     this.hosts = options.hosts;
     this.workspaceFolderPickerPaths =
       options.workspaceFolderPickerPaths === undefined
@@ -582,6 +594,14 @@ export class MockRunnerHost implements IRunnerHost {
         this.localHostHandlers.delete(handler);
       },
     };
+  }
+
+  getLastKnownLocalHostId(): Promise<string | null> {
+    if (this.explicitLastKnownLocalHostId !== undefined) {
+      return Promise.resolve(this.explicitLastKnownLocalHostId);
+    }
+    // A running host is exactly the case where pid metadata carries its id.
+    return Promise.resolve(this.localHost?.hostId ?? null);
   }
 
   onSystemResumed(handler: () => void): Disposable {

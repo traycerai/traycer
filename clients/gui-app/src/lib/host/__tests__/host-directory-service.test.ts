@@ -374,6 +374,11 @@ describe("HostDirectoryService", () => {
     });
 
     const startPromise = directory.start();
+    // `start()` first settles the shell's durable local-host-id seed, so the
+    // initial fetch is dispatched one hop in rather than synchronously. The
+    // property under test is unchanged: a remote fetch still in flight must
+    // not hold back the local default.
+    await flushPromises();
     expect(directory.getSelected()).toBeNull();
 
     pending.resolve?.({ kind: "hosts", entries: [] });
@@ -1233,11 +1238,11 @@ describe("HostDirectoryService", () => {
   describe("machine-owned host id vs the registry twin", () => {
     /**
      * The registry also lists this machine's own host. During a local restart
-     * (reinstall/update) the local snapshot is null, so without the persisted
-     * machine-id memory the merged directory would serve the registry's
-     * remote-kind twin - "available" by presence lease, dialable on paper,
-     * but reached through the relay. Binding it renders the dead-end
-     * unavailable card and disables the local provisioning lifecycle.
+     * (reinstall/update) the local snapshot is null, so the registry's
+     * remote-kind twin - "available" by presence lease, dialable on paper, but
+     * reached through the relay - is the only entry carrying that id. Binding
+     * it renders the dead-end unavailable card and disables the local
+     * provisioning lifecycle.
      */
     const ownRegistryTwin: HostDirectoryEntry = {
       hostId: localSnapshot.hostId,
@@ -1248,7 +1253,7 @@ describe("HostDirectoryService", () => {
       status: "available",
     };
 
-    it("keeps the machine's own registry twin out of the directory while the local host is down", async () => {
+    it("presents the machine's own registry twin as a non-dialable local entry", async () => {
       window.localStorage.setItem(
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
         localSnapshot.hostId,
@@ -1264,10 +1269,22 @@ describe("HostDirectoryService", () => {
       });
       await directory.start();
 
-      expect(await directory.list()).toEqual([secondRemoteHostEntry]);
+      const entries = await directory.list();
+      expect(entries).toHaveLength(2);
+      // `kind: local` keeps `localTarget` true so the provisioning/Retry card
+      // stays reachable; `websocketUrl: null` is what refuses the relay.
+      expect(entries[0]).toEqual({
+        hostId: localSnapshot.hostId,
+        label: "hardiks-macbook",
+        kind: "local",
+        websocketUrl: null,
+        version: "1.2.2",
+        status: "available",
+      });
+      expect(entries[1]).toEqual(secondRemoteHostEntry);
     });
 
-    it("does not restore a remembered selection onto the twin while the local host is down", async () => {
+    it("restores the remembered local selection onto the booting entry rather than dropping it", async () => {
       window.localStorage.setItem(
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
         localSnapshot.hostId,
@@ -1281,8 +1298,47 @@ describe("HostDirectoryService", () => {
       });
       await directory.start();
 
-      expect(await directory.list()).toEqual([]);
-      expect(directory.getSelected()).toBeNull();
+      const selected = directory.getSelected();
+      expect(selected?.hostId).toBe(localSnapshot.hostId);
+      expect(selected?.kind).toBe("local");
+      expect(selected?.websocketUrl).toBeNull();
+    });
+
+    /**
+     * Regression (Codex P1 on OSS #913): when the twin was DROPPED instead of
+     * coerced, the remembered local id resolved to nothing at startup, so a
+     * registry holding exactly one other machine had that remote auto-promoted
+     * as the default - and `reconcileSelection()` returns early while the
+     * current selection is still present, so the app stayed bound to the wrong
+     * machine even after the local host came back.
+     */
+    it("never promotes a lone remote over this machine's booting host", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      rememberHostSelection(localSnapshot.hostId);
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [ownRegistryTwin, secondRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+      // ...and once the local host publishes, the selection follows it to the
+      // real dialable endpoint instead of being stranded on the remote.
+      host.setLocalHost(localSnapshot);
+
+      const selected = directory.getSelected();
+      expect(selected?.hostId).toBe(localSnapshot.hostId);
+      expect(selected?.kind).toBe("local");
+      expect(selected?.websocketUrl).toBe(localSnapshot.websocketUrl);
     });
 
     it("re-covers the id through the local arm the moment the host publishes", async () => {
@@ -1297,7 +1353,7 @@ describe("HostDirectoryService", () => {
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
       });
       await directory.start();
-      expect(await directory.list()).toEqual([]);
+      expect((await directory.list())[0].websocketUrl).toBeNull();
 
       host.setLocalHost(localSnapshot);
 
@@ -1322,7 +1378,7 @@ describe("HostDirectoryService", () => {
       );
 
       // Next launch: the host is still restarting (no snapshot), but the
-      // learned id already keeps the registry twin out of the directory.
+      // learned id already neutralises the registry twin.
       const secondLaunchHost = makeHost(null);
       const secondLaunch = makeDirectory({
         runnerHost: secondLaunchHost,
@@ -1330,7 +1386,49 @@ describe("HostDirectoryService", () => {
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
       });
       await secondLaunch.start();
-      expect(await secondLaunch.list()).toEqual([]);
+      expect((await secondLaunch.list())[0]).toMatchObject({
+        kind: "local",
+        websocketUrl: null,
+      });
+    });
+
+    /**
+     * Regression (Codex P1 on OSS #913): the FIRST launch of the build that
+     * introduced the persisted key has nothing stored, and that launch is
+     * exactly the reinstall this guard exists for - the host is down, so no
+     * snapshot seeds it either. Without the shell's durable pid metadata the
+     * twin would go unrecognised on the one launch that needed it most.
+     */
+    it("seeds the id from the shell's pid metadata when nothing is persisted yet", async () => {
+      expect(
+        window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY),
+      ).toBeNull();
+      const host = new MockRunnerHost({
+        signInUrl: "https://auth.traycer.invalid/sign-in",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        lastKnownLocalHostId: localSnapshot.hostId,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+      });
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await directory.start();
+
+      expect((await directory.list())[0]).toMatchObject({
+        hostId: localSnapshot.hostId,
+        kind: "local",
+        websocketUrl: null,
+      });
+      // Seeding also persists, so the next launch needs no shell round-trip.
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        localSnapshot.hostId,
+      );
     });
 
     it("leaves other machines' remote hosts untouched", async () => {

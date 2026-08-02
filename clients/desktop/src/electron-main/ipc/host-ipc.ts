@@ -7,6 +7,7 @@ import type {
   HostRestartRequestResult,
   MutationOutcome,
 } from "../../ipc-contracts/host-management-types";
+import { readPidMetadata } from "../host/host-lifecycle";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 // Collapses a restart-intent outcome to the wire result both restart
@@ -47,6 +48,20 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
     async (): Promise<HostRestartRequestResult> => {
       const outcome = await bridge.options.hostController.respawn();
       return restartRequestResultFromOutcome(outcome);
+    },
+  );
+
+  // Read on demand rather than cached at install time: the file is watched
+  // and rewritten across the host's whole lifecycle, and a renderer that asks
+  // during a restart should get the id the host most recently published, not
+  // whatever happened to be on disk when the bridge was built.
+  bridge.handleInvoke(
+    RunnerHostInvoke.lastKnownLocalHostId,
+    async (): Promise<string | null> => {
+      const metadata = await readPidMetadata(
+        bridge.options.host.pidMetadataFile,
+      );
+      return metadata === null ? null : metadata.hostId;
     },
   );
 

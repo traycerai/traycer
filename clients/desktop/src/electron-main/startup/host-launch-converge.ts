@@ -96,6 +96,24 @@ export async function runLaunchHostConvergeReconcile(
     return;
   }
 
+  // An `unavailable` service is not registered at all, so NOTHING can reach
+  // this host until it is re-registered - and the decision arms below run
+  // only after `stageLatest()` settles, which joins a controller-owned
+  // release download that can take minutes on a slow link. Recovering first
+  // is what keeps a reinstall from leaving the user hostless for the length
+  // of a WAN transfer. An already-staged update keeps its apply-first
+  // precedence instead: applying is itself the fastest route to a running
+  // host, and it re-registers on the way.
+  const recovery =
+    !initialStatus.updateReady && initialStatus.activation === "unavailable"
+      ? await hostController.convergeReady(false)
+      : null;
+  if (recovery !== null) {
+    log.info("[host-controller] launch converge recovered an absent service", {
+      kind: recovery.kind,
+    });
+  }
+
   // Registry discovery stages asynchronously so a generic refresh never
   // blocks its caller on a WAN download. At launch that is insufficient: a
   // reconcile which samples status before staging finishes would leave the
@@ -119,11 +137,15 @@ export async function runLaunchHostConvergeReconcile(
     status.activation === "activationUnknown"
   ) {
     outcome = await hostController.activateInstalled(false);
-  } else if (status.activation === "unavailable") {
+  } else if (status.activation === "unavailable" && recovery === null) {
+    // Only when the pre-stage pass did not already run it: staging can itself
+    // surface an `unavailable` service, but re-running a recovery that just
+    // failed would only repeat the same failure a few seconds later.
     outcome = await hostController.convergeReady(false);
   }
 
-  if (outcome === null) {
+  const effectiveOutcome = outcome ?? recovery;
+  if (effectiveOutcome === null) {
     log.info("[host-controller] launch converge has no activation debt", {
       activation: status.activation,
     });
@@ -132,7 +154,8 @@ export async function runLaunchHostConvergeReconcile(
 
   log.info("[host-controller] launch converge reconcile complete", {
     updateReady: status.updateReady,
-    kind: outcome.kind,
+    kind: effectiveOutcome.kind,
+    recoveredBeforeStaging: recovery !== null,
   });
   // Fixup B1: a successful apply just moved `installedVersion` (and cleared
   // the stage), so the cache/menu built from the pre-apply registry snapshot
@@ -140,7 +163,7 @@ export async function runLaunchHostConvergeReconcile(
   // `updateReady`-derived) reflects the freshly applied version instead of
   // advertising the update we just installed. `activateInstalled` never moves
   // `installedVersion`, so there's nothing new to advertise on that branch.
-  if (status.updateReady && outcome.kind === "ok") {
+  if (status.updateReady && effectiveOutcome.kind === "ok") {
     await refreshHostRegistryIfNotRemoved(hostController, menu, {
       force: true,
       maxAgeMs: null,

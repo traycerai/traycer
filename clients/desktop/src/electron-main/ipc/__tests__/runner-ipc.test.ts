@@ -641,6 +641,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.requestMicrophoneAccess,
         RunnerHostInvoke.openMicrophoneSettings,
         RunnerHostInvoke.requestHostRespawn,
+        RunnerHostInvoke.lastKnownLocalHostId,
         RunnerHostInvoke.traySetIndicator,
         RunnerHostInvoke.traySetEpics,
         RunnerHostInvoke.setUnsyncedEditsSnapshot,

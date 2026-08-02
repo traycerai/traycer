@@ -62,22 +62,30 @@ export class HostDirectoryService implements IHostDirectoryService {
   private readonly remoteFetcher: RemoteHostFetcher;
   private localEntry: HostDirectoryEntry | null = null;
   /**
-   * The hostId this MACHINE's local host last published, persisted across
-   * launches. The registry also lists this machine's host, so during a local
-   * restart (reinstall, update, crash recovery) the merged directory would
-   * otherwise serve a remote-kind twin of the local host: "available" by
-   * presence lease, dialable on paper, but reached through the relay - the
-   * one transport that must never be used for the machine's own host. That
-   * twin flips `localTarget` off, which both renders the dead-end
-   * "unavailable" card and DISABLES the local provisioning lifecycle exactly
-   * when it is needed. `snapshot()` therefore keeps remote entries carrying
-   * this id out of the merged directory; the live local entry re-covers the
-   * id the moment the host publishes its metadata.
+   * The hostId this MACHINE's local host last published.
    *
-   * Never cleared, only replaced by the next local snapshot: the id is a
-   * durable machine fact, and a stale value can only suppress the remote twin
-   * of a host this machine no longer runs - which no client should relay-dial
-   * from here anyway.
+   * The registry also lists this machine, so during a local restart
+   * (reinstall, update, crash recovery) the merged directory's only entry for
+   * that id is the registry's remote-kind twin: "available" by presence lease,
+   * dialable on paper, but reached through the relay - the one transport that
+   * must never carry this machine's own host. Binding it also flips
+   * `localTarget` off, which DISABLES the local provisioning lifecycle exactly
+   * when it is needed, leaving the dead-end "unavailable" card with no Retry.
+   *
+   * `snapshot()` therefore rewrites that twin into a NON-DIALABLE LOCAL entry
+   * rather than dropping it. Dropping it looked simpler but silently broke
+   * selection: the remembered id then resolved to nothing at startup, so a
+   * registry holding exactly one other machine had that remote auto-promoted,
+   * and `reconcileSelection()` kept the still-valid remote even after the
+   * local host came back. Keeping the id present preserves the user's intent
+   * while still refusing the relay.
+   *
+   * Seeded widest-first: the persisted value, the shell's durable pid metadata
+   * (which still answers while the host is DOWN - the case the persisted value
+   * cannot cover on the first launch after the upgrade that introduced it),
+   * and every live local snapshot. Never cleared, only replaced: the id is a
+   * durable machine fact, and a stale value can only neutralise the twin of a
+   * host this machine no longer runs - which nothing should relay-dial anyway.
    */
   private lastKnownLocalHostId: string | null = loadPersistedLocalHostId();
   private remoteEntries: readonly HostDirectoryEntry[] = [];
@@ -171,6 +179,13 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     this.started = true;
     this.preparePersistedSelectionRestore();
+    // BEFORE the first refresh: the very first launch after the upgrade that
+    // introduced the persisted key has nothing stored, and that launch is
+    // exactly the reinstall this guard exists for - the host is down, so no
+    // snapshot will seed it either. The shell's pid metadata is the one source
+    // that still answers in that window. A shell without a local host (web,
+    // mobile) answers `null` and nothing is neutralised.
+    await this.seedLocalHostIdFromShell();
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
       this.localEntry = toLocalEntry(snapshot);
       if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
@@ -486,6 +501,34 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
   }
 
+  /**
+   * Best-effort: a shell that cannot answer must not stop the directory from
+   * starting. Failing closed here would trade a mislabelled row for a app that
+   * never lists any host at all.
+   */
+  private async seedLocalHostIdFromShell(): Promise<void> {
+    if (this.lastKnownLocalHostId !== null) {
+      return;
+    }
+    let hostId: string | null;
+    try {
+      hostId = await this.runnerHost.getLastKnownLocalHostId();
+    } catch (error) {
+      appLogger.warn("[host-directory] local host id seed failed", {
+        error: describeLogError(error),
+      });
+      return;
+    }
+    if (hostId === null) {
+      return;
+    }
+    this.lastKnownLocalHostId = hostId;
+    persistLocalHostId(hostId);
+    appLogger.debug("[host-directory] seeded local host id from shell", {
+      hostId,
+    });
+  }
+
   private snapshot(): readonly HostDirectoryEntry[] {
     const entries: HostDirectoryEntry[] = [];
     const seenHostIds = new Set<string>();
@@ -498,14 +541,16 @@ export class HostDirectoryService implements IHostDirectoryService {
         continue;
       }
       // This machine's own host id is served exclusively by the local arm.
-      // While the local host is down/booting the registry twin would be the
-      // only entry for the id - remote-kind and relay-dialed - and binding it
-      // renders the dead-end unavailable card while switching off the local
-      // provisioning lifecycle (see `lastKnownLocalHostId`).
-      if (entry.hostId === this.lastKnownLocalHostId) {
-        continue;
-      }
-      entries.push(entry);
+      // While the local host is down/booting the registry twin is the only
+      // entry carrying it, and it is remote-kind and relay-dialed. Present it
+      // as a non-dialable LOCAL entry instead of dropping it, so the id stays
+      // resolvable for selection while nothing can dial it through the relay
+      // (see `lastKnownLocalHostId`).
+      entries.push(
+        entry.hostId === this.lastKnownLocalHostId
+          ? bootingLocalEntry(entry)
+          : entry,
+      );
       seenHostIds.add(entry.hostId);
     }
     return entries;
@@ -797,6 +842,30 @@ function hostDirectoryEntriesEqual(
 
 function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
   return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
+}
+
+/**
+ * Rewrites the registry's view of THIS machine into the local, not-yet-dialable
+ * entry the local arm will publish once the host is up.
+ *
+ * `websocketUrl: null` is what makes it safe: `isHostDialable()` refuses it, so
+ * no transport - app-wide or per-tab - can reach for the relay against our own
+ * host. `kind: "local"` is what makes it useful: the readiness controller keeps
+ * `localTarget` true, so the local provisioning lifecycle stays armed and the
+ * surface offers the loading/Retry card instead of the dead-end one.
+ *
+ * The registry's label/version are kept: they are this machine's, and they are
+ * the freshest description available while the host is down.
+ */
+function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
+  return {
+    hostId: twin.hostId,
+    label: twin.label,
+    kind: "local",
+    websocketUrl: null,
+    version: twin.version,
+    status: twin.status,
+  };
 }
 
 function toLocalEntry(

@@ -108,12 +108,22 @@ function fakeHostController(
   readonly activateInstalledCalls: readonly boolean[];
   readonly convergeReadyCalls: readonly boolean[];
   readonly stageLatestCalls: number;
+  /**
+   * Method names in invocation order. Counts alone cannot express "recovery
+   * ran BEFORE the release download", which is the whole point of the
+   * unavailable-first ordering.
+   */
+  readonly callOrder: readonly string[];
 } {
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
   const activateInstalledCalls: boolean[] = [];
   const convergeReadyCalls: boolean[] = [];
+  const callOrder: string[] = [];
   let stageLatestCalls = 0;
   return {
+    get callOrder() {
+      return callOrder;
+    },
     get applyStagedCalls() {
       return applyStagedCalls;
     },
@@ -146,10 +156,12 @@ function fakeHostController(
       force: boolean,
     ): Promise<MutationOutcome<ConvergeReadyOk>> {
       convergeReadyCalls.push(force);
+      callOrder.push("convergeReady");
       return { kind: "ok", value: { running: true, version: "1.4.0" } };
     },
     async stageLatest(): Promise<void> {
       stageLatestCalls += 1;
+      callOrder.push("stageLatest");
     },
     installVersion: () => {
       throw new Error(
@@ -302,6 +314,47 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.convergeReadyCalls).toEqual([false]);
     expect(controller.applyStagedCalls).toEqual([]);
     expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  // An unavailable service is not registered at all, so the host is
+  // unreachable until it is. `stageLatest()` joins a controller-owned release
+  // download that can run for minutes on a slow link; recovering after it
+  // would leave the user hostless for that entire window.
+  it("recovers an unavailable service BEFORE joining the release download", async () => {
+    const controller = fakeHostController(
+      fakeStatus(false, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.callOrder).toEqual(["convergeReady", "stageLatest"]);
+    // Exactly once: the post-stage arm must not re-run a recovery that the
+    // pre-stage pass already performed.
+    expect(controller.convergeReadyCalls).toEqual([false]);
+  });
+
+  // Applying is itself the fastest route back to a running host and
+  // re-registers on the way, so a ready stage keeps its precedence rather
+  // than paying for a separate recovery first.
+  it("keeps apply-first precedence when an update is already staged", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
   });
 
   it("P1: does not resurrect a host removed by the user", async () => {
