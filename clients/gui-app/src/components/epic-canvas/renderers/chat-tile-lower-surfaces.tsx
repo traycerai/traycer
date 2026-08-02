@@ -31,9 +31,13 @@ import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
-import { lowerScrollRegionMaxHeightClass } from "@/lib/chat/chat-lower-scroll-budget";
+import {
+  chatBackgroundSectionVisible,
+  lowerScrollRegionMaxHeightClass,
+} from "@/lib/chat/chat-lower-scroll-budget";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-command-list-registry";
 import { cn } from "@/lib/utils";
 import type {
   PendingInterviewView,
@@ -261,8 +265,16 @@ export function ChatLowerInteractionSurfaces(
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
-  const backgroundVisible =
-    props.backgroundItems !== undefined && props.backgroundItems.length > 0;
+  // Read here rather than inside the dock: the same count decides the dock's
+  // Background section and the spacing of everything below it.
+  const runningManagedCommandCount = useRunningManagedCommandsForChat(
+    props.epicId,
+    props.chatId,
+  ).length;
+  const backgroundVisible = chatBackgroundSectionVisible({
+    backgroundItemCount: props.backgroundItems?.length ?? 0,
+    runningManagedCommandCount,
+  });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
   const approvalVisible = approvalSurfaceVisible(
@@ -357,6 +369,7 @@ export function ChatLowerInteractionSurfaces(
         restore={props.restoreContext}
         queue={props.queue.value}
         backgroundItems={props.backgroundItems}
+        runningManagedCommandCount={runningManagedCommandCount}
         backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
         backgroundStopAllPending={props.backgroundStopAllPending}
         activeTurnStatus={props.turn.activeTurnStatus}

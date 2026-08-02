@@ -13,7 +13,7 @@ import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
-import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-command-list-registry";
+import { chatBackgroundSectionVisible } from "@/lib/chat/chat-lower-scroll-budget";
 import { cn } from "@/lib/utils";
 import type { ChatPinnedStackTopSpacing } from "@/components/chat/chat-pinned-stack";
 
@@ -29,6 +29,12 @@ export interface ChatLowerDockProps {
   readonly restore: ChatRestoreContextValue;
   readonly queue: ChatSessionState["queue"];
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  /**
+   * This chat's running managed commands, counted by the parent because the
+   * surfaces around the dock size themselves from the same number - see
+   * `chatBackgroundSectionVisible`.
+   */
+  readonly runningManagedCommandCount: number;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
@@ -61,16 +67,10 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   const queueVisible = props.queue.items.length > 0;
   const agentsVisible =
     props.activeAgents.length > 0 && props.selfAgent !== null;
-  // Managed commands reach the strip by a client-side join on the epic's list
-  // stream, so they can make the section worth showing even when the harness
-  // session reports no background work of its own.
-  const runningManagedCommandCount = useRunningManagedCommandsForChat(
-    props.epicId,
-    props.chatId,
-  ).length;
-  const backgroundVisible =
-    (props.backgroundItems !== undefined && props.backgroundItems.length > 0) ||
-    runningManagedCommandCount > 0;
+  const backgroundVisible = chatBackgroundSectionVisible({
+    backgroundItemCount: props.backgroundItems?.length ?? 0,
+    runningManagedCommandCount: props.runningManagedCommandCount,
+  });
 
   if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {
     return null;

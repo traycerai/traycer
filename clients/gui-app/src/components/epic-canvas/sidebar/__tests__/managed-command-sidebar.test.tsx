@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
-  createEvent,
   fireEvent,
   render,
   screen,
@@ -266,40 +265,24 @@ describe("Monitors & Shells section", () => {
     ).toBe("managed-command-output");
   });
 
-  it("opens the output window from the keyboard on the row itself", () => {
+  it("makes the door a real button, so the platform activates it", () => {
     const list = installListStub();
     renderPanel();
     act(() => {
       list.emit().onSnapshot([MONITOR]);
     });
 
-    fireEvent.keyDown(screen.getByTestId("managed-command-row-cmd-monitor"), {
-      key: "Enter",
+    // Named by the title it carries, and a `<button>` rather than a div wearing
+    // the role - which is what buys keyboard activation without a hand-rolled
+    // keydown handler.
+    const door = screen.getByRole("button", {
+      name: /Monitor · deploy watcher/,
     });
-
-    expect(findOpenArtifactInTab(TAB_ID, "cmd-monitor")).not.toBeNull();
+    expect(door.tagName).toBe("BUTTON");
+    expect(door).toBe(screen.getByTestId("managed-command-row-cmd-monitor"));
   });
 
-  it("leaves Enter alone when it is aimed at a control inside the row", () => {
-    const list = installListStub();
-    renderPanel();
-    act(() => {
-      list.emit().onSnapshot([MONITOR]);
-    });
-
-    const stopButton = screen.getByTestId("managed-command-stop-cmd-monitor");
-    const enter = createEvent.keyDown(stopButton, { key: "Enter" });
-    fireEvent(stopButton, enter);
-
-    // Two halves of the same bug. The row must not treat a keypress meant for
-    // Stop as a door, and - the half a real browser punishes - it must not
-    // preventDefault it either: that is what turns Enter on a focused button
-    // into "nothing happened".
-    expect(findOpenArtifactInTab(TAB_ID, "cmd-monitor")).toBeNull();
-    expect(enter.defaultPrevented).toBe(false);
-  });
-
-  it("leaves Enter alone when it is aimed at the agent backlink", () => {
+  it("keeps Stop, Delete and the backlink reachable as their own controls", () => {
     const list = installListStub();
     epicHandle.store.setState((state) => ({
       chats: {
@@ -312,12 +295,18 @@ describe("Monitors & Shells section", () => {
       list.emit().onSnapshot([MONITOR]);
     });
 
-    const backlink = screen.getByTestId("managed-command-backlink-cmd-monitor");
-    const enter = createEvent.keyDown(backlink, { key: "Enter" });
-    fireEvent(backlink, enter);
+    // A button flattens its subtree to presentational, so a control nested
+    // inside the door would vanish from the accessibility tree. Each of these
+    // has to be a sibling of it, not a child.
+    const door = screen.getByTestId("managed-command-row-cmd-monitor");
+    for (const name of ["Stop", "Delete", "Open Deploy work"]) {
+      const control = screen.getByRole("button", { name });
+      expect(door.contains(control)).toBe(false);
+    }
 
+    // And pressing one is that control's business alone.
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(findOpenArtifactInTab(TAB_ID, "cmd-monitor")).toBeNull();
-    expect(enter.defaultPrevented).toBe(false);
   });
 
   it("links back to the agent that created the command", () => {

@@ -148,37 +148,39 @@ function ManagedCommandRow(props: {
   return (
     <li>
       <div
-        role="button"
-        tabIndex={0}
-        data-testid={`managed-command-row-${command.id}`}
-        onClick={open}
-        onKeyDown={(event) => {
-          // Keydown bubbles: a press aimed at Stop, Delete or the backlink is
-          // that control's to handle. Claiming it here would both open the
-          // window and - via preventDefault - cancel the button's own Enter
-          // activation, so the control the human actually pressed does nothing.
-          if (event.target !== event.currentTarget) return;
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          open();
-        }}
         className={cn(
-          "group flex w-full min-w-0 cursor-default flex-col gap-0.5 rounded-md px-2 py-1.5 text-left",
-          "hover:bg-sidebar-accent focus-visible:bg-sidebar-accent focus-visible:outline-none",
+          "group flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5",
+          "hover:bg-sidebar-accent",
         )}
       >
+        {/*
+         * The door is a real button over the title alone, with Stop, Delete and
+         * the backlink as siblings rather than children: a button flattens its
+         * subtree to presentational, so nesting them would drop those controls
+         * out of the accessibility tree entirely.
+         */}
         <div className="flex w-full min-w-0 items-center gap-2">
-          <ManagedCommandKindIcon kind={command.kind} className={undefined} />
-          <ManagedCommandStatusDot
-            status={command.status}
-            className={undefined}
-          />
-          <span
-            className="min-w-0 flex-1 truncate text-ui-sm"
-            data-testid={`managed-command-row-title-${command.id}`}
+          <button
+            type="button"
+            data-testid={`managed-command-row-${command.id}`}
+            onClick={open}
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            )}
           >
-            {managedCommandTitle(command)}
-          </span>
+            <ManagedCommandKindIcon kind={command.kind} className={undefined} />
+            <ManagedCommandStatusDot
+              status={command.status}
+              className={undefined}
+            />
+            <span
+              className="min-w-0 flex-1 truncate text-ui-sm"
+              data-testid={`managed-command-row-title-${command.id}`}
+            >
+              {managedCommandTitle(command)}
+            </span>
+          </button>
           {hostId === null ? null : (
             <ManagedCommandLifecycleActions
               command={command}

@@ -1,9 +1,9 @@
 /**
- * `chat.subscribe@1.5` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.4`
+ * `chat.subscribe@1.6` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.5`
  * (frozen, near the bottom of this file) are the exact shapes shipped in
- * earlier hosts; later minors only add to them, so a `1.5` app still bridges to
- * hosts that only know `1.0`–`1.4`. Streams have no cross-major downgrade
+ * earlier hosts; later minors only add to them, so a `1.6` app still bridges to
+ * hosts that only know `1.0`–`1.5`. Streams have no cross-major downgrade
  * bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a method
  * ships, its major must never move again - only additive minors.
  *
@@ -320,9 +320,9 @@ export type ChatQueueSteerRequest = z.infer<typeof chatQueueSteerRequestSchema>;
  * and the settings tuple its turn will run under.
  */
 export const chatQueuedPromptItemSchema = z.object({
-  // Defaulted so every pre-`1.5` payload parses as a prompt item with no
+  // Defaulted so every pre-`1.6` payload parses as a prompt item with no
   // migration: persisted `queue.added` metadata written by older hosts, and
-  // frames from a `1.4` host parsed by a newer GUI, both carry no `kind`.
+  // frames from a `1.5` host parsed by a newer GUI, both carry no `kind`.
   kind: z.literal("prompt").default("prompt"),
   queueItemId: z.string(),
   messageId: z.string(),
@@ -379,7 +379,7 @@ export const chatQueuedManagedCommandItemSchema = z.object({
   commandKind: z.enum(["monitor", "shell"]).nullable().default(null),
   // Narrower than the prompt lifecycle enum on purpose: a delivery is never
   // steered, so `steer_requested`/`steering`/`injected`/`fallback` are not just
-  // unused here, they are unrepresentable. The `1.5` line that introduced this
+  // unused here, they are unrepresentable. The `1.6` line that introduces this
   // variant is unshipped, so tightening costs no compatibility.
   status: z.enum(["pending", "paused"]).default("pending"),
   createdAt: z.number(),
@@ -434,8 +434,8 @@ const chatQueueStateSchemaPreInReplyTo = z.object({
   items: z.array(chatQueuedItemSchemaPreInReplyTo),
 });
 
-// Wire-freeze copy of the queue item as `chat.subscribe@1.4` shipped it: a
-// plain object with a mandatory `message`, before `1.5` split it into the
+// Wire-freeze copy of the queue item as `chat.subscribe@1.5` shipped it: a
+// plain object with a mandatory `message`, before `1.6` split it into the
 // `prompt | managed-command` union. Senders here are the LIVE (`inReplyTo`-
 // bearing) shape - `1.4` is the minor that introduced them. Hand-frozen, not
 // derived from the live shape.
@@ -444,8 +444,8 @@ const chatQueueStateSchemaPreInReplyTo = z.object({
 // no sibling shape to degrade into: this schema cannot parse one at all
 // (`message`/`sender`/`settings` are required and there is nothing honest to
 // put in them). That is deliberate, and it is why the host's per-minor frame
-// projection OMITS managed-command items for ≤1.4 peers rather than reshaping
-// them - see `projectManagedCommandQueueItemsForPreV15` in the host's
+// projection OMITS managed-command items for ≤1.5 peers rather than reshaping
+// them - see `projectManagedCommandQueueItemsForPreV16` in the host's
 // `chat-frame-projection.ts`.
 const chatQueuedItemSchemaPreManagedCommand = z.object({
   queueItemId: z.string(),
@@ -827,9 +827,9 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     event: chatEventSchemaPreInReplyTo,
   });
 
-// Frozen common frames bound to `chat.subscribe@1.4`: live message/event trees
-// (`inReplyTo` shipped in 1.4) but the pre-union queue, so the released 1.4
-// `queueChanged` frame can never carry a managed-command item.
+// Frozen common frames bound to `chat.subscribe@1.4–1.5`: live message/event
+// trees (`inReplyTo` shipped in 1.4) but the pre-union queue, so a released
+// 1.4/1.5 `queueChanged` frame can never carry a managed-command item.
 const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,

@@ -271,8 +271,14 @@ function renderSidebarWithResources(): void {
 }
 
 function chipOnRow(commandId: string): HTMLElement | null {
-  const row = screen.getByTestId(`managed-command-row-${commandId}`);
-  return row.querySelector<HTMLElement>('[data-slot="resource-usage-chip"]');
+  // The row's door is a button covering the title alone - the chip is its
+  // sibling on the second line, so scope to the whole list item.
+  const row = screen
+    .getByTestId(`managed-command-row-${commandId}`)
+    .closest("li");
+  return (
+    row?.querySelector<HTMLElement>('[data-slot="resource-usage-chip"]') ?? null
+  );
 }
 
 beforeEach(() => {

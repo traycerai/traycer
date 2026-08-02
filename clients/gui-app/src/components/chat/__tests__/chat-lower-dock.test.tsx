@@ -182,6 +182,7 @@ function renderDock(input: {
         restore={baseRestore(input.changes)}
         queue={input.queue}
         backgroundItems={input.backgroundItems}
+        runningManagedCommandCount={0}
         backgroundStopPendingTaskIds={new Set()}
         backgroundStopAllPending={false}
         activeTurnStatus="running"
