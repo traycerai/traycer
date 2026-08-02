@@ -2398,6 +2398,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (currentScrollTop === undefined) return;
       const previousScrollTop = detachedLastScrollTopRef.current;
       detachedLastScrollTopRef.current = currentScrollTop;
+      // This classifier exists only for platforms whose native thumb emits
+      // scroll without a pointer event on the transcript. Once a pointer is
+      // active, its own moved/not-moved direction path is authoritative; a
+      // bare pointerdown followed by a late programmatic edge echo must not
+      // masquerade as a pointerless thumb drag.
+      if (activePointerLastScrollTopRef.current !== null) return;
       if (
         scrollOnlyMovementCarriesReaderIntent({
           previousScrollTop,
