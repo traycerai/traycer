@@ -1,12 +1,12 @@
 /**
  * Task-level activity aggregation, with the layering that survived the move to
- * per-user presence: an open chat session that reads some activity is
- * authoritative for its own tier, and host-published presence backfills
+ * per-user activity: an open chat session that reads some activity is
+ * authoritative for its own tier, and host-published activity backfills
  * everything else.
  *
- * The load-bearing case is the last pair: presence for an epic this window has
+ * The load-bearing case is the last pair: activity for an epic this window has
  * NEVER opened must show through (no projection to check it against), while
- * presence naming an agent a LIVE projection no longer holds must be filtered
+ * activity naming an agent a LIVE projection no longer holds must be filtered
  * out. Both look like "an empty candidate set" if you only count ids, which is
  * why the hook distinguishes "no session" from "a session with no agents".
  */
@@ -20,8 +20,8 @@ import {
 } from "@/stores/epics/open-epic/store";
 import {
   publishAgentActivity,
-  resetAgentActivityPresence,
-} from "@/__tests__/agent-activity-presence-harness";
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 
 const EPIC_ID = "epic-activity";
 const AGENT_ID = "chat-1";
@@ -46,7 +46,10 @@ function registerEmptySession(): void {
   );
 }
 
-function publishWorking(agentIds: readonly string[], turnIds: unknown): void {
+function publishWorking(
+  agentIds: readonly string[],
+  turnIds: readonly string[],
+): void {
   publishAgentActivity([
     {
       hostId: "host-a",
@@ -57,7 +60,7 @@ function publishWorking(agentIds: readonly string[], turnIds: unknown): void {
 
 afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
-  resetAgentActivityPresence();
+  resetAgentActivity();
 });
 
 describe("useEpicActivityStatus", () => {
@@ -84,15 +87,7 @@ describe("useEpicActivityStatus", () => {
     expect(result.current).toBe("background");
   });
 
-  it("degrades an unclassified host's working ids to a turn", () => {
-    const { result } = renderHook(() => useEpicActivityStatus(EPIC_ID));
-    act(() => {
-      publishWorking([AGENT_ID], "not an array");
-    });
-    expect(result.current).toBe("turn");
-  });
-
-  it("filters presence against a live projection that no longer holds the agent", () => {
+  it("filters host activity against a live projection that no longer holds the agent", () => {
     // A session IS registered, so its (empty) projection is authoritative and
     // the stale id must not keep a spinner alive.
     registerEmptySession();
@@ -107,7 +102,7 @@ describe("useEpicActivityStatus", () => {
     // The handle -> null transition the liveness filter turns on. While the
     // session is live its projection is authoritative and suppresses the stale
     // id; the moment the MRU evicts it the epic is UNKNOWN again, so
-    // host-published presence has to show through rather than staying
+    // host-published activity has to show through rather than staying
     // suppressed by a projection that no longer exists.
     registerEmptySession();
     const { result } = renderHook(() => useEpicActivityStatus(EPIC_ID));

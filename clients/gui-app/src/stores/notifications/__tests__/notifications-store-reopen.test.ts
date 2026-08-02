@@ -9,9 +9,9 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import {
-  NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS,
-  NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS,
-} from "@/lib/notifications/notification-stream-reopen";
+  HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
+  HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
+} from "@/lib/host/stream-reopen";
 import {
   __resetNotificationsStoreForTests,
   openNotificationsStream,
@@ -104,7 +104,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
     expect(useNotificationsStore.getState().connectionStatus).toBe("closed");
     // The reopen waits out the backoff — no synchronous redial storm.
     expect(clients).toHaveLength(1);
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(2);
     expect(clients[0].closeCount).toBe(1);
 
@@ -113,7 +113,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
     clients[1].callbacks.onConnectionStatus("open", null);
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     expect(useNotificationsStore.getState().connectionStatus).toBe("open");
-    vi.advanceTimersByTime(4 * NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+    vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
     expect(clients).toHaveLength(2);
 
     close();
@@ -123,7 +123,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
     const close = openNotificationsStream(factory, null);
 
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(2);
 
     // A raw transport `open` is NOT proof of a usable stream — the host
@@ -131,16 +131,16 @@ describe("openNotificationsStream terminal-close reopen", () => {
     // backoff must keep escalating: this close waits the doubled delay.
     clients[1].callbacks.onConnectionStatus("open", null);
     clients[1].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(2);
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(3);
 
     // A snapshot is the usability proof that resets the backoff.
     clients[2].callbacks.onConnectionStatus("open", null);
     emptyServerSnapshot(clients[2]);
     clients[2].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(4);
 
     close();
@@ -158,7 +158,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     appendLocalEntry("offline-entry");
 
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(2);
     clients[1].callbacks.onConnectionStatus("open", null);
     // The replacement's snapshot still lacks the offline entry, so the
@@ -187,7 +187,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
       fatalClose("UNAUTHORIZED"),
     );
     expect(onAuthError).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(2);
 
     close();
@@ -200,7 +200,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
       "closed",
       fatalClose("FREE_TIER_NO_CLOUD_SYNC"),
     );
-    vi.advanceTimersByTime(4 * NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+    vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
     expect(clients).toHaveLength(1);
 
     close();
@@ -210,7 +210,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
     const close = openNotificationsStream(factory, null);
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     close();
-    vi.advanceTimersByTime(4 * NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+    vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
     expect(clients).toHaveLength(1);
     expect(clients[0].closeCount).toBe(1);
   });

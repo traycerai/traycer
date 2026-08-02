@@ -18,7 +18,7 @@ import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
-import { NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@/lib/notifications/notification-stream-reopen";
+import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@/lib/host/stream-reopen";
 import {
   cloudNotificationFeedId,
   openCloudNotificationsStream,
@@ -341,7 +341,7 @@ describe("cloud notifications store", () => {
       "unavailable",
     );
 
-    vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(client.sessions).toHaveLength(2);
     expect(client.sessions[0].closed).toBe(true);
     close();
@@ -353,7 +353,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(client, null, null, null);
 
     client.sessions[0].emitClosed(fatalClose("INCOMPATIBLE"));
-    vi.advanceTimersByTime(2 * NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(2 * HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
 
     expect(useCloudNotificationsStore.getState().connectionState).toBe(
       "unavailable",
@@ -379,7 +379,7 @@ describe("cloud notifications store", () => {
     expect(useCloudNotificationsStore.getState().connectionState).toBe(
       "unavailable",
     );
-    vi.advanceTimersByTime(2 * NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+    vi.advanceTimersByTime(2 * HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(client.sessions).toHaveLength(1);
     close();
   });

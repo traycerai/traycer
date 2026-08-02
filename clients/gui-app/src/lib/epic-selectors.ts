@@ -48,8 +48,8 @@ import {
 import {
   agentActivityTiers,
   type AgentActivityTier,
-} from "@/lib/notifications/agent-activity-presence";
-import { useEpicAgentActivity } from "@/stores/notifications/notifications-store";
+} from "@/lib/agent-activity";
+import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
