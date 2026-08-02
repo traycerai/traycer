@@ -90,6 +90,40 @@ describe("chat find projection", () => {
     expect(joined).not.toContain("Copy reply");
   });
 
+  // Find indexes what the DOM paints. `UserMessageBody` renders a chip through
+  // `slashCommandLabelFromAttrs`, so a `$`-written skill reads as `$name` on
+  // screen even though it still serializes to `/name` for the provider and the
+  // clipboard. Indexing the serialized form instead would make the visible text
+  // unsearchable AND count a match the highlighter has no node to paint.
+  it("indexes a $-triggered chip by the label it renders, not its canonical form", () => {
+    const user: ChatMessageModel = {
+      ...makeMessage(1, "user"),
+      content: "",
+      structuredContent: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "slashCommand",
+                attrs: { commandName: "traycer-implement", trigger: "$" },
+              },
+              { type: "text", text: " the runtime ticket" },
+            ],
+          },
+        ],
+      },
+    };
+
+    const joined = buildChatFindRows([user], TILE_INSTANCE_ID)
+      .map((row) => rowSearchText(row))
+      .join("\n");
+
+    expect(joined).toContain("$traycer-implement the runtime ticket");
+    expect(joined).not.toContain("/traycer-implement");
+  });
+
   it("indexes collapsed activity group summaries and child headers only", () => {
     const segments: ReadonlyArray<MessageSegment> = [
       {

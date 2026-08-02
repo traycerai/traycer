@@ -17,7 +17,7 @@ import {
 } from "@/components/chat/segments/subagent-display";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
-import { composerClipboardPlainText } from "@/lib/composer/composer-clipboard";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { segmentStepLabel } from "@/lib/chat/todo-status-tones";
 import {
@@ -173,10 +173,13 @@ function chatFindUnitsForMessage(
   // `text` segments mirror that content, so also projecting them would
   // double-count every match with a phantom unit that has no anchor to paint.
   // Project the content unit alone so the count matches what actually renders.
+  // The DISPLAY projection, not the clipboard one: find has to index the text
+  // the DOM actually paints, or a `$`-written chip is unfindable by what it
+  // reads as and findable by a `/name` the highlighter cannot locate.
   const contentText =
     message.structuredContent === null
       ? message.content
-      : composerClipboardPlainText(message.structuredContent);
+      : composerDisplayPlainText(message.structuredContent);
   return compactUnits([
     chatFindUnit({
       unitId: chatFindMessageContentUnitId(message.id),

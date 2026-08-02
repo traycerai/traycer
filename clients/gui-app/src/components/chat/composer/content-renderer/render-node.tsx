@@ -9,7 +9,7 @@ import {
   mentionAttachmentFromAttrs,
   mentionPlainTextFromAttrs,
   numberValue,
-  slashCommandPlainTextFromAttrs,
+  slashCommandLabelFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 import { cn } from "@/lib/utils";
@@ -79,7 +79,10 @@ function renderSlashCommand(
   return (
     <SlashCommandChip
       key={key}
-      name={slashCommandPlainTextFromAttrs(node.attrs)}
+      // Label, not plain text: a chip picked (or written into a next step) with
+      // `$` reads back as `$name` here just as it does in the live composer,
+      // while the node it came from still serializes to the canonical `/name`.
+      name={slashCommandLabelFromAttrs(node.attrs)}
       density={context.profile.inlineChipDensity}
     />
   );

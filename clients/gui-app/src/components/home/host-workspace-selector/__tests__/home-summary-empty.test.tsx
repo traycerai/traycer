@@ -320,6 +320,7 @@ function DelayedBranchValidationHarness() {
           actions.submit({
             draftId: null,
             editor: editorHandleForPrompt("Investigate the worktree race"),
+            slashCatalog: null,
             toolbar: {
               selection: {
                 harnessId: "codex",

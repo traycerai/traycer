@@ -268,7 +268,7 @@ describe("composer Markdown-style input", () => {
     expect(editor.state.doc.firstChild?.attrs.language).toBe("typescript");
 
     typeText(editor, "const answer: number = 42;");
-    const submitted = buildSubmittedChatJSONContent(editor.getJSON());
+    const submitted = buildSubmittedChatJSONContent(editor.getJSON(), null);
     expect(
       jsonContentToMarkdown(submitted, {
         mentionFormat: "llm",
