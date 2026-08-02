@@ -19,7 +19,8 @@ import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/land
  */
 export function LandingDraftSurface() {
   const draftId = useDraftSurfaceId();
-  const { workspaceFolders, settings } = useLandingDraftShell(draftId);
+  const { workspaceFolders, workspacePrimaryPath, settings } =
+    useLandingDraftShell(draftId);
   const activity = useTabSurfaceActivity();
 
   // Pre-mint the mount identity for the null-draft landing so the first
@@ -65,7 +66,10 @@ export function LandingDraftSurface() {
         </div>
 
         <section className="mx-auto flex w-full max-w-3xl items-end justify-center px-6 pb-10 pt-3">
-          <HomeHero workspaceFolders={workspaceFolders} />
+          <HomeHero
+            workspaceFolders={workspaceFolders}
+            workspacePrimaryPath={workspacePrimaryPath}
+          />
         </section>
 
         <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6">

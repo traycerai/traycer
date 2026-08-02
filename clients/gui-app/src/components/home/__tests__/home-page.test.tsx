@@ -279,7 +279,11 @@ describe("<HomePage />", () => {
       },
       contextMetadata: { userId: "test-user", username: "alice" },
     });
-    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+      pendingWorkspace: null,
+    });
     draftRuntimeRegistry.resetForTesting();
     useEpicCanvasStore.setState({
       tabsById: {},
@@ -295,7 +299,11 @@ describe("<HomePage />", () => {
 
   afterEach(() => {
     cleanup();
-    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+      pendingWorkspace: null,
+    });
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -533,6 +541,27 @@ describe("<HomePage />", () => {
           repoIdentifier: { owner: "traycerai", repo: "host" },
           hostId: null,
         },
+      },
+    });
+    // Blank-landing launches use the PENDING per-chat snapshot (the untouched
+    // landing is pinned-only) - this is the state a user selecting BOTH saved
+    // rows in the picker produces.
+    useLandingDraftStore.setState({
+      pendingWorkspace: {
+        folders: ["/tmp/gui-app", "/tmp/host"],
+        folderInfoByPath: {
+          "/tmp/gui-app": {
+            path: "/tmp/gui-app",
+            name: "gui-app",
+            repoIdentifier: { owner: "traycerai", repo: "gui-app" },
+          },
+          "/tmp/host": {
+            path: "/tmp/host",
+            name: "host",
+            repoIdentifier: { owner: "traycerai", repo: "host" },
+          },
+        },
+        primaryPath: null,
       },
     });
     homeMocks.request.mockResolvedValue({ roomInfo: null });

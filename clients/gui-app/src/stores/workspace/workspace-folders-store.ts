@@ -23,6 +23,14 @@ interface WorkspaceFoldersStore {
   folders: ReadonlyArray<string>;
   folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>;
   primaryPath: string | null;
+  // The pinned DEFAULT project for brand-new tasks. Independent of any chat's
+  // current selection (a draft's own `primaryPath`): changing what a chat
+  // uses never moves this pin, and moving the pin never touches open drafts.
+  pinnedPath: string | null;
+  // Whether chats may hold ADDITIONAL folders beyond the main project (the
+  // picker's per-row checkboxes). Off by default: single-project chats with
+  // multi-select as an explicit opt-in. One global preference, like the list.
+  allowMultipleFolders: boolean;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them -
   // otherwise an evicted folder can disappear from rows/persistence while
@@ -32,6 +40,8 @@ interface WorkspaceFoldersStore {
   ) => ReadonlyArray<string>;
   removeFolder: (folderPath: string) => void;
   setPrimaryFolder: (folderPath: string) => void;
+  setPinnedFolder: (folderPath: string) => void;
+  setAllowMultipleFolders: (allow: boolean) => void;
 }
 
 const INITIAL_FOLDERS: ReadonlyArray<string> = [];
@@ -46,6 +56,8 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
       folders: INITIAL_FOLDERS,
       folderInfoByPath: INITIAL_FOLDER_INFO_BY_PATH,
       primaryPath: null,
+      pinnedPath: null,
+      allowMultipleFolders: false,
       addResolvedFolders: (folders) => {
         const before = get().folders;
         set((state) => mergeWorkspaceFolderInfo(state, folders));
@@ -67,6 +79,7 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
             // removed folder WAS the primary; `resolvePrimaryPath` also
             // covers the "no folders left" case (`null`).
             primaryPath: resolvePrimaryPath(nextFolders, state.primaryPath),
+            pinnedPath: resolvePrimaryPath(nextFolders, state.pinnedPath),
           };
         });
       },
@@ -76,6 +89,20 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
           if (state.primaryPath === folderPath) return state;
           return { primaryPath: folderPath };
         });
+      },
+      setPinnedFolder: (folderPath) => {
+        set((state) => {
+          if (!state.folders.includes(folderPath)) return state;
+          if (state.pinnedPath === folderPath) return state;
+          return { pinnedPath: folderPath };
+        });
+      },
+      setAllowMultipleFolders: (allow) => {
+        set((state) =>
+          state.allowMultipleFolders === allow
+            ? state
+            : { allowMultipleFolders: allow },
+        );
       },
     }),
     {
@@ -128,6 +155,17 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
             folders,
             parsePersistedPrimaryPath(persisted.primaryPath),
           ),
+          // Migration: a payload persisted before `pinnedPath` existed seeds
+          // the pin from the stored primary (the previous "default folder for
+          // a new chat" in effect), else the first folder.
+          pinnedPath: resolvePrimaryPath(
+            folders,
+            parsePersistedPrimaryPath(persisted.pinnedPath) ??
+              parsePersistedPrimaryPath(persisted.primaryPath),
+          ),
+          // Anything but an explicit `true` (including pre-toggle payloads)
+          // resolves to the off default.
+          allowMultipleFolders: persisted.allowMultipleFolders === true,
         };
       },
     },
@@ -196,6 +234,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Merges resolved folders while preserving a valid primary and pinned path. */
 function mergeWorkspaceFolderInfo(
   state: WorkspaceFoldersStore,
   folders: ReadonlyArray<WorkspaceFolderInfo>,
@@ -203,7 +242,7 @@ function mergeWorkspaceFolderInfo(
   | WorkspaceFoldersStore
   | Pick<
       WorkspaceFoldersStore,
-      "folders" | "folderInfoByPath" | "primaryPath"
+      "folders" | "folderInfoByPath" | "primaryPath" | "pinnedPath"
     > {
   const trimmed = folders.flatMap((folder) => {
     const path = folder.path.trim();
@@ -252,6 +291,9 @@ function mergeWorkspaceFolderInfo(
     // or one whose stored primary no longer names a folder); an existing
     // valid primary is never disturbed by an add.
     primaryPath: resolvePrimaryPath(nextFolders, state.primaryPath),
+    // Same rule for the new-chat default pin: the first add stamps it, a
+    // later add never moves it while the pinned folder is still saved.
+    pinnedPath: resolvePrimaryPath(nextFolders, state.pinnedPath),
   };
 }
 

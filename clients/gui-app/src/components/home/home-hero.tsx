@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { basenameOfPath } from "@/lib/path";
+import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import { usePendingOrPinnedLandingWorkspace } from "@/stores/home/landing-draft-store";
 
 const PROMPT_POOL: ReadonlyArray<string> = [
   "What should we work on?",
@@ -39,16 +40,33 @@ function readFirstName(userName: string): string | null {
 
 interface HomeHeroProps {
   readonly workspaceFolders: ReadonlyArray<string> | null;
+  // The draft's raw stored primary. The folder list alone cannot name the
+  // MAIN project (a main switch may leave an additional folder at index 0).
+  readonly workspacePrimaryPath: string | null;
 }
 
-export function HomeHero({ workspaceFolders }: HomeHeroProps) {
-  const globalFolders = useWorkspaceFoldersStore((state) => state.folders);
-  const folders = workspaceFolders === null ? globalFolders : workspaceFolders;
+/** Renders the landing greeting for the active or pending main project. */
+export function HomeHero({
+  workspaceFolders,
+  workspacePrimaryPath,
+}: HomeHeroProps) {
+  // Blank landing (no draft yet): the shared pending-or-pinned resolver -
+  // the same snapshot the picker shows and a minted draft will start from.
+  const pendingOrPinned = usePendingOrPinnedLandingWorkspace();
   const profile = useAuthStore((state) => state.profile);
   const [greeting] = useState(() => timeGreeting(new Date().getHours()));
   const [prompt] = useState(() => pickPrompt());
 
-  const projectName = folders.length > 0 ? basenameOfPath(folders[0]) : null;
+  // Greet with the chat's MAIN project: the draft's resolved primary, else
+  // the blank landing's pending/pinned main - never array position zero.
+  const projectPath =
+    workspaceFolders !== null
+      ? resolvePrimaryPath(workspaceFolders, workspacePrimaryPath)
+      : resolvePrimaryPath(
+          pendingOrPinned.folders,
+          pendingOrPinned.primaryPath,
+        );
+  const projectName = projectPath !== null ? basenameOfPath(projectPath) : null;
   const firstName = profile === null ? null : readFirstName(profile.userName);
 
   return (

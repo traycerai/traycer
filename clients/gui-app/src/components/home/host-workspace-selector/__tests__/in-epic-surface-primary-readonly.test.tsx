@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -194,26 +200,49 @@ afterEach(() => {
 describe.each(["chat", "terminal-agent"] as const)(
   "InEpicSurface (%s owner)",
   (kind) => {
-    it("renders the primary pin read-only and offers NO Set-as-primary action on any bound row", async () => {
+    it("locks the bound main as a marker row; secondaries keep additional checkboxes", async () => {
       renderBoundSurface(kind);
 
       // Open the folder-rows popover from the collapsed summary.
-      fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-      const rows = await screen.findAllByTestId("folder-row");
-      expect(rows).toHaveLength(2);
+      const summary = screen.getByRole("button", {
+        name: /beta.*alpha/i,
+      });
+      fireEvent.click(summary);
+      const alphaRow = await screen.findByRole("group", {
+        name: "alpha project",
+      });
+      const betaRow = screen.getByRole("group", {
+        name: "beta project",
+      });
 
-      // The filled pin marks the bound primary (read-only display)...
-      expect(screen.getByTestId("folder-primary-pin")).toBeTruthy();
-      // ...and the collapsed chip agreed with it (isPrimary, not items[0]).
+      // The bound PRIMARY (beta, `isPrimary` — not array position) renders
+      // the locked main marker, with no checkbox to uncheck...
       expect(
-        screen.getByTestId("workspace-summary-trigger").textContent,
-      ).toContain("beta");
+        within(betaRow).getByRole("img", { name: "Main project" }),
+      ).toBeTruthy();
+      expect(within(betaRow).queryByRole("checkbox")).toBeNull();
+      // ...the secondary keeps its checked additional-folder checkbox...
+      expect(
+        within(alphaRow).getByRole("checkbox", {
+          name: "Also use alpha in this chat",
+          checked: true,
+        }),
+      ).toBeTruthy();
+      // ...and the collapsed summary agreed with the marker (isPrimary, not
+      // items[0]) by naming beta first, as asserted by the role query above.
 
-      // No atomic set-primary RPC exists for a live binding - the action
-      // must be absent on EVERY row of a bound surface.
-      expect(screen.queryByTestId("folder-make-primary")).toBeNull();
+      // A live chat's main is fixed: no switch affordance on any row.
+      expect(
+        screen.queryByRole("button", {
+          name: /as the main project for this chat/i,
+        }),
+      ).toBeNull();
       // The other row actions are still there (the rows are editable).
-      expect(screen.getAllByTestId("folder-remove").length).toBeGreaterThan(0);
+      expect(
+        within(alphaRow).getByRole("button", {
+          name: "Remove alpha from saved projects",
+        }),
+      ).toBeTruthy();
     });
   },
 );

@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { HomeHero } from "@/components/home/home-hero";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 describe("<HomeHero />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useWorkspaceFoldersStore.setState({ folders: [] });
+    useLandingDraftStore.setState({ pendingWorkspace: null });
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -19,6 +21,7 @@ describe("<HomeHero />", () => {
   afterEach(() => {
     cleanup();
     useWorkspaceFoldersStore.setState({ folders: [] });
+    useLandingDraftStore.setState({ pendingWorkspace: null });
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -37,7 +40,7 @@ describe("<HomeHero />", () => {
       contextMetadata: { userId: "test-user", username: "Ada Lovelace" },
     });
 
-    render(<HomeHero workspaceFolders={null} />);
+    render(<HomeHero workspaceFolders={null} workspacePrimaryPath={null} />);
 
     expect(screen.getByRole("heading").textContent).toMatch(/, Ada$/);
   });
@@ -56,7 +59,7 @@ describe("<HomeHero />", () => {
       },
     });
 
-    render(<HomeHero workspaceFolders={null} />);
+    render(<HomeHero workspaceFolders={null} workspacePrimaryPath={null} />);
 
     expect(screen.getByRole("heading").textContent).not.toContain(",");
   });
@@ -75,13 +78,13 @@ describe("<HomeHero />", () => {
       },
     });
 
-    render(<HomeHero workspaceFolders={null} />);
+    render(<HomeHero workspaceFolders={null} workspacePrimaryPath={null} />);
 
     expect(screen.getByRole("heading").textContent).not.toContain(",");
   });
 
   it("keeps the generic greeting when no profile is available", () => {
-    render(<HomeHero workspaceFolders={null} />);
+    render(<HomeHero workspaceFolders={null} workspacePrimaryPath={null} />);
 
     expect(screen.getByRole("heading").textContent).not.toContain(",");
   });
@@ -89,7 +92,12 @@ describe("<HomeHero />", () => {
   it("uses draft workspace folders over global folders", () => {
     useWorkspaceFoldersStore.setState({ folders: ["/tmp/global-app"] });
 
-    render(<HomeHero workspaceFolders={["/tmp/draft-app"]} />);
+    render(
+      <HomeHero
+        workspaceFolders={["/tmp/draft-app"]}
+        workspacePrimaryPath={null}
+      />,
+    );
 
     expect(screen.getByText("draft-app")).toBeTruthy();
     expect(screen.queryByText("global-app")).toBeNull();
@@ -98,8 +106,39 @@ describe("<HomeHero />", () => {
   it("does not fall back to global folders for an explicit empty draft workspace", () => {
     useWorkspaceFoldersStore.setState({ folders: ["/tmp/global-app"] });
 
-    render(<HomeHero workspaceFolders={[]} />);
+    render(<HomeHero workspaceFolders={[]} workspacePrimaryPath={null} />);
 
     expect(screen.queryByText("global-app")).toBeNull();
+  });
+
+  it("names the draft's MAIN project, not whichever folder is first", () => {
+    render(
+      <HomeHero
+        workspaceFolders={["/tmp/extra-app", "/tmp/main-app"]}
+        workspacePrimaryPath="/tmp/main-app"
+      />,
+    );
+
+    expect(screen.getByText("main-app")).toBeTruthy();
+    expect(screen.queryByText("extra-app")).toBeNull();
+  });
+
+  it("names the pending blank-landing main over the pinned default", () => {
+    useWorkspaceFoldersStore.setState({
+      folders: ["/tmp/pinned-app"],
+      pinnedPath: "/tmp/pinned-app",
+    });
+    useLandingDraftStore.setState({
+      pendingWorkspace: {
+        folders: ["/tmp/switched-app"],
+        folderInfoByPath: {},
+        primaryPath: "/tmp/switched-app",
+      },
+    });
+
+    render(<HomeHero workspaceFolders={null} workspacePrimaryPath={null} />);
+
+    expect(screen.getByText("switched-app")).toBeTruthy();
+    expect(screen.queryByText("pinned-app")).toBeNull();
   });
 });

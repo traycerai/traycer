@@ -141,6 +141,11 @@ vi.mock("@/stores/home/landing-draft-store", () => {
   return {
     useLandingDraftStore: (selector: (value: typeof state) => unknown) =>
       selector(state),
+    usePendingOrPinnedLandingWorkspace: () => ({
+      folders: [],
+      folderInfoByPath: {},
+      primaryPath: null,
+    }),
   };
 });
 

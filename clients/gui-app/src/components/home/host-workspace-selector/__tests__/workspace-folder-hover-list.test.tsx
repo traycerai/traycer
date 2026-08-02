@@ -34,9 +34,12 @@ function folder(over: {
     defaultNewBranchName: "traycer/swift-otter",
     repoIdentifier: null,
     isPrimary: true,
-    canChangePrimary: true,
-    makePrimaryDisabled: false,
-    makePrimaryDisabledReason: null,
+    selected: true,
+    onToggleSelected: null,
+    selectionDisabledReason: null,
+    onUseAsMain: null,
+    isPinned: false,
+    onTogglePin: null,
     hostClient: null,
     modeDisabled: false,
     modeDisabledReason: null,
@@ -46,7 +49,6 @@ function folder(over: {
     onSelectMode: NOOP,
     onEmit: NOOP,
     onLocate: null,
-    onMakePrimary: NOOP,
     onRemove: null,
   };
 }

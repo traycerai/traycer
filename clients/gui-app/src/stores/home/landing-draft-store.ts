@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -25,6 +26,7 @@ import type {
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { notifyLandingDraftMinted } from "@/stores/home/landing-draft-mint-bridge";
 import {
   resolvePrimaryPath,
   trimFoldersPreservingPrimary,
@@ -75,6 +77,13 @@ export interface LandingDraftWorkspaceSnapshot {
 interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
+  // Workspace edits made on the BLANK landing (no draft minted yet). The
+  // picker routes its add/remove/main-switch there so a pre-typing choice is
+  // a real per-chat snapshot, and `createDraftWithId` consumes it as the new
+  // draft's workspace instead of re-deriving pinned-only state (which would
+  // silently discard those edits). In-memory only (not persisted/projected):
+  // a reload before typing simply re-seeds from the pinned default.
+  readonly pendingWorkspace: LandingDraftWorkspaceSnapshot | null;
   /** Always creates a fresh draft, sets it as active, returns its id. */
   createDraft: (settings: ChatRunSettings | null) => string;
   /** Coordinator-only stable-id source creation. */
@@ -107,6 +116,15 @@ interface LandingDraftStoreState {
   ) => ReadonlyArray<string>;
   removeDraftFolder: (id: string, folderPath: string) => void;
   setDraftWorkspacePrimary: (id: string, folderPath: string) => void;
+  // Pending-landing counterparts of the per-draft workspace mutations. Each
+  // lazily seeds `pendingWorkspace` from the pinned default before applying,
+  // so the first picker edit on a blank landing starts from the same snapshot
+  // a fresh draft would.
+  addPendingResolvedFolders: (
+    folders: ReadonlyArray<WorkspaceFolderInfo>,
+  ) => ReadonlyArray<string>;
+  removePendingFolder: (folderPath: string) => void;
+  setPendingWorkspacePrimary: (folderPath: string) => void;
 }
 
 export const LANDING_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.landingDraft);
@@ -327,6 +345,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     (set, get) => ({
       drafts: [],
       activeDraftId: null,
+      pendingWorkspace: null,
 
       createDraft: (settings) => {
         return get().createDraftWithId(uuidv4(), settings);
@@ -334,6 +353,12 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 
       createDraftWithId: (id, settings) => {
         if (get().drafts.some((draft) => draft.id === id)) return id;
+        // The blank landing's staged Location/Branch/Scripts picks live under
+        // `landing:null`; the staging store (via the mint bridge) moves them
+        // to the minted draft's own slot alongside the pending workspace, or
+        // the surface rekeys, finds nothing staged, and reseeds defaults over
+        // the user's picks.
+        notifyLandingDraftMinted(id);
         const next: LandingDraftTab = {
           id,
           content: EMPTY_LANDING_DRAFT_CONTENT,
@@ -342,11 +367,16 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           settings: copyChatRunSettings(settings),
           // Seed from the global last-used mode; the draft owns it from here.
           composerMode: useSettingsStore.getState().composerMode,
-          workspace: readCurrentLandingDraftWorkspaceSnapshot(),
+          // Blank-landing picker edits (pending snapshot) become THIS draft's
+          // workspace; without them, seed the pinned default.
+          workspace:
+            get().pendingWorkspace ??
+            readCurrentLandingDraftWorkspaceSnapshot(),
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
           activeDraftId: next.id,
+          pendingWorkspace: null,
         }));
         return next.id;
       },
@@ -464,6 +494,34 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ),
         );
       },
+
+      addPendingResolvedFolders: (folders) => {
+        const before =
+          get().pendingWorkspace ?? readCurrentLandingDraftWorkspaceSnapshot();
+        const next = mergeLandingDraftWorkspaceFolders(before, folders);
+        set({ pendingWorkspace: next });
+        const afterSet = new Set(next.folders);
+        return before.folders.filter((path) => !afterSet.has(path));
+      },
+
+      removePendingFolder: (folderPath) => {
+        const before =
+          get().pendingWorkspace ?? readCurrentLandingDraftWorkspaceSnapshot();
+        set({
+          pendingWorkspace: removeLandingDraftWorkspaceFolder(
+            before,
+            folderPath,
+          ),
+        });
+      },
+
+      setPendingWorkspacePrimary: (folderPath) => {
+        const before =
+          get().pendingWorkspace ?? readCurrentLandingDraftWorkspaceSnapshot();
+        set({
+          pendingWorkspace: setLandingDraftWorkspacePrimary(before, folderPath),
+        });
+      },
     }),
     {
       ...basePersistOptions(LANDING_DRAFT_PERSIST_KEY),
@@ -543,6 +601,7 @@ draftRuntimeRegistry.configure({
 export function useActiveLandingDraftShell(): {
   readonly draftId: string | null;
   readonly workspaceFolders: ReadonlyArray<string> | null;
+  readonly workspacePrimaryPath: string | null;
   readonly settings: ChatRunSettings | null;
 } {
   const activeDraftId = useLandingDraftStore((state) => state.activeDraftId);
@@ -553,6 +612,10 @@ export function useActiveLandingDraftShell(): {
 export function useLandingDraftShell(draftId: string | null): {
   readonly draftId: string | null;
   readonly workspaceFolders: ReadonlyArray<string> | null;
+  // Raw stored primary for the draft's workspace - the folder list alone
+  // cannot name the main project (a main switch may leave an additional
+  // folder at index 0). Resolve via `resolvePrimaryPath(folders, primary)`.
+  readonly workspacePrimaryPath: string | null;
   readonly settings: ChatRunSettings | null;
 } {
   return useLandingDraftStore(
@@ -561,6 +624,7 @@ export function useLandingDraftShell(draftId: string | null): {
       return {
         draftId: draft?.id ?? null,
         workspaceFolders: draft?.workspace.folders ?? null,
+        workspacePrimaryPath: draft?.workspace.primaryPath ?? null,
         settings: draft?.settings ?? null,
       };
     }),
@@ -745,15 +809,76 @@ function normalizeChatRunSettings(
   };
 }
 
-function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
-  const globalState = useWorkspaceFoldersStore.getState();
+/**
+ * The workspace a brand-new task starts from: ONLY the pinned default project
+ * selected — the saved list stays in the global store and renders as
+ * unselected picker rows. `resolvePrimaryPath` covers a stale/absent pin
+ * (first saved folder) and the empty saved list (`null`). Pure so the
+ * blank-landing picker can derive the same snapshot from its own store
+ * subscriptions.
+ */
+export function pinnedLandingDraftWorkspaceSnapshot(globalState: {
+  readonly folders: ReadonlyArray<string>;
+  readonly pinnedPath: string | null;
+  readonly folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>;
+}): LandingDraftWorkspaceSnapshot {
+  const pinned = resolvePrimaryPath(
+    globalState.folders,
+    globalState.pinnedPath,
+  );
+  const pinnedInfo =
+    pinned !== null && Object.hasOwn(globalState.folderInfoByPath, pinned)
+      ? globalState.folderInfoByPath[pinned]
+      : null;
+  if (pinnedInfo === null) return emptyLandingDraftWorkspaceSnapshot();
   return normalizeLandingDraftWorkspace({
-    folders: [...globalState.folders],
-    folderInfoByPath: copyWorkspaceFolderInfoByPath(
-      globalState.folderInfoByPath,
-    ),
-    primaryPath: globalState.primaryPath,
+    folders: [pinnedInfo.path],
+    folderInfoByPath: copyWorkspaceFolderInfoByPath({
+      [pinnedInfo.path]: pinnedInfo,
+    }),
+    primaryPath: pinnedInfo.path,
   });
+}
+
+/** Reads the pinned-only workspace snapshot from the current global store. */
+function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
+  return pinnedLandingDraftWorkspaceSnapshot(
+    useWorkspaceFoldersStore.getState(),
+  );
+}
+
+/**
+ * The single blank-landing workspace resolver: pending picker edits when they
+ * exist, else the pinned-only snapshot a fresh draft would start from. EVERY
+ * null-draft consumer (picker, hero, availability gate, mention roots, launch
+ * boundary) must read through this, or it will disagree with the selection
+ * the picker shows and the minted draft will actually use.
+ */
+export function readPendingOrPinnedLandingWorkspace(): LandingDraftWorkspaceSnapshot {
+  return (
+    useLandingDraftStore.getState().pendingWorkspace ??
+    readCurrentLandingDraftWorkspaceSnapshot()
+  );
+}
+
+/** Reactive {@link readPendingOrPinnedLandingWorkspace} for render consumers. */
+export function usePendingOrPinnedLandingWorkspace(): LandingDraftWorkspaceSnapshot {
+  const pending = useLandingDraftStore((state) => state.pendingWorkspace);
+  const folders = useWorkspaceFoldersStore((state) => state.folders);
+  const pinnedPath = useWorkspaceFoldersStore((state) => state.pinnedPath);
+  const folderInfoByPath = useWorkspaceFoldersStore(
+    (state) => state.folderInfoByPath,
+  );
+  return useMemo(
+    () =>
+      pending ??
+      pinnedLandingDraftWorkspaceSnapshot({
+        folders,
+        pinnedPath,
+        folderInfoByPath,
+      }),
+    [pending, folders, pinnedPath, folderInfoByPath],
+  );
 }
 
 export function emptyLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {

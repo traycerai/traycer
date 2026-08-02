@@ -51,8 +51,12 @@ import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
-import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
+import {
+  preparedWorkspaceFolderToWorkspaceFolderInfo,
+  useWorkspaceFolderActionsForClient,
+} from "@/hooks/workspace/use-workspace-folder-actions";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { usePickAndAddWorkspaceFolders } from "./use-pick-and-add-folders";
 import {
@@ -319,6 +323,7 @@ type ActiveHostWorkspaceControlsProps = {
   readonly disabled: boolean;
 };
 
+/** Resolves the active host and renders its workspace-selection controls. */
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
 ) {
@@ -362,19 +367,48 @@ export function ActiveHostWorkspaceControls(
               primaryChanged: false,
               newPrimaryName: null,
             }),
+            selectFolder: () => undefined,
+            deselectFolder: () => ({
+              primaryChanged: false,
+              newPrimaryName: null,
+            }),
+            switchMainFolder: () => undefined,
             setPrimaryFolder: () => undefined,
+            setPinnedFolder: () => undefined,
             stageEntry: () => undefined,
           }
         : homeWorkspaceSource,
     [disabled, homeWorkspaceSource],
   );
+  // The picker renders the persistent SAVED list plus any surface-only
+  // folders (e.g. fork seeds outside the saved list), so resolution runs
+  // over that union - saved-list order first. The global-fallback
+  // representation passes `null` through (the resolver reads the global
+  // store, which IS the saved list there).
+  const displaySource = useMemo(() => {
+    const base = workspaceSource.source;
+    if (base === null) return null;
+    const savedSet = new Set(workspaceSource.savedFolders);
+    const folders = [
+      ...workspaceSource.savedFolders,
+      ...base.folders.filter((path) => !savedSet.has(path)),
+    ];
+    return {
+      folders,
+      folderInfoByPath: {
+        ...workspaceSource.savedFolderInfoByPath,
+        ...base.folderInfoByPath,
+      },
+    };
+  }, [
+    workspaceSource.savedFolderInfoByPath,
+    workspaceSource.savedFolders,
+    workspaceSource.source,
+  ]);
   // Resolve repo-identifier → path against the scope-correct host: the
   // default host in active scope, the source agent's FIXED host in the
   // terminal-agent fork dialog (else paths resolve on the wrong machine).
-  const resolved = useResolvedWorkspaceFolders(
-    workspaceSource.source,
-    activeHostClient,
-  );
+  const resolved = useResolvedWorkspaceFolders(displaySource, activeHostClient);
   const handleSelectHost = (hostId: string): void => {
     if (disabled) return;
     if (props.hostScope.kind === "fixed") return;
@@ -463,6 +497,7 @@ function fixedUnavailableHostEntry(
   };
 }
 
+/** Renders editable pre-creation workspace rows from the active source. */
 function HomeWorkspaceRows(props: {
   readonly workspaceSource: HomeWorkspaceSource;
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
@@ -504,17 +539,36 @@ function HomeWorkspaceRows(props: {
   const folderIntentByPath = useWorktreeIntentMemoryStore(
     (state) => state.folderIntentByPath,
   );
+  // Which display rows the current chat actually uses. `resolvedFolders` is
+  // the saved-list ∪ surface union; the surface's own folder list is the
+  // selection.
+  const selectedPaths = useMemo(
+    () => new Set(workspaceSource.folders),
+    [workspaceSource.folders],
+  );
   // The single resolved primary every row / the collapsed chip / the launch
-  // boundary agrees on - re-derived from the CURRENT resolved folder set so a
-  // stale/removed `primaryPath` always falls back to the first remaining
-  // folder without a separate write.
+  // boundary agrees on - re-derived from the CURRENT resolved SELECTION (the
+  // pinned default when selected, else the first selected folder) so a
+  // stale/removed `primaryPath` always falls back without a separate write.
   const resolvedPrimaryPath = useMemo(
     () =>
       resolvePrimaryPath(
-        resolvedFolders.map((entry) => entry.path),
+        resolvedFolders
+          .map((entry) => entry.path)
+          .filter((path) => selectedPaths.has(path)),
         workspaceSource.primaryPath,
       ),
-    [resolvedFolders, workspaceSource.primaryPath],
+    [resolvedFolders, selectedPaths, workspaceSource.primaryPath],
+  );
+  // The saved-list pin (default project for NEW tasks), membership-validated
+  // the same way. Independent of the chat's own primary.
+  const resolvedPinnedPath = useMemo(
+    () =>
+      resolvePrimaryPath(
+        workspaceSource.savedFolders,
+        workspaceSource.pinnedPath,
+      ),
+    [workspaceSource.savedFolders, workspaceSource.pinnedPath],
   );
   // Polite live-region announcement for a primary change - either an
   // explicit "Make primary" click or the deterministic reassignment when
@@ -633,9 +687,13 @@ function HomeWorkspaceRows(props: {
     stagingKey,
     unresolvedMetadataPaths,
   ]);
+  // Seeding / default-branch derivation / branch validation apply to the
+  // SELECTED folders only: an unselected saved project never stages a
+  // worktree intent (nothing about it rides the launch).
   const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
     () =>
       resolvedFolders.flatMap((entry) => {
+        if (!selectedPaths.has(entry.path)) return [];
         const summary = summaryForResolvedFolder(entry, summariesByPath);
         return summary !== null &&
           summary.resolvedAt !== null &&
@@ -643,7 +701,7 @@ function HomeWorkspaceRows(props: {
           ? [summary]
           : [];
       }),
-    [resolvedFolders, summariesByPath],
+    [resolvedFolders, selectedPaths, summariesByPath],
   );
   const worktreeBranchPrefix = useSettingsStore((s) => s.worktreeBranchPrefix);
   const defaultBranchByPath = useMemo(
@@ -831,7 +889,9 @@ function HomeWorkspaceRows(props: {
           onLocate: () => {
             void pickAndAddFolders();
           },
+          resolvedPinnedPath,
           resolvedPrimaryPath,
+          selectedPaths,
           setFolderIntent,
           summariesByPath,
           workspaceSource,
@@ -843,7 +903,9 @@ function HomeWorkspaceRows(props: {
       pickAndAddFolders,
       activeHostClient,
       resolvedFolders,
+      resolvedPinnedPath,
       resolvedPrimaryPath,
+      selectedPaths,
       workspaceSource,
       setFolderIntent,
       summariesByPath,
@@ -1127,6 +1189,65 @@ type UnresolvedWorkspaceFolder = Extract<
   { readonly kind: "unresolved" }
 >;
 
+/**
+ * The selection / main-switch / pin fields shared by every home-surface row
+ * shape (resolved, unresolved, metadata-pending). Selection toggles and the
+ * main switch route through the workspace source's surface-only mutations
+ * (the saved list is never touched); the pin always writes the global
+ * default-for-new-chats.
+ */
+function homeSelectionFields(input: {
+  readonly path: string;
+  readonly name: string;
+  readonly unresolvedOnHost: boolean;
+  readonly selectedPaths: ReadonlySet<string>;
+  readonly resolvedPinnedPath: string | null;
+  readonly resolvedPrimaryPath: string | null;
+  readonly workspaceSource: HomeWorkspaceSource;
+  readonly announcePrimaryChange: (folderName: string) => void;
+}): HomeSelectionFields {
+  const { workspaceSource } = input;
+  const selected = input.selectedPaths.has(input.path);
+  const isMain = selected && input.path === input.resolvedPrimaryPath;
+  const saved = workspaceSource.savedFolders.includes(input.path);
+  return {
+    selected,
+    onToggleSelected:
+      workspaceSource.canToggleSelection && !isMain
+        ? (nextSelected) => {
+            if (nextSelected) {
+              workspaceSource.selectFolder(input.path);
+              return;
+            }
+            const transition = workspaceSource.deselectFolder(input.path);
+            if (
+              transition.primaryChanged &&
+              transition.newPrimaryName !== null
+            ) {
+              input.announcePrimaryChange(transition.newPrimaryName);
+            }
+          }
+        : null,
+    selectionDisabledReason: input.unresolvedOnHost
+      ? "Not available on the selected host."
+      : null,
+    // The main row switches by picking ANOTHER row, and an unresolved folder
+    // can't run here, so neither offers the switch.
+    onUseAsMain:
+      isMain || input.unresolvedOnHost
+        ? null
+        : () => {
+            workspaceSource.switchMainFolder(input.path);
+            input.announcePrimaryChange(input.name);
+          },
+    isPinned: input.path === input.resolvedPinnedPath,
+    onTogglePin: saved
+      ? () => workspaceSource.setPinnedFolder(input.path)
+      : null,
+  };
+}
+
+/** Builds a picker row contract for a folder resolved on the active host. */
 function workspaceRunItemForResolvedFolder(input: {
   readonly entry: ResolvedFolder;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
@@ -1134,7 +1255,9 @@ function workspaceRunItemForResolvedFolder(input: {
   readonly defaultBranchByPath: Readonly<Record<string, string>>;
   readonly isFetchingSummaries: boolean;
   readonly onLocate: () => void;
+  readonly resolvedPinnedPath: string | null;
   readonly resolvedPrimaryPath: string | null;
+  readonly selectedPaths: ReadonlySet<string>;
   readonly setFolderIntent: (
     intent: WorktreeFolderIntent,
     timestamp: number,
@@ -1143,6 +1266,16 @@ function workspaceRunItemForResolvedFolder(input: {
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem {
   const summary = summaryForResolvedFolder(input.entry, input.summariesByPath);
+  const selectionFields = homeSelectionFields({
+    path: input.entry.path,
+    name: input.entry.name,
+    unresolvedOnHost: input.entry.kind === "unresolved" && summary === null,
+    selectedPaths: input.selectedPaths,
+    resolvedPinnedPath: input.resolvedPinnedPath,
+    resolvedPrimaryPath: input.resolvedPrimaryPath,
+    workspaceSource: input.workspaceSource,
+    announcePrimaryChange: input.announcePrimaryChange,
+  });
   if (input.entry.kind === "unresolved") {
     const unresolvedItem = workspaceRunItemForUnresolvedFolder({
       activeHostClient: input.activeHostClient,
@@ -1151,6 +1284,7 @@ function workspaceRunItemForResolvedFolder(input: {
       isFetchingSummaries: input.isFetchingSummaries,
       onLocate: input.onLocate,
       resolvedPrimaryPath: input.resolvedPrimaryPath,
+      selectionFields,
       summary,
       workspaceSource: input.workspaceSource,
     });
@@ -1205,9 +1339,7 @@ function workspaceRunItemForResolvedFolder(input: {
     repoIdentifier:
       summary?.repoIdentifier ?? repoIdentifierForResolvedFolder(input.entry),
     isPrimary,
-    canChangePrimary: true,
-    makePrimaryDisabled: false,
-    makePrimaryDisabledReason: null,
+    ...selectionFields,
     hostClient: input.activeHostClient,
     modeDisabled: !metadataResolved,
     modeDisabledReason: metadataResolved
@@ -1231,10 +1363,6 @@ function workspaceRunItemForResolvedFolder(input: {
       });
     },
     onLocate: null,
-    onMakePrimary: () => {
-      input.workspaceSource.setPrimaryFolder(input.entry.path);
-      input.announcePrimaryChange(input.entry.name);
-    },
     onRemove: () => {
       const transition = input.workspaceSource.removeFolder(input.entry.path);
       if (transition.primaryChanged && transition.newPrimaryName !== null) {
@@ -1244,6 +1372,17 @@ function workspaceRunItemForResolvedFolder(input: {
   };
 }
 
+type HomeSelectionFields = Pick<
+  WorkspaceRunItem,
+  | "selected"
+  | "onToggleSelected"
+  | "selectionDisabledReason"
+  | "onUseAsMain"
+  | "isPinned"
+  | "onTogglePin"
+>;
+
+/** Builds a fallback row when a saved folder is unresolved on this host. */
 function workspaceRunItemForUnresolvedFolder(input: {
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
   readonly announcePrimaryChange: (folderName: string) => void;
@@ -1251,6 +1390,7 @@ function workspaceRunItemForUnresolvedFolder(input: {
   readonly isFetchingSummaries: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
+  readonly selectionFields: HomeSelectionFields;
   readonly summary: WorktreeWorkspaceSummaryV13 | null;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem | null {
@@ -1269,6 +1409,7 @@ function workspaceRunItemForUnresolvedFolder(input: {
       repoIdentifier: input.entry.repoIdentifier,
       hostClient: input.activeHostClient,
       isPrimary,
+      selectionFields: input.selectionFields,
       onRemove,
     });
   }
@@ -1277,11 +1418,8 @@ function workspaceRunItemForUnresolvedFolder(input: {
     name: input.entry.name,
     repoIdentifier: input.entry.repoIdentifier,
     isPrimary,
+    selectionFields: input.selectionFields,
     onLocate: input.onLocate,
-    onMakePrimary: () => {
-      input.workspaceSource.setPrimaryFolder(input.entry.path);
-      input.announcePrimaryChange(input.entry.name);
-    },
     onRemove,
   });
 }
@@ -1392,8 +1530,8 @@ function unresolvedWorkspaceRunItem(input: {
   readonly name: string;
   readonly repoIdentifier: WorktreeWorkspaceSummaryV13["repoIdentifier"];
   readonly isPrimary: boolean;
+  readonly selectionFields: HomeSelectionFields;
   readonly onLocate: () => void;
-  readonly onMakePrimary: () => void;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {
   return {
@@ -1413,9 +1551,7 @@ function unresolvedWorkspaceRunItem(input: {
     defaultNewBranchName: "",
     repoIdentifier: input.repoIdentifier,
     isPrimary: input.isPrimary,
-    canChangePrimary: true,
-    makePrimaryDisabled: true,
-    makePrimaryDisabledReason: "Resolve this folder to make it primary",
+    ...input.selectionFields,
     hostClient: null,
     modeDisabled: true,
     modeDisabledReason: "Folder not on this host",
@@ -1425,17 +1561,18 @@ function unresolvedWorkspaceRunItem(input: {
     onSelectMode: () => undefined,
     onEmit: () => undefined,
     onLocate: input.onLocate,
-    onMakePrimary: input.onMakePrimary,
     onRemove: input.onRemove,
   };
 }
 
+/** Builds a loading row while the host resolves a saved folder's metadata. */
 function pendingWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
   readonly repoIdentifier: WorktreeWorkspaceSummaryV13["repoIdentifier"];
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly isPrimary: boolean;
+  readonly selectionFields: HomeSelectionFields;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {
   return {
@@ -1453,9 +1590,7 @@ function pendingWorkspaceRunItem(input: {
     defaultNewBranchName: "",
     repoIdentifier: input.repoIdentifier,
     isPrimary: input.isPrimary,
-    canChangePrimary: true,
-    makePrimaryDisabled: true,
-    makePrimaryDisabledReason: "Loading folder metadata",
+    ...input.selectionFields,
     hostClient: input.hostClient,
     modeDisabled: true,
     modeDisabledReason: "Loading folder metadata",
@@ -1465,7 +1600,6 @@ function pendingWorkspaceRunItem(input: {
     onSelectMode: () => undefined,
     onEmit: () => undefined,
     onLocate: null,
-    onMakePrimary: () => undefined,
     onRemove: input.onRemove,
   };
 }
@@ -1535,8 +1669,10 @@ interface InEpicSurfaceProps {
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
 }
 
-// Coordinates host-bound folder metadata, staged worktree edits, add/remove
-// mutations, and terminal resume state in one owner-scoped surface.
+/**
+ * Coordinates host-bound folder metadata, staged worktree edits, add/remove
+ * mutations, and terminal resume state in one owner-scoped surface.
+ */
 // eslint-disable-next-line complexity
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
@@ -1560,6 +1696,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const removeBindingEntryMutation = useWorkspaceBindingRemoveEntryForClient(
     props.hostClient,
   );
+  // Owner-binding removals are SERIALIZED through this queue, mirroring the
+  // Add Folder path's sequential loop: the binding is a single
+  // read-modify-write row host-side, so concurrent removeEntry calls (e.g.
+  // the multi-folder toggle collapsing several extras at once) could clobber
+  // one another and lose a removal. `queuedRemoveBindingPathsRef` also keeps
+  // one path from being enqueued twice before its mutation starts (the
+  // pendingRemovePaths guard only covers in-flight mutations).
+  const removeBindingQueueRef = useRef<Promise<void> | null>(null);
+  const queuedRemoveBindingPathsRef = useRef<Set<string> | null>(null);
   const addFolderMutation = useWorkspaceBindingAddFolderForClient(
     props.hostClient,
   );
@@ -1587,9 +1732,57 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       Array.from(new Set(bindingEntries.map((entry) => entry.workspacePath))),
     [bindingEntries],
   );
+  // The persistent saved-project list also renders here as unselected rows:
+  // checking one adds it to THIS owner's binding, so switching projects
+  // mid-epic is a checkbox action rather than re-picking folders. Saved
+  // paths resolve against the OWNER's fixed host - a project that doesn't
+  // exist on this host stays listed but can't be checked.
+  const savedFolders = useWorkspaceFoldersStore((s) => s.folders);
+  const savedFolderInfoByPath = useWorkspaceFoldersStore(
+    (s) => s.folderInfoByPath,
+  );
+  const savedPinnedPath = useWorkspaceFoldersStore((s) => s.pinnedPath);
+  const setSavedPinnedFolder = useWorkspaceFoldersStore(
+    (s) => s.setPinnedFolder,
+  );
+  const removeSavedFolder = useWorkspaceFoldersStore((s) => s.removeFolder);
+  const savedSource = useMemo(
+    () => ({ folders: savedFolders, folderInfoByPath: savedFolderInfoByPath }),
+    [savedFolders, savedFolderInfoByPath],
+  );
+  const savedResolved = useResolvedWorkspaceFolders(
+    savedSource,
+    props.hostClient,
+  );
+  const boundPathSet = useMemo(
+    () => new Set(bindingWorkspacePaths),
+    [bindingWorkspacePaths],
+  );
+  const unboundSavedFolders = useMemo(
+    () =>
+      savedResolved.folders.filter((entry) => !boundPathSet.has(entry.path)),
+    [savedResolved.folders, boundPathSet],
+  );
+  const resolvedPinnedPath = useMemo(
+    () => resolvePrimaryPath(savedFolders, savedPinnedPath),
+    [savedFolders, savedPinnedPath],
+  );
+  const savedPathSet = useMemo(() => new Set(savedFolders), [savedFolders]);
+  // Fetch disk metadata for the unbound-but-resolvable saved rows too, so
+  // their current branch shows; unresolved rows have no path on this host to
+  // list.
+  const metadataQueryPaths = useMemo(
+    () => [
+      ...bindingWorkspacePaths,
+      ...unboundSavedFolders.flatMap((entry) =>
+        entry.kind === "unresolved" ? [] : [entry.path],
+      ),
+    ],
+    [bindingWorkspacePaths, unboundSavedFolders],
+  );
   const metadataQuery = useWorktreeListByWorkspacePathsForClient(
     props.hostClient,
-    { workspacePaths: bindingWorkspacePaths, enabled: true },
+    { workspacePaths: metadataQueryPaths, enabled: true },
   );
   const metadataSummaries =
     metadataQuery.data?.workspaces ?? EMPTY_WORKSPACE_SUMMARIES;
@@ -1954,9 +2147,56 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const activeRunLocksBinding =
     surface.kind === "chat" && surface.isOwnerActive;
 
+  // Checking a saved project's row: add that known path to THIS owner's
+  // binding (no folder dialog). Mirrors `addFoldersToOwnerBinding`'s
+  // per-folder post-processing: default-seed once metadata resolves, and
+  // never resume the PTY on its own.
+  const addSavedFolderToBinding = useCallback(
+    (workspacePath: string): void => {
+      addFolderMutation.mutate(
+        {
+          epicId: surface.epicId,
+          ownerId: surface.ownerId,
+          ownerKind,
+          workspacePath,
+        },
+        {
+          onSuccess: () => {
+            pendingDefaultPathsRef.current?.add(workspacePath);
+            if (surface.kind === "terminal-agent") {
+              markBindingDirtyWithoutResume([workspacePath]);
+            } else {
+              handleBindingCommitted([workspacePath]);
+            }
+          },
+        },
+      );
+    },
+    [
+      addFolderMutation,
+      handleBindingCommitted,
+      markBindingDirtyWithoutResume,
+      ownerKind,
+      surface.epicId,
+      surface.kind,
+      surface.ownerId,
+    ],
+  );
+
+  /** Picks, saves, and sequentially adds folders to the current owner. */
   const addFoldersToOwnerBinding = async (): Promise<boolean> => {
     const result = await folderActions.pickAndPrepareFolders();
     if (result === null) return false;
+    // Every explicit add SAVES the project for future chats too (same rule as
+    // the pre-create surfaces) - a folder added to a live chat must show up
+    // in the persistent saved list, be pinnable, and survive this chat.
+    // Saved-list cap evictions never unbind rows here: bound rows come from
+    // the owner binding, not the saved list.
+    useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders(
+        result.folders.map(preparedWorkspaceFolderToWorkspaceFolderInfo),
+      );
     const addedWorkspacePaths: string[] = [];
     // Add each picked folder independently and sequentially: the binding is a
     // single read-modify-write row, so parallel writes would clobber one
@@ -1979,6 +2219,18 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       }
     }
     if (addedWorkspacePaths.length === 0) return false;
+    // A live binding cannot atomically switch its main project, so an add
+    // with the multi-folder opt-in OFF still lands ALONGSIDE the existing
+    // folders. Flip the opt-in on when that produces a multi-folder chat, so
+    // the picker state (row checkboxes, footer toggle) matches reality
+    // instead of silently violating the single-folder promise.
+    const foldersState = useWorkspaceFoldersStore.getState();
+    if (
+      !foldersState.allowMultipleFolders &&
+      workspaces.length + addedWorkspacePaths.length > 1
+    ) {
+      foldersState.setAllowMultipleFolders(true);
+    }
     // The folders are in the binding now, but adding never resumes the PTY —
     // the explicit "Update" does. Mark dirty so "Update" is enabled (a non-git
     // add stages nothing). Chat has no PTY to resume (no-op callback).
@@ -2119,6 +2371,57 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           diskWorktrees: otherWorktrees,
         });
         const emit = emitForFolder(ws);
+        // `forgetSaved`: the trash flow also deletes the SAVED project - but
+        // only after the host confirms the unbind, so a failed unbind can
+        // never leave this chat bound to a project that has already vanished
+        // from saved projects.
+        const removeFromBinding = (forgetSaved: boolean): void => {
+          const queuedPaths = (queuedRemoveBindingPathsRef.current ??=
+            new Set());
+          if (removePending || queuedPaths.has(ws.workspacePath)) {
+            return;
+          }
+          queuedPaths.add(ws.workspacePath);
+          removeBindingQueueRef.current = (
+            removeBindingQueueRef.current ?? Promise.resolve()
+          ).then(() =>
+            removeBindingEntryMutation
+              .mutateAsync({
+                epicId: surface.epicId,
+                ownerId: surface.ownerId,
+                ownerKind,
+                workspacePath: ws.workspacePath,
+              })
+              .then(() => {
+                // Terminal-agent: remove from the binding but don't resume —
+                // only "Update" does. Chat: no PTY to resume (no-op
+                // callback).
+                //
+                // A folder removed before its metadata resolved has nothing
+                // to seed - its summary never arrives, so left in place the
+                // path would pin the pending-defaults guard and block
+                // Update's resume forever.
+                pendingDefaultPathsRef.current?.delete(ws.workspacePath);
+                // And if metadata DID resolve first, the seeding effect may
+                // already have staged a default worktree intent for this
+                // path - unstage it, or the next Update would call
+                // worktree.create for a folder no longer in the binding.
+                unstageWorktreeEntry(stagedKey, ws.workspacePath);
+                if (forgetSaved) removeSavedFolder(ws.workspacePath);
+                if (surface.kind === "terminal-agent") {
+                  markBindingDirtyWithoutResume([ws.workspacePath]);
+                  return;
+                }
+                handleBindingCommitted([ws.workspacePath]);
+              })
+              // The mutation hook's onError already surfaces the toast; a
+              // failed removal must not break the queue for later ones.
+              .catch(() => undefined)
+              .finally(() => {
+                queuedPaths.delete(ws.workspacePath);
+              }),
+          );
+        };
         return {
           key: ws.workspacePath,
           displayName: workspaceFolderName(ws.workspacePath),
@@ -2128,22 +2431,41 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           missing: visibleMissingWorktreePaths.includes(ws.workspacePath),
           isGitRepo: rowIsGitRepo,
           mode: currentMode,
-          branchLabel:
-            currentMode === "local"
-              ? (currentBranch ?? modeLabel)
-              : branchLabel,
+          branchLabel: boundRowBranchLabel(
+            currentMode,
+            currentBranch,
+            modeLabel,
+            branchLabel,
+          ),
           summary: ws,
           currentIntent,
           defaultNewBranchName,
           repoIdentifier: ws.repoIdentifier,
           isPrimary,
-          // Bound owner rows (chat / terminal-agent) have no atomic
-          // set-primary RPC yet - the badge renders read-only here; switching
-          // stays scoped to not-yet-created pickers (landing, fork dialogs,
-          // the new-conversation modal, the terminal-agent launcher).
-          canChangePrimary: false,
-          makePrimaryDisabled: false,
-          makePrimaryDisabledReason: null,
+          // A bound row IS in the chat: unchecking a SECONDARY removes it
+          // from this owner's binding (the saved list keeps the project).
+          // The bound PRIMARY renders the locked main marker instead of a
+          // checkbox, and no bound row offers the main switch: a live
+          // chat's primary is fixed host-side (no set-primary RPC).
+          selected: true,
+          onToggleSelected: isPrimary
+            ? null
+            : (nextSelected) => {
+                if (nextSelected) return;
+                removeFromBinding(false);
+              },
+          selectionDisabledReason: boundSelectionDisabledReason({
+            activeRunLocksBinding,
+            activeRunNotice,
+            removePending,
+          }),
+          onUseAsMain: null,
+          ...savedPinFields(
+            ws.workspacePath,
+            savedPathSet,
+            resolvedPinnedPath,
+            setSavedPinnedFolder,
+          ),
           hostClient: props.hostClient,
           modeDisabled: activeRunLocksBinding || rowMetadataPending,
           modeDisabledReason: modeDisabledReasonFor(
@@ -2158,7 +2480,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           ),
           removePending,
           onEmit: emit,
-          onMakePrimary: () => undefined,
           onSelectMode: (nextMode) => {
             if (ws.resolvedAt === null) return;
             if (!locationSelectionChanges(nextMode, currentIntent, currentMode))
@@ -2185,36 +2506,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           },
           onLocate: null,
           onRemove: () => {
-            if (removePending) return;
-            removeBindingEntryMutation.mutate(
-              {
-                epicId: surface.epicId,
-                ownerId: surface.ownerId,
-                ownerKind,
-                workspacePath: ws.workspacePath,
-              },
-              {
-                // Terminal-agent: remove from the binding but don't resume —
-                // only "Update" does. Chat: no PTY to resume (no-op callback).
-                onSuccess: () => {
-                  // A folder removed before its metadata resolved has nothing
-                  // to seed - its summary never arrives, so left in place the
-                  // path would pin the pending-defaults guard and block
-                  // Update's resume forever.
-                  pendingDefaultPathsRef.current?.delete(ws.workspacePath);
-                  // And if metadata DID resolve first, the seeding effect may
-                  // already have staged a default worktree intent for this
-                  // path - unstage it, or the next Update would call
-                  // worktree.create for a folder no longer in the binding.
-                  unstageWorktreeEntry(stagedKey, ws.workspacePath);
-                  if (surface.kind === "terminal-agent") {
-                    markBindingDirtyWithoutResume([ws.workspacePath]);
-                    return;
-                  }
-                  handleBindingCommitted([ws.workspacePath]);
-                },
-              },
-            );
+            // The trash deletes the project from the SAVED list too;
+            // unchecking (above) only detaches it from this chat. Saved-list
+            // deletion is sequenced inside the unbind's onSuccess.
+            removeFromBinding(true);
           },
         };
       }),
@@ -2227,6 +2522,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       markBindingDirtyWithoutResume,
       pendingBranchByPath,
       pendingRemovePaths,
+      removeSavedFolder,
+      resolvedPinnedPath,
+      savedPathSet,
+      setSavedPinnedFolder,
       stagedKey,
       unstageWorktreeEntry,
       props.hostClient,
@@ -2241,6 +2540,54 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       visibleMissingWorktreePaths,
       workspaces,
     ],
+  );
+
+  // The unbound saved projects, appended after the bound rows: unchecked,
+  // display-only facts, checkable when the path resolves on this host.
+  // Handlers attach here (not in the pure display-field helper) so the
+  // ref-capturing binding-add callback is only stored on the item, never
+  // passed through a render-time function call.
+  const savedUnboundItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+    () =>
+      unboundSavedFolders.map((entry) => ({
+        ...savedUnboundRunItemFields({
+          entry,
+          hostClient: props.hostClient,
+          metadataFetching: metadataQuery.isFetching,
+          resolvedPinnedPath,
+          summariesByPath,
+        }),
+        onToggleSelected: (nextSelected: boolean) => {
+          if (!nextSelected) return;
+          addSavedFolderToBinding(entry.path);
+        },
+        selectionDisabledReason: unboundSelectionDisabledReason({
+          entry,
+          activeRunLocksBinding,
+          activeRunNotice,
+        }),
+        // A live chat's primary is fixed host-side - saved rows can join as
+        // additional folders but never become the main here.
+        onUseAsMain: null,
+        onTogglePin: () => setSavedPinnedFolder(entry.path),
+        onRemove: () => removeSavedFolder(entry.path),
+      })),
+    [
+      activeRunLocksBinding,
+      activeRunNotice,
+      addSavedFolderToBinding,
+      metadataQuery.isFetching,
+      props.hostClient,
+      removeSavedFolder,
+      resolvedPinnedPath,
+      setSavedPinnedFolder,
+      summariesByPath,
+      unboundSavedFolders,
+    ],
+  );
+  const pickerItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+    () => [...workspaceRunItems, ...savedUnboundItems],
+    [workspaceRunItems, savedUnboundItems],
   );
 
   // Setup/teardown editor, hosted here so it outlives the popover. In-epic
@@ -2303,7 +2650,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         </div>
         <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
           <WorkspaceFolderSummaryControl
-            items={workspaceRunItems}
+            items={pickerItems}
             readOnly={readOnly}
             bindingResolved={surface.bindingResolved}
             addFolderPending={
@@ -2360,6 +2707,122 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       />
     </>
   );
+}
+
+/**
+ * The saved-list pin fields for a bound row: the pin action only exists for
+ * folders that are actually in the saved list (a bound-but-unsaved folder
+ * can't be a default for new tasks).
+ */
+function savedPinFields(
+  workspacePath: string,
+  savedPathSet: ReadonlySet<string>,
+  resolvedPinnedPath: string | null,
+  setSavedPinnedFolder: (folderPath: string) => void,
+): Pick<WorkspaceRunItem, "isPinned" | "onTogglePin"> {
+  return {
+    isPinned: workspacePath === resolvedPinnedPath,
+    onTogglePin: savedPathSet.has(workspacePath)
+      ? () => setSavedPinnedFolder(workspacePath)
+      : null,
+  };
+}
+
+/** A local bound row reads as its checkout's branch (else the mode label);
+ * worktree rows keep the derived branch label. */
+function boundRowBranchLabel(
+  currentMode: WorkspaceRunMode,
+  currentBranch: string | null,
+  modeLabel: string,
+  branchLabel: string,
+): string {
+  if (currentMode !== "local") return branchLabel;
+  return currentBranch ?? modeLabel;
+}
+
+/**
+ * Why a bound row's checkbox is inert: an active run locks the binding, and
+ * an in-flight removal must not double-fire. (The bound main renders a
+ * locked marker, not a checkbox, so "at least one folder" is structural.)
+ */
+function boundSelectionDisabledReason(input: {
+  readonly activeRunLocksBinding: boolean;
+  readonly activeRunNotice: string;
+  readonly removePending: boolean;
+}): string | null {
+  if (input.activeRunLocksBinding) return input.activeRunNotice;
+  if (input.removePending) return "Removing this folder…";
+  return null;
+}
+
+/**
+ * Display fields for a saved project not bound to this owner: an unchecked,
+ * display-only row (name + current branch). The caller attaches the handlers
+ * (check → add to binding, trash → delete saved, pin). Rows that don't
+ * resolve on this host stay visible but can't be checked.
+ */
+function savedUnboundRunItemFields(input: {
+  readonly entry: ResolvedFolder;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly metadataFetching: boolean;
+  readonly resolvedPinnedPath: string | null;
+  readonly summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV13>;
+}): Omit<
+  WorkspaceRunItem,
+  | "onToggleSelected"
+  | "selectionDisabledReason"
+  | "onUseAsMain"
+  | "onTogglePin"
+  | "onRemove"
+> {
+  const { entry } = input;
+  const unresolvedOnHost = entry.kind === "unresolved";
+  const summary = unresolvedOnHost
+    ? null
+    : (input.summariesByPath.get(entry.path) ?? null);
+  const metadataResolved = summary !== null && summary.resolvedAt !== null;
+  return {
+    key: entry.path,
+    displayName: entry.name,
+    displayPath: entry.path,
+    unresolved: unresolvedOnHost,
+    metadataPending:
+      !unresolvedOnHost && !metadataResolved && input.metadataFetching,
+    missing: false,
+    isGitRepo: metadataResolved && summary.isGitRepo,
+    mode: "local",
+    branchLabel: unresolvedOnHost
+      ? "Unavailable"
+      : (branchForSummary(summary) ?? "Local"),
+    summary,
+    currentIntent: null,
+    defaultNewBranchName: "",
+    repoIdentifier:
+      summary?.repoIdentifier ?? repoIdentifierForResolvedFolder(entry),
+    isPrimary: false,
+    selected: false,
+    isPinned: entry.path === input.resolvedPinnedPath,
+    hostClient: input.hostClient,
+    modeDisabled: true,
+    modeDisabledReason: null,
+    removeDisabled: false,
+    removeDisabledReason: null,
+    removePending: false,
+    onSelectMode: () => undefined,
+    onEmit: () => undefined,
+    onLocate: null,
+  };
+}
+
+/** Explains why a saved project cannot be added to the current binding. */
+function unboundSelectionDisabledReason(input: {
+  readonly entry: ResolvedFolder;
+  readonly activeRunLocksBinding: boolean;
+  readonly activeRunNotice: string;
+}): string | null {
+  if (input.entry.kind === "unresolved") return "Not available on this host.";
+  if (input.activeRunLocksBinding) return input.activeRunNotice;
+  return null;
 }
 
 // No staged pick yet (`capturedEntry === null`): a git folder reflects the

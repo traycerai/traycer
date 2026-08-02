@@ -6,7 +6,10 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftStore,
+  usePendingOrPinnedLandingWorkspace,
+} from "@/stores/home/landing-draft-store";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -33,6 +36,7 @@ export function useWorkspaceMentionRoots(
   }, [fallbackToGlobalWhenEmpty, preferredRoots, workspaceFolders]);
 }
 
+/** Resolves mention roots from the active draft or blank-landing selection. */
 export function useLandingComposerMentionRoots(
   draftId: string | null,
 ): ReadonlyArray<string> {
@@ -43,7 +47,9 @@ export function useLandingComposerMentionRoots(
       null
     );
   });
-  const globalFolders = useWorkspaceFoldersStore((state) => state.folders);
+  // Blank landing: mention roots must match the chat's actual selection (the
+  // shared pending-or-pinned snapshot), not every saved project.
+  const pendingOrPinnedWorkspace = usePendingOrPinnedLandingWorkspace();
   const stagingKeyId = worktreeStagingKeyString({
     surface: "landing",
     draftId,
@@ -52,9 +58,9 @@ export function useLandingComposerMentionRoots(
     (state) => state.intentByKey[stagingKeyId] ?? null,
   );
   const preferredRoots = useMemo(() => {
-    const folders = draftFolders ?? globalFolders;
+    const folders = draftFolders ?? pendingOrPinnedWorkspace.folders;
     return mentionRootsFromWorktreeIntent(folders, stagedIntent);
-  }, [draftFolders, globalFolders, stagedIntent]);
+  }, [draftFolders, pendingOrPinnedWorkspace, stagedIntent]);
 
   // `preferredRoots` already resolves the global folders (intent-aware) in the
   // base-landing case, so the global fallback inside `useWorkspaceMentionRoots`

@@ -26,8 +26,14 @@ function resetStores(): void {
     folders: [],
     folderInfoByPath: {},
     primaryPath: null,
+    pinnedPath: null,
+    allowMultipleFolders: false,
   });
-  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingDraftStore.setState({
+    drafts: [],
+    activeDraftId: null,
+    pendingWorkspace: null,
+  });
   useWorktreeIntentStagingStore.getState().resetForTests();
 }
 
@@ -43,6 +49,9 @@ afterEach(resetStores);
  */
 describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins", () => {
   it("resolves the pinned folder, not the first one (no active draft)", () => {
+    // Adding TWO folders needs multi-select on; in the default single-project
+    // mode the add would keep only the first as the pending landing's main.
+    useWorkspaceFoldersStore.setState({ allowMultipleFolders: true });
     const stagingKey: WorktreeStagingKey = {
       surface: "landing",
       draftId: null,
@@ -64,6 +73,9 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
   });
 
   it("resolves the pinned folder for the active landing draft", () => {
+    // A draft-backed add of TWO folders needs multi-select on; in the default
+    // single-project mode the add would switch the main instead.
+    useWorkspaceFoldersStore.setState({ allowMultipleFolders: true });
     const draftId = useLandingDraftStore.getState().createDraft(null);
     const stagingKey: WorktreeStagingKey = { surface: "landing", draftId };
     const { result } = renderHook(() =>

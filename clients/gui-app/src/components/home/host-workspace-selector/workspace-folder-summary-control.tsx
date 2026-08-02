@@ -201,7 +201,11 @@ export function WorkspaceFolderSummaryControl(props: {
   // clicked, so the preview must be forced closed while the picker is open.
   const popoverTrigger = (
     <HoverPreviewCard
-      content={<WorkspaceFolderHoverList items={props.items} />}
+      content={
+        <WorkspaceFolderHoverList
+          items={props.items.filter((item) => item.selected)}
+        />
+      }
       side={props.popoverSide}
       sideOffset={4}
       align="start"

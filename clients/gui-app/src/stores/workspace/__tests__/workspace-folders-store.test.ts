@@ -22,6 +22,8 @@ beforeEach(() => {
     folders: [],
     folderInfoByPath: {},
     primaryPath: null,
+    pinnedPath: null,
+    allowMultipleFolders: false,
   });
 });
 
@@ -104,6 +106,141 @@ describe("useWorkspaceFoldersStore", () => {
     expect(state.folders).toContain("/f50");
     // "/f1" was the oldest SECONDARY - it is the one evicted, not "/f0".
     expect(state.folders).not.toContain("/f1");
+  });
+
+  it("stamps the first added folder as the pinned default when none is set yet", () => {
+    useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders([folderInfo("/a"), folderInfo("/b")]);
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/a");
+  });
+
+  it("setPinnedFolder moves the pin; a non-member path is a no-op; later adds never move it", () => {
+    useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders([folderInfo("/a"), folderInfo("/b")]);
+
+    useWorkspaceFoldersStore.getState().setPinnedFolder("/b");
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/b");
+
+    useWorkspaceFoldersStore.getState().setPinnedFolder("/not-a-folder");
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/b");
+
+    useWorkspaceFoldersStore.getState().addResolvedFolders([folderInfo("/c")]);
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/b");
+  });
+
+  it("keeps the pin independent of setPrimaryFolder (per-chat primary is not the default)", () => {
+    useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders([folderInfo("/a"), folderInfo("/b")]);
+    useWorkspaceFoldersStore.getState().setPrimaryFolder("/b");
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/a");
+  });
+
+  it("removing the pinned folder falls the pin back to the first remaining folder", () => {
+    useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders([
+        folderInfo("/a"),
+        folderInfo("/b"),
+        folderInfo("/c"),
+      ]);
+    useWorkspaceFoldersStore.getState().setPinnedFolder("/b");
+
+    useWorkspaceFoldersStore.getState().removeFolder("/b");
+
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/a");
+  });
+
+  it("multi-select preference is off by default and flips via setAllowMultipleFolders", () => {
+    expect(useWorkspaceFoldersStore.getState().allowMultipleFolders).toBe(
+      false,
+    );
+    useWorkspaceFoldersStore.getState().setAllowMultipleFolders(true);
+    expect(useWorkspaceFoldersStore.getState().allowMultipleFolders).toBe(true);
+    useWorkspaceFoldersStore.getState().setAllowMultipleFolders(false);
+    expect(useWorkspaceFoldersStore.getState().allowMultipleFolders).toBe(
+      false,
+    );
+  });
+
+  it("rehydrates allowMultipleFolders: only an explicit true survives; pre-toggle payloads default off", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          folders: ["/a"],
+          folderInfoByPath: { "/a": folderInfo("/a") },
+          primaryPath: "/a",
+          allowMultipleFolders: true,
+        },
+      }),
+    );
+    await useWorkspaceFoldersStore.persist.rehydrate();
+    expect(useWorkspaceFoldersStore.getState().allowMultipleFolders).toBe(true);
+
+    // A payload persisted before the toggle existed (no field at all).
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          folders: ["/a"],
+          folderInfoByPath: { "/a": folderInfo("/a") },
+          primaryPath: "/a",
+        },
+      }),
+    );
+    await useWorkspaceFoldersStore.persist.rehydrate();
+    expect(useWorkspaceFoldersStore.getState().allowMultipleFolders).toBe(
+      false,
+    );
+  });
+
+  it("rehydrates a payload persisted before pinnedPath by seeding the pin from the stored primary", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          folders: ["/a", "/b"],
+          folderInfoByPath: {
+            "/a": folderInfo("/a"),
+            "/b": folderInfo("/b"),
+          },
+          primaryPath: "/b",
+        },
+      }),
+    );
+
+    await useWorkspaceFoldersStore.persist.rehydrate();
+
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/b");
+  });
+
+  it("rehydrates a valid persisted pinnedPath verbatim, independent of primary", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          folders: ["/a", "/b"],
+          folderInfoByPath: {
+            "/a": folderInfo("/a"),
+            "/b": folderInfo("/b"),
+          },
+          primaryPath: "/a",
+          pinnedPath: "/b",
+        },
+      }),
+    );
+
+    await useWorkspaceFoldersStore.persist.rehydrate();
+
+    expect(useWorkspaceFoldersStore.getState().primaryPath).toBe("/a");
+    expect(useWorkspaceFoldersStore.getState().pinnedPath).toBe("/b");
   });
 
   it("rehydrates a v1 payload (no primaryPath field) by resolving folders[0] as primary", async () => {
