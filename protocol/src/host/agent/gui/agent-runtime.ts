@@ -779,6 +779,12 @@ export const commandStartedEventSchema = z.object({
   type: z.literal("command.started"),
   command: z.string(),
   cwd: z.string().optional(),
+  // True when the harness has promoted this command to a backgrounded one. A
+  // harness that only learns this later (Codex decides at the parent turn's
+  // end, by which time the card is already open) re-emits `command.started`
+  // with the same `blockId` to stamp the marker - the accumulator updates the
+  // open block in place rather than appending a second card.
+  backgroundTask: z.boolean().optional(),
 });
 export type CommandStartedEvent = z.infer<typeof commandStartedEventSchema>;
 
@@ -787,6 +793,13 @@ export const commandCompletedEventSchema = z.object({
   type: z.literal("command.completed"),
   command: z.string(),
   exitCode: z.number().optional(),
+  // Distinguishes an explicit stop (the host terminated a backgrounded command,
+  // or a teardown killed it) from a genuine non-zero exit. Optional/defaulted:
+  // an old emitter that never sends this reproduces today's shipped behavior.
+  terminationReason: z.enum(["error", "stopped"]).default("error"),
+  // Reinforces the persistent background marker at terminal, so a card whose
+  // promotion re-emit was lost still settles as a background card.
+  backgroundTask: z.boolean().optional(),
 });
 export type CommandCompletedEvent = z.infer<typeof commandCompletedEventSchema>;
 
