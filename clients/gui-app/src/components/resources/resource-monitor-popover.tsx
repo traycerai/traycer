@@ -319,6 +319,13 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
  * a bulk kill is one RPC per host rather than one per row. The host validates
  * every pid against its live tracked set, so an already-dead pid is harmless.
  */
+function sameResourceKeySet(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
+  return left.size === right.size && [...left].every((key) => right.has(key));
+}
+
 function useResourceKillSelection(
   // Keys of every row currently rendered as killable. Selection is pruned
   // against this LIVE set at read time (never via an effect), so a selected
@@ -348,9 +355,15 @@ function useResourceKillSelection(
   const [selected, setSelected] = useState<ReadonlyMap<string, KillTarget>>(
     () => new Map(),
   );
+  const [previousLiveKeys, setPreviousLiveKeys] =
+    useState<ReadonlySet<string>>(liveKeys);
   const liveSelected = new Map(
     [...selected].filter(([key]) => liveKeys.has(key)),
   );
+  if (!sameResourceKeySet(liveKeys, previousLiveKeys)) {
+    setPreviousLiveKeys(liveKeys);
+    if (liveSelected.size !== selected.size) setSelected(liveSelected);
+  }
   const killTargets = (targets: readonly KillTarget[]): void => {
     const pidsByHost = new Map<string, number[]>();
     for (const target of targets) {
@@ -2187,6 +2200,34 @@ function processSearchTerms(
   ];
 }
 
+function matchingProcessPidsForSearch(
+  processes: readonly ResourceProcessSnapshotWire[],
+  searchQuery: string,
+  ancestorTerms: readonly (string | number | null)[],
+): ReadonlySet<number> {
+  const processByPid = new Map(
+    processes.map((process) => [process.pid, process]),
+  );
+  return new Set(
+    processes
+      .filter((process) => {
+        const lineageTerms: (string | number | null)[] = [...ancestorTerms];
+        let current: ResourceProcessSnapshotWire | undefined = process;
+        const visitedPids = new Set<number>();
+        while (current !== undefined && !visitedPids.has(current.pid)) {
+          visitedPids.add(current.pid);
+          lineageTerms.push(...processSearchTerms(current));
+          current =
+            current.parentPid === null
+              ? undefined
+              : processByPid.get(current.parentPid);
+        }
+        return matchesResourceSearch(searchQuery, lineageTerms);
+      })
+      .map((process) => process.pid),
+  );
+}
+
 function taskRowMatchesSearch(
   task: TaskDisplayRow,
   searchQuery: string,
@@ -2243,12 +2284,11 @@ function ownerHierarchyMatchesSearch(
   ];
   return (
     matchesResourceSearch(searchQuery, ownerTerms) ||
-    row.snapshot.processes.some((process) =>
-      matchesResourceSearch(searchQuery, [
-        ...ownerTerms,
-        ...processSearchTerms(process),
-      ]),
-    )
+    matchingProcessPidsForSearch(
+      row.snapshot.processes,
+      searchQuery,
+      ownerTerms,
+    ).size > 0
   );
 }
 
@@ -2265,14 +2305,12 @@ function buildOwnerProcessSearchProjection(input: {
   ];
   const ownerMatches = matchesResourceSearch(input.searchQuery, ownerTerms);
   const filteredRows = input.processRows.rootRows.flatMap((root) => {
-    const rootMatches = matchesResourceSearch(input.searchQuery, [
-      ...ownerTerms,
-      ...processSearchTerms(root.process),
-    ]);
+    const rootTerms = [...ownerTerms, ...processSearchTerms(root.process)];
+    const rootMatches = matchesResourceSearch(input.searchQuery, rootTerms);
     return filterProcessDisplayRowsForSearch(
       rootMatches ? [root] : root.children,
       input.searchQuery,
-      ownerTerms,
+      rootMatches ? ownerTerms : rootTerms,
     );
   });
   return {
@@ -2440,15 +2478,10 @@ function searchVisibleProcessKeys(
       )
       .map((process) => process.pid),
   );
-  const matchingProcessPids = new Set(
-    processes
-      .filter((process) =>
-        matchesResourceSearch(searchQuery, [
-          ...ancestorTerms,
-          ...processSearchTerms(process),
-        ]),
-      )
-      .map((process) => process.pid),
+  const matchingProcessPids = matchingProcessPidsForSearch(
+    processes,
+    searchQuery,
+    ancestorTerms,
   );
   const visibleKeys = new Set<string>();
   for (const process of processes) {
@@ -2512,12 +2545,8 @@ function otherResourcesMatchSearch(
 ): boolean {
   return (
     matchesResourceSearch(searchQuery, ["Other"]) ||
-    other.processes.some((process) =>
-      matchesResourceSearch(searchQuery, [
-        "Other",
-        ...processSearchTerms(process),
-      ]),
-    )
+    matchingProcessPidsForSearch(other.processes, searchQuery, ["Other"]).size >
+      0
   );
 }
 
@@ -2528,14 +2557,14 @@ function matchingOtherRootPids(
   if (matchesResourceSearch(searchQuery, ["Other"])) {
     return new Set(processes.map((process) => process.rootPid));
   }
+  const matchingProcessPids = matchingProcessPidsForSearch(
+    processes,
+    searchQuery,
+    ["Other"],
+  );
   const matchingRootPids = new Set<number>();
   for (const process of processes) {
-    if (
-      matchesResourceSearch(searchQuery, [
-        "Other",
-        ...processSearchTerms(process),
-      ])
-    ) {
+    if (matchingProcessPids.has(process.pid)) {
       matchingRootPids.add(process.rootPid);
     }
   }
@@ -2548,15 +2577,13 @@ function filterProcessDisplayRowsForSearch(
   ancestorTerms: readonly (string | number | null)[],
 ): ProcessDisplayRow[] {
   return rows.flatMap((row): ProcessDisplayRow[] => {
+    const rowTerms = [...ancestorTerms, ...processSearchTerms(row.process)];
     const children = filterProcessDisplayRowsForSearch(
       row.children,
       searchQuery,
-      ancestorTerms,
+      rowTerms,
     );
-    const rowMatches = matchesResourceSearch(searchQuery, [
-      ...ancestorTerms,
-      ...processSearchTerms(row.process),
-    ]);
+    const rowMatches = matchesResourceSearch(searchQuery, rowTerms);
     if (!rowMatches && children.length === 0) return [];
     if (children.length === 0) {
       return [

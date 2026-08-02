@@ -625,11 +625,57 @@ describe("ResourceMonitorPopover", () => {
     ).toBe(true);
   });
 
-  it("does not retain an owner when tokens only match separate processes", () => {
+  it("matches tokens across a process ancestor and its descendant", () => {
     const stub = installStubFactory();
     renderPopover();
     act(() => {
       stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "zsh dev-server" } },
+    );
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.getByText("node dev-server.js")).not.toBeNull();
+  });
+
+  it("does not retain an owner when tokens only match separate processes", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node dev-server.js",
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "make",
+                  command: "make",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
@@ -871,6 +917,19 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Terminal Alpha")).toBeNull();
     const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
     expect(killZero.hasAttribute("disabled")).toBe(true);
+
+    act(() => {
+      stub.emit().onUpdate(
+        projection({
+          owners: [owner({ activeProcessName: "unique-match", processes })],
+        }),
+      );
+    });
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Kill 0 selected" }),
+    ).not.toBeNull();
   });
 
   it("prunes a selected process root when search stops rendering it", () => {
