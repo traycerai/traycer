@@ -39,7 +39,15 @@ export function SteerSettingsConflictDialog(
         showCloseButton={false}
         data-testid="steer-settings-conflict-dialog"
         onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.repeat) return;
+          // Prefer nativeEvent.isComposing: React's KeyboardEvent typing in this
+          // package does not expose isComposing on the synthetic event.
+          if (
+            event.key !== "Enter" ||
+            event.repeat ||
+            event.nativeEvent.isComposing
+          ) {
+            return;
+          }
           event.preventDefault();
           onRestart();
         }}

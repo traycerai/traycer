@@ -48,6 +48,34 @@ describe("<SteerSettingsConflictDialog /> keyboard navigation", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
+  it("ignores held-key Enter repeats", () => {
+    renderDialog();
+
+    fireEvent.keyDown(screen.getByRole("dialog"), {
+      key: "Enter",
+      repeat: true,
+    });
+
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("ignores Enter while an IME composition is active", () => {
+    renderDialog();
+
+    screen.getByRole("dialog").dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+      }),
+    );
+
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("keeps both actions reachable by keyboard and Escape cancels", async () => {
     const user = userEvent.setup();
     renderDialog();
@@ -60,6 +88,8 @@ describe("<SteerSettingsConflictDialog /> keyboard navigation", () => {
     expect(document.activeElement).toBe(cancel);
     await user.tab();
     expect(document.activeElement).toBe(confirm);
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(cancel);
 
     await user.keyboard("{Escape}");
     expect(onOpenChange).toHaveBeenCalledWith(false);
