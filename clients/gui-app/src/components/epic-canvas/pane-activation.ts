@@ -194,6 +194,39 @@ export interface PaneActivationClaimEvent {
   readonly target: EventTarget | null;
 }
 
+type HostedPaneActivationClaim = (event: PaneActivationClaimEvent) => void;
+
+const hostedPaneActivationClaims = new Map<
+  string,
+  Map<string, HostedPaneActivationClaim>
+>();
+
+export function registerHostedPaneActivationClaim(
+  viewTabId: string,
+  paneId: string,
+  claim: HostedPaneActivationClaim,
+): () => void {
+  let claimsByPane = hostedPaneActivationClaims.get(viewTabId);
+  if (claimsByPane === undefined) {
+    claimsByPane = new Map();
+    hostedPaneActivationClaims.set(viewTabId, claimsByPane);
+  }
+  claimsByPane.set(paneId, claim);
+  return () => {
+    if (claimsByPane.get(paneId) !== claim) return;
+    claimsByPane.delete(paneId);
+    if (claimsByPane.size === 0) hostedPaneActivationClaims.delete(viewTabId);
+  };
+}
+
+export function claimHostedPaneActivation(
+  viewTabId: string,
+  paneId: string,
+  event: PaneActivationClaimEvent,
+): void {
+  hostedPaneActivationClaims.get(viewTabId)?.get(paneId)?.(event);
+}
+
 interface PaneGestureSubscriber {
   readonly onClickCapture: () => void;
   readonly onPointerCancelCapture: () => void;

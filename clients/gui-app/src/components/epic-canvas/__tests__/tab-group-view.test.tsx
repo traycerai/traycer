@@ -184,6 +184,13 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
         >
           Deferred action that replaces itself
         </button>
+        <button
+          type="button"
+          data-testid={`stopped-pointer-activation-${props.id}`}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          Stopped pointer action
+        </button>
       </div>
     );
   }
@@ -290,6 +297,44 @@ function groupView(
         />
       </PaneVisibilityContext.Provider>
     </TooltipProvider>
+  );
+}
+
+const OPEN_EPIC_HANDLE = {} as OpenEpicStoreHandle;
+
+function seedHostedTopLevelTab(): void {
+  useEpicCanvasStore.setState((state) => ({
+    ...state,
+    openTabOrder: [VIEW_TAB_ID],
+  }));
+  const ref: TabRef = { kind: "epic", id: VIEW_TAB_ID };
+  useTabsStore.setState((state) => ({
+    ...state,
+    items: [{ kind: "tab" as const, id: `tab:${ref.kind}:${ref.id}`, ref }],
+    activeItemId: `tab:${ref.kind}:${ref.id}`,
+    stripOrder: [ref],
+  }));
+}
+
+function hostedGroupView(
+  renderRecordBody: () => ReactNode,
+  onPointerDownCapture: (() => void) | undefined,
+): ReactNode {
+  return (
+    <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
+      <TooltipProvider>
+        <PaneVisibilityContext.Provider value>
+          <div onPointerDownCapture={onPointerDownCapture}>
+            <TabGroupView
+              epicId="epic-1"
+              tabId={VIEW_TAB_ID}
+              pane={pane([CHAT], CHAT.instanceId)}
+            />
+            <StableTileSurfaceHost renderRecordBody={renderRecordBody} />
+          </div>
+        </PaneVisibilityContext.Provider>
+      </TooltipProvider>
+    </EpicSessionContext.Provider>
   );
 }
 
@@ -420,6 +465,21 @@ describe("<TabGroupView />", () => {
         useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
       ).toBe("group-1");
     });
+  });
+
+  it("activates a physical pane before a descendant stops pointerdown propagation", async () => {
+    const tabs = [SPEC];
+    seedCanvasWithActivePane(tabs, SPEC.instanceId, "other-group");
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    const stoppedPointer = await screen.findByTestId(
+      `stopped-pointer-activation-${SPEC.id}`,
+    );
+    fireEvent.pointerDown(stoppedPointer);
+
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
+    ).toBe("group-1");
   });
 
   it("activates after a deferred child removes itself during its click action", async () => {
@@ -832,31 +892,24 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     const tabs = [CHAT];
     // Pane is not the active canvas pane - activation should flip activePaneId.
     seedCanvasWithActivePane(tabs, CHAT.instanceId, "other-group");
-    const { container } = render(groupView(tabs, CHAT.instanceId, true));
-
-    await waitFor(() => {
-      expect(
-        container.querySelector('[data-testid="tile-surface-slot"]'),
-      ).not.toBeNull();
-    });
-
-    // Hosted chat body lives outside the physical pane (StableTileSurfaceHost
-    // plane, a sibling of paneRootRef's subtree). Build that sibling DOM by
-    // hand, stamped exactly as `TileSurfaceRecord` stamps a ready record.
-    const hostedRecord = document.createElement("div");
-    hostedRecord.setAttribute(
-      HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
-      CHAT.instanceId,
+    seedHostedTopLevelTab();
+    render(
+      hostedGroupView(
+        () => (
+          <button
+            type="button"
+            {...paneActivationDeferProps}
+            data-testid="hosted-deferred-activation"
+          >
+            Deferred hosted action
+          </button>
+        ),
+        undefined,
+      ),
     );
-    hostedRecord.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, "group-1");
-    hostedRecord.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, VIEW_TAB_ID);
-    document.body.appendChild(hostedRecord);
-    onTestFinished(() => hostedRecord.remove());
-    const hostedDeferred = document.createElement("button");
-    hostedDeferred.type = "button";
-    hostedDeferred.setAttribute("data-pane-activation-defer", "true");
-    hostedDeferred.setAttribute("data-testid", "hosted-deferred-activation");
-    hostedRecord.appendChild(hostedDeferred);
+    const hostedDeferred = await screen.findByTestId(
+      "hosted-deferred-activation",
+    );
 
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
@@ -882,26 +935,14 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     testState.stableTileSurfaceHostEnabled = true;
     const tabs = [CHAT];
     seedCanvasWithActivePane(tabs, CHAT.instanceId, "other-group");
-    const { container } = render(groupView(tabs, CHAT.instanceId, true));
-
-    await waitFor(() => {
-      expect(
-        container.querySelector('[data-testid="tile-surface-slot"]'),
-      ).not.toBeNull();
-    });
-
-    const hostedRecord = document.createElement("div");
-    hostedRecord.setAttribute(
-      HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
-      CHAT.instanceId,
+    seedHostedTopLevelTab();
+    render(
+      hostedGroupView(
+        () => <div data-testid="hosted-non-deferred-body" />,
+        undefined,
+      ),
     );
-    hostedRecord.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, "group-1");
-    hostedRecord.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, VIEW_TAB_ID);
-    document.body.appendChild(hostedRecord);
-    onTestFinished(() => hostedRecord.remove());
-    const hostedBody = document.createElement("div");
-    hostedBody.setAttribute("data-testid", "hosted-non-deferred-body");
-    hostedRecord.appendChild(hostedBody);
+    const hostedBody = await screen.findByTestId("hosted-non-deferred-body");
 
     // No `data-pane-activation-defer` anywhere on this target - ordinary
     // hosted clicks must activate on pointerdown itself, same as an ordinary
@@ -913,43 +954,117 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     ).toBe("group-1");
   });
 
+  it("activates a hosted pane before a descendant stops pointerdown propagation", async () => {
+    testState.stableTileSurfaceHostEnabled = true;
+    seedCanvasWithActivePane([CHAT], CHAT.instanceId, "other-group");
+    seedHostedTopLevelTab();
+    render(
+      hostedGroupView(
+        () => (
+          <button
+            type="button"
+            data-testid="hosted-stopped-pointer"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            Hosted stopped pointer action
+          </button>
+        ),
+        undefined,
+      ),
+    );
+
+    fireEvent.pointerDown(await screen.findByTestId("hosted-stopped-pointer"));
+
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
+    ).toBe("group-1");
+  });
+
+  it("does not let descendant pointerdown preventDefault suppress a hosted claim", async () => {
+    testState.stableTileSurfaceHostEnabled = true;
+    seedCanvasWithActivePane([CHAT], CHAT.instanceId, "other-group");
+    seedHostedTopLevelTab();
+    render(
+      hostedGroupView(
+        () => (
+          <button
+            type="button"
+            data-testid="hosted-prevented-pointer"
+            onPointerDown={(event) => event.preventDefault()}
+          >
+            Hosted prevented pointer action
+          </button>
+        ),
+        undefined,
+      ),
+    );
+
+    fireEvent.pointerDown(
+      await screen.findByTestId("hosted-prevented-pointer"),
+    );
+
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
+    ).toBe("group-1");
+  });
+
+  it("keeps the hosted claim structurally after document capture and before descendants across a full remount", async () => {
+    testState.stableTileSurfaceHostEnabled = true;
+    const order: string[] = [];
+    const unsubscribe = useEpicCanvasStore.subscribe((next, previous) => {
+      const nextPaneId = next.canvasByTabId[VIEW_TAB_ID]?.activePaneId ?? null;
+      const previousPaneId =
+        previous.canvasByTabId[VIEW_TAB_ID]?.activePaneId ?? null;
+      if (nextPaneId === "group-1" && previousPaneId !== "group-1") {
+        order.push("claim");
+      }
+    });
+    onTestFinished(unsubscribe);
+    // This wrapper is structurally below document but above the hosted plane.
+    // Seeing it before the claim, and the target after the claim, proves the
+    // document marker has completed before the plane dispatches ownership.
+    const renderOrderingHarness = () =>
+      hostedGroupView(
+        () => (
+          <div
+            data-testid="hosted-ordering-target"
+            onPointerDownCapture={() => order.push("descendant")}
+          />
+        ),
+        () => order.push("plane-ancestor"),
+      );
+
+    seedCanvasWithActivePane([CHAT], CHAT.instanceId, "other-group");
+    seedHostedTopLevelTab();
+    let rendered = render(renderOrderingHarness());
+    fireEvent.pointerDown(await screen.findByTestId("hosted-ordering-target"));
+    expect(order).toEqual(["plane-ancestor", "claim", "descendant"]);
+
+    rendered.unmount();
+    seedCanvasWithActivePane([CHAT], CHAT.instanceId, "other-group");
+    seedHostedTopLevelTab();
+    order.length = 0;
+    rendered = render(renderOrderingHarness());
+    fireEvent.pointerDown(await screen.findByTestId("hosted-ordering-target"));
+    expect(order).toEqual(["plane-ancestor", "claim", "descendant"]);
+    rendered.unmount();
+  });
+
   it("publishes the hosted control's pane activation focus intent through the real slot", async () => {
     testState.stableTileSurfaceHostEnabled = true;
     const tabs = [CHAT];
     seedCanvasWithActivePane(tabs, CHAT.instanceId, "other-group");
-    useEpicCanvasStore.setState((state) => ({
-      ...state,
-      openTabOrder: [VIEW_TAB_ID],
-    }));
-    const ref: TabRef = { kind: "epic", id: VIEW_TAB_ID };
-    useTabsStore.setState((state) => ({
-      ...state,
-      items: [{ kind: "tab" as const, id: `tab:${ref.kind}:${ref.id}`, ref }],
-      activeItemId: `tab:${ref.kind}:${ref.id}`,
-      stripOrder: [ref],
-    }));
+    seedHostedTopLevelTab();
     resetTileSurfaceEnvironmentRegistryForTesting();
-    const openEpicHandle = {} as OpenEpicStoreHandle;
-
     render(
-      <EpicSessionContext.Provider value={openEpicHandle}>
-        <TooltipProvider>
-          <PaneVisibilityContext.Provider value>
-            <TabGroupView
-              epicId="epic-1"
-              tabId={VIEW_TAB_ID}
-              pane={pane(tabs, CHAT.instanceId)}
-            />
-            <StableTileSurfaceHost
-              renderRecordBody={() => (
-                <button type="button" data-testid="hosted-focus-owner">
-                  Hosted action
-                </button>
-              )}
-            />
-          </PaneVisibilityContext.Provider>
-        </TooltipProvider>
-      </EpicSessionContext.Provider>,
+      hostedGroupView(
+        () => (
+          <button type="button" data-testid="hosted-focus-owner">
+            Hosted action
+          </button>
+        ),
+        undefined,
+      ),
     );
 
     const hostedControl = await screen.findByTestId("hosted-focus-owner");

@@ -44,6 +44,7 @@ import {
   useRef,
   useSyncExternalStore,
   Suspense,
+  type PointerEvent,
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
@@ -63,10 +64,13 @@ import {
   type TileSurfaceRect,
 } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 import {
+  HOSTED_TILE_RECORD_SELECTOR,
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
   HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
 } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
+import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
+import { claimHostedPaneActivation } from "@/components/epic-canvas/pane-activation";
 
 export interface StableTileSurfaceHostProps {
   readonly renderRecordBody: (
@@ -89,12 +93,29 @@ export function StableTileSurfaceHost(
     },
     [],
   );
+  const claimHostedPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const { target } = event;
+      if (!(target instanceof Element)) return;
+      const ownership = resolveHostedTileOwnership(target);
+      if (ownership === null) return;
+      // Descendant preventDefault does not suppress claims, matching the
+      // physical capture path; the deferred attribute is the opt-out.
+      claimHostedPaneActivation(ownership.viewTabId, ownership.paneId, {
+        defaultPrevented: event.defaultPrevented,
+        scope: target.closest(HOSTED_TILE_RECORD_SELECTOR),
+        target,
+      });
+    },
+    [],
+  );
 
   return (
     <div
       ref={registerHostElement}
       data-testid="stable-tile-surface-host"
       className="pointer-events-none absolute inset-0 z-0"
+      onPointerDownCapture={claimHostedPointerDown}
     >
       {Array.from(memberInstanceIds, (instanceId) => (
         <TileSurfaceRecord

@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   PaneActivationFocusIntentContext,
+  registerHostedPaneActivationClaim,
   usePaneActivationOwnership,
 } from "@/components/epic-canvas/pane-activation";
 import { cn } from "@/lib/utils";
@@ -248,18 +249,12 @@ export const TabGroupView = memo(function TabGroupView(
     [parentPaneFocusProbe],
   );
 
+  useLayoutEffect(
+    () => registerHostedPaneActivationClaim(tabId, pane.id, claimPointerDown),
+    [claimPointerDown, pane.id, tabId],
+  );
+
   useEffect(() => {
-    const claimHostedPointerDown = (event: globalThis.PointerEvent): void => {
-      const { target } = event;
-      if (!(target instanceof Element)) return;
-      const ownership = resolveHostedTileOwnership(target);
-      if (ownership?.paneId !== pane.id) return;
-      claimPointerDown({
-        defaultPrevented: event.defaultPrevented,
-        scope: target.closest(HOSTED_TILE_RECORD_SELECTOR),
-        target,
-      });
-    };
     const claimHostedFocus = (event: globalThis.FocusEvent): void => {
       const { target } = event;
       if (!(target instanceof Element)) return;
@@ -272,17 +267,14 @@ export const TabGroupView = memo(function TabGroupView(
       });
     };
     // Hosted records are physical siblings of the pane root, so its React
-    // capture handlers cannot see these gestures. Reuse the current pane
-    // activation owner instead of reviving the older parallel deferred-click
-    // state machine; its document gesture ledger retains stopped-propagation,
-    // pointer-cancel, focus-intent, and next-task completion behavior.
-    document.addEventListener("pointerdown", claimHostedPointerDown);
+    // focus capture handler cannot see them. Pointer claims are dispatched
+    // from the surface plane's capture handler; focus keeps this document
+    // bridge because focus ownership has no gesture-ordering dependency.
     document.addEventListener("focusin", claimHostedFocus);
     return () => {
-      document.removeEventListener("pointerdown", claimHostedPointerDown);
       document.removeEventListener("focusin", claimHostedFocus);
     };
-  }, [claimFocus, claimPointerDown, pane.id]);
+  }, [claimFocus, pane.id]);
   const handleSplitFromMenu = useCallback(
     (
       groupId: string,
