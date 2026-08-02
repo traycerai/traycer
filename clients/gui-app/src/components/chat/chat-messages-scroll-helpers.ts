@@ -303,6 +303,9 @@ export function chatAnchorScrollCaptureShouldCancel(
 
 export type ChatWheelVerticalDirection = "down" | "up" | "ambiguous";
 
+export type ChatWheelFollowIntent =
+  "preserve-follow" | "depart" | "approach-live-edge";
+
 /**
  * `WheelEvent.deltaY`'s SIGN convention (positive = scrolling toward the
  * content's end) is invariant across all three `deltaMode` values (pixel/
@@ -342,6 +345,11 @@ export function chatWheelVerticalDirection(
  * every other non-following mode. Only `following-end` - where "at the live
  * edge" and "at the true content end" coincide - gets the exemption.
  *
+ * The result is an intent transition rather than a cancellation boolean:
+ * a downward gesture away from the edge arms a later strict-edge resume,
+ * while upward/ambiguous input explicitly disarms it. This keeps physical
+ * edge geometry from silently recreating reader intent after departure.
+ *
  * `isAtLiveEdge` and `isFollowingEnd` are both expected to be FRESH reads
  * taken at the moment the wheel fires (LegendList's own small-epsilon
  * `getState().isAtEnd`, the same strict signal ticket 11 uses for "did the
@@ -355,14 +363,34 @@ export function chatWheelVerticalDirection(
  * momentary elastic overshoot past the clamped edge still reads as "at the
  * edge", so it does not cancel either.
  */
-export function chatWheelShouldCancelLiveFollow(
+export function resolveChatWheelFollowIntent(
   deltaY: number,
   isAtLiveEdge: boolean,
   isFollowingEnd: boolean,
-): boolean {
+): ChatWheelFollowIntent {
   const direction = chatWheelVerticalDirection(deltaY);
-  if (direction === "down" && isFollowingEnd) return !isAtLiveEdge;
-  return true;
+  if (direction !== "down") return "depart";
+  if (isFollowingEnd && isAtLiveEdge) return "preserve-follow";
+  return "approach-live-edge";
+}
+
+/**
+ * Touch content moves opposite the finger: decreasing clientY scrolls toward
+ * the transcript end, while increasing/unchanged clientY is departure or
+ * ambiguous and therefore cannot authorize follow reacquisition.
+ */
+export function resolveChatTouchFollowIntent(
+  previousClientY: number | null,
+  currentClientY: number | null,
+): Exclude<ChatWheelFollowIntent, "preserve-follow"> {
+  if (
+    previousClientY !== null &&
+    currentClientY !== null &&
+    currentClientY < previousClientY
+  ) {
+    return "approach-live-edge";
+  }
+  return "depart";
 }
 
 export function buildMessageIdToIndex(
@@ -707,6 +735,25 @@ export function viewportActiveUserMessageId(
     selectActiveUserMessageId(messages, viewportRowMessageId, false) ??
     viewportRowMessageId
   );
+}
+
+/**
+ * Resolves the actual measured transcript row at the viewport reading line.
+ * Unlike `viewportActiveUserMessageId`, this deliberately does not collapse
+ * an assistant/tool/A2A row back to the preceding human query. Scroll
+ * restoration needs the physical row the reader was inside so its saved
+ * pixel offset remains local to that row, including for very tall replies.
+ */
+export function viewportAnchorMessageId(
+  state: ChatViewportAnchorListState,
+  messages: ReadonlyArray<ChatMessageModel>,
+): string | null {
+  const rowIndex = chatViewportAnchorRowIndex(
+    state,
+    messages.length,
+    VIEWPORT_ACTIVE_ANCHOR_OFFSET_PX,
+  );
+  return rowIndex === null ? null : (messages[rowIndex]?.id ?? null);
 }
 
 // --- Edge-mutation classification -------------------------------------------

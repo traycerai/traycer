@@ -195,14 +195,12 @@ export interface ChatTimelineProps {
    */
   readonly initialScrollAtEnd?: boolean;
   /**
-   * Ticket 5: exact restored free-scrolling position (the saved anchor row +
-   * pixel offset), passed straight through as LegendList's own
-   * `initialScrollIndex` bootstrap - the same measurement-aware convergence
-   * path `initialScrollAtEnd` uses, so a deep anchor past variable-height rows
-   * still lands correctly once real heights replace the `estimatedItemSize`
-   * guess (verified against the installed @legendapp/list 3.2.0 source, not
-   * just its type declarations). `null` for the ordinary fresh-open/no-restore
-   * case - `initialScrollAtEnd` or the anchor engine own the DOM position then.
+   * Ticket 5: restored row bootstrap, passed straight through as LegendList's
+   * own `initialScrollIndex`. For free-scrolling this carries the saved pixel
+   * offset and self-corrects as variable-height rows are measured. For a
+   * restored new-turn session it makes a deep semantic query row measurable;
+   * the anchor engine then owns the exact offset and reply reserve. `null` for
+   * the ordinary fresh-open/no-restore case.
    */
   readonly initialScrollIndex?: ChatTimelineInitialScrollAnchor | null;
   /**
@@ -212,8 +210,9 @@ export interface ChatTimelineProps {
    * sit `anchorOffset` px from the viewport top while its reply streams in.
    */
   readonly anchorMessageId?: string | null;
-  /** Pixel offset from the viewport top for the anchored row (decision #12-13:
-   *  flat 16px + the controller's live pinned-stack height). */
+  /** Pixel offset from the viewport top for the anchored row. The controller
+   *  keeps it at least as large as the measured fade/header so the query is
+   *  fully visible while its reply streams below. */
   readonly anchorOffset?: number;
   readonly onAnchorReady?: (messageId: string, anchorIndex: number) => void;
   readonly onAnchorSizeChanged?: (messageId: string, size: number) => void;
@@ -375,7 +374,6 @@ export const ChatTimeline = memo(function ChatTimeline({
     handleAnchorSizeChanged,
     rows,
   ]);
-
   const handleScroll = useCallback(() => {
     const state = listRef.current?.getState();
     const isAtEnd = resolveChatTimelineIsAtEnd(state);
@@ -435,11 +433,10 @@ export const ChatTimeline = memo(function ChatTimeline({
         getItemType={chatTimelineGetItemType}
         renderItem={renderItem}
         estimatedItemSize={90}
-        // `isNearEnd` (read via resolveChatTimelineIsAtEnd) is computed by
-        // LegendList from `onEndReachedThreshold`, NOT `maintainScrollAtEndThreshold`
-        // - the installed 3.2.0 defaults `onEndReachedThreshold` to 0.5 (50% of
-        // scroll length), not the 10% decision #5 assumes. Set it explicitly;
-        // verified against the installed package source, not its type doc.
+        // Keep LegendList's proximity threshold explicit for onEndReached and
+        // presentation consumers. Follow ownership deliberately reads only
+        // strict `isAtEnd` via resolveChatTimelineIsAtEnd; this 10% band can
+        // never re-attach a detached reader.
         onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
         initialScrollAtEnd={initialScrollAtEnd}
         {...(initialScrollIndex !== null ? { initialScrollIndex } : {})}
