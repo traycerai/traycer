@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
   useRouter,
@@ -33,6 +33,8 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
+import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
+import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -82,6 +84,7 @@ export function useEpicRouteSynchronization(
     (s) => s.applyNestedRouteFocus,
   );
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const [nestedRouteRetryToken, setNestedRouteRetryToken] = useState(0);
   const pendingCreateArtifactIds = useEpicCanvasStore(
     (s) => s.pendingCreateArtifactIds,
   );
@@ -137,6 +140,17 @@ export function useEpicRouteSynchronization(
     if (!hasRestoredCanvas) {
       return;
     }
+    const deferralMs = getNestedRouteApplicationDeferralMs(
+      epicId,
+      tabId,
+      nestedRouteTarget,
+    );
+    if (deferralMs !== null) {
+      const timeout = window.setTimeout(() => {
+        setNestedRouteRetryToken((token) => token + 1);
+      }, deferralMs);
+      return () => window.clearTimeout(timeout);
+    }
 
     if (nestedRouteTarget === null) {
       if (
@@ -181,6 +195,7 @@ export function useEpicRouteSynchronization(
     tabId,
     currentNestedTarget,
     applyNestedRouteFocus,
+    nestedRouteRetryToken,
   ]);
 
   // The nested-route target we last moved DOM focus to. This effect re-runs on
@@ -506,6 +521,9 @@ function focusNestedRouteTarget(
       ? findActivePaneElement(target.paneId)
       : findSelectedTileElement(target.tileInstanceId);
   if (element === null) {
+    return;
+  }
+  if (!focusPrimaryEditor && shouldYieldPaneActivationRouteFocus(element)) {
     return;
   }
   if (focusPrimaryEditor) {

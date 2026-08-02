@@ -350,6 +350,28 @@ describe("PrRow status badges", () => {
     expect(review.querySelector(".truncate")).not.toBeNull();
   });
 
+  // The reported bug: at a width past the review badge's drop point but above
+  // the checks badge's own, "1 running" kept its full width and painted over
+  // the comment count and timestamp. Those are pinned right and `shrink-0` by
+  // design, and the column holding the badges is `min-w-0` with overflow
+  // visible - so anything in it that cannot shrink overflows ONTO them rather
+  // than pushing them. Every badge in that column except the identity one has
+  // to be able to give width back.
+  it("lets the checks badge shrink instead of overflowing onto the trailing slot", () => {
+    renderRow({
+      checksRollup: { success: 0, failure: 0, pending: 1, total: 1 },
+      commentCount: 4,
+    });
+
+    const checks = screen.getByTestId("pr-row-checks");
+    expect(checks.className).toContain("shrink");
+    expect(checks.className).not.toContain("shrink-0");
+    expect(checks.className).toContain("min-w-0");
+    // `shrink` alone only makes the BOX narrower - without a truncating child
+    // the label still spills out of it.
+    expect(checks.querySelector(".truncate")).not.toBeNull();
+  });
+
   it("shows no CI or review badge when a PR has neither", () => {
     renderRow({});
 

@@ -2,22 +2,24 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type RefObject,
 } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
+import { FoldVertical, UnfoldVertical } from "lucide-react";
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
+  CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_MIN_ITEMS,
-  resolveChatTurnMinimapHasPersistentGutter,
   resolveChatTurnMinimapHeightStyle,
-  resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapIndexFromPointer,
   resolveChatTurnMinimapInteractiveWidth,
-  resolveChatTurnMinimapRowInView,
-  resolveChatTurnMinimapTopPercent,
+  resolveChatTurnMinimapRowViewportDistance,
+  resolveChatTurnMinimapTopStyle,
+  type ChatTurnMinimapListState,
 } from "@/components/chat/chat-turn-minimap-logic";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { cn } from "@/lib/utils";
@@ -26,6 +28,14 @@ import {
   saveChatTurnMinimapActiveEntry,
 } from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import type { ChatTurnMinimapSide } from "@/stores/settings/settings-store";
+import { Button } from "@/components/ui/button";
+import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export interface ChatTurnMinimapProps {
   /** Same row array LegendList renders - rail indices key directly into it. */
@@ -38,8 +48,8 @@ export interface ChatTurnMinimapProps {
    *  (not a number prop) since it updates via LegendList's own metrics
    *  callback, independent of this component's own render cycle. */
   readonly topOffsetAdjustmentRef: RefObject<number>;
-  /** Measures the pane's full width, to size the gutter/hit-strip against
-   *  the centered content column (the transcript's clip-region wrapper). */
+  /** Observes the transcript clip-region wrapper so pane resizes refresh
+   *  in-view strip highlighting even when no scroll event fires. */
   readonly viewportRef: RefObject<HTMLElement | null>;
   /** Composer/queue dock height overlaying the bottom of the transcript
    *  (decision #3, #13) - the rail's own box shrinks by this amount rather
@@ -59,6 +69,8 @@ export interface ChatTurnMinimapProps {
    *  against - tab-key while switching away and back, chat-key across a
    *  full close/reopen. */
   readonly identity: ChatTabPersistenceIdentity;
+  /** Persisted transcript-edge preference. Right is the app default. */
+  readonly side: ChatTurnMinimapSide;
 }
 
 interface ChatTurnMinimapItem {
@@ -154,7 +166,6 @@ function resolveChatTurnMinimapStripWidthClassName(
 interface ChatTurnMinimapActiveState {
   readonly resolvedActiveIndex: number | null;
   readonly activeItem: ChatTurnMinimapItem | null;
-  readonly activeTopPercent: number;
 }
 
 /** Kept extracted for the same complexity-ceiling reason as the two
@@ -166,26 +177,239 @@ function resolveChatTurnMinimapActiveState(
   const resolvedActiveIndex =
     activeIndex !== null && activeIndex < items.length ? activeIndex : null;
   if (resolvedActiveIndex === null) {
-    return { resolvedActiveIndex: null, activeItem: null, activeTopPercent: 0 };
+    return { resolvedActiveIndex: null, activeItem: null };
   }
   return {
     resolvedActiveIndex,
     activeItem: items[resolvedActiveIndex] ?? null,
-    activeTopPercent: resolveChatTurnMinimapTopPercent(
-      resolvedActiveIndex,
-      items.length,
-    ),
   };
 }
 
+interface ChatTurnMinimapViewportHighlightResolution {
+  readonly closestMessageId: string | null;
+  readonly hasInViewItem: boolean;
+}
+
+function updateChatTurnMinimapStripDataset(
+  strip: HTMLSpanElement,
+  key: "inView" | "proximity",
+  enabled: boolean,
+): void {
+  const nextValue = enabled ? "true" : "false";
+  if (strip.dataset[key] !== nextValue) {
+    strip.dataset[key] = nextValue;
+  }
+}
+
+function refreshChatTurnMinimapViewportHighlights(
+  state: ChatTurnMinimapListState,
+  items: ReadonlyArray<ChatTurnMinimapItem>,
+  stripMap: ReadonlyMap<string, HTMLSpanElement>,
+): ChatTurnMinimapViewportHighlightResolution {
+  let hasInViewItem = false;
+  let closestMessageId: string | null = null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const item of items) {
+    const strip = stripMap.get(item.id);
+    if (!strip) continue;
+    const distance = resolveChatTurnMinimapRowViewportDistance(
+      state,
+      item.rowIndex,
+    );
+    const inView = distance !== null && distance < 0;
+    updateChatTurnMinimapStripDataset(strip, "inView", inView);
+    if (inView) {
+      hasInViewItem = true;
+      continue;
+    }
+    if (distance === null || distance >= closestDistance) continue;
+    closestDistance = distance;
+    closestMessageId = item.id;
+  }
+  return { closestMessageId, hasInViewItem };
+}
+
+function syncChatTurnMinimapProximityHighlight(
+  stripMap: ReadonlyMap<string, HTMLSpanElement>,
+  previousMessageId: string | null,
+  nextMessageId: string | null,
+): void {
+  if (previousMessageId !== nextMessageId && previousMessageId !== null) {
+    const previousStrip = stripMap.get(previousMessageId);
+    if (previousStrip) {
+      updateChatTurnMinimapStripDataset(previousStrip, "proximity", false);
+    }
+  }
+  if (nextMessageId === null) return;
+  const nextStrip = stripMap.get(nextMessageId);
+  if (nextStrip) {
+    updateChatTurnMinimapStripDataset(nextStrip, "proximity", true);
+  }
+}
+
+interface ChatTurnMinimapPreviewProps {
+  readonly activeItem: ChatTurnMinimapItem;
+  readonly activeItemIndex: number;
+  readonly activeTooltipTranslate: string;
+  readonly expanded: boolean;
+  readonly items: ReadonlyArray<ChatTurnMinimapItem>;
+  readonly onSelect: (messageId: string) => void;
+  readonly onToggleExpanded: () => void;
+  readonly side: ChatTurnMinimapSide;
+}
+
+function ChatTurnMinimapItemText(props: {
+  readonly item: ChatTurnMinimapItem;
+  readonly mode: "list" | "preview";
+}) {
+  const { item, mode } = props;
+  return (
+    <>
+      <span
+        className={cn(
+          "block max-w-full text-ui-xs font-medium leading-5",
+          mode === "list"
+            ? "line-clamp-3 whitespace-normal break-words"
+            : "overflow-hidden text-ellipsis whitespace-nowrap",
+        )}
+        data-chat-turn-minimap-user-text=""
+      >
+        {item.userText ?? "User message"}
+      </span>
+      {mode === "preview" && item.assistantText !== null ? (
+        <span
+          className="mt-1 line-clamp-3 text-muted-foreground text-ui-xs leading-5"
+          data-chat-turn-minimap-assistant=""
+        >
+          {item.assistantText}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
+  const {
+    activeItem,
+    activeItemIndex,
+    activeTooltipTranslate,
+    expanded,
+    items,
+    onSelect,
+    onToggleExpanded,
+    side,
+  } = props;
+  return (
+    <div
+      className={cn(
+        "pointer-events-auto absolute w-[min(20rem,calc(100vw-3rem))] select-none text-left text-popover-foreground",
+        side === "left" ? "left-8" : "right-8",
+      )}
+      data-chat-turn-minimap-preview=""
+      onMouseMove={(event) => event.stopPropagation()}
+      style={{
+        top: expanded
+          ? "50%"
+          : resolveChatTurnMinimapTopStyle(activeItemIndex, items.length),
+        transform: `translateY(${expanded ? "-50%" : activeTooltipTranslate})`,
+      }}
+    >
+      {expanded ? (
+        <div className="relative flex max-h-[min(60vh,calc(100cqh_-_1rem))] flex-col overflow-hidden rounded-xl border border-border/60 bg-popover shadow-lg">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Collapse message list"
+                className="absolute top-2 right-2 z-10 text-muted-foreground/60 hover:text-foreground active:bg-muted/80 active:text-foreground"
+                onClick={() => {
+                  onToggleExpanded();
+                }}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <FoldVertical aria-hidden="true" className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>
+              Collapse message list
+            </TooltipContent>
+          </Tooltip>
+          <div
+            className="min-h-0 overflow-y-auto p-2"
+            data-chat-turn-minimap-list-scroll=""
+          >
+            <div className="flex flex-col gap-0.5">
+              {items.map((item, index) => (
+                <button
+                  aria-label={`Jump to message: ${item.userText ?? "User message"}`}
+                  aria-current={index === activeItemIndex ? "true" : undefined}
+                  className={cn(
+                    "w-full cursor-pointer rounded-lg px-3 py-2.5 text-left transition-[background-color,color,box-shadow] duration-100 first:pr-11 hover:bg-foreground/[0.08] focus-visible:bg-foreground/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+                    index === activeItemIndex
+                      ? "bg-foreground/[0.13] text-foreground ring-1 ring-inset ring-foreground/[0.08] hover:bg-foreground/[0.16]"
+                      : "bg-transparent text-popover-foreground",
+                  )}
+                  data-active={index === activeItemIndex ? "true" : "false"}
+                  data-chat-turn-minimap-list-item=""
+                  data-message-id={item.id}
+                  key={item.id}
+                  onClick={() => {
+                    onSelect(item.id);
+                  }}
+                  type="button"
+                >
+                  <ChatTurnMinimapItemText item={item} mode="list" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="relative overflow-hidden rounded-xl border border-border/60 bg-popover shadow-lg">
+          <button
+            aria-label={`Jump to message: ${activeItem.userText ?? "User message"}`}
+            className="block w-full cursor-pointer select-none p-3 pr-11 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+            data-chat-turn-minimap-card=""
+            onClick={() => {
+              onSelect(activeItem.id);
+            }}
+            type="button"
+          >
+            <ChatTurnMinimapItemText item={activeItem} mode="preview" />
+          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Expand all messages"
+                className="absolute top-2 right-2 text-muted-foreground/60 hover:text-foreground active:bg-muted/80 active:text-foreground"
+                onClick={() => {
+                  onToggleExpanded();
+                }}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <UnfoldVertical aria-hidden="true" className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>
+              Expand all messages
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
- * Left-rail turn minimap (decision #20).
- * One evenly spaced strip per HUMAN user turn; hover/focus opens a 22rem
+ * Configurable transcript-edge turn minimap (decision #20).
+ * One evenly spaced strip per HUMAN user turn; hover/focus opens a 20rem
  * viewport-capped preview (user text + the turn's last assistant text); a
- * single hit-target button maps pointer Y / arrow keys to the nearest turn.
- * Fine-pointer only; the collapsed strip is capped to the actual side
- * gutter and goes fully inert (not just visually collapsed) at 0px so it
- * never intercepts clicks over the centered content column.
+ * single hit-target control maps pointer Y / arrow keys to the nearest turn.
+ * Fine-pointer only; the compact edge target stays visible and interactive
+ * at every pane width, including tiled epic-canvas layouts.
  */
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const {
@@ -195,6 +419,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     listRef,
     messages,
     onSelect,
+    side,
     topOffsetAdjustmentRef,
     viewportRef,
   } = props;
@@ -206,11 +431,14 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     const index = items.findIndex((item) => item.id === savedActiveMessageId);
     return index === -1 ? null : index;
   });
-  const [hasPersistentGutter, setHasPersistentGutter] = useState(false);
-  const [hitStripWidth, setHitStripWidth] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  const [interactionStarted, setInteractionStarted] = useState(false);
+  const interactionRegionRef = useRef<HTMLDivElement | null>(null);
+  const hitStripRef = useRef<HTMLButtonElement | null>(null);
+  const proximityMessageIdRef = useRef<string | null>(null);
 
-  // Gutter/hit-strip geometry and in-view highlighting: recomputed on mount
-  // and whenever the pane's own box changes (zoom or split resize). A
+  // In-view highlighting is refreshed on mount and whenever the pane's own
+  // box changes (zoom or split resize). A
   // height-only resize changes LegendList's scrollLength without necessarily
   // producing either a scroll event or a row remeasurement.
   useEffect(() => {
@@ -218,12 +446,6 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     if (viewportElement === null) return;
 
     const measure = (): void => {
-      const viewportWidth = viewportElement.getBoundingClientRect().width;
-      setHasPersistentGutter((current) => {
-        const next = resolveChatTurnMinimapHasPersistentGutter(viewportWidth);
-        return current === next ? current : next;
-      });
-      setHitStripWidth(resolveChatTurnMinimapHitStripWidth(viewportWidth));
       inViewRefreshRef.current();
     };
 
@@ -238,8 +460,10 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   // In-view strip highlighting from LegendList's own measured positions - no
   // DOM rect probing (jsdom/perf lesson; the old reading-line probe died on
-  // exactly this). Written directly to each strip's dataset, bypassing React
-  // state, so a scroll tick never triggers a re-render of the whole rail. O2
+  // exactly this). One O(items) geometry pass with no per-item allocation
+  // handles both visibility and proximity. Dataset writes are diffed and
+  // bypass React state, so a scroll tick never re-renders the rail or repeats
+  // style work for unchanged markers. O2
   // (ticket 16 listener consolidation): this used to run off a second scroll listener
   // this component attached to the scrollable node itself (rAF-polling
   // attach + native listener + detach, duplicating a lifecycle ChatTimeline
@@ -266,15 +490,25 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       ),
       topOffsetAdjustment: topOffsetAdjustmentRef.current,
     };
-    for (const item of items) {
-      const strip = stripMap.get(item.id);
-      if (!strip) continue;
-      strip.dataset.inView = resolveChatTurnMinimapRowInView(
-        state,
-        item.rowIndex,
-      )
-        ? "true"
-        : "false";
+    const resolution = refreshChatTurnMinimapViewportHighlights(
+      state,
+      items,
+      stripMap,
+    );
+    const fallbackMessageId = items.length === 0 ? null : items[0].id;
+    const nextProximityMessageId = resolution.hasInViewItem
+      ? null
+      : (resolution.closestMessageId ??
+        proximityMessageIdRef.current ??
+        fallbackMessageId);
+    const previousProximityMessageId = proximityMessageIdRef.current;
+    syncChatTurnMinimapProximityHighlight(
+      stripMap,
+      previousProximityMessageId,
+      nextProximityMessageId,
+    );
+    if (previousProximityMessageId !== nextProximityMessageId) {
+      proximityMessageIdRef.current = nextProximityMessageId;
     }
   }, [bottomInset, items, listRef, stripMap, topOffsetAdjustmentRef]);
 
@@ -296,8 +530,10 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   // ceiling. Inlining this 3-branch resolution pushed it over, so it stays
   // extracted; the true one-liners (aria-label, wrapper opacity) below ARE
   // inlined.
-  const { resolvedActiveIndex, activeItem, activeTopPercent } =
-    resolveChatTurnMinimapActiveState(items, activeIndex);
+  const { resolvedActiveIndex, activeItem } = resolveChatTurnMinimapActiveState(
+    items,
+    activeIndex,
+  );
   const activeTooltipTranslate = resolveChatTurnMinimapTooltipTranslate(
     resolvedActiveIndex,
     items.length,
@@ -334,6 +570,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   const updateActiveIndexFromPointer = useCallback(
     (event: ReactMouseEvent<HTMLElement>): void => {
+      setInteractionStarted(true);
       setActiveIndex(resolveActiveIndexFromPointer(event));
     },
     [resolveActiveIndexFromPointer],
@@ -349,16 +586,10 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     [items.length],
   );
 
-  const isInert = hitStripWidth <= 0;
-
   const handleHitStripClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>): void => {
-      // Real browsers already refuse focus/pointer/keyboard dispatch into an
-      // `inert` subtree; this guard makes that non-negotiable rather than
-      // relying solely on the attribute (M3b - the old minimap's hard-won
-      // zero-budget fix went the same belt-and-suspenders route).
-      if (isInert) return;
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
+      setInteractionStarted(true);
       const nextIndex = resolveActiveIndexFromPointer(event);
       const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
       if (nextItem) {
@@ -366,12 +597,13 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       }
       event.currentTarget.blur();
     },
-    [isInert, items, onSelect, resolveActiveIndexFromPointer],
+    [items, onSelect, resolveActiveIndexFromPointer],
   );
 
   const handleHitStripKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
-      if (isInert) return;
+      if (chatTurnMinimapEventTargetsPreview(event.target)) return;
+      setInteractionStarted(true);
       if (event.key === "ArrowDown") {
         event.preventDefault();
         moveActiveIndex(1);
@@ -399,7 +631,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
         }
       }
     },
-    [activeItem, isInert, items.length, moveActiveIndex, onSelect],
+    [activeItem, items.length, moveActiveIndex, onSelect],
   );
 
   const handleHitStripMouseDown = useCallback(
@@ -410,108 +642,171 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     [],
   );
 
+  const closeInteraction = useCallback((): void => {
+    setExpanded(false);
+    setInteractionStarted(false);
+    setActiveIndex(null);
+  }, []);
+
+  const handleInteractionBlur = useCallback(
+    (event: FocusEvent): void => {
+      if (
+        event.relatedTarget instanceof Node &&
+        interactionRegionRef.current?.contains(event.relatedTarget) === true
+      ) {
+        return;
+      }
+      closeInteraction();
+    },
+    [closeInteraction],
+  );
+
+  const handleInteractionKeyDown = useCallback(
+    (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (expanded) {
+        setExpanded(false);
+        hitStripRef.current?.focus();
+        return;
+      }
+      closeInteraction();
+      hitStripRef.current?.blur();
+    },
+    [closeInteraction, expanded],
+  );
+
+  useEffect(() => {
+    const interactionRegion = interactionRegionRef.current;
+    if (interactionRegion === null) return;
+    interactionRegion.addEventListener("focusout", handleInteractionBlur);
+    interactionRegion.addEventListener("keydown", handleInteractionKeyDown);
+    interactionRegion.addEventListener("mouseleave", closeInteraction);
+    return () => {
+      interactionRegion.removeEventListener("focusout", handleInteractionBlur);
+      interactionRegion.removeEventListener(
+        "keydown",
+        handleInteractionKeyDown,
+      );
+      interactionRegion.removeEventListener("mouseleave", closeInteraction);
+    };
+  }, [closeInteraction, handleInteractionBlur, handleInteractionKeyDown]);
+
+  const handlePreviewSelect = useCallback(
+    (messageId: string): void => {
+      const index = items.findIndex((item) => item.id === messageId);
+      if (index !== -1) setActiveIndex(index);
+      onSelect(messageId);
+    },
+    [items, onSelect],
+  );
+
+  const toggleExpanded = useCallback((): void => {
+    setInteractionStarted(true);
+    setExpanded((current) => !current);
+  }, []);
+
   if (items.length < CHAT_TURN_MINIMAP_MIN_ITEMS) {
     return null;
   }
 
   const safeBottomInset = Math.max(0, Math.ceil(bottomInset));
+  const previewVisible = interactionStarted && activeItem !== null;
+  const interactiveWidth = resolveChatTurnMinimapInteractiveWidth(
+    CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
+    previewVisible || expanded,
+  );
 
   return (
     <div
       className={cn(
-        "group/chat-turn-minimap pointer-events-none absolute top-0 left-0 z-40 hidden w-18 [@media(pointer:fine)]:block",
-        hasPersistentGutter
-          ? "opacity-100"
-          : "opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100",
+        "group/chat-turn-minimap pointer-events-none absolute top-0 z-40 hidden w-18 opacity-100 [container-type:size] [@media(pointer:fine)]:block",
+        side === "left" ? "left-0" : "right-0",
       )}
+      data-side={side}
       data-testid="chat-turn-minimap"
-      data-persistent-gutter={hasPersistentGutter ? "true" : "false"}
       style={{ bottom: safeBottomInset }}
     >
       <div className="relative h-full w-full select-none">
-        <button
-          aria-hidden={isInert ? "true" : undefined}
-          aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
+        <div
           className={cn(
-            "absolute top-1/2 left-3 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
-            // The strip is width-capped to the side gutter so it never
-            // overlays the centered content column; with no usable gutter
-            // it goes fully inert, not just visually collapsed (M3b - the
-            // old minimap's hard-won zero-budget fix).
-            isInert ? "pointer-events-none" : "pointer-events-auto",
+            "pointer-events-auto absolute top-1/2 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            side === "left" ? "left-3" : "right-3",
           )}
-          data-testid="chat-turn-minimap-hit-strip"
-          {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
-          inert={isInert}
-          onBlur={() => setActiveIndex(null)}
-          onClick={handleHitStripClick}
-          onFocus={() => setActiveIndex((current) => current ?? 0)}
-          onKeyDown={handleHitStripKeyDown}
-          onMouseDown={handleHitStripMouseDown}
-          onMouseLeave={() => setActiveIndex(null)}
-          onMouseMove={updateActiveIndexFromPointer}
-          style={{
-            height: resolveChatTurnMinimapHeightStyle(items.length),
-            width: resolveChatTurnMinimapInteractiveWidth(
-              hitStripWidth,
-              activeItem !== null,
-            ),
-          }}
-          tabIndex={isInert ? -1 : 0}
-          type="button"
+          aria-label="Message minimap controls"
+          data-chat-turn-minimap-interaction-region=""
+          {...paneActivationDeferProps}
+          ref={interactionRegionRef}
+          role="group"
+          style={{ height: resolveChatTurnMinimapHeightStyle(items.length) }}
         >
-          <div className="absolute top-0 left-3 h-full w-px bg-border/15" />
-          {items.map((item, index) => {
-            const top = `${resolveChatTurnMinimapTopPercent(index, items.length)}%`;
-            const activeDistance =
-              resolvedActiveIndex === null
-                ? null
-                : Math.abs(index - resolvedActiveIndex);
-            return (
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "pointer-events-none absolute left-0 h-0.5 -translate-y-1/2 rounded-full bg-muted-foreground/35 transition-[background-color,width] duration-150 data-[in-view=true]:bg-foreground/90",
-                  resolveChatTurnMinimapStripWidthClassName(activeDistance),
-                )}
-                data-chat-turn-minimap-strip=""
-                data-in-view="false"
-                data-message-id={item.id}
-                key={item.id}
-                ref={(node) => {
-                  if (node) {
-                    stripMap.set(item.id, node);
-                  } else {
-                    stripMap.delete(item.id);
-                  }
-                }}
-                style={{ top }}
-              />
-            );
-          })}
-          {activeItem === null ? null : (
-            <span
-              className="pointer-events-auto absolute left-8 w-[min(20rem,calc(100vw-3rem))] cursor-text select-text"
-              data-chat-turn-minimap-preview=""
-              onMouseMove={(event) => event.stopPropagation()}
-              style={{
-                top: `${activeTopPercent}%`,
-                transform: `translateY(${activeTooltipTranslate})`,
-              }}
-            >
-              <span className="block rounded-xl border border-border/60 bg-popover p-3 text-left text-popover-foreground shadow-lg">
-                <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-ui-xs font-medium leading-5">
-                  {activeItem.userText ?? "User message"}
-                </span>
-                {activeItem.assistantText === null ? null : (
-                  <span className="mt-1 line-clamp-3 text-muted-foreground text-ui-xs leading-5">
-                    {activeItem.assistantText}
-                  </span>
-                )}
-              </span>
-            </span>
+          <button
+            aria-label="Message minimap"
+            className="pointer-events-auto relative block h-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+            data-chat-turn-minimap-interactive-width={interactiveWidth}
+            data-testid="chat-turn-minimap-hit-strip"
+            {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
+            onClick={handleHitStripClick}
+            onFocus={() => {
+              setInteractionStarted(true);
+              setActiveIndex((current) => current ?? 0);
+            }}
+            onKeyDown={handleHitStripKeyDown}
+            onMouseDown={handleHitStripMouseDown}
+            onMouseMove={(event) => {
+              if (!expanded) updateActiveIndexFromPointer(event);
+            }}
+            ref={hitStripRef}
+            style={{
+              width: interactiveWidth,
+            }}
+            type="button"
+          >
+            {items.map((item, index) => {
+              const top = resolveChatTurnMinimapTopStyle(index, items.length);
+              const activeDistance =
+                resolvedActiveIndex === null
+                  ? null
+                  : Math.abs(index - resolvedActiveIndex);
+              return (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none absolute h-0.5 -translate-y-1/2 rounded-full bg-muted-foreground/35 transition-[background-color,width] duration-150 data-[in-view=true]:bg-foreground/90 data-[proximity=true]:bg-foreground/90",
+                    side === "left" ? "left-0" : "right-0",
+                    resolveChatTurnMinimapStripWidthClassName(activeDistance),
+                  )}
+                  data-chat-turn-minimap-strip=""
+                  data-in-view="false"
+                  data-message-id={item.id}
+                  data-proximity="false"
+                  key={item.id}
+                  ref={(node) => {
+                    if (node) {
+                      stripMap.set(item.id, node);
+                    } else {
+                      stripMap.delete(item.id);
+                    }
+                  }}
+                  style={{ top }}
+                />
+              );
+            })}
+          </button>
+          {!previewVisible ? null : (
+            <ChatTurnMinimapPreview
+              activeItem={activeItem}
+              activeItemIndex={resolvedActiveIndex ?? 0}
+              activeTooltipTranslate={activeTooltipTranslate}
+              expanded={expanded}
+              items={items}
+              onSelect={handlePreviewSelect}
+              onToggleExpanded={toggleExpanded}
+              side={side}
+            />
           )}
-        </button>
+        </div>
       </div>
     </div>
   );

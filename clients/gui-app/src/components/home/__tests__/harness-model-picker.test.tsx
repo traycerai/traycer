@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
 // actions. This unit test renders the picker bare (no RouterProvider), so stub
@@ -114,7 +115,7 @@ import {
   type ProviderCliState,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import type { Key, KeyboardEvent, ReactNode } from "react";
+import { useState, type Key, type KeyboardEvent, type ReactNode } from "react";
 
 interface CatalogHarness extends HarnessOption {
   readonly models: ReadonlyArray<ModelOption>;
@@ -469,6 +470,11 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
+import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import {
   createComposerToolbarStore,
@@ -791,7 +797,10 @@ interface PickerHarness {
   readonly selections: HarnessModelSelection[];
   readonly reasoningChanges: ReasoningLevel[];
   readonly serviceTierChanges: ServiceTier[];
-  readonly element: (disabled: boolean) => ReactNode;
+  readonly element: (
+    disabled: boolean,
+    activityEnabled: boolean | undefined,
+  ) => ReactNode;
 }
 
 function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
@@ -804,7 +813,6 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       selection,
       reasoning: resolvedInput.reasoning ?? "",
       serviceTier: resolvedInput.serviceTier ?? "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
@@ -832,8 +840,13 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       serviceTierChanges.push(state.serviceTier);
     }
   });
-  const element = (disabled: boolean): ReactNode => (
-    <SurfaceActivityProvider active={resolvedInput.activityEnabled ?? true}>
+  const element = (
+    disabled: boolean,
+    activityEnabled: boolean | undefined,
+  ): ReactNode => (
+    <SurfaceActivityProvider
+      active={activityEnabled ?? resolvedInput.activityEnabled ?? true}
+    >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
           store={store}
@@ -852,9 +865,34 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
   return { store, selections, reasoningChanges, serviceTierChanges, element };
 }
 
+function ColdInactivePanePicker(props: { readonly harness: PickerHarness }) {
+  const [active, setActive] = useState(false);
+  const activation = usePaneActivationOwnership({
+    active,
+    activate: () => setActive(true),
+  });
+  return (
+    <PaneActivationFocusIntentContext.Provider value={activation.focusIntent}>
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: active }}
+      >
+        <div
+          data-testid="cold-inactive-pane"
+          data-active={active ? "true" : "false"}
+          onFocusCapture={activation.onFocusCapture}
+          onPointerCancelCapture={activation.onPointerCancelCapture}
+          onPointerDownCapture={activation.onPointerDownCapture}
+        >
+          {props.harness.element(false, active)}
+        </div>
+      </PaneSurfaceActivityContext.Provider>
+    </PaneActivationFocusIntentContext.Provider>
+  );
+}
+
 function renderPicker(input: RenderPickerInput | undefined): PickerHarness {
   const harness = pickerHarness(input);
-  render(harness.element(input?.disabled ?? false));
+  render(harness.element(input?.disabled ?? false, undefined));
   return harness;
 }
 
@@ -902,6 +940,7 @@ describe("<HarnessModelPicker />", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     cleanup();
+    resetPaneActivationFocusIntentsForTests();
     useKeybindingStore.getState().resetAll();
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
@@ -1359,15 +1398,15 @@ describe("<HarnessModelPicker />", () => {
 
   it("closes and blocks selection when disabled while already open", async () => {
     const harness = pickerHarness(undefined);
-    const view = render(harness.element(false));
+    const view = render(harness.element(false, undefined));
 
     await openPicker();
-    view.rerender(harness.element(true));
+    view.rerender(harness.element(true, undefined));
 
     await waitFor(() => {
       expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
     });
-    view.rerender(harness.element(false));
+    view.rerender(harness.element(false, undefined));
 
     expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
     expect(harness.selections).toEqual([]);
@@ -1395,6 +1434,28 @@ describe("<HarnessModelPicker />", () => {
       enabled: false,
       subscribed: false,
     });
+  });
+
+  it("opens on the first click when both pickers are closed and its pane is inactive", async () => {
+    const harness = pickerHarness(undefined);
+    render(<ColdInactivePanePicker harness={harness} />);
+
+    const trigger = screen.getByRole("button", { name: "Select model" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("cold-inactive-pane").dataset.active).toBe(
+      "false",
+    );
+
+    fireEvent.pointerDown(trigger);
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const input = await screen.findByRole("textbox", { name: /^Search/ });
+    expect(input).toBe(document.activeElement);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("cold-inactive-pane").dataset.active).toBe(
+      "true",
+    );
   });
 
   it("keeps provider state warm before opening the picker", () => {
@@ -2128,7 +2189,7 @@ describe("<HarnessModelPicker />", () => {
         profileId: "work-profile",
       },
     });
-    const { container, rerender } = render(harness.element(false));
+    const { container, rerender } = render(harness.element(false, undefined));
 
     expect(screen.getByRole("button", { name: "GPT-5.5, Work" })).toBeDefined();
     await openPickerByTriggerName("GPT-5.5, Work");
@@ -2145,7 +2206,7 @@ describe("<HarnessModelPicker />", () => {
     act(() => {
       harness.store.getState().setReasoning("medium");
     });
-    rerender(harness.element(false));
+    rerender(harness.element(false, undefined));
 
     expect(
       screen.getByRole("button", { name: "GPT-5.5, Personal" }),

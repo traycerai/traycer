@@ -25,7 +25,10 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -76,6 +79,10 @@ import {
   useEpicCanvasStore,
   useIsActiveTile,
 } from "@/stores/epics/canvas/store";
+import {
+  useEpicLeftPanelStore,
+  useLeftPanelSectionCollapsed,
+} from "@/stores/epics/left-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
@@ -192,7 +199,20 @@ function TerminalsPanelBodyLive(props: {
  * every host list update.
  */
 export function TerminalsPanelActions(props: LeftPanelSlotProps) {
-  return <NewTerminalPicker epicId={props.epicId} tabId={props.tabId} />;
+  const collapsed = useLeftPanelSectionCollapsed("terminals");
+  const setPanelSectionCollapsed = useEpicLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
+  const expandBeforeOpen = useCallback(() => {
+    if (collapsed) setPanelSectionCollapsed("terminals", false);
+  }, [collapsed, setPanelSectionCollapsed]);
+  return (
+    <NewTerminalPicker
+      epicId={props.epicId}
+      tabId={props.tabId}
+      onBeforeOpen={expandBeforeOpen}
+    />
+  );
 }
 
 interface TerminalSidebarBodyProps {
@@ -552,10 +572,14 @@ function terminalRowMenuEntries(
   ];
 }
 
-function deriveTerminalLabel(session: CanonicalTerminalSessionInfo): string {
+function deriveTerminalLabel(
+  session:
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+): string {
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
+    currentCwd: "currentCwd" in session ? session.currentCwd : session.cwd,
   });
 }
 

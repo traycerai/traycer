@@ -1021,3 +1021,84 @@ describe("agent.configure v1 <-> v2 hermes-harness response translation", () => 
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
   });
 });
+
+describe("Epic Mode removal — agentMode is RETAINED on the released wires", () => {
+  const LIVE_RESPONSE = {
+    settings: {
+      harnessId: "claude" as const,
+      model: "opus-4.7",
+      profileSelection: { kind: "profile" as const, profileId: "profile-1" },
+      reasoningEffort: "high",
+      fastMode: false,
+      permissionMode: "supervised" as const,
+      agentMode: "regular" as const,
+    },
+    warnings: [],
+  };
+
+  // `agent.configure` v3.0 is RELEASED: its baseline surface requires
+  // `settings.agentMode` on the response, so a payload built from this tree
+  // that omitted it would be rejected outright by an already-shipped peer.
+  // Epic Mode is gone from the PRODUCT, but the key stays on the wire until
+  // the released floor passes this version. The host states the one
+  // remaining mode rather than dropping the field.
+  it("keeps agentMode required on the live configure response", () => {
+    expect(
+      agentConfigureResponseSchema.safeParse({
+        ...LIVE_RESPONSE,
+        settings: Object.fromEntries(
+          Object.entries(LIVE_RESPONSE.settings).filter(
+            ([key]) => key !== "agentMode",
+          ),
+        ),
+      }).success,
+    ).toBe(false);
+
+    const parsed = agentConfigureResponseSchema.parse(LIVE_RESPONSE);
+    expect(parsed.settings.agentMode).toBe("regular");
+  });
+
+  // The field is present on every version in the chain, so no bridge has to
+  // synthesize it - each simply passes through what its input carried. A
+  // legacy "epic" value must survive rather than be normalized away: these
+  // bridges translate an existing wire payload, they do not mint new records.
+  it.each([
+    ["v3.0 -> v2.0", agentConfigureDowngradeV30ToV20],
+    ["v3.0 -> v1.0", agentConfigureDowngradeV30ToV10],
+    ["v2.0 -> v1.0", agentConfigureDowngradeV20ToV10],
+  ])("passes agentMode through unchanged on the frozen %s response", (_label, bridge) => {
+    const result = bridge.downgradeResponse({
+      ...LIVE_RESPONSE,
+      settings: { ...LIVE_RESPONSE.settings, agentMode: "epic" as const },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.settings.agentMode).toBe("epic");
+  });
+
+  // v3.0 is itself released (v1.1.8), so a current client and a v1.1.8 host
+  // both negotiate 3.0 with NO bridge between them. The key must survive the
+  // upgrade or that host rejects the request outright.
+  it("keeps agentMode on the released v3.0 create request", () => {
+    const upgraded = agentCreateUpgradeV20ToV30.upgradeRequest(
+      createAgentRequestSchemaV20.parse({
+        senderAgentId: "agent-1",
+        epicId: "epic-1",
+        name: null,
+        surface: "gui",
+        harnessId: "claude",
+        model: null,
+        agentMode: "regular",
+        reasoningEffort: null,
+        fastMode: null,
+        workspace: null,
+        profileSelection: { kind: "ambient" },
+      }),
+    );
+
+    expect(createAgentRequestSchemaV30.safeParse(upgraded).success).toBe(true);
+    expect(upgraded.agentMode).toBe("regular");
+    expect(upgraded.permissionMode).toBeNull();
+  });
+});

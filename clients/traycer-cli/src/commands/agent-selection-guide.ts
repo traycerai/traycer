@@ -2,7 +2,10 @@ import {
   agentSelectionGuideRequestSchema,
   agentSelectionGuideResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
-import { formatAgentSelectionGuideResponse } from "@traycer/protocol/agent/agent-selection-guide-format";
+import {
+  A2A_PERMISSION_MODE_INSTRUCTION,
+  formatAgentSelectionGuideResponse,
+} from "@traycer/protocol/agent/agent-selection-guide-format";
 import {
   callHostRpc,
   parseHostResponse,
@@ -31,6 +34,13 @@ export function buildAgentSelectionGuideCommand(opts: {
       result,
     );
     const human = formatAgentSelectionGuideResponse(response);
-    return { data: response, human, exitCode: 0 };
+    return {
+      data: {
+        ...response,
+        permissionModeInstruction: A2A_PERMISSION_MODE_INSTRUCTION,
+      },
+      human,
+      exitCode: 0,
+    };
   };
 }

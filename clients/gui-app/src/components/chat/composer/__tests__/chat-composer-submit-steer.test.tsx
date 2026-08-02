@@ -36,6 +36,7 @@ const DIRTY: JsonContent = {
 };
 
 const MATCHING_TURN: ChatActiveTurn = {
+  agentMode: "regular",
   sameTurnSteeringSupported: true,
   turnId: "turn-1",
   status: "running",
@@ -43,7 +44,6 @@ const MATCHING_TURN: ChatActiveTurn = {
   model: "claude-sonnet",
   reasoningEffort: "medium",
   serviceTier: null,
-  agentMode: "regular",
   profileId: null,
   userMessageId: "message-1",
   startedAt: 1,
@@ -170,7 +170,6 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(input.settings).toMatchObject({
       harnessId: "claude",
       model: "claude-opus",
-      agentMode: "regular",
       profileId: null,
     } satisfies Partial<ChatRunSettings>);
     expect(result.current.steerConflict.open).toBe(false);
@@ -642,7 +641,6 @@ function mountSubmit(input: MountSubmitInput): {
       },
       reasoning: "medium",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: false,

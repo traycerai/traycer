@@ -88,6 +88,7 @@ import {
   agentInboxSubscribeV10,
   agentInboxSubscribeV11,
 } from "@traycer/protocol/host/agent/inbox";
+import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
   agentRolesClaimV10,
@@ -249,18 +250,21 @@ import {
   terminalCreateV20,
   terminalCreateUpgradeV10ToV20,
   terminalKillV10,
-  terminalListDowngradeV21ToV10,
+  terminalListDowngradeV22ToV10,
   terminalListV10,
   terminalListV20,
   terminalListV21,
+  terminalListV22,
   terminalListUpgradeV10ToV20,
   terminalListUpgradeV20ToV21,
+  terminalListUpgradeV21ToV22,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
   terminalSubscribeV13,
   terminalSubscribeV14,
+  terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   hostNotificationHooksSave,
@@ -4575,7 +4579,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: terminalListV20,
@@ -4585,8 +4589,12 @@ const HOST_RPC_REGISTRY_DEFINITION = {
           contract: terminalListV21,
           upgradeFromPreviousVersion: terminalListUpgradeV20ToV21,
         },
+        2: {
+          contract: terminalListV22,
+          upgradeFromPreviousVersion: terminalListUpgradeV21ToV22,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalListDowngradeV21ToV10 },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV22ToV10 },
     },
   },
   "terminal.rename": {
@@ -5615,7 +5623,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -5631,6 +5639,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         4: {
           contract: terminalSubscribeV14,
+        },
+        5: {
+          contract: terminalSubscribeV15,
         },
       },
     },
@@ -5703,6 +5714,20 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         1: {
           contract: agentInboxSubscribeV11,
+        },
+      },
+    },
+  },
+  // Optional host-local activity source reserved for a future explicit local
+  // desktop mode. Every current GUI environment continues using the per-user
+  // notification-room awareness path; entitlement must not select this method.
+  // Older hosts may omit it through ordinary optional-method negotiation.
+  "agent.activity.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentActivitySubscribeV10,
         },
       },
     },

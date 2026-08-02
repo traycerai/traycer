@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import {
   displayAppLocalNotification,
+  displayForwardedForegroundNotification,
   playNotificationChime,
 } from "@/lib/notifications/notification-display";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
@@ -8,8 +9,16 @@ import {
   useMergedNotificationsActions,
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
-import { useNotificationShow } from "@/hooks/notifications/use-notifications";
-import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import {
+  useNotificationForegroundDisplay,
+  useNotificationShow,
+} from "@/hooks/notifications/use-notifications";
+import {
+  parseForegroundAppLocalNotificationEntry,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
+import type { NotificationForegroundDisplay } from "@traycer-clients/shared/platform/runner-host";
 import {
   appLocalDisplayDeliveryKey,
   captureAppLocalDisplayReceiptSession,
@@ -26,6 +35,39 @@ export function NotificationEmissionController(): null {
   const actions = useMergedNotificationsActions();
   const inFlightVersionsRef = useRef(new Set<string>());
   const drainScheduledRef = useRef(false);
+  const onForegroundDisplay = useCallback(
+    (display: NotificationForegroundDisplay): void => {
+      const foregroundAppLocal = display.foregroundAppLocal;
+      if (foregroundAppLocal !== null) {
+        const state = useAppLocalNotificationsStore.getState();
+        const entry = parseForegroundAppLocalNotificationEntry(
+          foregroundAppLocal.entry,
+        );
+        if (
+          entry === null ||
+          state.activeUserId !== foregroundAppLocal.userId
+        ) {
+          return;
+        }
+        const version: AppLocalDisplayReceiptVersion = {
+          userId: foregroundAppLocal.userId,
+          notificationId: entry.id,
+          updatedAt: entry.updatedAt,
+        };
+        recordAppLocalDisplayReceipt(version);
+        state.mergeForegroundDisplayed(entry);
+      }
+      displayForwardedForegroundNotification(display, {
+        playChime: playNotificationChime,
+        onToastClick: (payload) =>
+          useNotificationEventsStore
+            .getState()
+            .recordInAppClick(payload, Date.now()),
+      });
+    },
+    [],
+  );
+  useNotificationForegroundDisplay(onForegroundDisplay);
   const onToastClick = useCallback(
     (row: MergedNotificationRow): void => {
       if (row.payload === null) return;
@@ -82,6 +124,7 @@ export function NotificationEmissionController(): null {
             onToastClick,
           },
           deliveryKey,
+          userId,
         )
           .then(() => {
             if (!isAppLocalDisplayReceiptSessionCurrent(receiptSession)) return;

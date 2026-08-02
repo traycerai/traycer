@@ -83,6 +83,7 @@ export interface AppLocalNotificationsState {
   ) => void;
   markAllAsRead: (readAt: number) => void;
   markAsDisplayed: (id: string, updatedAt: number) => void;
+  mergeForegroundDisplayed: (entry: AppLocalNotificationInput) => void;
   clearAll: () => void;
   resetForTests: () => void;
 }
@@ -197,6 +198,24 @@ function parsePersistedAppLocalEntry(
     message: value.message,
     detail: value.detail,
     displayedUpdatedAt: value.displayedUpdatedAt,
+  };
+}
+
+export function parseForegroundAppLocalNotificationEntry(
+  value: unknown,
+): AppLocalNotificationInput | null {
+  if (!isRecord(value) || typeof value.id !== "string") return null;
+  const parsed = parsePersistedAppLocalEntry(value.id, value);
+  if (parsed === null) return null;
+  return {
+    id: parsed.id,
+    updatedAt: parsed.updatedAt,
+    readAt: parsed.readAt,
+    kind: parsed.kind,
+    sourceRef: parsed.sourceRef,
+    payload: parsed.payload,
+    message: parsed.message,
+    detail: parsed.detail,
   };
 }
 
@@ -412,6 +431,33 @@ export function createAppLocalNotificationsStore(initialName: string) {
                 ...state.byId,
                 [id]: { ...entry, displayedUpdatedAt: updatedAt },
               },
+            };
+          });
+        },
+
+        mergeForegroundDisplayed: (entry) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const existing = Object.hasOwn(state.byId, entry.id)
+              ? state.byId[entry.id]
+              : null;
+            if (existing !== null && existing.updatedAt > entry.updatedAt) {
+              return state;
+            }
+            const displayedEntry: AppLocalNotificationEntry = {
+              ...entry,
+              readAt: existing === null ? entry.readAt : existing.readAt,
+              displayedUpdatedAt: entry.updatedAt,
+            };
+            const byId = cappedAppLocalEntries({
+              ...state.byId,
+              [entry.id]: displayedEntry,
+            });
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
             };
           });
         },

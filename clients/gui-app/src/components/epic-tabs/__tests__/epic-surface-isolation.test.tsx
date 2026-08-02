@@ -33,12 +33,24 @@ const hostBoundary = vi.hoisted(() => ({
   seenTileHostIds: new Set<string>(),
 }));
 
+const activeHostEntry = vi.hoisted(() => ({
+  hostId: "default-host",
+  label: "Default host",
+  kind: "mock" as const,
+  websocketUrl: "ws://default-host.test/stream",
+  version: null,
+  status: "available" as const,
+}));
+
 const activeHostClient = vi.hoisted(() => ({
+  getActiveHost: () => activeHostEntry,
   getActiveHostId: () => "default-host",
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
   onChange: () => () => undefined,
   request: () => Promise.resolve({}),
+  resolveHostById: (hostId: string) =>
+    hostId === activeHostEntry.hostId ? activeHostEntry : null,
 }));
 
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({

@@ -35,7 +35,7 @@ import {
   ArtifactFilterMenu,
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
-import { CommGraphOpenButton } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
+import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -49,7 +49,6 @@ import { type EpicNodeRef } from "@/stores/epics/canvas/types";
 import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import { PanelGroupSectionHeader } from "@/components/epic-canvas/sidebar/epic-sidebar-header";
-import { PANEL_HEADER_ACTION_REVEAL_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import {
   ArtifactReadLifecycleBridge,
@@ -110,6 +109,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   useEpicArtifact,
+  useEpicActiveAgentIds,
   useAncestorIds,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
@@ -129,7 +129,10 @@ import {
   resolveDisabledPresentation,
 } from "@/lib/disabled-presentation";
 import { displayTitle } from "@/lib/display-title";
-import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useEpicArchiveChats,
+  useEpicDeleteChat,
+} from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
 import {
   useEpicCreateArtifact,
@@ -148,17 +151,19 @@ import {
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 import { cn } from "@/lib/utils";
 import {
-  CheckCheck,
-  CopyMinus,
+  Archive,
   Download,
   FolderOpen,
   ListChecks,
   MessageSquareText,
   MoreHorizontal,
   Plus,
-  Search,
   Trash2,
   X,
 } from "lucide-react";
@@ -173,13 +178,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   Fragment,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   useCallback,
   type ComponentType,
@@ -189,6 +195,7 @@ import { SplitResizeHandle } from "@/components/epic-canvas/canvas/resize-handle
 import {
   isSidebarBulkSelectionPanelId,
   rootmostSelectedSidebarIds,
+  sidebarIdsWithinRoots,
   SidebarBulkSelectionProvider,
   useSidebarBulkSelection,
   type SidebarBulkSelectionPanelId,
@@ -197,8 +204,6 @@ import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar
 import { useShallow } from "zustand/react/shallow";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-const COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS = "@max-[21rem]:hidden";
-
 interface ArtifactReadTarget {
   readonly id: string;
   readonly updatedAt: number;
@@ -317,6 +322,7 @@ export interface EpicLeftPanelHostProps {
 export type LeftPanelBodyProps = LeftPanelSlotProps;
 export interface LeftPanelHeaderSlotProps extends LeftPanelSlotProps {
   readonly collapsed: boolean;
+  readonly mode: "normal" | "search" | "selection";
 }
 
 export interface LeftPanelDefinition extends LeftPanelMetadataDefinition {
@@ -1341,6 +1347,98 @@ function sidebarDeleteTargetForRecord(
   return { id: record.id, kind: "artifact" };
 }
 
+interface SelectedChatArchiveAction {
+  readonly supported: boolean;
+  readonly pending: boolean;
+  readonly selectedHasActiveAgent: boolean;
+  readonly archiveSelected: () => void;
+}
+
+function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
+  const selection = useSidebarBulkSelection();
+  const supported = useChatArchiveSupported();
+  const archiveChats = useEpicArchiveChats();
+  const activeAgentIds = useEpicActiveAgentIds();
+  const tree = useEpicTreeIndex();
+  const latestTreeRef = useRef(tree);
+  useLayoutEffect(() => {
+    latestTreeRef.current = tree;
+  }, [tree]);
+  const epicId = useOpenEpicHandle().epicId;
+  const selectedRootIds = useMemo(
+    () =>
+      rootmostSelectedSidebarIds({
+        ids: selection.selectedVisibleIds,
+        tree,
+      }),
+    [selection.selectedVisibleIds, tree],
+  );
+  const selectedHasActiveAgent =
+    sidebarIdsWithinRoots({
+      ids: [...activeAgentIds],
+      rootIds: selectedRootIds,
+      tree,
+    }).length > 0;
+  const archiveSelected = useCallback(() => {
+    if (
+      selection.panelId !== "chats" ||
+      !supported ||
+      !canMutate ||
+      archiveChats.isPending ||
+      selectedRootIds.length === 0 ||
+      selectedHasActiveAgent
+    ) {
+      return;
+    }
+    archiveChats.mutate(
+      { epicId, chatIds: selectedRootIds, archived: true },
+      {
+        onSuccess: (results) => {
+          const successfulRootIds = selectedRootIds.filter(
+            (_id, index) => results[index].status === "fulfilled",
+          );
+          // Checkboxes stay interactive while the batch is pending. Clear each
+          // successful root even if projection already removed it, plus only
+          // the descendants still beneath it in the latest committed tree.
+          // That includes collaborators' additions without clearing children
+          // they moved elsewhere while the request was in flight.
+          const latestTree = latestTreeRef.current;
+          const successfulSubtreeIds = new Set([
+            ...successfulRootIds,
+            ...sidebarIdsWithinRoots({
+              ids: Object.keys(latestTree.nodeById),
+              rootIds: successfulRootIds,
+              tree: latestTree,
+            }),
+          ]);
+          selection.clearSelectedIds([...successfulSubtreeIds]);
+          // If a collaborator moves a selected row beneath this root after
+          // the response snapshot, the later archive projection can be the
+          // event that removes the final selection. Arm that one projection
+          // path so it exits instead of leaving a zero-selected toolbar.
+          if (successfulRootIds.length > 0) {
+            selection.armSelectablePruneExit(successfulRootIds);
+          }
+        },
+      },
+    );
+  }, [
+    archiveChats,
+    canMutate,
+    epicId,
+    selectedHasActiveAgent,
+    selectedRootIds,
+    selection,
+    supported,
+  ]);
+  return {
+    supported,
+    pending: archiveChats.isPending,
+    selectedHasActiveAgent,
+    archiveSelected,
+  };
+}
+
 function describeSidebarBulkDeleteTitle(
   panelId: SidebarBulkSelectionPanelId,
   ids: readonly string[] | null,
@@ -1538,7 +1636,17 @@ function TreePanelActions(props: TreePanelActionsProps) {
     props.epicId,
     props.panelId,
   );
-  const collapseAll = useCollapseAllPanelAction(props.tabId, props.panelId);
+  const artifactMenuOpen = usePanelHeaderMenuOpen(
+    props.tabId,
+    props.panelId,
+    "create",
+  );
+  const setPanelHeaderMenuOpen = usePanelHeaderMenuStore(
+    (state) => state.setMenuOpen,
+  );
+  const setPanelSectionCollapsed = useEpicLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
   const addIsPending =
     localRootPending !== null ||
     acknowledgedRootPending !== null ||
@@ -1600,140 +1708,119 @@ function TreePanelActions(props: TreePanelActionsProps) {
     artifactsDisabledTooltip,
   );
 
+  const expandBeforeOpen = useCallback(() => {
+    if (props.collapsed) setPanelSectionCollapsed(props.panelId, false);
+  }, [props.collapsed, props.panelId, setPanelSectionCollapsed]);
+  const handleArtifactMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) expandBeforeOpen();
+      setPanelHeaderMenuOpen(props.tabId, props.panelId, "create", open);
+    },
+    [expandBeforeOpen, props.panelId, props.tabId, setPanelHeaderMenuOpen],
+  );
+
+  if (props.panelId === "chats") {
+    return (
+      <NewConversationModalAction
+        epicId={props.epicId}
+        tabId={props.tabId}
+        parentId={null}
+        size="icon-sm"
+        disabled={!canMutate || addIsPending}
+        disabledTooltip={mutationDisabledHint(
+          permissionRole,
+          isDisconnected,
+          "create agents",
+        )}
+        triggerLabel={props.addLabel}
+        triggerTestId={props.triggerTestId}
+        actionRevealClassName=""
+        onBeforeOpen={expandBeforeOpen}
+      />
+    );
+  }
+
   return (
-    <div className="flex items-center gap-0.5">
-      <TooltipWrapper
-        label="Collapse all"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
+    <AddNodeDropdown
+      open={artifactMenuOpen}
+      onOpenChange={handleArtifactMenuOpenChange}
+      menuPlacement="header"
+      epicId={props.epicId}
+      menuTestId={props.menuTestId}
+      itemTestId={props.itemTestId}
+      onAdd={addRoot}
+      onAddTerminalAgent={undefined}
+      terminalAgentWorkspaceSeed={null}
+      terminalAgentHostScope={undefined}
+      // Root create keeps the epic-scoped default launcher slot; only chat /
+      // agent ROWS override with a per-parent key (T4).
+      terminalAgentStagingKey={undefined}
+      tuiAgentPending={undefined}
+      excludeTypes={props.excludeTypes}
+      disabledTypes={undefined}
+      disabled={artifactsAddDisabled}
+      disabledTooltip={artifactsDisabledTooltip}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={props.addLabel}
+        aria-disabled={artifactsPresentation.ariaDisabled ? true : undefined}
+        data-testid={props.triggerTestId}
+        className={cn(
+          "text-muted-foreground hover:text-foreground",
+          ARIA_DISABLED_TRIGGER_CLASS,
+        )}
+        disabled={artifactsPresentation.nativeDisabled}
       >
-        <span className="inline-flex">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={collapseAll}
-            aria-label="Collapse all"
-            data-testid={`epic-sidebar-collapse-all-${props.panelId}`}
-            disabled={props.collapsed}
-            className={cn(
-              "text-muted-foreground hover:text-foreground",
-              PANEL_HEADER_ACTION_REVEAL_CLASS,
-              COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-            )}
-          >
-            <CopyMinus className="size-4" />
-          </Button>
-        </span>
-      </TooltipWrapper>
-      {props.panelId === "chats" ? (
-        <NewConversationModalAction
-          epicId={props.epicId}
-          tabId={props.tabId}
-          parentId={null}
-          size="icon-sm"
-          disabled={!canMutate || addIsPending}
-          disabledTooltip={mutationDisabledHint(
-            permissionRole,
-            isDisconnected,
-            "create agents",
-          )}
-          triggerLabel={props.addLabel}
-          triggerTestId={props.triggerTestId}
-          actionRevealClassName=""
-        />
-      ) : null}
-      {props.panelId !== "chats" ? (
-        <AddNodeDropdown
-          open={undefined}
-          onOpenChange={undefined}
-          epicId={props.epicId}
-          menuTestId={props.menuTestId}
-          itemTestId={props.itemTestId}
-          onAdd={addRoot}
-          onAddTerminalAgent={undefined}
-          terminalAgentWorkspaceSeed={null}
-          terminalAgentHostScope={undefined}
-          // Root create keeps the epic-scoped default launcher slot; only chat /
-          // agent ROWS override with a per-parent key (T4).
-          terminalAgentStagingKey={undefined}
-          tuiAgentPending={undefined}
-          excludeTypes={props.excludeTypes}
-          disabledTypes={undefined}
-          disabled={artifactsAddDisabled}
-          disabledTooltip={artifactsDisabledTooltip}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={props.addLabel}
-            aria-disabled={
-              artifactsPresentation.ariaDisabled ? true : undefined
-            }
-            data-testid={props.triggerTestId}
-            className={cn(
-              "text-muted-foreground hover:text-foreground",
-              ARIA_DISABLED_TRIGGER_CLASS,
-            )}
-            disabled={artifactsPresentation.nativeDisabled}
-          >
-            {addIsPending ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : (
-              <Plus className="size-4" />
-            )}
-          </Button>
-        </AddNodeDropdown>
-      ) : null}
-    </div>
+        {addIsPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : (
+          <Plus className="size-4" />
+        )}
+      </Button>
+    </AddNodeDropdown>
   );
 }
 
 function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
   const selection = useSidebarBulkSelection();
   const canArchive = useChatArchiveSupported();
+  const collapseAll = useCollapseAllPanelAction(props.tabId, "chats");
   if (selection.selectionMode) return <SidebarBulkSelectionActions />;
   return (
     <div className="flex items-center gap-0.5">
+      {props.mode === "search" ? null : (
+        <>
+          <TreePanelActions
+            epicId={props.epicId}
+            tabId={props.tabId}
+            panelId="chats"
+            collapsed={props.collapsed}
+            addLabel="Add agent"
+            menuTestId="epic-sidebar-add-chat-root-menu"
+            triggerTestId="epic-sidebar-add-chat-root"
+            itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
+            excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
+          />
+          <ChatHeaderMoreMenu
+            epicId={props.epicId}
+            tabId={props.tabId}
+            collapsed={props.collapsed}
+          />
+        </>
+      )}
       <ChatFilterMenu
         epicId={props.epicId}
-        disabled={props.collapsed}
+        tabId={props.tabId}
+        collapsed={props.collapsed}
         canArchive={canArchive}
-      />
-      <SidebarStartSelectionButton
-        label="Select agents"
-        disabled={props.collapsed}
-      />
-      <CommGraphOpenButton
-        epicId={props.epicId}
-        disabled={props.collapsed}
-        className={cn(
-          PANEL_HEADER_ACTION_REVEAL_CLASS,
-          COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-        )}
-      />
-      <CompactPanelHeaderMoreMenu
-        epicId={props.epicId}
-        tabId={props.tabId}
-        panelId="chats"
-        collapsed={props.collapsed}
-      />
-      <TreePanelActions
-        epicId={props.epicId}
-        tabId={props.tabId}
-        panelId="chats"
-        collapsed={props.collapsed}
-        addLabel="Add agent"
-        menuTestId="epic-sidebar-add-chat-root-menu"
-        triggerTestId="epic-sidebar-add-chat-root"
-        itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
-        excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
+        onCollapseAll={collapseAll}
       />
     </div>
   );
@@ -1770,48 +1857,11 @@ function useUnreadArtifactReadTargets(
   );
 }
 
-/**
- * Compact-width home for secondary panel operations. Direct icon buttons stay
- * in the DOM for wide sidebars, while container queries trade them for this
- * single trigger before they can consume the title's space. The menu repeats
- * search because the direct search icon also yields at the 200 px width floor.
- */
-function CompactPanelHeaderMoreMenu(props: {
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly panelId: SidebarBulkSelectionPanelId;
-  readonly collapsed: boolean;
-}) {
-  if (props.panelId === "artifacts") {
-    return (
-      <CompactArtifactHeaderMoreMenu
-        epicId={props.epicId}
-        tabId={props.tabId}
-        collapsed={props.collapsed}
-      />
-    );
-  }
-  return (
-    <CompactChatHeaderMoreMenu
-      tabId={props.tabId}
-      collapsed={props.collapsed}
-    />
-  );
-}
-
-function CompactMoreMenuTrigger(props: {
+function PanelHeaderMoreMenuTrigger(props: {
   readonly label: string;
   readonly testId: string;
-  readonly collapsed: boolean;
 }) {
   return (
-    // Tooltip OUTSIDE the menu trigger, with no span between them: both are
-    // `asChild`, so nesting this way merges the tooltip's and the menu's props
-    // onto the button itself. A guard span in between took delivery of them
-    // instead - which broke this button's own `aria-expanded:opacity-100` (the
-    // attribute landed on the span) and left the always-`inline-flex` span
-    // rendered in the header while its `@max-[21rem]:inline-flex` child stayed
-    // hidden at wider widths.
     <TooltipWrapper
       label={props.label}
       side="top"
@@ -1824,11 +1874,7 @@ function CompactMoreMenuTrigger(props: {
           variant="ghost"
           size="icon-sm"
           aria-label={props.label}
-          disabled={props.collapsed}
-          className={cn(
-            "hidden text-muted-foreground hover:text-foreground aria-expanded:opacity-100 @max-[21rem]:inline-flex",
-            PANEL_HEADER_ACTION_REVEAL_CLASS,
-          )}
+          className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
           data-testid={props.testId}
         >
           <MoreHorizontal className="size-4" />
@@ -1838,36 +1884,61 @@ function CompactMoreMenuTrigger(props: {
   );
 }
 
-function CompactChatHeaderMoreMenu(props: {
+function useExpandableHeaderMenu(
+  tabId: string,
+  panelId: LeftPanelId,
+  collapsed: boolean,
+): {
+  readonly open: boolean;
+  readonly handleOpenChange: (open: boolean) => void;
+} {
+  const open = usePanelHeaderMenuOpen(tabId, panelId, "more");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
+  const setPanelSectionCollapsed = useEpicLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen && collapsed) setPanelSectionCollapsed(panelId, false);
+      setMenuOpen(tabId, panelId, "more", nextOpen);
+    },
+    [collapsed, panelId, setMenuOpen, setPanelSectionCollapsed, tabId],
+  );
+  return { open, handleOpenChange };
+}
+
+function ChatHeaderMoreMenu(props: {
+  readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
 }) {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
-  const collapseAll = useCollapseAllPanelAction(props.tabId, "chats");
-  const selectionEnabled =
-    !props.collapsed && selection.canSelect && connectionStatus !== "closed";
+  const menu = useExpandableHeaderMenu(props.tabId, "chats", props.collapsed);
+  const selectionEnabled = selection.canSelect && connectionStatus !== "closed";
 
   return (
-    <DropdownMenu>
-      <CompactMoreMenuTrigger
+    <DropdownMenu open={menu.open} onOpenChange={menu.handleOpenChange}>
+      <PanelHeaderMoreMenuTrigger
         label="More agent actions"
         testId="epic-sidebar-more-chats"
-        collapsed={props.collapsed}
       />
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={collapseAll}>
-          <CopyMinus className="size-4" />
-          Collapse all
-        </DropdownMenuItem>
+      <DropdownMenuContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        avoidCollisions={false}
+        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
+      >
+        <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
         {isEditableRole(permissionRole) ? (
           <DropdownMenuItem
             disabled={!selectionEnabled}
             onSelect={selection.enterSelectionMode}
           >
             <ListChecks className="size-4" />
-            Start agent selection
+            Select agents
           </DropdownMenuItem>
         ) : null}
       </DropdownMenuContent>
@@ -1875,211 +1946,147 @@ function CompactChatHeaderMoreMenu(props: {
   );
 }
 
-function CompactArtifactHeaderMoreMenu(props: {
-  readonly epicId: string;
+function ArtifactHeaderMoreMenu(props: {
   readonly tabId: string;
   readonly collapsed: boolean;
 }) {
   const selection = useSidebarBulkSelection();
-  const unreadArtifacts = useUnreadArtifactReadTargets(props.epicId);
-  const markRead = useArtifactReadStateStore((s) => s.markRead);
-  const collapseAll = useCollapseAllPanelAction(props.tabId, "artifacts");
   const searchAvailable = useArtifactSearchAvailable();
-  const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
-  const selectionEnabled = !props.collapsed && selection.canSelect;
-  const handleMarkAllRead = useCallback(() => {
-    unreadArtifacts.forEach((artifact) => {
-      markRead(props.epicId, artifact.id, artifact.updatedAt);
-    });
-  }, [markRead, props.epicId, unreadArtifacts]);
+  const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
+  const menu = useExpandableHeaderMenu(
+    props.tabId,
+    "artifacts",
+    props.collapsed,
+  );
 
   return (
-    <DropdownMenu>
-      <CompactMoreMenuTrigger
+    <DropdownMenu open={menu.open} onOpenChange={menu.handleOpenChange}>
+      <PanelHeaderMoreMenuTrigger
         label="More artifact actions"
         testId="epic-sidebar-more-artifacts"
-        collapsed={props.collapsed}
       />
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        avoidCollisions={false}
+        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
+      >
         {searchAvailable ? (
-          <>
-            <DropdownMenuItem
-              onSelect={() => openSearch("artifacts", "")}
-              data-testid="epic-sidebar-more-search-artifacts"
-            >
-              <Search className="size-4" />
-              Search artifacts
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
+          <DropdownMenuItem
+            onSelect={() => openSearch(props.tabId, "artifacts", "")}
+            data-testid="epic-sidebar-more-search-artifacts"
+          >
+            Search artifacts
+          </DropdownMenuItem>
         ) : null}
-        <DropdownMenuItem onSelect={collapseAll}>
-          <CopyMinus className="size-4" />
-          Collapse all
-        </DropdownMenuItem>
         <DropdownMenuItem
-          disabled={unreadArtifacts.length === 0}
-          onSelect={handleMarkAllRead}
-        >
-          <CheckCheck className="size-4" />
-          Mark all as read
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={!selectionEnabled}
+          disabled={!selection.canSelect}
           onSelect={selection.enterSelectionMode}
         >
           <ListChecks className="size-4" />
-          Start artifact selection
+          Select artifacts
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-function MarkAllArtifactsReadButton(props: {
-  readonly epicId: string;
-  readonly collapsed: boolean;
-}) {
+function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
+  const selection = useSidebarBulkSelection();
   const unreadArtifacts = useUnreadArtifactReadTargets(props.epicId);
-  const markRead = useArtifactReadStateStore((s) => s.markRead);
-  const handleMarkAllRead = useCallback(() => {
+  const markRead = useArtifactReadStateStore((state) => state.markRead);
+  const collapseAll = useCollapseAllPanelAction(props.tabId, "artifacts");
+  const markAllRead = useCallback(() => {
     unreadArtifacts.forEach((artifact) => {
       markRead(props.epicId, artifact.id, artifact.updatedAt);
     });
   }, [markRead, props.epicId, unreadArtifacts]);
-
-  return (
-    <TooltipWrapper
-      label="Mark all unread artifacts as read"
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <span className="inline-flex">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={handleMarkAllRead}
-          aria-label="Mark all unread artifacts as read"
-          data-testid="epic-sidebar-mark-all-artifacts-read"
-          disabled={props.collapsed || unreadArtifacts.length === 0}
-          className={cn(
-            "text-muted-foreground hover:text-foreground",
-            PANEL_HEADER_ACTION_REVEAL_CLASS,
-            COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-          )}
-        >
-          <CheckCheck className="size-4" />
-        </Button>
-      </span>
-    </TooltipWrapper>
-  );
-}
-
-/**
- * Enters artifact search mode. Only rendered once the Epic holds enough
- * artifacts for filtering to beat scanning - below that the header carries no
- * search affordance at all.
- */
-function ArtifactSearchButton(props: { readonly collapsed: boolean }) {
-  const available = useArtifactSearchAvailable();
-  const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
-  if (!available) return null;
-  return (
-    <TooltipWrapper
-      label="Search artifacts"
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <span className="inline-flex">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => openSearch("artifacts", "")}
-          aria-label="Search artifacts"
-          data-testid="epic-sidebar-search-artifacts"
-          disabled={props.collapsed}
-          className={cn(
-            "text-muted-foreground hover:text-foreground @max-[14rem]:hidden",
-            PANEL_HEADER_ACTION_REVEAL_CLASS,
-          )}
-        >
-          <Search className="size-4" />
-        </Button>
-      </span>
-    </TooltipWrapper>
-  );
-}
-
-function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
-  const selection = useSidebarBulkSelection();
   if (selection.selectionMode) return <SidebarBulkSelectionActions />;
   return (
     <div className="flex items-center gap-0.5">
-      <ArtifactSearchButton collapsed={props.collapsed} />
-      <ArtifactFilterMenu epicId={props.epicId} disabled={props.collapsed} />
-      <MarkAllArtifactsReadButton
-        epicId={props.epicId}
-        collapsed={props.collapsed}
-      />
-      <SidebarStartSelectionButton
-        label="Select artifacts"
-        disabled={props.collapsed}
-      />
-      <CompactPanelHeaderMoreMenu
+      {props.mode === "search" ? null : (
+        <>
+          <TreePanelActions
+            epicId={props.epicId}
+            tabId={props.tabId}
+            panelId="artifacts"
+            collapsed={props.collapsed}
+            addLabel="Add artifact"
+            menuTestId="epic-sidebar-add-artifact-root-menu"
+            triggerTestId="epic-sidebar-add-artifact-root"
+            itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
+            excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
+          />
+          <ArtifactHeaderMoreMenu
+            tabId={props.tabId}
+            collapsed={props.collapsed}
+          />
+        </>
+      )}
+      <ArtifactFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
-        panelId="artifacts"
         collapsed={props.collapsed}
-      />
-      <TreePanelActions
-        epicId={props.epicId}
-        tabId={props.tabId}
-        panelId="artifacts"
-        collapsed={props.collapsed}
-        addLabel="Add artifact"
-        menuTestId="epic-sidebar-add-artifact-root-menu"
-        triggerTestId="epic-sidebar-add-artifact-root"
-        itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
-        excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
+        onCollapseAll={collapseAll}
+        onMarkAllRead={markAllRead}
+        markAllReadDisabled={unreadArtifacts.length === 0}
       />
     </div>
   );
 }
 
-function SidebarStartSelectionButton(props: {
-  readonly label: string;
-  readonly disabled: boolean;
+function SidebarSelectedChatArchiveButton(props: {
+  readonly visible: boolean;
+  readonly selectedCount: number;
+  readonly canMutate: boolean;
+  readonly action: SelectedChatArchiveAction;
 }) {
-  const selection = useSidebarBulkSelection();
-  const permissionRole = useEpicPermissionRole();
-  const connectionStatus = useEpicConnectionStatus();
-  const readOnlySelection = selection.panelId === "artifacts";
-  if (!readOnlySelection && !isEditableRole(permissionRole)) return null;
-  if (!props.disabled && !selection.canSelect) return null;
-  const canStartSelection = readOnlySelection || connectionStatus !== "closed";
+  if (!props.visible || !props.action.supported) return null;
+  const label =
+    props.selectedCount > 0
+      ? `Archive ${props.selectedCount} selected ${panelRowNoun("chats", props.selectedCount)}`
+      : "Archive selected agents";
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label={props.label}
-      disabled={props.disabled || !selection.canSelect || !canStartSelection}
-      onClick={selection.enterSelectionMode}
-      className={cn(
-        "text-muted-foreground hover:text-foreground",
-        PANEL_HEADER_ACTION_REVEAL_CLASS,
-        COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-      )}
+    <TooltipWrapper
+      label={
+        props.action.selectedHasActiveAgent
+          ? "Wait for selected agents to finish"
+          : "Archive selected agents"
+      }
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <ListChecks className="size-4" />
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={label}
+          data-testid="epic-sidebar-archive-selected-chats"
+          disabled={
+            props.selectedCount === 0 ||
+            !props.canMutate ||
+            props.action.pending ||
+            props.action.selectedHasActiveAgent
+          }
+          onClick={props.action.archiveSelected}
+        >
+          {props.action.pending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : (
+            <Archive className="size-4" />
+          )}
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
-
 function SidebarBulkSelectionActions() {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
@@ -2089,6 +2096,7 @@ function SidebarBulkSelectionActions() {
   const meta = useEpicSnapshotMeta();
   const canMutate =
     isEditableRole(permissionRole) && connectionStatus !== "closed";
+  const chatArchive = useSelectedChatArchive(canMutate);
   const recordById = useMemo(
     () => new Map(records.map((record) => [record.id, record])),
     [records],
@@ -2109,11 +2117,18 @@ function SidebarBulkSelectionActions() {
   };
   return (
     <div className="flex items-center gap-0.5">
+      <span
+        className="mr-1 whitespace-nowrap text-ui-xs font-medium text-foreground @max-[21rem]:hidden"
+        data-testid="epic-sidebar-artifact-selection-count"
+        aria-live="polite"
+      >
+        {selection.selectedCount} selected
+      </span>
       <Button
         type="button"
         variant="ghost"
         size="xs"
-        disabled={!selection.canSelect}
+        disabled={!selection.canSelect || chatArchive.pending}
         onClick={
           selection.allVisibleSelected
             ? selection.deselectAllVisible
@@ -2134,7 +2149,7 @@ function SidebarBulkSelectionActions() {
             variant="ghost"
             size="icon-sm"
             aria-label="Cancel selection"
-            disabled={selection.deletePending}
+            disabled={selection.deletePending || chatArchive.pending}
             onClick={selection.cancelSelection}
           >
             <X className="size-3.5" />
@@ -2184,6 +2199,12 @@ function SidebarBulkSelectionActions() {
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
+      <SidebarSelectedChatArchiveButton
+        visible={selection.panelId === "chats"}
+        selectedCount={selection.selectedCount}
+        canMutate={canMutate}
+        action={chatArchive}
+      />
       <Button
         type="button"
         variant="ghost"
@@ -2195,7 +2216,10 @@ function SidebarBulkSelectionActions() {
         }
         data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
         disabled={
-          selection.selectedCount === 0 || !canMutate || selection.deletePending
+          selection.selectedCount === 0 ||
+          !canMutate ||
+          selection.deletePending ||
+          chatArchive.pending
         }
         className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={selection.requestDeleteSelected}
