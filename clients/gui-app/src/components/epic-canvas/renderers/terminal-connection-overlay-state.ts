@@ -2,21 +2,29 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { TerminalLifecycleStatus } from "@/stores/terminals/terminal-session-store";
 
 export type TerminalConnectionOverlayState =
-  "reconnecting" | "recovering" | "lost";
+  "reconnecting" | "recovering" | "lost" | "sessionLost";
 
 /**
  * Resolve which connection overlay (if any) a terminal/TUI tile should show from
  * its session status. `null` means connected/healthy - no overlay. A "lost"
- * session shows the automatic-recovery spinner until recovery is exhausted, then
- * the manual Reconnect prompt; a running session whose transport is mid-reconnect
- * shows the transient spinner. The initial "creating" window shows nothing (the
- * tile's own loading skeleton covers it).
+ * session (recoverable - see `TerminalLifecycleStatus`) shows the
+ * automatic-recovery spinner until recovery is exhausted, then the manual
+ * Reconnect prompt ("reattachable", Architecture §8); a "reaped" session (the
+ * host confirmed via `TERMINAL_NOT_FOUND` that it's definitively gone) always
+ * shows the terminal "sessionLost" state - never a retry loop, since retrying
+ * a confirmed-gone session is guaranteed to fail identically every time. A
+ * running session whose transport is mid-reconnect shows the transient
+ * spinner. The initial "creating" window shows nothing (the tile's own
+ * loading skeleton covers it).
  */
 export function resolveTerminalOverlayState(input: {
   readonly status: TerminalLifecycleStatus;
   readonly connectionStatus: StreamConnectionStatus;
   readonly recoveryExhausted: boolean;
 }): TerminalConnectionOverlayState | null {
+  if (input.status === "reaped") {
+    return "sessionLost";
+  }
   if (input.status === "lost") {
     return input.recoveryExhausted ? "lost" : "recovering";
   }

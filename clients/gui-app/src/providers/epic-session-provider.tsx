@@ -17,8 +17,9 @@ import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useAuthService } from "@/lib/host";
+import { useAuthService, useHostBinding } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import {
   claimDesktopEpicOwnership,
@@ -31,6 +32,7 @@ import {
   getEpicStreamClientFactoryOverride,
   getOpenEpicRegistry,
   handleHostIds,
+  handleOwnerIdentityKeys,
 } from "@/lib/registries/epic-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 
@@ -56,6 +58,15 @@ export function EpicSessionProvider(
   // provider-driven re-subscribe; a `hostId` CHANGE releases the session below.
   const openTransport = useDurableStreamTransportFactory();
   const activeHostId = useReactiveActiveHostId();
+  // Owner-identity discriminator (R-1): `activeHostId` alone cannot see a
+  // same-host remote public-key rotation (re-enrollment / corruption
+  // recovery), since the hostId is unchanged. Folded into the rebuild
+  // decision below alongside the existing hostId/user checks, not in place
+  // of them.
+  const binding = useHostBinding();
+  const ownerIdentityKey = useReactiveOwnerIdentityKey(
+    binding === null ? null : binding.hostClient,
+  );
   // One explicit-host resolver per retained Epic surface. Sidebar rows share
   // the result through context instead of each mounting a directory listener,
   // query observer, and transient client for this same host.
@@ -153,9 +164,12 @@ export function EpicSessionProvider(
     const existing = registry.get(epicId);
     if (existing !== null) {
       const existingHostId = handleHostIds.get(existing) ?? null;
+      const existingOwnerIdentityKey =
+        handleOwnerIdentityKeys.get(existing) ?? null;
       if (
         existing.userId !== sessionUserId ||
-        existingHostId !== activeHostId
+        existingHostId !== activeHostId ||
+        existingOwnerIdentityKey !== ownerIdentityKey
       ) {
         registry.release(epicId);
       }
@@ -213,6 +227,7 @@ export function EpicSessionProvider(
       }),
     );
     handleHostIds.set(nextHandle, activeHostId);
+    handleOwnerIdentityKeys.set(nextHandle, ownerIdentityKey);
     queueMicrotask(() => {
       if (lifecycle.cancelled) return;
       setSession({ key: sessionKey, handle: nextHandle });
@@ -226,6 +241,7 @@ export function EpicSessionProvider(
     activeHostId,
     epicId,
     openTransport,
+    ownerIdentityKey,
     ownershipClaimed,
     sessionKey,
     sessionUserId,

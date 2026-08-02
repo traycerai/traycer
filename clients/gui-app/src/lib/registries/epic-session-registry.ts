@@ -25,6 +25,15 @@ export const EpicSessionHostClientContext =
   createContext<HostClient<HostRpcRegistry> | null>(null);
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
+// Owner-identity discriminator (R-1), tracked separately from `handleHostIds`
+// so a same-host remote public-key rotation - which `activeHostId` alone
+// cannot see - also forces the acquire effect to close the stale durable
+// stream and mount a fresh session, instead of leaving it pinned to the
+// stale key.
+export const handleOwnerIdentityKeys = new WeakMap<
+  OpenEpicStoreHandle,
+  string | null
+>();
 
 export function getEpicSessionHandleHostId(
   handle: OpenEpicStoreHandle,

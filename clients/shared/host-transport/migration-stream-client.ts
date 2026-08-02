@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 export type TaskChainProgressOutcome = "complete" | "skipped" | "failed";
 export type EpicProgressOutcome = "complete" | "failed";
@@ -71,7 +71,7 @@ export interface MigrationStreamCallbacks {
 }
 
 export interface MigrationStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly callbacks: MigrationStreamCallbacks;
 }
 

@@ -154,6 +154,32 @@ async function parseOk<T>(
 }
 
 /**
+ * The shared tail of every fetcher below: once an endpoint's own status
+ * branches (`unauthorized`, `not-found`, `step-up-required`, `rejected`, ...)
+ * have returned, the only remaining outcomes are a 2xx that parses and
+ * everything else - and "everything else" collapses to `network-error`,
+ * including a 2xx whose body does not match the schema.
+ *
+ * Shared rather than written out per endpoint so a fetcher added later cannot
+ * silently drop the status check or the parse check.
+ */
+async function finalizeResult<T>(
+  response: Response,
+  schema: z.ZodType<T>,
+): Promise<
+  | { readonly kind: "ok"; readonly response: T }
+  | { readonly kind: "network-error" }
+> {
+  if (response.status < 200 || response.status >= 300) {
+    return { kind: "network-error" };
+  }
+  const parsed = await parseOk(response, schema);
+  return parsed === null
+    ? { kind: "network-error" }
+    : { kind: "ok", response: parsed };
+}
+
+/**
  * Reads the account session list. `signal` is the reader's own cancellation
  * (the TanStack query's); an abort collapses into `network-error` like any
  * other transport failure, because the only caller re-checks its signal before
@@ -179,13 +205,7 @@ export async function listUserSessionsViaHttp(
   if (response.status === 401 || response.status === 403) {
     return { kind: "unauthorized" };
   }
-  if (response.status < 200 || response.status >= 300) {
-    return { kind: "network-error" };
-  }
-  const parsed = await parseOk(response, listUserSessionsResponseSchema);
-  return parsed === null
-    ? { kind: "network-error" }
-    : { kind: "ok", response: parsed };
+  return finalizeResult(response, listUserSessionsResponseSchema);
 }
 
 export async function revokeUserSessionViaHttp(
@@ -213,13 +233,7 @@ export async function revokeUserSessionViaHttp(
   if (response.status === 404) {
     return { kind: "not-found" };
   }
-  if (response.status < 200 || response.status >= 300) {
-    return { kind: "network-error" };
-  }
-  const parsed = await parseOk(response, revokeUserSessionResponseSchema);
-  return parsed === null
-    ? { kind: "network-error" }
-    : { kind: "ok", response: parsed };
+  return finalizeResult(response, revokeUserSessionResponseSchema);
 }
 
 export async function revokeAllSessionsViaHttp(
@@ -245,13 +259,7 @@ export async function revokeAllSessionsViaHttp(
   if (response.status === 401 || response.status === 403) {
     return { kind: "unauthorized" };
   }
-  if (response.status < 200 || response.status >= 300) {
-    return { kind: "network-error" };
-  }
-  const parsed = await parseOk(response, revokeAllSessionsResponseSchema);
-  return parsed === null
-    ? { kind: "network-error" }
-    : { kind: "ok", response: parsed };
+  return finalizeResult(response, revokeAllSessionsResponseSchema);
 }
 
 /**
@@ -297,16 +305,10 @@ export async function mintHostCredentialViaHttp(
     // host, not an error to surface to the user.
     return { kind: "rejected" };
   }
-  if (response.status < 200 || response.status >= 300) {
-    // Includes 429 (the per-user mint budget): transient from the client's
-    // point of view, and the fallback while it lasts is simply no host
-    // credential.
-    return { kind: "network-error" };
-  }
-  const parsed = await parseOk(response, mintHostCredentialResponseSchema);
-  return parsed === null
-    ? { kind: "network-error" }
-    : { kind: "ok", response: parsed };
+  // A non-2xx here includes 429 (the per-user mint budget): transient from the
+  // client's point of view, and the fallback while it lasts is simply no host
+  // credential - which is what `finalizeResult`'s `network-error` means.
+  return finalizeResult(response, mintHostCredentialResponseSchema);
 }
 
 export async function requestStepUpChallengeViaHttp(
@@ -329,13 +331,7 @@ export async function requestStepUpChallengeViaHttp(
   if (response.status === 401 || response.status === 403) {
     return { kind: "unauthorized" };
   }
-  if (response.status < 200 || response.status >= 300) {
-    return { kind: "network-error" };
-  }
-  const parsed = await parseOk(response, stepUpChallengeResponseSchema);
-  return parsed === null
-    ? { kind: "network-error" }
-    : { kind: "ok", response: parsed };
+  return finalizeResult(response, stepUpChallengeResponseSchema);
 }
 
 export async function verifyStepUpChallengeViaHttp(
@@ -362,13 +358,7 @@ export async function verifyStepUpChallengeViaHttp(
   if (response.status === 401 || response.status === 403) {
     return { kind: "unauthorized" };
   }
-  if (response.status < 200 || response.status >= 300) {
-    return { kind: "network-error" };
-  }
-  const parsed = await parseOk(response, verifyStepUpResponseSchema);
-  return parsed === null
-    ? { kind: "network-error" }
-    : { kind: "ok", response: parsed };
+  return finalizeResult(response, verifyStepUpResponseSchema);
 }
 
 export function toRetainedStepUpVerifyResult(

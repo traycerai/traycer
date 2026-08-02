@@ -710,7 +710,10 @@ export function NewConversationModalBody(props: {
       );
       return;
     }
-    const content = buildSubmittedChatJSONContent(editor.getJSON());
+    const content = buildSubmittedChatJSONContent(
+      editor.getJSON(),
+      pickerStore.getState().knownSlashCommands,
+    );
     const chatId = uuidv4();
     const messageId = uuidv4();
     const clientActionId = uuidv4();
@@ -795,6 +798,7 @@ export function NewConversationModalBody(props: {
     canSubmit,
     cleanupAfterSubmit,
     createChat,
+    pickerStore,
     draftWorkspaceFolderCount,
     epicId,
     hostClient,

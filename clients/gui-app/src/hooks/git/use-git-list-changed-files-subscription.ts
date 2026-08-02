@@ -7,7 +7,7 @@ import {
 } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -71,7 +71,7 @@ interface SharedSubscription {
 }
 
 interface GitSubscriptionRefreshStateArgs {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry> | null;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   readonly hostId: string | null;
   readonly runningDir: string | null;
   readonly ignoreWhitespace: boolean;
@@ -79,7 +79,7 @@ interface GitSubscriptionRefreshStateArgs {
 
 interface ReplaceStreamSessionArgs {
   readonly shared: SharedSubscription;
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly args: ActiveSubscriptionArgs;
   readonly freshNonce: string | null;
@@ -88,7 +88,7 @@ interface ReplaceStreamSessionArgs {
 interface V12FrameHandlerArgs {
   readonly value: unknown;
   readonly shared: SharedSubscription;
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly args: ActiveSubscriptionArgs;
   readonly awaitingFreshNonce: { current: string | null };
@@ -108,7 +108,7 @@ const subscriptions = new Map<string, SharedSubscription>();
 const refreshStateListeners = new Map<string, Set<() => void>>();
 
 function subscriptionKeyFor(
-  client: WsStreamClient<HostStreamRpcRegistry>,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
   args: ActiveSubscriptionArgs,
 ): string {
   return `${client.instanceId}|${args.hostId}|${args.runningDir}|${args.ignoreWhitespace ? "1" : "0"}`;
@@ -116,7 +116,7 @@ function subscriptionKeyFor(
 
 /** Render-time lookup of the shared entry this hook instance is attached to. */
 function activeSubscriptionFor(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
+  client: IHostStreamClient<HostStreamRpcRegistry> | null,
   args: {
     readonly hostId: string | null;
     readonly runningDir: string | null;
@@ -186,7 +186,7 @@ export function useGitSubscriptionRefreshState(
  * `null` tells callers to retain their negotiated-minor <=1 unary fallback.
  */
 export function refreshGitSubscriptionWithFreshNonce(args: {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry> | null;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   readonly queryClient: QueryClient;
   readonly hostId: string | null;
   readonly runningDir: string | null;
@@ -365,7 +365,7 @@ export function useGitListChangedFilesSubscription(args: {
 }
 
 function createSharedSubscription(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   queryClient: QueryClient,
   args: ActiveSubscriptionArgs,
 ): SharedSubscription {
@@ -800,7 +800,7 @@ function writeRichEventIntoCache(
  * the rich slot only while the stream still owns it.
  */
 function replayLastEventIntoCache(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   queryClient: QueryClient,
   args: ActiveSubscriptionArgs,
   event: GitSubscribeStatusStreamEvent,

@@ -43,6 +43,9 @@ const activeHostEntry = vi.hoisted(() => ({
 }));
 
 const activeHostClient = vi.hoisted(() => ({
+  // The remote-aware owner identity key (R-1) reads the full active entry, not
+  // just its id, so the fake must answer `getActiveHost` too - with the real
+  // entry, matching `resolveHostById` below rather than contradicting it.
   getActiveHost: () => activeHostEntry,
   getActiveHostId: () => "default-host",
   getRequestContext: () => null,

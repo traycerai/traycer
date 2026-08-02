@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
 import {
@@ -150,84 +151,15 @@ function createDesktopWindowsBridge(): FakeWindowsBridgeHandle {
 }
 
 function createBaseRunnerHost(): IRunnerHost {
-  return {
-    signInUrl: "https://auth.example.invalid/sign-in",
-    authnBaseUrl: "https://auth.example.invalid",
-    hasLocalHost: true,
-    validateAuthTokenIdentity: () =>
-      Promise.resolve({ kind: "rejected" as const }),
-    listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
-    revokeUserSession: () =>
-      Promise.resolve({ kind: "network-error" as const }),
-    revokeAllSessions: () =>
-      Promise.resolve({ kind: "network-error" as const }),
-    mintHostCredential: () =>
-      Promise.resolve({ kind: "network-error" as const }),
-    requestStepUpChallenge: () =>
-      Promise.resolve({ kind: "network-error" as const }),
-    verifyStepUpChallenge: () =>
-      Promise.resolve({ kind: "network-error" as const }),
-    openExternalLink: () => Promise.resolve(),
-    getRegisteredUrlSchemes: () => Promise.resolve([]),
-    requestMicrophoneAccess: () => Promise.resolve("granted" as const),
-    openMicrophoneSettings: () => Promise.resolve(),
-    beginAuthAttempt: () => undefined,
-    onAuthCallback: () => ({ dispose: () => undefined }),
-    deviceFlow: { start: () => Promise.resolve(null) },
-    secureStorage: {
-      get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
-      delete: () => Promise.resolve(),
-    },
-    notifications: {
-      show: () => Promise.resolve(),
-      onForegroundDisplay: () => ({ dispose: () => undefined }),
-      onClick: () => ({ dispose: () => undefined }),
-    },
-    tray: {
-      setEpics: () => Promise.resolve(),
-      setIndicator: () => Promise.resolve(),
-      onEpicSelected: () => ({ dispose: () => undefined }),
-    },
-    hostPicker: {
-      get isOpen() {
-        return false;
-      },
-      requestOpen: () => undefined,
-      requestClose: () => undefined,
-      onChange: () => ({ dispose: () => undefined }),
-    },
-    workspaceFolders: {
-      pickFolders: () => Promise.resolve([]),
-    },
-    fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
-      copyDroppedFilePaths: (paths) => Promise.resolve(paths),
-      readNativeClipboardFilePaths: () => Promise.resolve([]),
-    },
-    tokenStore: {
-      get: () => Promise.resolve(null),
-      signIn: () => Promise.resolve(),
-      rotate: () =>
-        Promise.resolve({ outcome: "deleted" as const, pair: null }),
-      delete: () => Promise.resolve(),
-      subscribe: () => ({ dispose: () => undefined }),
-      migrateLegacyCredentials: () =>
-        Promise.resolve("identity-unknown" as const),
-    },
+  return createFakeRunnerHost({
+    // The bridge provider hydrates its local-host state off this callback, so
+    // (unlike the other renderer/bridge tests sharing this factory) it must
+    // fire synchronously with "no local host" rather than staying a no-op.
     onLocalHostChange: (handler) => {
       handler(null);
       return { dispose: () => undefined };
     },
-    onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
-    service: null,
-    traycerCli: null,
-    migration: null,
-    hostManagement: null,
-    hostTray: null,
-    zoom: null,
-  } satisfies IRunnerHost;
+  });
 }
 
 function createRunnerHostWithWindows(value: unknown): IRunnerHost {

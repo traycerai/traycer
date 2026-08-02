@@ -21,7 +21,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * The full per-epic resource projection carried by every `snapshot`/`update`
@@ -94,7 +94,7 @@ export interface ResourcesStreamCallbacks {
 }
 
 export interface ResourcesStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly scope: ResourcesStreamScope;
   readonly callbacks: ResourcesStreamCallbacks;
 }
