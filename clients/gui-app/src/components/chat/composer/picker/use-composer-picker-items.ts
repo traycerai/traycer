@@ -4,6 +4,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { SlashCommand } from "@/lib/composer/types";
 
 import type { ComposerPickerStore } from "./composer-picker-store";
 import { useMentionItems } from "./use-mention-items";
@@ -43,11 +44,12 @@ export function useComposerPickerItems(
 }
 
 // Eagerly loads the slash-command catalog for the *active* composer (independent
-// of the popover being open) and mirrors a lowercased name -> canonical name map
-// into the picker store. The paste handler reads this to convert a pasted
-// `/command` into a chip only when it is a real command. Gated on `isActive` so
+// of the popover being open) and mirrors a lowercased name -> option map into the
+// picker store. The raw-text converters read this to turn a written `/command` or
+// `$skill` into a chip only when it is a real command, and to build that chip
+// from the same option the popover would have inserted. Gated on `isActive` so
 // inactive-but-mounted composers do not fetch `agent.gui.listCommands`; their
-// `knownSlashCommands` stays null (a composer you cannot focus cannot be pasted
+// `knownSlashCommands` stays null (a composer you cannot focus cannot be typed
 // into). Shares the cached query with the popover, so it opens against warm data.
 function useKnownSlashCommandNames(params: UseComposerPickerItemsParams): void {
   const { data: commands, isLoading } = useSlashCommands("", {
@@ -56,14 +58,11 @@ function useKnownSlashCommandNames(params: UseComposerPickerItemsParams): void {
     workingDirectories: params.mentionRoots,
     enabled: params.isActive,
   });
-  const knownCommands = useMemo<ReadonlyMap<string, string> | null>(
+  const knownCommands = useMemo<ReadonlyMap<string, SlashCommand> | null>(
     () =>
       params.isActive && !isLoading
         ? new Map(
-            commands.map((command) => [
-              command.name.toLowerCase(),
-              command.name,
-            ]),
+            commands.map((command) => [command.name.toLowerCase(), command]),
           )
         : null,
     [params.isActive, commands, isLoading],
