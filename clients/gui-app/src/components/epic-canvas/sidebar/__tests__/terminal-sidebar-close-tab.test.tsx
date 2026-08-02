@@ -138,6 +138,18 @@ describe("terminal sidebar Close", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
+  it("highlights the terminal shown in the active canvas pane", () => {
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    expect(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).className.split(
+        " ",
+      ),
+    ).toContain("bg-accent");
+  });
+
   it("closes the open canvas tab and kills the session", () => {
     // Precondition: a canvas tab is open for this session.
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
@@ -147,7 +159,7 @@ describe("terminal sidebar Close", () => {
     );
     expect(
       getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).textContent,
-    ).toBe("New Terminal");
+    ).toBe("work · New Terminal");
     expect(
       getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).className,
     ).toContain("h-7");
@@ -209,7 +221,7 @@ describe("terminal sidebar Close", () => {
     expect(queryByRole("menuitem", { name: "Close" })).toBeNull();
   });
 
-  it("uses the active process name for an unnamed terminal", () => {
+  it("prefixes the active process with the directory for an unnamed terminal", () => {
     terminalSessions.value = [{ ...RUNNING_SESSION, activeProcessName: "vim" }];
 
     const { getByTestId } = render(
@@ -218,7 +230,7 @@ describe("terminal sidebar Close", () => {
 
     expect(
       getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).textContent,
-    ).toBe("vim");
+    ).toBe("work · vim");
   });
 
   it("shows the empty terminal panel state when there are no terminals", () => {

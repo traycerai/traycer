@@ -30,6 +30,10 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => authService,
 }));
 
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 // `EpicSessionProvider` opens its own durable transport via this factory, but
 // the test installs an `__setEpicStreamClientFactoryForTests` override that
 // short-circuits before `openTransport` runs - so a stable stub opener that is

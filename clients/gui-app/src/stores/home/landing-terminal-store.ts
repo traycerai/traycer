@@ -33,6 +33,8 @@ export interface LandingTerminalStoreState {
   readonly addTab: (tab: LandingTerminalTabRef) => void;
   readonly activateTab: (instanceId: string) => void;
   readonly renameTab: (instanceId: string, name: string) => void;
+  /** Refreshes a derived title without overwriting a user rename. */
+  readonly syncDefaultTitle: (instanceId: string, name: string) => void;
   /** Atomically tombstones then removes a user-closed tab. */
   readonly closeTab: (instanceId: string) => LandingTerminalTabRef | null;
   /**
@@ -168,6 +170,27 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               : tab,
           ),
         }));
+      },
+      syncDefaultTitle: (instanceId, name) => {
+        const trimmed = name.trim();
+        if (trimmed.length === 0) return;
+        set((state) => {
+          const target = state.tabs.find(
+            (tab) => tab.instanceId === instanceId,
+          );
+          if (
+            target === undefined ||
+            target.titleSource === "manual" ||
+            target.name === trimmed
+          ) {
+            return state;
+          }
+          return {
+            tabs: state.tabs.map((tab) =>
+              tab.instanceId === instanceId ? { ...tab, name: trimmed } : tab,
+            ),
+          };
+        });
       },
       closeTab: (instanceId) => {
         const closed = get().tabs.find(

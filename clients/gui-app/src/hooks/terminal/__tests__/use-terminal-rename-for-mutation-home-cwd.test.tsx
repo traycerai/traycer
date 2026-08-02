@@ -11,8 +11,8 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
-  CanonicalTerminalSessionInfo,
-  ListTerminalsResponseV21,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+  ListTerminalsResponseV22,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { RenameTerminalMutationContext } from "@/hooks/terminal/use-terminal-rename-for-mutation";
@@ -100,13 +100,14 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 
 function sessionInfo(
-  overrides: Partial<CanonicalTerminalSessionInfo>,
-): CanonicalTerminalSessionInfo {
+  overrides: Partial<CanonicalTerminalSessionInfoWithCurrentCwd>,
+): CanonicalTerminalSessionInfoWithCurrentCwd {
   return {
     sessionId: SESSION_ID,
     scope: { kind: "epic", epicId: EPIC_ID },
     sessionKind: "terminal",
     cwd: "/work/repo",
+    currentCwd: "/work/repo",
     shellCommand: "/bin/zsh",
     shellArgs: [],
     cols: 80,
@@ -142,7 +143,7 @@ describe("useTerminalRenameFor homeCwd cache preservation", () => {
       sessionId: "term-other",
       title: "other",
     });
-    queryClient.setQueryData<ListTerminalsResponseV21>(listKey, {
+    queryClient.setQueryData<ListTerminalsResponseV22>(listKey, {
       sessions: [sessionInfo({}), sibling],
       homeCwd: HOME_CWD,
     });
@@ -156,7 +157,7 @@ describe("useTerminalRenameFor homeCwd cache preservation", () => {
       title: NEW_TITLE,
     });
 
-    const data = queryClient.getQueryData<ListTerminalsResponseV21>(listKey);
+    const data = queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
     expect(data?.homeCwd).toBe(HOME_CWD);
     expect(
       data?.sessions.find((session) => session.sessionId === SESSION_ID)?.title,
@@ -180,7 +181,7 @@ describe("useTerminalRenameFor homeCwd cache preservation", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<ListTerminalsResponseV21>(listKey, {
+    queryClient.setQueryData<ListTerminalsResponseV22>(listKey, {
       sessions: [sessionInfo({})],
       homeCwd: HOME_CWD,
     });
@@ -194,11 +195,11 @@ describe("useTerminalRenameFor homeCwd cache preservation", () => {
       title: NEW_TITLE,
     });
     expect(
-      queryClient.getQueryData<ListTerminalsResponseV21>(listKey)?.homeCwd,
+      queryClient.getQueryData<ListTerminalsResponseV22>(listKey)?.homeCwd,
     ).toBe(HOME_CWD);
     expect(
       queryClient
-        .getQueryData<ListTerminalsResponseV21>(listKey)
+        .getQueryData<ListTerminalsResponseV22>(listKey)
         ?.sessions.find((session) => session.sessionId === SESSION_ID)?.title,
     ).toBe(NEW_TITLE);
 
@@ -209,7 +210,7 @@ describe("useTerminalRenameFor homeCwd cache preservation", () => {
     );
 
     const rolledBack =
-      queryClient.getQueryData<ListTerminalsResponseV21>(listKey);
+      queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
     expect(rolledBack?.homeCwd).toBe(HOME_CWD);
     expect(
       rolledBack?.sessions.find((session) => session.sessionId === SESSION_ID)

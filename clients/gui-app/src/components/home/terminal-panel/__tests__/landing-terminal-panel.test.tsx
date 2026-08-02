@@ -502,6 +502,9 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
+    expect(useLandingTerminalStore.getState().tabs[0]?.name).toBe(
+      "project · New Terminal",
+    );
 
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
     await waitFor(() => {

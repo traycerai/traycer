@@ -10,6 +10,7 @@ import {
   Option,
   type Command as CommanderCommand,
 } from "commander";
+import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
@@ -1505,7 +1506,7 @@ function registerAgentCommands(
       )
       .option(
         "--permission-mode <mode>",
-        "GUI permission mode: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
+        `GUI permission mode. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
     (opts) =>
       buildAgentCreateCommand({
@@ -1622,7 +1623,7 @@ function registerAgentCommands(
       )
       .option(
         "--permission-mode <mode>",
-        "Permission mode for future turns: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
+        `Permission mode for future turns. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
     (opts) =>
       buildAgentConfigureCommand({

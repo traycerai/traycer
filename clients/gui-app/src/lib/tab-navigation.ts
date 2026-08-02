@@ -802,7 +802,16 @@ export class TabNavigationController {
     }
 
     const activationTarget = this.activationTarget(requestedIntent);
-    const activation = tabCommandCoordinator.activateTab(activationTarget);
+    // Same convention as `activateExternalTarget` below: `activateTab` can
+    // throw for a migrated-epic target whose identity resolution was raced
+    // out from under it (see `resolveMigratedEpicActivation` in
+    // tab-command-coordinator.ts) - treat that the same as a `null` result.
+    let activation: CoordinatedTabActivation | null;
+    try {
+      activation = tabCommandCoordinator.activateTab(activationTarget);
+    } catch {
+      return false;
+    }
     if (activation === null) return false;
     const intent = this.canonicalIntent(requestedIntent, activation.ref);
     if (intent === null) {
