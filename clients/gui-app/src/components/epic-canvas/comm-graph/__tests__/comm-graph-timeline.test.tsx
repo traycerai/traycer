@@ -339,13 +339,10 @@ afterEach(() => {
  * itself belongs to the dev-app pass, and is stated as unverified rather than
  * implied to be green.
  *
- * That gap extends to REACHING an edge at all. `getEdgePosition` bails unless
+ * That gap extends to REACHING an edge at all: `getEdgePosition` bails unless
  * both endpoints carry DOM-measured `handleBounds`, so `EdgeWrapper` renders no
- * <g> here - nothing to dispatch at, no `inactive` class to assert, no tab stop
- * to land on. So neither the canvas's `onEdgeClick` (what keeps that class off,
- * and the only reason an edge line is pointer-live) nor the edge's keyboard
- * path (Enter/Space through `domAttributes`, and the focus ring it drives) has
- * ANY coverage in this suite. Both are dev-app checks - unlike their
+ * <g> here - nothing to dispatch at, no tab stop to land on. Everything in
+ * `commGraphEdgeInteraction` is therefore a dev-app check, unlike its
  * `onNodeClick` twin below, which a mounted node wrapper does let us pin.
  */
 describe("CommGraphTile projection", () => {

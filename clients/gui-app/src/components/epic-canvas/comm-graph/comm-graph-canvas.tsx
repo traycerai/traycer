@@ -10,18 +10,12 @@
  * just the cursor being live. The transport that MOVES the cursor is docked at
  * the bottom of this canvas.
  */
-import {
-  useCallback,
-  useMemo,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Background,
   Controls,
   ReactFlow,
   ReactFlowProvider,
-  type EdgeMouseHandler,
   type NodeMouseHandler,
   type Viewport,
 } from "@xyflow/react";
@@ -56,7 +50,7 @@ import {
 import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
 import { CommGraphAgentDetailPanel } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-panel";
 import { commGraphEventTouchesAgent } from "@/lib/comm-graph/comm-graph-timeline";
-import { commGraphAgentLabel } from "@/lib/comm-graph/comm-graph-labels";
+import { commGraphEdgeInteraction } from "@/components/epic-canvas/comm-graph/comm-graph-edge-interaction";
 import {
   commGraphEdgeTravel,
   type CommGraphEdgeTravel,
@@ -162,16 +156,13 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   // vice versa, so the canvas never has two competing explanations beside it.
   const [selectedDetail, setSelectedDetail] =
     useState<CommGraphSelectedDetail | null>(null);
-  // Which edge holds keyboard focus, so the edge component can draw the ring
-  // React Flow's stylesheet otherwise leaves it without - see `edges` below.
-  const [focusedEdgeId, setFocusedEdgeId] = useState<string | null>(null);
   // React Flow paints its own chrome (background dots, zoom controls) outside
   // the Tailwind cascade, so it needs the resolved mode handed to it.
   const { resolvedTheme } = useResolvedTheme();
   const activityTiers = useEpicAgentActivityTiers();
 
   // Shared by the edge labels and both detail panels, so an agent is named the
-  // same way wherever it is referred to.
+  // same way wherever it appears.
   const nameById = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent.name])),
     [agents],
@@ -231,11 +222,11 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     [handleSelectAgent],
   );
 
-  const handleEdgeClick = useCallback<EdgeMouseHandler<CommGraphFlowEdge>>(
-    (_event, edge) => {
-      handleSelectEdge(edge.id);
-    },
-    [handleSelectEdge],
+  // Both halves of "an edge is a control", from one call - see the module for
+  // the React Flow behavior each knob answers.
+  const { edgeInteraction, onEdgeClick } = useMemo(
+    () => commGraphEdgeInteraction(handleSelectEdge, nameById),
+    [handleSelectEdge, nameById],
   );
 
   const nodes = useMemo<ReadonlyArray<CommGraphAgentFlowNode>>(
@@ -291,60 +282,17 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
         source: edge.agentAId,
         target: edge.agentBId,
         type: COMM_GRAPH_EDGE_TYPE,
-        // React Flow's own `cursor: pointer` rides on the `selectable` class,
-        // which `elementsSelectable={false}` withholds - so the edge would take
-        // clicks while still reading as inert ink. Landed on the <g>, it covers
-        // the interaction path the pointer actually meets.
-        className: "cursor-pointer",
-        // React Flow makes every edge a tab stop (`edgesFocusable` defaults on)
-        // and its own key handler gates on `isSelectable` - off here - so the
-        // stop did nothing at all. Rather than delete the stop the way
-        // `nodesFocusable={false}` did for nodes, it is given the behavior it
-        // was already advertising: a pair panel reachable by keyboard. A node
-        // could give up its wrapper stop because it has a real <button> inside;
-        // an edge has no inner control, so deleting it would have made the pair
-        // panel mouse-only.
-        //
-        // `button`, not the default `group`: it is activatable, and the
-        // default name is "Edge from <id> to <id>" - raw uuids, and DIRECTED
-        // for an edge this canvas draws undirected on purpose.
-        ariaRole: "button",
-        ariaLabel: `Open messages between ${commGraphAgentLabel(edge.agentAId, nameById)} and ${commGraphAgentLabel(edge.agentBId, nameById)}`,
-        // The escape hatch is spread LAST onto the <g>, so this REPLACES React
-        // Flow's own key handler (which only drove the selection this canvas
-        // turns off). Focus is tracked here because the ring is drawn by the
-        // edge component, which cannot see its own wrapper's focus.
-        domAttributes: {
-          onKeyDown: (event: ReactKeyboardEvent<SVGGElement>) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            // Space scrolls the canvas otherwise, and Enter would bubble to
-            // whatever the tile is nested in.
-            event.preventDefault();
-            handleSelectEdge(edge.id);
-          },
-          onFocus: () => setFocusedEdgeId(edge.id),
-          onBlur: () =>
-            setFocusedEdgeId((current) =>
-              current === edge.id ? null : current,
-            ),
-        },
+        ...edgeInteraction(edge),
         data: {
           edgeId: edge.id,
           hasOpenThread: edge.hasOpenThread,
-          // NOT a breach of the uniform-stroke rule, which is about ACTIVITY -
-          // two permanent channels for the same fact is what makes a busy
-          // canvas unreadable. This is a transient user state: one edge, only
-          // while it holds focus, and the focus ring has nowhere else to go
-          // (React Flow's stylesheet kills the <g>'s outline, and its own
-          // focus stroke rides on the `selectable` class this canvas withholds).
-          focused: edge.id === focusedEdgeId,
           // Resolved against THIS edge's canonical endpoint order, so the drawn
           // edge stays undirected while the message that travels it does not.
           ...travelData(travelFor(edge.id, edge.agentAId, edge.agentBId)),
           onSelect: handleSelectEdge,
         },
       })),
-    [aggregated, focusedEdgeId, handleSelectEdge, nameById, travelFor],
+    [aggregated, edgeInteraction, handleSelectEdge, travelFor],
   );
 
   const selectedEdge =
@@ -408,20 +356,10 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           // passed the whole time. Deleting this prop silently breaks the
           // feature again; the node-wrapper test is what guards it.
           onNodeClick={handleNodeClick}
-          // REQUIRED, and for the same reason as `onNodeClick` above - the edge
-          // half of the same trap. `EdgeWrapper` writes
-          //   inactive = !isSelectable && !onClick
-          // onto the edge's <g>, and `.react-flow__edge.inactive` is
-          // `pointer-events: none`. With `elementsSelectable={false}` and no
-          // `onEdgeClick`, EVERY edge line was dead: `BaseEdge` was already
-          // painting its 20px transparent interaction path, but nothing in the
-          // group could receive a pointer. The only reachable click target on
-          // the whole canvas was the "awaiting reply" badge - which renders in
-          // the label layer (its own `pointer-events-auto`), and ONLY on an
-          // edge with an open thread. So a settled pair - the common case -
-          // could not open its thread panel at all, and `data.onSelect` was
-          // wired to nothing. Deleting this prop silently breaks it again.
-          onEdgeClick={handleEdgeClick}
+          // REQUIRED, like `onNodeClick`: without it every edge <g> is
+          // pointer-inert - see `commGraphEdgeInteraction`, which builds this
+          // and the per-edge half together for that reason.
+          onEdgeClick={onEdgeClick}
           nodesDraggable={false}
           nodesConnectable={false}
           // The node wrapper would otherwise take `tabIndex=0` and be a DEAD tab
@@ -434,10 +372,9 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           // re-inert the node: `hasPointerEvents` is a function of `onClick`,
           // not of `isFocusable`.
           //
-          // `edgesFocusable` is deliberately LEFT ON, which is not an
-          // inconsistency: an edge has no inner control to fall back to, so its
-          // wrapper is the ONLY keyboard route to the pair panel. It earns the
-          // tab stop by carrying a real key handler - see `edges` above.
+          // `edgesFocusable` stays ON deliberately: an edge has no inner
+          // control, so its wrapper is the only keyboard route to the pair
+          // panel, and it earns the stop by carrying a real key handler.
           nodesFocusable={false}
           // Kept OFF deliberately, and it does not gate the click: React Flow
           // gates only its INTERNAL selection (`handleNodeClick`) on

@@ -285,32 +285,58 @@ const SUBJECT_CLASS =
   "min-w-0 flex-1 text-ui-sm font-medium text-foreground/90";
 
 /**
- * The two endpoints, each reachable in the way its transcript can support.
- * Two link species (see `CommGraphDirectionLabel`): SCROLL links land
- * somewhere specific; PLAIN OPENS (↗) only focus the tile. Per kind:
+ * WHICH ENDPOINT CAN SCROLL WHERE - the whole mapping, as data.
  *
- * - message rows: the CAPTURED-anchor endpoint (the delivered message's own
- *   chat - the arrow's receiver) scrolls to that message; the SENDER scrolls
- *   to its own "Sent message" card, resolved at jump time from block
- *   metadata, when its transcript can carry it (a projected GUI chat).
- * - notice rows: the WAITING agent (arrow's receiver) scrolls to the
- *   delivered notice when the row carries an anchor - that notice is a real
- *   message in its transcript. The IDLE agent (arrow's sender) is a plain
- *   open: NOTHING in its transcript is the notice. The broker observed it
- *   going quiet; the agent never wrote a message saying so, so there is no
- *   anchor to land on and the endpoint must not claim one. Its transcript
- *   tail is merely "whatever it was doing", which drifts as the agent keeps
- *   working and is not the row the reader clicked.
- * - created rows: the CREATED agent scrolls to the START of its transcript
- *   (its birth); the creator is a plain open - its create call carries no
- *   resolvable anchor today.
+ * Ordered, first match wins: a captured anchor beats one resolved at jump time.
+ * A row not listed here is a PLAIN OPEN (↗) - reachable, claiming nothing. That
+ * is the honest default, and it is where a notice's idle agent lands: the
+ * broker OBSERVED it going quiet, so nothing in its transcript is this row.
  *
- * `canJump` alone never grants a scroll claim: it is also true for rows whose
- * jump degrades to a plain tile open, and claiming a landing the jump cannot
- * deliver reads as broken navigation, not honesty. Endpoints that cannot
- * scroll but are projected stay reachable as plain opens; an agent this epic
- * does not project renders as plain text - a dead-looking link is the one
- * wrong answer.
+ * `endpoint` names a RAW log field, not the arrow's side - a notice reverses
+ * the two for display (`commGraphEventDirection`).
+ */
+interface CommGraphScrollClaim {
+  readonly jump: CommGraphJumpKind;
+  readonly endpoint: "anchor" | "sender" | "receiver";
+  /** Row kind this claim is limited to; null = any. */
+  readonly rowKind: CommGraphEvent["kind"] | null;
+  /** Named in the accessible label, so claim and landing cannot drift apart. */
+  readonly landing: string;
+}
+
+type CommGraphJumpKind = "anchor" | "created" | "sender";
+
+const SCROLL_CLAIMS: ReadonlyArray<CommGraphScrollClaim> = [
+  {
+    jump: "anchor",
+    endpoint: "anchor",
+    rowKind: null,
+    landing: " and scroll to this message",
+  },
+  {
+    jump: "created",
+    endpoint: "receiver",
+    rowKind: "agent_created",
+    landing: " and scroll to the start",
+  },
+  {
+    jump: "sender",
+    endpoint: "sender",
+    rowKind: "a2a_message",
+    landing: " and scroll to this message",
+  },
+];
+
+/**
+ * The two endpoints, each reachable in the way its transcript can support - see
+ * `SCROLL_CLAIMS` for which is which, and `CommGraphDirectionLabel` for the two
+ * link species.
+ *
+ * A capability being on never by itself grants a claim: `canJump` is also true
+ * for rows whose jump degrades to a plain tile open, so the claim must match
+ * the ENDPOINT too. Claiming a landing the jump cannot deliver reads as broken
+ * navigation, not honesty. An agent this epic does not project renders as plain
+ * text - a dead-looking link is the one wrong answer.
  */
 function CommGraphSubject(props: {
   readonly event: CommGraphEvent;
@@ -339,37 +365,46 @@ function CommGraphSubject(props: {
   const { fromAgentId: senderId, toAgentId: receiverId } =
     commGraphEventDirection(event);
   const jumpTarget = canJump ? commGraphJumpTarget(event) : null;
-  const jumpAgentId =
-    jumpTarget !== null && jumpTarget.kind !== "agent"
-      ? jumpTarget.chatId
-      : null;
+  // The table's two lookups. `anchor` is the chat the captured origin ref points
+  // at - null when the row has none, or when its jump degrades to a plain tile
+  // open, which is what keeps `canJump` alone from granting a claim.
+  const endpointIds: Readonly<
+    Record<CommGraphScrollClaim["endpoint"], string | null>
+  > = {
+    anchor:
+      jumpTarget !== null && jumpTarget.kind !== "agent"
+        ? jumpTarget.chatId
+        : null,
+    sender: event.senderAgentId,
+    receiver: event.receiverAgentId,
+  };
+  const jumps: Readonly<
+    Record<
+      CommGraphJumpKind,
+      { readonly enabled: boolean; readonly open: () => void }
+    >
+  > = {
+    anchor: { enabled: true, open: () => onJump(event) },
+    created: {
+      enabled: canJumpToCreated,
+      open: () => onJumpToCreated(event),
+    },
+    sender: { enabled: canJumpToSender, open: () => onJumpToSender(event) },
+  };
   const endpointAction = (agentId: string | null): CommGraphEndpointAction => {
     if (agentId === null || !agentNames.has(agentId)) {
       return { onOpen: null, scrollSuffix: null };
     }
-    if (agentId === jumpAgentId) {
-      return {
-        onOpen: () => onJump(event),
-        scrollSuffix: " and scroll to this message",
-      };
+    const claim = SCROLL_CLAIMS.find(
+      (candidate) =>
+        (candidate.rowKind === null || candidate.rowKind === event.kind) &&
+        jumps[candidate.jump].enabled &&
+        endpointIds[candidate.endpoint] === agentId,
+    );
+    if (claim === undefined) {
+      return { onOpen: () => onOpenAgent(agentId), scrollSuffix: null };
     }
-    if (
-      event.kind === "agent_created" &&
-      canJumpToCreated &&
-      agentId === event.receiverAgentId
-    ) {
-      return {
-        onOpen: () => onJumpToCreated(event),
-        scrollSuffix: " and scroll to the start",
-      };
-    }
-    if (canJumpToSender && agentId === event.senderAgentId) {
-      return {
-        onOpen: () => onJumpToSender(event),
-        scrollSuffix: " and scroll to this message",
-      };
-    }
-    return { onOpen: () => onOpenAgent(agentId), scrollSuffix: null };
+    return { onOpen: jumps[claim.jump].open, scrollSuffix: claim.landing };
   };
   return (
     <CommGraphDirectionLabel

@@ -1295,3 +1295,14 @@
   background-color: color-mix(in srgb, var(--primary) 75%, transparent);
   color: var(--primary-foreground);
 }
+
+/*
+ * Communication-graph edge focus (`comm-graph-edge-interaction.ts`).
+ * React Flow strips the edge group's outline and paints its own focus stroke
+ * only for a `selectable` edge - which that canvas is not - so a focused edge
+ * would otherwise look identical to an unfocused one.
+ */
+.react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--ring);
+  stroke-width: 2;
+}
