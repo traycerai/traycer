@@ -4,6 +4,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -28,6 +29,14 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import * as chatTabViewportHandoff from "@/stores/chats/chat-tab-viewport-handoff";
+import {
+  evictChatTabState,
+  evictChatTabStateForChat,
+  hasSavedChatTabState,
+  restoreChatTabState,
+} from "@/stores/chats/chat-tab-state-cache";
+import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { appLogger } from "@/lib/logger";
 import { isBlankTileRef } from "@/stores/epics/canvas/types";
 import { epicCanvasKey } from "@/lib/persist";
 import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
@@ -2325,5 +2334,127 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
       SPEC_C.instanceId,
       SPEC_A.instanceId,
     ]);
+  });
+
+  it("a failed viewport capture cannot abort remaining captures or the structural mutation", () => {
+    const throwingChat: EpicCanvasTileRef = {
+      ...CHAT_A,
+      id: "chat-capture-throws",
+      instanceId: "inst-chat-capture-throws",
+      name: "Throwing capture",
+    };
+    const healthyChat: EpicCanvasTileRef = {
+      ...CHAT_A,
+      id: "chat-capture-healthy",
+      instanceId: "inst-chat-capture-healthy",
+      name: "Healthy capture",
+    };
+    const identity: ChatTabPersistenceIdentity = {
+      epicId: "epic-t20",
+      chatId: throwingChat.id,
+      tileInstanceId: throwingChat.instanceId,
+    };
+    evictChatTabState([identity.tileInstanceId]);
+    evictChatTabStateForChat(identity);
+    onTestFinished(() => {
+      evictChatTabState([identity.tileInstanceId]);
+      evictChatTabStateForChat(identity);
+    });
+
+    seedHeaderTab(
+      "tab-capture-isolation",
+      {
+        activePaneId: "pane-gone",
+        root: {
+          kind: "group",
+          id: "split-outer",
+          direction: "horizontal",
+          children: [
+            {
+              kind: "pane",
+              id: "pane-gone",
+              tabInstanceIds: [SPEC_A.instanceId],
+              activeTabId: SPEC_A.instanceId,
+              previewTabId: null,
+              activationHistory: [SPEC_A.instanceId],
+            },
+            {
+              kind: "group",
+              id: "split-survivor",
+              direction: "vertical",
+              children: [
+                {
+                  kind: "pane",
+                  id: "pane-throwing",
+                  tabInstanceIds: [throwingChat.instanceId],
+                  activeTabId: throwingChat.instanceId,
+                  previewTabId: null,
+                  activationHistory: [throwingChat.instanceId],
+                },
+                {
+                  kind: "pane",
+                  id: "pane-healthy",
+                  tabInstanceIds: [healthyChat.instanceId],
+                  activeTabId: healthyChat.instanceId,
+                  previewTabId: null,
+                  activationHistory: [healthyChat.instanceId],
+                },
+              ],
+            },
+          ],
+        },
+        tilesByInstanceId: {
+          [SPEC_A.instanceId]: SPEC_A,
+          [throwingChat.instanceId]: throwingChat,
+          [healthyChat.instanceId]: healthyChat,
+        },
+        sizesByGroupId: {
+          "split-outer": [0.5, 0.5],
+          "split-survivor": [0.5, 0.5],
+        },
+      },
+      "epic-t20",
+    );
+
+    const captureFailure = new Error("capture failed");
+    const unregisterThrowing =
+      chatTabViewportHandoff.registerChatTabViewportCapture(
+        throwingChat.instanceId,
+        () => {
+          throw captureFailure;
+        },
+      );
+    onTestFinished(unregisterThrowing);
+    const healthyCapture = vi.fn();
+    const unregisterHealthy =
+      chatTabViewportHandoff.registerChatTabViewportCapture(
+        healthyChat.instanceId,
+        healthyCapture,
+      );
+    onTestFinished(unregisterHealthy);
+    const logError = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    expect(() => {
+      useEpicCanvasStore
+        .getState()
+        .closeCanvasPane("tab-capture-isolation", "pane-gone");
+    }).not.toThrow();
+
+    expect(healthyCapture).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith(
+      "chat tab viewport capture failed during structural handoff",
+      { instanceId: throwingChat.instanceId },
+      captureFailure,
+    );
+    expect(
+      findPaneById(requireCanvas("tab-capture-isolation").root, "pane-gone"),
+    ).toBeNull();
+    expect(hasSavedChatTabState(identity)).toBe(false);
+    expect(restoreChatTabState(identity, [])).toEqual({
+      mode: "following-end",
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+    });
   });
 });

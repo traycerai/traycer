@@ -25,6 +25,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -1786,6 +1787,7 @@ describe("T3 rev-3 adversarial: coordinator ledger & structural restore", () => 
         resolveTabEpicIdentity(phase.tabId, "phase-race", "epic-racer");
       }
     });
+    onTestFinished(unsubscribeRace);
 
     const thrown = runAndCaptureError(() => {
       tabCommandCoordinator.activateTab({
@@ -1795,8 +1797,6 @@ describe("T3 rev-3 adversarial: coordinator ledger & structural restore", () => 
         tabId: phase.tabId,
       });
     });
-    unsubscribeRace();
-
     expect(thrown).toBeInstanceOf(Error);
     expect(useTabsStore.getState().items).toEqual(layoutBefore);
     expect(useEpicCanvasStore.getState().activeTabId).toBe(activeBefore);
@@ -1833,6 +1833,7 @@ describe("T3 rev-3 adversarial: coordinator ledger & structural restore", () => 
         resolveTabEpicIdentity(phase.tabId, "epic-canonical", "epic-racer");
       }
     });
+    onTestFinished(unsubscribeRace);
 
     const thrown = runAndCaptureError(() => {
       tabCommandCoordinator.activateTab({
@@ -1842,8 +1843,6 @@ describe("T3 rev-3 adversarial: coordinator ledger & structural restore", () => 
         tabId: phase.tabId,
       });
     });
-    unsubscribeRace();
-
     expect(thrown).toBeInstanceOf(Error);
     expect(useTabsStore.getState().items).toEqual(layoutBefore);
     expect(useEpicCanvasStore.getState().activeTabId).toBe(activeBefore);
@@ -2251,6 +2250,7 @@ describe("T3 rev-3 adversarial: Resource Monitor nested + Phase completion", () 
         resolveTabEpicIdentity(first.tabId, "epic-phase", "epic-racer");
       }
     });
+    onTestFinished(unsubscribeRace);
 
     let result: boolean | undefined;
     expect(() => {
@@ -2271,8 +2271,6 @@ describe("T3 rev-3 adversarial: Resource Monitor nested + Phase completion", () 
         { replace: true },
       );
     }).not.toThrow();
-    unsubscribeRace();
-
     expect(result).toBe(false);
     expect(nav.calls.length).toBe(0);
     expect(useEpicCanvasStore.getState().tabsById[first.tabId]?.epicId).toBe(

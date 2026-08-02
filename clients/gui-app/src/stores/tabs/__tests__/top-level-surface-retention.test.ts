@@ -42,6 +42,18 @@ describe("retainedTopLevelSurfaceKeys (pure)", () => {
     expect(retained).toEqual(["a"]);
   });
 
+  it("does not let an unavailable active key consume a retention slot", () => {
+    const available = ["0", "1", "2", "3", "4", "5"];
+    const retained = retainedTopLevelSurfaceKeys(
+      available,
+      ["stale-active"],
+      ["5", "4", "3", "2", "1", "0"],
+    );
+
+    expect(retained).toHaveLength(MAX_RETAINED_TOP_LEVEL_SURFACES);
+    expect(retained).toEqual(["1", "2", "3", "4", "5"]);
+  });
+
   it("applies one global cap across mixed-kind keys, not a per-kind cap", () => {
     const available = [
       "epic:old",

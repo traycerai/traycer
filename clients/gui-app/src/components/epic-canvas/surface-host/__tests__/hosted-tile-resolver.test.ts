@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
@@ -62,9 +62,9 @@ describe("findHostedTileElement (forward instanceId -> element, command-to-compo
     const otherRoot = document.createElement("div");
     otherRoot.appendChild(buildHostedRecord("chat-1", "p1", "tab-1", ""));
     document.body.appendChild(otherRoot);
+    onTestFinished(() => otherRoot.remove());
     const root = mount(buildHostedRecord("chat-2", "p2", "tab-1", ""));
     expect(findHostedTileElement(root, "chat-1")).toBeNull();
-    otherRoot.remove();
   });
 
   it("escapes instanceIds containing quote/backslash characters instead of producing an invalid selector", () => {

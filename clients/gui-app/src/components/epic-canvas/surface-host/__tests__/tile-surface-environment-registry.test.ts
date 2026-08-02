@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from "vitest";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -20,7 +27,8 @@ import {
   subscribeTileSurfaceEnvironment,
   type ReadyTileSurfaceEnvironment,
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
-import { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/components/layout/top-level-tab-host";
+import { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
+import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 
 function canvasWithChat(instanceId: string): EpicCanvasState {
   return {
@@ -110,6 +118,21 @@ describe("tile surface environment registry", () => {
     expect(getTileSurfaceEnvironment("never-a-member")).toBeNull();
   });
 
+  it("keeps the requested registry key when a synthetic identity override disagrees", () => {
+    const synthetic = buildSyntheticTileSurfaceEnvironment("chat-1", {
+      identity: {
+        instanceId: "mismatched-instance",
+        tileKind: "chat",
+        contentId: "chat-content",
+        epicId: "epic-1",
+        hostId: TEST_HOST_ID,
+      },
+    });
+
+    expect(synthetic.identity.instanceId).toBe("chat-1");
+    expect(synthetic.identity.contentId).toBe("chat-content");
+  });
+
   it("publishes a ready environment for a current member and notifies its subscribers", () => {
     seedMember("chat-1", "tab-1");
     let notifications = 0;
@@ -135,6 +158,26 @@ describe("tile surface environment registry", () => {
     expect(notifications).toBe(0);
     expect(getTileSurfaceEnvironment("chat-1")).toBeNull();
     unsubscribe();
+  });
+
+  it("a repeated stale unsubscribe cannot delete a newer listener set", () => {
+    seedMember("chat-1", "tab-1");
+    const unsubscribeStale = subscribeTileSurfaceEnvironment(
+      "chat-1",
+      () => {},
+    );
+    unsubscribeStale();
+
+    let notifications = 0;
+    const unsubscribeCurrent = subscribeTileSurfaceEnvironment("chat-1", () => {
+      notifications += 1;
+    });
+    onTestFinished(unsubscribeCurrent);
+
+    unsubscribeStale();
+    publishTileSurfaceEnvironment(environment({}));
+
+    expect(notifications).toBe(1);
   });
 
   it("retains the last valid environment across a structural transfer (no round-trip through null)", () => {

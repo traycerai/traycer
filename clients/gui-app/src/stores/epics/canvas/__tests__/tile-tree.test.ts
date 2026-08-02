@@ -546,6 +546,27 @@ describe("paneRemovalDissolveHandoffTargets", () => {
     expect(paneRemovalDissolveHandoffTargets(tree, "a")).toEqual([]);
   });
 
+  it("captures the same fallback tab rendering paints when a survivor activeTabId is null or stale", () => {
+    const nullActive = group("g-null", "horizontal", [
+      pane("gone-null", ["t-gone"]),
+      { ...pane("keep-null", ["t-painted", "t-other"]), activeTabId: null },
+    ]);
+    const staleActive = group("g-stale", "horizontal", [
+      pane("gone-stale", ["t-gone"]),
+      {
+        ...pane("keep-stale", ["t-painted", "t-other"]),
+        activeTabId: "t-missing",
+      },
+    ]);
+
+    expect
+      .soft(paneRemovalDissolveHandoffTargets(nullActive, "gone-null"))
+      .toEqual(["t-painted"]);
+    expect
+      .soft(paneRemovalDissolveHandoffTargets(staleActive, "gone-stale"))
+      .toEqual(["t-painted"]);
+  });
+
   /**
    * Review round 1, finding 4: the original version of this test only
    * checked `result.root?.kind` (pane vs group) - it would stay green even

@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from "vitest";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState, EpicNodeRef } from "@/stores/epics/canvas/types";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -25,6 +32,7 @@ import {
 import {
   reportChatRemoteDeletionState,
   resetChatRemoteDeletionRegistryForTesting,
+  subscribeChatRemoteDeletion,
 } from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
 import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 
@@ -57,7 +65,10 @@ function canvasWithChat(instanceId: string, paneId: string): EpicCanvasState {
   };
 }
 
-function seedSingleTabStrip(refs: ReadonlyArray<TabRef>, activeRef: TabRef) {
+function seedSingleTabStrip(
+  refs: ReadonlyArray<TabRef>,
+  activeRef: TabRef,
+): void {
   useTabsStore.setState((state) => ({
     ...state,
     items: refs.map((ref) => ({
@@ -837,6 +848,33 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
     expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
 
     reportChatRemoteDeletionState("chat-1", false);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+  });
+
+  it("reset notifies subscribers and immediately recomputes remote-deletion membership", () => {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChat("chat-1", "p1") },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+    reportChatRemoteDeletionState("chat-1", true);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
+
+    let notifications = 0;
+    const unsubscribe = subscribeChatRemoteDeletion(() => {
+      notifications += 1;
+    });
+    onTestFinished(unsubscribe);
+    resetChatRemoteDeletionRegistryForTesting();
+
+    expect(notifications).toBe(1);
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
   });
 });

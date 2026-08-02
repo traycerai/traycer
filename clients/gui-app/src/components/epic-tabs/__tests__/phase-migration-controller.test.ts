@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import {
   resolveTabEpicIdentity,
@@ -236,15 +244,16 @@ describe("PhaseMigrationController", () => {
     controller.attach(PHASE_TAB_ID, "phase-1", start);
     const unsubscribeCompletion =
       controller.subscribeCompletion(completionListener);
+    onTestFinished(unsubscribeCompletion);
     const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
       const current = useEpicCanvasStore.getState().tabsById[PHASE_TAB_ID];
       if (current?.surfaceMode?.kind === "phase-migration") {
         resolveTabEpicIdentity(PHASE_TAB_ID, "phase-1", "epic-racer");
       }
     });
+    onTestFinished(unsubscribeRace);
 
     controller.succeed(PHASE_TAB_ID, "phase-1", 1, "epic-created");
-    unsubscribeRace();
 
     expect(controller.snapshot(PHASE_TAB_ID)).toMatchObject({
       status: "error",
@@ -269,7 +278,6 @@ describe("PhaseMigrationController", () => {
     });
     expect(start.mock.calls).toEqual([[1], [2]]);
     expect(completionListener).not.toHaveBeenCalled();
-    unsubscribeCompletion();
   });
 
   it("clears migration mode when the migrated Epic keeps the Phase id", () => {

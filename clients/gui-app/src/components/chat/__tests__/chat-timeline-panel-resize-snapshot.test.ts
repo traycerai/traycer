@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import {
   captureChatTimelineVisibleRows,
   clearChatTimelineVisibleRows,
@@ -178,6 +178,7 @@ describe("end-to-end recovery through the real registry (review F1)", () => {
         clearChatTimelineVisibleRows(scroller);
       },
     });
+    onTestFinished(unregister);
 
     // Drag 1: row visible -> marked. Its clear() throws; the registry
     // isolates the failure (class lifecycle still completes normally, per
@@ -197,7 +198,5 @@ describe("end-to-end recovery through the real registry (review F1)", () => {
     const stop2 = beginPanelResizeInteraction(2, () => undefined);
     expect(row.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
     stop2();
-
-    unregister();
   });
 });

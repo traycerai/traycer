@@ -19,6 +19,8 @@
  * snapshot logic the component's own unmount cleanup uses, so both paths can
  * never drift out of sync with each other.
  */
+import { appLogger } from "@/lib/logger";
+
 type ChatTabViewportCapture = () => void;
 
 const liveViewportCaptures = new Map<string, ChatTabViewportCapture>();
@@ -55,6 +57,14 @@ export function flushChatTabViewportHandoff(
   instanceIds: ReadonlyArray<string>,
 ): void {
   for (const instanceId of instanceIds) {
-    liveViewportCaptures.get(instanceId)?.();
+    try {
+      liveViewportCaptures.get(instanceId)?.();
+    } catch (error) {
+      appLogger.error(
+        "chat tab viewport capture failed during structural handoff",
+        { instanceId },
+        error,
+      );
+    }
   }
 }

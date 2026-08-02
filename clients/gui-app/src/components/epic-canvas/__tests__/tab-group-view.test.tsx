@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useLayoutEffect, type ReactNode } from "react";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
@@ -23,7 +23,10 @@ import {
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
   HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
 } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
-import { isChatRemoteDeleted } from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
+import {
+  isChatRemoteDeleted,
+  resetChatRemoteDeletionRegistryForTesting,
+} from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import {
   getTileSurfaceMembership,
@@ -617,6 +620,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     tabCommandCoordinator.resetReconciliationForTesting();
+    resetChatRemoteDeletionRegistryForTesting();
     resetTileSurfaceMembershipForTesting();
     resetTileSurfaceEnvironmentRegistryForTesting();
   });
@@ -844,6 +848,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     hostedRecord.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, "group-1");
     hostedRecord.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, VIEW_TAB_ID);
     document.body.appendChild(hostedRecord);
+    onTestFinished(() => hostedRecord.remove());
     const hostedDeferred = document.createElement("button");
     hostedDeferred.type = "button";
     hostedDeferred.setAttribute("data-pane-activation-defer", "true");
@@ -868,8 +873,6 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
         useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
       ).toBe("group-1");
     });
-
-    hostedRecord.remove();
   });
 
   it("design-review F3: activates the pane immediately on a non-deferred pointerdown on a hosted record", async () => {
@@ -892,6 +895,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     hostedRecord.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, "group-1");
     hostedRecord.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, VIEW_TAB_ID);
     document.body.appendChild(hostedRecord);
+    onTestFinished(() => hostedRecord.remove());
     const hostedBody = document.createElement("div");
     hostedBody.setAttribute("data-testid", "hosted-non-deferred-body");
     hostedRecord.appendChild(hostedBody);
@@ -904,8 +908,6 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
     ).toBe("group-1");
-
-    hostedRecord.remove();
   });
 
   it("does not activate this pane when a hosted pointerdown belongs to a different paneId", async () => {
@@ -931,6 +933,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
       "other-view-tab",
     );
     document.body.appendChild(foreignHosted);
+    onTestFinished(() => foreignHosted.remove());
     const foreignBody = document.createElement("div");
     foreignBody.setAttribute("data-testid", "foreign-hosted-body");
     foreignHosted.appendChild(foreignBody);
@@ -940,7 +943,5 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
     ).toBe("other-group");
-
-    foreignHosted.remove();
   });
 });

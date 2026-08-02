@@ -1,5 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { SplitResizeHandle } from "@/components/epic-canvas/canvas/resize-handle";
 import { pointerEvent } from "./test-pointer-events";
@@ -164,6 +164,7 @@ describe("<SplitResizeHandle />", () => {
     const decoy = document.createElement("div");
     decoy.setAttribute("data-testid", "decoy-overlay");
     document.body.appendChild(decoy);
+    onTestFinished(() => decoy.remove());
 
     fireEvent(
       handle,
@@ -203,8 +204,6 @@ describe("<SplitResizeHandle />", () => {
     expect(groupId).toBe(GROUP_ID);
     expect(committed[0]).toBeCloseTo(0.6, 10);
     expect(committed[1]).toBeCloseTo(0.4, 10);
-
-    document.body.removeChild(decoy);
   });
 
   // Ticket 21 wave-2 live pass, fix round 2 (F1): moving move/up/cancel to

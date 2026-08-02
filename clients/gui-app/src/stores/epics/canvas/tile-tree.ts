@@ -407,8 +407,8 @@ export function paneRemovalDissolveHandoffTargets(
   const removeIndex = path[path.length - 1];
   const survivor = parentNode.children[removeIndex === 0 ? 1 : 0];
   return collectPanes(survivor)
-    .map((pane) => pane.activeTabId)
-    .filter((activeTabId): activeTabId is string => activeTabId !== null);
+    .map((pane) => resolveActivePaneTab(pane.activeTabId, pane.tabInstanceIds))
+    .filter((instanceId): instanceId is string => instanceId !== null);
 }
 
 export interface InsertPaneAtEdgeArgs {

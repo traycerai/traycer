@@ -49,5 +49,9 @@ export function subscribeChatRemoteDeletion(
 }
 
 export function resetChatRemoteDeletionRegistryForTesting(): void {
+  const hadDeletedInstances = remoteDeletedInstanceIds.size > 0;
   remoteDeletedInstanceIds.clear();
+  if (hadDeletedInstances) {
+    listeners.forEach((listener) => listener());
+  }
 }

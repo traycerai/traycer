@@ -676,6 +676,8 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
           "getBoundingClientRect",
           originalDescriptor,
         );
+      } else {
+        Reflect.deleteProperty(Element.prototype, "getBoundingClientRect");
       }
       slot.remove();
     }

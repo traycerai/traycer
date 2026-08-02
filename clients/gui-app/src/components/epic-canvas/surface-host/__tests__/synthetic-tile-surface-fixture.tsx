@@ -17,7 +17,7 @@ export function buildSyntheticTileSurfaceEnvironment(
   instanceId: string,
   overrides: Partial<ReadyTileSurfaceEnvironment>,
 ): ReadyTileSurfaceEnvironment {
-  const identity: TileSurfaceIdentity = {
+  const defaultIdentity: TileSurfaceIdentity = {
     instanceId,
     tileKind: "chat",
     contentId: instanceId,
@@ -25,7 +25,6 @@ export function buildSyntheticTileSurfaceEnvironment(
     hostId: TEST_HOST_ID,
   };
   return {
-    identity,
     placement: {
       epicId: "tab-1",
       viewTabId: "tab-1",
@@ -42,6 +41,11 @@ export function buildSyntheticTileSurfaceEnvironment(
       isPaneFocusedNow: () => false,
     },
     ...overrides,
+    identity: {
+      ...defaultIdentity,
+      ...overrides.identity,
+      instanceId,
+    },
   };
 }
 

@@ -18,6 +18,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -847,6 +848,7 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
       dispose: () => {},
     };
     setEpicCanvasDesktopProjectionBridge(bridge);
+    onTestFinished(() => setEpicCanvasDesktopProjectionBridge(null));
 
     const before = requireCanvas(tabId);
     const repointed: EpicCanvasState = {
@@ -873,8 +875,6 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
     // this valid local mutation would be silently suppressed too.
     useEpicCanvasStore.getState().openTileInTab(tabId, SPEC_C);
     expect(updates).toHaveLength(1);
-
-    setEpicCanvasDesktopProjectionBridge(null);
   });
 
   it("throws when a desktop projection changes only a tab's epicId while its canvas stays identical (round-2 adversarial probe)", () => {

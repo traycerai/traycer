@@ -39,8 +39,9 @@ export function retainedTopLevelSurfaceKeys(
   recency: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
   const available = new Set(availableKeys);
+  const availableActiveKeys = activeKeys.filter((key) => available.has(key));
   const ordered = [
-    ...activeKeys,
+    ...availableActiveKeys,
     ...recency.filter((key) => available.has(key) && !activeKeys.includes(key)),
   ];
   const retained = new Set(ordered.slice(0, MAX_RETAINED_TOP_LEVEL_SURFACES));

@@ -163,14 +163,18 @@ describe("host-root movement invalidates every registered slot", () => {
 
     rectsA.length = 0;
     rectsB.length = 0;
+    const hostRectRead = vi.spyOn(host, "getBoundingClientRect");
 
     // Simulate a real host-root resize (e.g. the sidebar toggling) - only
     // the HOST's own observed element changed; neither slot moved.
-    stubRect(host, { left: 0, top: 0, width: 400, height: 300 });
+    hostRectRead.mockReturnValue(
+      fakeRect({ left: 0, top: 0, width: 400, height: 300 }),
+    );
     triggerResizeObserverCallbacks();
 
     expect(rectsA).toEqual([{ left: 100, top: 100, width: 50, height: 50 }]);
     expect(rectsB).toEqual([{ left: 300, top: 300, width: 50, height: 50 }]);
+    expect(hostRectRead).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -224,6 +228,46 @@ describe("unregister and re-registration", () => {
     triggerResizeObserverCallbacks();
 
     expect(rectsSecond).toEqual([{ left: 0, top: 0, width: 250, height: 250 }]);
+  });
+
+  it("stops all slot updates and unobserves the host after host unregister", () => {
+    const host = document.createElement("div");
+    stubRect(host, { left: 0, top: 0, width: 800, height: 600 });
+    const unregisterHost = registerTileSurfaceGeometryHost(host);
+
+    const slot = document.createElement("div");
+    stubRect(slot, { left: 0, top: 0, width: 100, height: 100 });
+    const rects: TileSurfaceRect[] = [];
+    registerTileSurfaceGeometrySlot("chat-1", slot, (rect) => rects.push(rect));
+    rects.length = 0;
+
+    unregisterHost();
+    const observer = controllableInstances.at(0);
+    expect(observer?.observed.has(host)).toBe(false);
+    stubRect(slot, { left: 0, top: 0, width: 250, height: 250 });
+    triggerResizeObserverCallbacks();
+
+    expect(rects).toEqual([]);
+  });
+
+  it("late cleanup after a test reset does not construct a replacement observer", () => {
+    const host = document.createElement("div");
+    stubRect(host, { left: 0, top: 0, width: 800, height: 600 });
+    const unregisterHost = registerTileSurfaceGeometryHost(host);
+    const slot = document.createElement("div");
+    stubRect(slot, { left: 0, top: 0, width: 100, height: 100 });
+    const unregisterSlot = registerTileSurfaceGeometrySlot(
+      "chat-1",
+      slot,
+      () => {},
+    );
+    expect(controllableInstances).toHaveLength(1);
+
+    resetTileSurfaceGeometryCoordinatorForTesting();
+    unregisterHost();
+    unregisterSlot();
+
+    expect(controllableInstances).toHaveLength(1);
   });
 });
 

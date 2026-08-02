@@ -69,9 +69,10 @@ function ensureSharedObserver(): ResizeObserver {
   return sharedObserver;
 }
 
-function applyRect(registration: SlotRegistration): void {
-  if (hostRegistration === null) return;
-  const hostRect = hostRegistration.element.getBoundingClientRect();
+function applyRectAgainstHost(
+  registration: SlotRegistration,
+  hostRect: DOMRect,
+): void {
   const slotRect = registration.slotElement.getBoundingClientRect();
   registration.onRect({
     left: slotRect.left - hostRect.left,
@@ -81,9 +82,19 @@ function applyRect(registration: SlotRegistration): void {
   });
 }
 
+function applyRect(registration: SlotRegistration): void {
+  if (hostRegistration === null) return;
+  applyRectAgainstHost(
+    registration,
+    hostRegistration.element.getBoundingClientRect(),
+  );
+}
+
 function applyAllRegisteredRects(): void {
+  if (hostRegistration === null) return;
+  const hostRect = hostRegistration.element.getBoundingClientRect();
   for (const registration of slotRegistrations.values()) {
-    applyRect(registration);
+    applyRectAgainstHost(registration, hostRect);
   }
 }
 
@@ -103,7 +114,7 @@ export function registerTileSurfaceGeometryHost(element: Element): () => void {
   applyAllRegisteredRects();
   return () => {
     if (hostRegistration === registration) {
-      ensureSharedObserver().unobserve(element);
+      sharedObserver?.unobserve(element);
       hostRegistration = null;
     }
   };
@@ -133,7 +144,7 @@ export function registerTileSurfaceGeometrySlot(
   applyRect(registration);
   return () => {
     if (slotRegistrations.get(key) === registration) {
-      ensureSharedObserver().unobserve(slotElement);
+      sharedObserver?.unobserve(slotElement);
       slotRegistrations.delete(key);
     }
   };

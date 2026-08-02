@@ -187,7 +187,12 @@ export function subscribeTileSurfaceEnvironment(
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) listenersByInstance.delete(instanceId);
+    if (
+      listeners.size === 0 &&
+      listenersByInstance.get(instanceId) === listeners
+    ) {
+      listenersByInstance.delete(instanceId);
+    }
   };
 }
 

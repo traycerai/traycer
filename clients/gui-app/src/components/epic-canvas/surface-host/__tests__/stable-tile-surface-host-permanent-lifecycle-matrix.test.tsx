@@ -60,7 +60,10 @@ import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/s
 import { resetTileSurfaceEnvironmentRegistryForTesting } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import { resetTileSurfaceGeometryCoordinatorForTesting } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 import { resetChatRemoteDeletionRegistryForTesting } from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
-import { HOSTED_TILE_INSTANCE_ID_ATTRIBUTE } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { renderHostedChatSurfaceBody } from "@/components/epic-canvas/surface-host/hosted-chat-surface-body";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
@@ -324,7 +327,8 @@ function deleteChatFromLiveDoc(chatId: string): void {
   const handle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
   if (handle === null) throw new Error("expected a live epic session handle");
   const chatsMap = getChatsMap(handle.doc);
-  chatsMap?.delete(chatId);
+  if (chatsMap === null) throw new Error("expected a live chats map");
+  chatsMap.delete(chatId);
 }
 
 /** Row 13 recovery: re-insert a fresh Y.Map entry for the chat. */
@@ -814,7 +818,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     // identity above is pinned to zero remounts.
     expect(
       hostedRecord(container, CHAT_TRACKED.instanceId).getAttribute(
-        "data-hosted-canvas-pane-id",
+        HOSTED_TILE_PANE_ID_ATTRIBUTE,
       ),
     ).toBe("p3");
   });
