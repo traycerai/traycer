@@ -1,6 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
-import { LiveActivityWindow } from "@/components/chat/segments/live-activity-window";
+import { act } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  LIVE_ACTIVITY_WINDOW_EXIT_MS,
+  LiveActivityWindow,
+} from "@/components/chat/segments/live-activity-window";
 
 /**
  * jsdom does no layout, so `scrollHeight`/`clientHeight` are 0 and the window
@@ -206,6 +210,56 @@ describe("<LiveActivityWindow />", () => {
     );
 
     expect(reachedTranscript).toHaveLength(0);
+  });
+
+  // `pinnedRef` lives on the component, which outlives the scroller: the window
+  // stays mounted for the whole run and only returns null between folds. So a
+  // pin suspended by scrolling up would survive into the NEXT scroller - one
+  // that starts at `scrollTop = 0` - and the window would sit frozen on the
+  // oldest rows while the run streamed on.
+  it("re-pins when a fold replaces the scroller, so reopening resumes at the tail", () => {
+    withStubbedGeometry({ scrollHeight: 400, clientHeight: 100 }, () => {
+      const { rerender } = render(
+        <LiveActivityWindow shown>
+          <div>row one</div>
+        </LiveActivityWindow>,
+      );
+
+      // The reader scrolls up to re-read something, suspending the pin.
+      const scroller = screen.getByTestId("activity-live-window-scroller");
+      scroller.scrollTop = 40;
+      fireEvent.scroll(scroller);
+
+      // The group is opened: the window folds away and unmounts its scroller.
+      vi.useFakeTimers();
+      try {
+        rerender(
+          <LiveActivityWindow shown={false}>
+            <div>row one</div>
+          </LiveActivityWindow>,
+        );
+        act(() => {
+          vi.advanceTimersByTime(LIVE_ACTIVITY_WINDOW_EXIT_MS);
+        });
+        expect(
+          screen.queryByTestId("activity-live-window-scroller"),
+        ).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // Closed again while the run is still going: a brand new scroller.
+      rerender(
+        <LiveActivityWindow shown>
+          <div>row one</div>
+          <div>row two</div>
+        </LiveActivityWindow>,
+      );
+
+      expect(
+        screen.getByTestId("activity-live-window-scroller").scrollTop,
+      ).toBe(400);
+    });
   });
 
   it("flags overflow only when the content actually exceeds the bound", () => {

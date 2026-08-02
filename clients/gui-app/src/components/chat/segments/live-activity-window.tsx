@@ -102,6 +102,14 @@ export function LiveActivityWindow(props: LiveActivityWindowProps) {
     scrollRef.current = node;
     if (node === null) return;
 
+    // A fresh scroller starts pinned. `pinnedRef` lives on the component, which
+    // outlives the scroller: the component stays mounted for the whole run and
+    // only returns null between folds, so a pin suspended by scrolling up would
+    // otherwise survive into the next scroller - one that starts at
+    // `scrollTop = 0`. The layout effect would then refuse to move it, and the
+    // window would sit frozen on the oldest rows while the run streamed on.
+    pinnedRef.current = true;
+
     // NATIVE listeners, on this element, and deliberately NOT React's
     // `onWheel`/`onTouchMove`. The transcript attaches its own `wheel` and
     // `touchmove` listeners directly to the LegendList scroll node
