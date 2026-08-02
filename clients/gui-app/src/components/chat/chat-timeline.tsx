@@ -139,15 +139,12 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
-// M4 (ticket 16 spacer alignment): the 40px header/footer and 64/80px fade
-// header were unsanctioned drift (decision log #30).
+// M4 (ticket 16 spacer alignment): the old 40px header/footer were
+// unsanctioned drift (decision log #30).
 // Consumers read the live measured size via `onListMetricsChange`, so they
 // adapt automatically; nothing here is a hardcoded assumption elsewhere.
 const CHAT_TIMELINE_LIST_HEADER = (
   <div aria-hidden="true" className="h-3 sm:h-4" />
-);
-const CHAT_TIMELINE_LIST_FADE_HEADER = (
-  <div aria-hidden="true" className="h-10 sm:h-12" />
 );
 const CHAT_TIMELINE_LIST_FOOTER = (
   <div aria-hidden="true" className="h-3 sm:h-4" />
@@ -184,7 +181,6 @@ export interface ChatTimelineProps {
    *  position-based inference cannot reliably tell them apart). */
   readonly "data-scroll-mode"?: string;
   /** Top-fade chrome; the scroll-policy ticket decides when it's on. */
-  readonly topFadeEnabled?: boolean;
   /**
    * Whether the initial mount parks at the tail. `true` (the default) for a
    * fresh, never-scrolled-in chat (decision #15 - ticket 4 replaces this with
@@ -195,14 +191,12 @@ export interface ChatTimelineProps {
    */
   readonly initialScrollAtEnd?: boolean;
   /**
-   * Ticket 5: exact restored free-scrolling position (the saved anchor row +
-   * pixel offset), passed straight through as LegendList's own
-   * `initialScrollIndex` bootstrap - the same measurement-aware convergence
-   * path `initialScrollAtEnd` uses, so a deep anchor past variable-height rows
-   * still lands correctly once real heights replace the `estimatedItemSize`
-   * guess (verified against the installed @legendapp/list 3.2.0 source, not
-   * just its type declarations). `null` for the ordinary fresh-open/no-restore
-   * case - `initialScrollAtEnd` or the anchor engine own the DOM position then.
+   * Ticket 5: restored row bootstrap, passed straight through as LegendList's
+   * own `initialScrollIndex`. For free-scrolling this carries the saved pixel
+   * offset and self-corrects as variable-height rows are measured. For a
+   * restored new-turn session it makes a deep semantic query row measurable;
+   * the anchor engine then owns the exact offset and reply reserve. `null` for
+   * the ordinary fresh-open/no-restore case.
    */
   readonly initialScrollIndex?: ChatTimelineInitialScrollAnchor | null;
   /**
@@ -212,8 +206,9 @@ export interface ChatTimelineProps {
    * sit `anchorOffset` px from the viewport top while its reply streams in.
    */
   readonly anchorMessageId?: string | null;
-  /** Pixel offset from the viewport top for the anchored row (decision #12-13:
-   *  flat 16px + the controller's live pinned-stack height). */
+  /** Pixel offset from the viewport top for the anchored row. The controller
+   *  keeps it at least as large as the measured fade/header so the query is
+   *  fully visible while its reply streams below. */
   readonly anchorOffset?: number;
   readonly onAnchorReady?: (messageId: string, anchorIndex: number) => void;
   readonly onAnchorSizeChanged?: (messageId: string, size: number) => void;
@@ -289,7 +284,6 @@ export const ChatTimeline = memo(function ChatTimeline({
   listRef,
   onScroll,
   className,
-  topFadeEnabled = false,
   initialScrollAtEnd = true,
   initialScrollIndex = null,
   anchorMessageId = null,
@@ -375,7 +369,6 @@ export const ChatTimeline = memo(function ChatTimeline({
     handleAnchorSizeChanged,
     rows,
   ]);
-
   const handleScroll = useCallback(() => {
     const state = listRef.current?.getState();
     const isAtEnd = resolveChatTimelineIsAtEnd(state);
@@ -435,11 +428,10 @@ export const ChatTimeline = memo(function ChatTimeline({
         getItemType={chatTimelineGetItemType}
         renderItem={renderItem}
         estimatedItemSize={90}
-        // `isNearEnd` (read via resolveChatTimelineIsAtEnd) is computed by
-        // LegendList from `onEndReachedThreshold`, NOT `maintainScrollAtEndThreshold`
-        // - the installed 3.2.0 defaults `onEndReachedThreshold` to 0.5 (50% of
-        // scroll length), not the 10% decision #5 assumes. Set it explicitly;
-        // verified against the installed package source, not its type doc.
+        // Keep LegendList's proximity threshold explicit for onEndReached and
+        // presentation consumers. Follow ownership deliberately reads only
+        // strict `isAtEnd` via resolveChatTimelineIsAtEnd; this 10% band can
+        // never re-attach a detached reader.
         onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
         initialScrollAtEnd={initialScrollAtEnd}
         {...(initialScrollIndex !== null ? { initialScrollIndex } : {})}
@@ -464,22 +456,16 @@ export const ChatTimeline = memo(function ChatTimeline({
         {...(onListMetricsChange !== undefined
           ? { onMetricsChange: onListMetricsChange }
           : {})}
+        showsVerticalScrollIndicator
+        data-native-scrollbar="true"
         className={cn(
-          // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both`
-          // reserves the scrollbar's track width on BOTH edges permanently, so
-          // the centered `max-w-3xl` column never shifts when the bar
-          // appears/disappears - the previous one-sided `mr-1` margin hack
-          // only reserved the right edge, and the fade mask's own gutter
-          // exclusion band (index.css) is sized to match this.
-          "chat-scrollbar-native-thin scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
-          topFadeEnabled && "chat-timeline-scroll-fade",
+          // The Legend List node is the sole scroll owner. Its native marker
+          // opts out of the app-wide scrollbar theme in index.css; explicit
+          // overflow keeps platform visibility and hit-testing in charge.
+          "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
           className,
         )}
-        ListHeaderComponent={
-          topFadeEnabled
-            ? CHAT_TIMELINE_LIST_FADE_HEADER
-            : CHAT_TIMELINE_LIST_HEADER
-        }
+        ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
         ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
         {...rest}
         // Round-2 finding 3, test-observability only: echoes the SAME

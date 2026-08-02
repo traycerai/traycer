@@ -9,15 +9,17 @@ import {
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
   chatViewportAnchorRowIndex,
-  chatWheelShouldCancelLiveFollow,
   chatWheelVerticalDirection,
   classifyChatEdgeMutation,
   isChatAnchorCandidateMessage,
   resolveChatAnchorTargetWithSetupCard,
+  resolveChatTouchFollowIntent,
+  resolveChatWheelFollowIntent,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   selectActiveUserMessageId,
   viewportActiveUserMessageId,
+  viewportAnchorMessageId,
   type ChatAnchorScrollCapturePhysicalSnapshot,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import { makeMessageAt } from "./chat-message-fixtures";
@@ -220,43 +222,60 @@ describe("chatWheelVerticalDirection", () => {
 });
 
 /**
- * Ticket 14 (direction A): edge-aware live-follow cancellation policy.
- * Downward at the live edge while following-end must NOT cancel; every other
- * combination (upward, ambiguous, or downward-at-edge in any non-following
- * mode - e.g. `anchoring-new-turn`'s reserve-capped `isAtEnd`) always does.
+ * Edge-aware live-follow intent policy. Direction determines whether a
+ * cancelled gesture may later resume at the strict edge; geometry alone never
+ * grants that permission.
  */
-describe("chatWheelShouldCancelLiveFollow", () => {
-  it("does not cancel a downward wheel at the live edge while following-end", () => {
-    expect(chatWheelShouldCancelLiveFollow(40, true, true)).toBe(false);
+describe("resolveChatWheelFollowIntent", () => {
+  it("preserves a downward wheel at the live edge while following-end", () => {
+    expect(resolveChatWheelFollowIntent(40, true, true)).toBe(
+      "preserve-follow",
+    );
   });
 
-  it("cancels a downward wheel when not at the live edge (following-end)", () => {
-    expect(chatWheelShouldCancelLiveFollow(40, false, true)).toBe(true);
+  it("arms strict-edge resume for a downward wheel away from the edge", () => {
+    expect(resolveChatWheelFollowIntent(40, false, true)).toBe(
+      "approach-live-edge",
+    );
   });
 
-  it("cancels a downward wheel at the live edge when not following-end (e.g. anchoring-new-turn's reserve-capped isAtEnd)", () => {
-    expect(chatWheelShouldCancelLiveFollow(40, true, false)).toBe(true);
+  it("arms strict-edge resume for downward input in a non-following mode", () => {
+    expect(resolveChatWheelFollowIntent(40, true, false)).toBe(
+      "approach-live-edge",
+    );
   });
 
-  it("cancels a downward wheel when neither at the live edge nor following-end", () => {
-    expect(chatWheelShouldCancelLiveFollow(40, false, false)).toBe(true);
+  it("arms strict-edge resume when neither at the edge nor following", () => {
+    expect(resolveChatWheelFollowIntent(40, false, false)).toBe(
+      "approach-live-edge",
+    );
   });
 
-  it("cancels an upward wheel at the live edge regardless of mode", () => {
-    expect(chatWheelShouldCancelLiveFollow(-40, true, true)).toBe(true);
-    expect(chatWheelShouldCancelLiveFollow(-40, true, false)).toBe(true);
+  it("treats upward input as departure regardless of edge or mode", () => {
+    expect(resolveChatWheelFollowIntent(-40, true, true)).toBe("depart");
+    expect(resolveChatWheelFollowIntent(-40, true, false)).toBe("depart");
+    expect(resolveChatWheelFollowIntent(-40, false, true)).toBe("depart");
+    expect(resolveChatWheelFollowIntent(-40, false, false)).toBe("depart");
   });
 
-  it("cancels an upward wheel when not at the live edge regardless of mode", () => {
-    expect(chatWheelShouldCancelLiveFollow(-40, false, true)).toBe(true);
-    expect(chatWheelShouldCancelLiveFollow(-40, false, false)).toBe(true);
+  it("treats ambiguous input as departure rather than guessing intent", () => {
+    expect(resolveChatWheelFollowIntent(0, true, true)).toBe("depart");
+    expect(resolveChatWheelFollowIntent(0, false, true)).toBe("depart");
+    expect(resolveChatWheelFollowIntent(0, true, false)).toBe("depart");
+    expect(resolveChatWheelFollowIntent(0, false, false)).toBe("depart");
+  });
+});
+
+describe("resolveChatTouchFollowIntent", () => {
+  it("arms strict-edge resume when the finger moves toward older screen coordinates", () => {
+    expect(resolveChatTouchFollowIntent(300, 280)).toBe("approach-live-edge");
   });
 
-  it("cancels an ambiguous (zero) wheel regardless of edge or mode", () => {
-    expect(chatWheelShouldCancelLiveFollow(0, true, true)).toBe(true);
-    expect(chatWheelShouldCancelLiveFollow(0, false, true)).toBe(true);
-    expect(chatWheelShouldCancelLiveFollow(0, true, false)).toBe(true);
-    expect(chatWheelShouldCancelLiveFollow(0, false, false)).toBe(true);
+  it("treats away, stationary, and missing coordinates as departure", () => {
+    expect(resolveChatTouchFollowIntent(280, 300)).toBe("depart");
+    expect(resolveChatTouchFollowIntent(300, 300)).toBe("depart");
+    expect(resolveChatTouchFollowIntent(null, 300)).toBe("depart");
+    expect(resolveChatTouchFollowIntent(300, null)).toBe("depart");
   });
 });
 
@@ -500,6 +519,18 @@ describe("chatViewportAnchorRowIndex + viewportActiveUserMessageId", () => {
     ];
     const state = stateWithRowTops([0, 90, 180], 0);
     // Default anchor offset is NAV_OFFSET + 1 = 49 → still row 0 (u0)
+    expect(viewportActiveUserMessageId(state, messages)).toBe("u0");
+  });
+
+  it("keeps the physical assistant row for scroll restoration", () => {
+    const messages: ReadonlyArray<ChatMessageModel> = [
+      user("u0", 1),
+      assistant("a0", 2),
+      user("u1", 3),
+    ];
+    const state = stateWithRowTops([0, 90, 990], 400);
+
+    expect(viewportAnchorMessageId(state, messages)).toBe("a0");
     expect(viewportActiveUserMessageId(state, messages)).toBe("u0");
   });
 

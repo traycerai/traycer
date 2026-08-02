@@ -131,14 +131,23 @@ function clearActivePointerResizeInteraction(interactionId: number): void {
   }
 }
 
-/**
- * Shared 1px visual line + widened invisible hit area (via `::after`) for a
- * given drag axis (inherently fixed touch target, allowed hardcoded size).
- */
 export function pointerDragHandleAxisClassName(axis: PointerDragAxis): string {
   return axis === "horizontal"
     ? "w-px cursor-col-resize touch-none after:absolute after:inset-y-0 after:left-1/2 after:w-2.5 after:-translate-x-1/2"
     : "h-px cursor-row-resize touch-none after:absolute after:inset-x-0 after:top-1/2 after:h-2.5 after:-translate-y-1/2";
+}
+
+/**
+ * In-flow split divider footprint. The whole pointer region consumes layout
+ * space; it never extends over either adjacent pane's content or native
+ * scrollbar gutter.
+ */
+export function inFlowPointerDragHandleAxisClassName(
+  axis: PointerDragAxis,
+): string {
+  return axis === "horizontal"
+    ? "w-1 cursor-col-resize touch-none"
+    : "h-1 cursor-row-resize touch-none";
 }
 
 export function usePointerDragCommit(

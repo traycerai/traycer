@@ -280,8 +280,8 @@ describe("resolveChatTurnMinimapRowTop / RowHeight / RowInView", () => {
   });
 
   it("subtracts the header offset before comparing (decision #18 - positionAtIndex is content-relative, scroll is not)", () => {
-    // 80px header (topFadeEnabled's fade header). scroll=80 means the
-    // viewport's own top edge sits at content-relative position 0.
+    // A measured 80px header. scroll=80 means the viewport's own top edge
+    // sits at content-relative position 0.
     const headerState = {
       scroll: 80,
       scrollLength: 100,

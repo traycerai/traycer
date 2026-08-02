@@ -29,10 +29,13 @@ import {
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
 import {
+  acceptExhaustedPersistedRestoreFallback,
   anchorMoverShouldYieldToReader,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
+  chatScrollCaptureLibraryOwnedTop,
   chatTimelineGetItemType,
+  scrollOnlyMovementCarriesReaderIntent,
   type ChatAnchorDriftRepairOutcome,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import {
@@ -45,6 +48,7 @@ import {
   evictChatTabState,
   evictChatTabStateForChat,
   hasSavedChatTabState,
+  peekSavedChatTabState,
   restoreChatTabState,
   saveChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
@@ -74,6 +78,7 @@ import {
 } from "./chat-message-fixtures";
 import {
   installLegendListViewportMetrics,
+  setLegendListMessageRowHeightOverrides,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "./legend-list-test-environment";
@@ -851,6 +856,7 @@ interface RenderChatMessagesOptions {
   readonly tileActive?: boolean;
   readonly groupId?: string;
   readonly withSiblingChrome?: boolean;
+  readonly strictMode?: boolean;
   /**
    * Ticket 21 slice 4: models a HOSTED chat's DOM shape - the tile's own
    * wrapper carries the hosted-record identity attributes instead of a
@@ -966,7 +972,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     return <div data-group-id={hostedPaneId}>{button}</div>;
   }
 
-  const jsx = (): ReactNode => (
+  const content = (): ReactNode => (
     <div
       data-group-id={hostedPaneId === undefined ? groupId : undefined}
       style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
@@ -1004,6 +1010,12 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       {options.withSiblingChrome === true ? siblingChrome() : null}
     </div>
   );
+  const jsx = (): ReactNode =>
+    options.strictMode === true ? (
+      <StrictMode>{content()}</StrictMode>
+    ) : (
+      content()
+    );
 
   const result = render(jsx());
   return {
@@ -1183,7 +1195,8 @@ describe("ChatMessages scroll policy", () => {
    * Ticket 14 (direction A): edge-aware wheel cancellation. A downward wheel
    * at the true live edge must not cancel follow (clamped momentum shape:
    * wheel with no accompanying scroll). Upward / ambiguous wheels and
-   * touchmove remain unconditional cancels.
+   * directionless touch movement are departures; explicit toward-end touch
+   * movement may arm a later strict-edge resume.
    */
   describe("edge-aware wheel live-follow cancellation (ticket 14)", () => {
     async function renderFollowingAtLiveEdge(
@@ -1233,7 +1246,7 @@ describe("ChatMessages scroll policy", () => {
       }
     });
 
-    it("touchmove at the live edge still cancels follow unconditionally", async () => {
+    it("touchmove without directional coordinates fails safe to departure", async () => {
       const scrollNode = await renderFollowingAtLiveEdge(
         "t14-touchmove-at-edge-key",
       );
@@ -1241,6 +1254,72 @@ describe("ChatMessages scroll policy", () => {
       fireEvent.touchMove(scrollNode);
 
       expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+    });
+
+    it("touch direction must explicitly approach the strict edge before follow resumes", async () => {
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-touch-direction-key",
+      );
+
+      fireEvent.touchStart(scrollNode, {
+        touches: [{ clientY: 300 }],
+      });
+      fireEvent.touchMove(scrollNode, {
+        touches: [{ clientY: 320 }],
+      });
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+      fireEvent.touchStart(scrollNode, {
+        touches: [{ clientY: 320 }],
+      });
+      fireEvent.touchMove(scrollNode, {
+        touches: [{ clientY: 300 }],
+      });
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+    });
+
+    it("a scrollbar drag resumes follow only after it actually moves toward the strict edge", async () => {
+      setLegendListScrollContainerScrollHeightOverride(2_000);
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-pointer-direction-key",
+      );
+      const atEnd = scrollNode.scrollTop;
+      expect(atEnd).toBeGreaterThan(40);
+
+      // Pointerdown alone is ambiguous (it may be text selection or an
+      // inline-link click), so it relinquishes ownership without granting a
+      // path back to follow. The scroll positions reported while that pointer
+      // remains active provide the missing scrollbar-drag direction.
+      fireEvent.pointerDown(scrollNode);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      await fireScrollTopAndFlush(atEnd - 40);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+      fireEvent.pointerMove(scrollNode);
+      await fireScrollTopAndFlush(atEnd);
+      expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      fireEvent.pointerUp(scrollNode);
+    });
+
+    it("an active text-selection pointer does not turn list-owned motion into scrollbar intent", async () => {
+      setLegendListScrollContainerScrollHeightOverride(2_000);
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-pointer-list-owned-key",
+      );
+      const atEnd = scrollNode.scrollTop;
+
+      fireEvent.pointerDown(scrollNode);
+      await fireScrollTopAndFlush(atEnd - 40);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+      // Pointer movement can be ordinary text selection. Legend List's
+      // pre-written scroll state is the ownership proof that this later
+      // toward-tail correction is MVCP/app motion, not a thumb drag.
+      fireEvent.pointerMove(scrollNode);
+      await fireLibraryOwnedScrollTo(atEnd);
+
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      fireEvent.pointerUp(scrollNode);
     });
 
     it("ambiguous wheel (deltaY 0) at the live edge still cancels follow", async () => {
@@ -1314,9 +1393,15 @@ describe("ChatMessages scroll policy", () => {
     expect(getScrollNode().scrollTop).toBe(parked);
   });
 
-  it("near-end restores following-end (pill hides after isAtEnd becomes true)", async () => {
+  it("stays detached inside the near-end band and resumes only at the strict edge", async () => {
     const messages = makeTranscript(20);
-    renderChatMessages({ messages, scrollStateKey: "near-end-restore-key" });
+    setLegendListScrollContainerScrollHeightOverride(
+      LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+    );
+    const { rerenderMessages } = renderChatMessages({
+      messages,
+      scrollStateKey: "near-end-restore-key",
+    });
     await settleLegendList();
 
     act(() => {
@@ -1329,13 +1414,37 @@ describe("ChatMessages scroll policy", () => {
     });
     expect(isJumpPillVisible()).toBe(true);
 
+    const scrollNode = getScrollNode();
+    const maxScrollTop = Math.max(
+      0,
+      scrollNode.scrollHeight - scrollNode.clientHeight,
+    );
+    await fireScrollTopAndFlush(maxScrollTop - 30);
+    expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+    const parkedNearEnd = scrollNode.scrollTop;
+    const streamedMessages = appendAssistant(
+      messages,
+      "near-end-stream",
+      99_000,
+    );
+    rerenderMessages(streamedMessages);
+    await settleLegendList();
+    expect(getScrollNode().scrollTop).toBe(parkedNearEnd);
+    expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+    setLegendListScrollContainerScrollHeightOverride(
+      LEGEND_LIST_HEADER_PX + streamedMessages.length * 90 + 40,
+    );
     act(() => {
+      fireEvent.wheel(scrollNode, { deltaY: 40 });
       fireScrollToEnd();
     });
 
     await waitFor(
       () => {
         expect(isJumpPillVisible()).toBe(false);
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       },
       { timeout: 3_000 },
     );
@@ -1615,6 +1724,44 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().scrollTop).toBe(scrollTopBefore);
       expect(getScrollNode().scrollTop).toBe(T17_CASE_A_SCROLL_TOP);
       expect(scrollToSpy.mock.calls.length).toBe(scrollToCallsBefore);
+    });
+
+    it("(a reserve cleanup) a deleted detached reserve cannot block reattachment at the real edge", async () => {
+      const sendId = "t17-case-a-removed-reserve";
+      const messages = makeCompletedTranscript(T17_ROW_COUNT);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t17-case-a-removed-reserve-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      await t17SeedFreeScrollingAt(T17_CASE_A_SCROLL_TOP);
+
+      // The reader is above the deletion boundary, so the viewport remains
+      // untouched while the suffix removes the row that owned reply-reserve
+      // geometry.
+      rerenderMessages(messages.slice(0, T17_KEEP_COUNT));
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().scrollTop).toBe(T17_CASE_A_SCROLL_TOP);
+
+      setLegendListScrollContainerScrollHeightOverride(
+        T17_HEADER_PX + T17_KEEP_COUNT * T17_ITEM_PX + T17_FOOTER_PX,
+      );
+      act(() => {
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+        fireScrollToEnd();
+      });
+
+      await waitFor(() => {
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      });
     });
 
     it("(b) free-scrolling inside the deleted region: following-end at the true end (not last-row-short)", async () => {
@@ -3312,7 +3459,7 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
-    it("a bare pointerdown mid-flight freezes the in-flight animated scroll and absorbs a stray late near-end echo", async () => {
+    it("a bare pointerdown mid-flight freezes the animated scroll and disarms a stray late edge echo", async () => {
       const messages = makeTranscript(24);
       const { rerenderMessages } = renderChatMessages({
         messages,
@@ -3371,7 +3518,84 @@ describe("ChatMessages scroll policy", () => {
       expect(scrollNode.scrollTop).toBe(parked);
     });
 
-    it("a pointerdown freeze with NO stale echo does not swallow the next real gesture's own terminal report", async () => {
+    it.each([-40, 40])(
+      "height-shift: wheel delta %s during the initial send landing freezes the anchor animation before the reader scroll takes over",
+      async (deltaY) => {
+        const direction = deltaY < 0 ? "up" : "down";
+        const sendId = `height-shift-mid-anchor-wheel-${direction}`;
+        const messages = makeCompletedTranscript(4);
+        const { rerenderMessages } = renderChatMessages({
+          messages,
+          scrollStateKey: `height-shift-mid-anchor-wheel-${direction}`,
+          localProvenanceMessageIds: new Set([sendId]),
+        });
+        await settleLegendList();
+
+        const afterSend = appendOptimisticUserSend(messages, sendId, 701_000);
+        rerenderMessages(afterSend);
+        // React replaces Legend List's imperative-handle object on rerender,
+        // so intercept the post-send handle before the anchor's queued rAFs
+        // issue their animated scroll.
+        const list = legendListRefHolder.current;
+        if (list === null) throw new Error("Expected an attached LegendList");
+        const realScrollToIndex = list.scrollToIndex.bind(list);
+        const animatedScrollControl = { release: (): void => undefined };
+        const animationStillInFlight = new Promise<void>((resolve) => {
+          animatedScrollControl.release = resolve;
+        });
+        vi.spyOn(list, "scrollToIndex").mockImplementation((options) => {
+          const realCompletion = realScrollToIndex(options);
+          return options.animated
+            ? Promise.all([realCompletion, animationStillInFlight]).then(
+                () => undefined,
+              )
+            : realCompletion;
+        });
+        await waitFor(() => {
+          expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+        // Let the two-rAF anchor chain issue its animated scrollToIndex, but do
+        // not wait for its settle watchdog. `height-shift.mov` gestures in this
+        // exact interval: the first wheel moves toward history, then the native
+        // anchor animation keeps advancing and pulls the query back upward.
+        await waitForRevealPassTick();
+        expect(list.scrollToIndex).toHaveBeenCalledWith(
+          expect.objectContaining({ animated: true }),
+        );
+        const scrollNode = getScrollNode();
+        const scrollAtGesture = scrollNode.scrollTop;
+        const reservedContentLength = list.getState().contentLength;
+        const freezeSpy = vi.spyOn(list, "scrollToOffset");
+        freezeSpy.mockClear();
+
+        fireEvent.wheel(scrollNode, { deltaY });
+
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        expect(freezeSpy).toHaveBeenCalledWith({
+          offset: scrollAtGesture,
+          animated: false,
+        });
+
+        // Model the wheel's native default movement after the passive listener.
+        // The canceled anchor operation must neither resume nor reissue over it.
+        const readerPosition = Math.max(
+          0,
+          scrollAtGesture + Math.sign(deltaY) * 40,
+        );
+        await fireScrollTopAndFlush(readerPosition);
+        await waitForAnchorEngineSettle();
+        expect(scrollNode.scrollTop).toBe(readerPosition);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        expect(list.getState().contentLength).toBeGreaterThanOrEqual(
+          reservedContentLength,
+        );
+        animatedScrollControl.release();
+      },
+    );
+
+    it("a pointerdown freeze with NO stale echo still allows a later toward-end gesture to resume", async () => {
       const messages = makeTranscript(24);
       renderChatMessages({
         messages,
@@ -3384,27 +3608,22 @@ describe("ChatMessages scroll policy", () => {
       });
       await waitForPillVisible();
 
-      // Animated navigateToMessage (sets suppression, arms the freeze grace
-      // window on the pointerdown below).
+      // Animated navigateToMessage sets suppression; pointerdown below freezes
+      // its native animation and disarms live-edge reacquisition.
       await selectLastChatTurnMinimapItem();
 
       const scrollNode = getScrollNode();
 
-      // A bare pointerdown mid-flight freezes the in-flight scroll (arms the
-      // grace window) - but the freeze's own same-offset scrollToOffset
-      // write is not guaranteed to emit ANY scroll event (a jsdom no-op
-      // write, or a real browser deduping a same-position write). NO stale
-      // echo follows here - unlike the sibling test above.
+      // The freeze's same-offset scrollToOffset write is not guaranteed to
+      // emit any scroll event (a jsdom no-op write, or a real browser deduping
+      // a same-position write). No stale echo follows here.
       act(() => {
         fireEvent.pointerDown(scrollNode);
       });
       expect(isJumpPillVisible()).toBe(true);
 
-      // A REAL subsequent gesture (wheel) must not have ITS OWN legitimate
-      // terminal near-end report swallowed by an unconsumed grace window left
-      // over from the pointerdown freeze above - the grace must be bounded to
-      // THIS cancel, not survive indefinitely waiting for a report that never
-      // came.
+      // A real subsequent toward-end wheel explicitly re-arms the strict-edge
+      // transition; the earlier pointerdown does not permanently block it.
       act(() => {
         fireEvent.wheel(scrollNode, { deltaY: 40 });
         fireScrollToEnd();
@@ -3423,8 +3642,8 @@ describe("ChatMessages scroll policy", () => {
       // was gated solely on suppression, so a bare pointerdown mid-animation
       // found nothing to freeze - the native smooth-scroll kept running and
       // its terminal near-end report re-enabled following against the
-      // cancellation. hasActiveAnimatedImperativeScrollRef closes that gap
-      // independently of suppression.
+      // cancellation. Explicit animated-operation ownership closes that gap
+      // independently of suppression or the rendered mode.
       const messages = makeTranscript(24);
       renderChatMessages({
         messages,
@@ -3467,10 +3686,9 @@ describe("ChatMessages scroll policy", () => {
       // suppressFollowRestoreRef unconditionally - the same gap the pill-click
       // pin above closes, but reachable via the single most ordinary path in
       // the whole app: send a message, then pointerdown to select text while
-      // the anchor is still animating into position. Covered by the
-      // mode-based freeze condition (overengineering-audit collapse): the
-      // send-anchor animation always runs during `anchoring-new-turn`, so
-      // `modeAtEntry !== "free-scrolling"` holds for the whole flight.
+      // the anchor is still animating into position. The anchor registers
+      // that animated operation explicitly, so cancellation does not have to
+      // guess from the rendered mode.
       const sendId = "round2-f1-send";
       const messages = makeCompletedTranscript(10);
       const { rerenderMessages } = renderChatMessages({
@@ -3491,8 +3709,7 @@ describe("ChatMessages scroll policy", () => {
       // requestAnimationFrame calls inside positionAnchor) actually ISSUE its
       // ANIMATED scrollToIndex WITHOUT waiting for its full settle
       // (CHAT_ANCHOR_SETTLE_FALLBACK_MS is 750ms; this is ~2 frames + 20ms,
-      // deliberately short of that) - the mode stays "anchoring-new-turn"
-      // for the whole flight, which is what the freeze condition below reads.
+      // deliberately short of that) - the operation still owns its landing.
       await waitForRevealPassTick();
 
       const scrollNode = getScrollNode();
@@ -3516,16 +3733,13 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("Round-2 regression: an earlier suppressed nav's own pending settle timer must not prevent a later mode-changing pill click's animated scroll from freezing on pointerdown", async () => {
-      // Scenario-regression pin (overengineering-audit collapse of round-2
-      // finding 2's operation-token mechanism into the mode-based freeze
-      // condition): op1 (a suppressed minimap nav, mode stays
+      // Scenario-regression pin for generation-safe operation ownership: op1
+      // (a suppressed minimap nav, mode stays
       // "free-scrolling") and op2 (a pill click, mode becomes
       // "following-end") overlap in flight - op1's own 750ms settle fallback
       // is still pending when op2 issues, and still pending when the
-      // pointerdown below fires. The freeze must hold on `modeAtEntry`
-      // (captured at "following-end", set by op2) regardless of op1's
-      // in-flight settle timer - no per-operation bookkeeping is involved
-      // anymore, so there is nothing left for op1's stale settle to clobber.
+      // pointerdown below fires. Op1's stale settle must not clear op2's newer
+      // ownership token before the gesture arrives.
       const messages = makeTranscript(24);
       renderChatMessages({
         messages,
@@ -3558,9 +3772,8 @@ describe("ChatMessages scroll policy", () => {
       // OP2: pill click (scrollToEnd, animated) - setTimelineMode
       // ("following-end") both changes the mode AND clears
       // suppressFollowRestoreRef unconditionally (explicit go-live), so from
-      // this point on the freeze below is held up ONLY by
-      // `modeAtEntry !== "free-scrolling"`, isolating exactly what this pin
-      // exercises.
+      // this point the newer animated operation's generation is the only
+      // source of freeze ownership, isolating exactly what this pin exercises.
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
       });
@@ -3582,9 +3795,8 @@ describe("ChatMessages scroll policy", () => {
 
       const scrollNode = getScrollNode();
       // A bare pointerdown now must STILL freeze op2's still-in-flight
-      // animation - the mode is "following-end" (set by op2, unaffected by
-      // op1's pending or fired settle callback), so the freeze condition
-      // holds regardless of op1's timer state.
+      // animation. Op1's older generation cannot clear op2's active one,
+      // regardless of its pending or fired settle callback.
       act(() => {
         fireEvent.pointerDown(scrollNode);
       });
@@ -3722,34 +3934,59 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  describe("M1 isAtEndRef null sentinel on cancel", () => {
-    it("reconciles follow when a cancel happens while still in the near-end band", async () => {
+  describe("intent-latched strict-edge follow", () => {
+    it("keeps a sub-pixel upward departure detached across repeated streaming row growth", async () => {
       const messages = makeTranscript(20);
       const { rerenderMessages } = renderChatMessages({
         messages,
-        scrollStateKey: "m1-near-end-cancel",
+        scrollStateKey: "scroll-push-subpixel-departure",
       });
       await settleLegendList();
 
-      // Cancel without leaving the near-end band (wheel only; stay at end).
+      // `scroll-push.mov`: the first slow trackpad samples move less than
+      // Legend List's one-pixel strict-edge epsilon. Geometry therefore still
+      // says isAtEnd=true, but the negative wheel has already declared the
+      // reader's intent to leave and must revoke follow synchronously.
       const scrollNode = getScrollNode();
       const atEnd = scrollNode.scrollTop;
-      fireEvent.wheel(scrollNode, { deltaY: -10 });
-      // Re-fire scroll while still at the end so onIsAtEndChange(true) runs
-      // after isAtEndRef was invalidated to null.
-      scrollNode.scrollTop = atEnd;
-      fireEvent.scroll(scrollNode);
-
-      // Mode must re-enter following-end (pill stays hidden).
+      fireEvent.wheel(scrollNode, { deltaY: -0.1 });
+      await fireScrollTopAndFlush(atEnd - 0.25);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
       expect(isJumpPillVisible()).toBe(false);
 
-      // Following catch-up still works after the reconcile.
-      const before = getScrollNode().scrollTop;
-      rerenderMessages(appendAssistant(messages, "m1-follow-stream", 90_000));
-      await settleLegendList();
-      // At end + following: maintainScrollAtEnd / reveal pass may hold or
-      // advance the offset; either way we are not free-parked away from end.
-      expect(getScrollNode().scrollTop).toBeGreaterThanOrEqual(before - 1);
+      // Grow the SAME live assistant row several times. Each pass exercises
+      // both the messages-driven reveal scheduler and Legend List's genuine
+      // item-layout path. None may translate repeated edge geometry back into
+      // follow intent or erase the 0.25px reading departure.
+      const tailId = messages.at(-1)?.id;
+      if (tailId === undefined) throw new Error("Expected a transcript tail");
+      let current = messages;
+      for (let growth = 0; growth < 3; growth += 1) {
+        current = current.map((message) =>
+          message.id === tailId
+            ? {
+                ...message,
+                content: `${message.content}\nstream growth ${growth}`,
+              }
+            : message,
+        );
+        rerenderMessages(current);
+        act(() => {
+          legendListRefHolder.current?.setItemSize(tailId, {
+            height: 120 + growth * 40,
+            width: VIEWPORT_WIDTH_PX,
+          });
+        });
+        await waitForRevealPassTick();
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        expect(getScrollNode().scrollTop).toBe(atEnd - 0.25);
+      }
+
+      // A later, explicit toward-end gesture arms exactly one legitimate
+      // strict-edge transition. Geometry still cannot do this on its own.
+      fireEvent.wheel(scrollNode, { deltaY: 0.1 });
+      await fireScrollTopAndFlush(atEnd);
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
     });
 
     it("still shows the pill when a gesture genuinely leaves the near-end band", async () => {
@@ -4547,6 +4784,50 @@ describe("ChatMessages scroll policy", () => {
       );
     });
 
+    it("keeps a completed-turn composer send below the top fade and retains its reply viewport after a slight departure", async () => {
+      const messages = makeCompletedTranscript(10);
+      const sendId = "composer-send-reserve-departure";
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "composer-send-reserve-departure",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 205_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("Expected an attached LegendList");
+      const sendIndex = afterSend.length - 1;
+      const queryViewportTop =
+        list.getState().positionAtIndex(sendIndex) +
+        LEGEND_LIST_HEADER_PX -
+        getScrollNode().scrollTop;
+      // The compact fade is 40px tall. The query must start at or below its
+      // fully opaque edge instead of the old 16px clipped position.
+      expect(queryViewportTop).toBeGreaterThanOrEqual(LEGEND_LIST_HEADER_PX);
+
+      const reservedContentLength = list.getState().contentLength;
+      const anchoredScrollTop = getScrollNode().scrollTop;
+      fireEvent.wheel(getScrollNode(), { deltaY: -0.1 });
+      await fireScrollTopAndFlush(anchoredScrollTop - 0.25);
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().scrollTop).toBe(anchoredScrollTop - 0.25);
+      // Detaching the mover must not destroy the independent reply reserve;
+      // otherwise the browser clamps the now-shorter range and yanks the
+      // viewport exactly as reported.
+      expect(list.getState().contentLength).toBeGreaterThanOrEqual(
+        reservedContentLength,
+      );
+    });
+
     it("distinguishes a scroll-only settle departure from an ordinary anchor undershoot", () => {
       // The initial anchor started at 300 and targets 940. A landing between
       // those positions is an ordinary animated undershoot and must be
@@ -4587,7 +4868,7 @@ describe("ChatMessages scroll policy", () => {
       await waitForAnchorEngineSettle();
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
-      // 14 * 90px ≈ 1260 > usable viewport (~604 with endInset 80 + offset 16)
+      // 14 * 90px ≈ 1260 > usable viewport (~580 with endInset 80 + offset 40)
       // so the reveal pass flips anchoredTurnOverflowsViewport → streaming pill.
       const afterOverflow = appendStreamingAssistantChunks(
         afterSend,
@@ -4664,7 +4945,8 @@ describe("ChatMessages scroll policy", () => {
       // regardless of any header/inset constant this test doesn't know.
       // This is what distinguishes a real landing from an undershoot: the
       // live third-turn regression settled ~512px SHORT of the target
-      // (528px landed vs 16px expected) while holding rock-steady there -
+      // (528px landed vs the fade-safe offset expected) while holding
+      // rock-steady there -
       // a loose "moved far enough" check cannot see that at all.
       const ROW_HEIGHT_PX = 90;
       const initial = makeCompletedTranscript(4);
@@ -4988,10 +5270,10 @@ describe("ChatMessages scroll policy", () => {
         expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
         const scrollAtAnchor = getScrollNode().scrollTop;
 
-        // Usable viewport ≈ 604px / 90px rows ≈ 6.7 rows - well under overflow.
+        // Usable viewport ≈ 580px / 90px rows ≈ 6.4 rows - well under overflow.
         // With uniform 90px rows, `anchoredEndSpace`'s reserved trailing
-        // space absorbs each new row exactly (decision #12's 16px offset
-        // budgets ~588px below the anchor before overflow) - growth inside
+        // space absorbs each new row exactly (decision #12's fade-safe offset
+        // budgets ~564px below the anchor before overflow) - growth inside
         // that budget needs no scroll adjustment at all, since the newly
         // measured row simply replaces reserved blank space that was
         // already within the viewport. scrollTop staying put here is the
@@ -5337,6 +5619,21 @@ describe("ChatMessages scroll policy", () => {
           expect(screen.getByTestId(`mock-message-${steerId}`)).toBeTruthy();
         });
         expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+        await waitForAnchorEngineSettle();
+        const list = legendListRefHolder.current;
+        if (list === null) throw new Error("Expected an attached LegendList");
+        const reservedContentLength = list.getState().contentLength;
+        const anchoredScrollTop = getScrollNode().scrollTop;
+        fireEvent.wheel(getScrollNode(), { deltaY: -0.1 });
+        await fireScrollTopAndFlush(anchoredScrollTop - 0.25);
+        await settleLegendList();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        expect(getScrollNode().scrollTop).toBe(anchoredScrollTop - 0.25);
+        expect(list.getState().contentLength).toBeGreaterThanOrEqual(
+          reservedContentLength,
+        );
       });
 
       it("stays free-scrolling when the inserted user id is NOT in the registry", async () => {
@@ -5476,6 +5773,323 @@ describe("ChatMessages scroll policy", () => {
         second.unmount();
       },
     );
+
+    it("anchors a variable-height reading position to the actual assistant row", async () => {
+      const messages = makeCompletedTranscript(12);
+      const tallAssistantId = messages[1].id;
+      setLegendListMessageRowHeightOverrides(new Map([[tallAssistantId, 900]]));
+      setLegendListScrollContainerScrollHeightOverride(2_000);
+
+      const instanceId = `t5-tall-assistant-${Math.random().toString(36).slice(2)}`;
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      await settleLegendList();
+
+      act(() => enterFreeScrollingAwayFromEnd());
+      // Header (40) + first row (90) + 300px into the tall assistant.
+      await fireScrollTopAndFlush(430);
+      expect(getScrollNode().scrollTop).toBe(430);
+
+      first.unmount();
+
+      const saved = restoreChatTabState(
+        makeDefaultTestIdentity(instanceId),
+        messages,
+      );
+      expect(saved.anchorMessageId).toBe(tallAssistantId);
+      expect(saved.anchorIndex).toBe(1);
+      expect(saved.offset).toBe(-300);
+
+      const second = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(430);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      second.unmount();
+    });
+
+    it("captures inline-navigation source positions synchronously and replaces stale captures", async () => {
+      const messages = makeCompletedTranscript(24);
+      const instanceId = `t5-inline-source-${Math.random().toString(36).slice(2)}`;
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      await settleLegendList();
+
+      act(() => enterFreeScrollingAwayFromEnd());
+      await fireScrollTopAndFlush(360);
+      fireEvent.pointerDown(screen.getByTestId("chat-transcript-container"));
+
+      const firstCapture = restoreChatTabState(
+        makeDefaultTestIdentity(instanceId),
+        messages,
+      );
+      expect(firstCapture.mode).toBe("free-scrolling");
+      expect(firstCapture.anchorMessageId).not.toBeNull();
+
+      await fireScrollTopAndFlush(720);
+      fireEvent.pointerDown(screen.getByTestId("chat-transcript-container"));
+
+      const secondCapture = restoreChatTabState(
+        makeDefaultTestIdentity(instanceId),
+        messages,
+      );
+      expect(secondCapture.mode).toBe("free-scrolling");
+      expect(secondCapture.anchorMessageId).not.toBe(
+        firstCapture.anchorMessageId,
+      );
+      expect(secondCapture.anchorIndex).toBeGreaterThan(
+        firstCapture.anchorIndex ?? -1,
+      );
+      view.unmount();
+    });
+
+    it("corrects a restored landing with an absolute measured offset when index restoration is a no-op", async () => {
+      const messages = makeCompletedTranscript(20);
+      const targetIndex = 8;
+      const targetId = messages[targetIndex].id;
+      const instanceId = `t5-validated-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: -12,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      const list = legendListRefHolder.current;
+      expect(list).not.toBeNull();
+      if (list === null) throw new Error("LegendList ref did not mount");
+      const scrollNode = getScrollNode();
+      scrollNode.scrollTop = 0;
+      const indexRestore = vi
+        .spyOn(list, "scrollToIndex")
+        .mockResolvedValue(undefined);
+      const absoluteRestore = vi.spyOn(list, "scrollToOffset");
+
+      await settleLegendList();
+      await settleLegendList();
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      expect(indexRestore).not.toHaveBeenCalled();
+      expect(absoluteRestore).toHaveBeenCalledWith({
+        offset: expectedScrollTop,
+        animated: false,
+      });
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+    });
+
+    it("restores the validated reading anchor without waiting for a deleted reply reserve after streaming ends", async () => {
+      const messages = makeCompletedTranscript(20);
+      const targetIndex = 8;
+      const targetId = messages[targetIndex].id;
+      const instanceId = `t5-deleted-reserve-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: -12,
+        replyReserveMessageId: "deleted-reply-reserve",
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+        isChatStreaming: true,
+      });
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      getScrollNode().scrollTop = 0;
+      vi.spyOn(list, "scrollToIndex").mockResolvedValue(undefined);
+      const absoluteRestore = vi.spyOn(list, "scrollToOffset");
+
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(absoluteRestore).not.toHaveBeenCalled();
+
+      view.rerenderWith({ isChatStreaming: false });
+      await settleLegendList();
+      await settleLegendList();
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      expect(absoluteRestore).toHaveBeenCalledWith({
+        offset: expectedScrollTop,
+        animated: false,
+      });
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe("");
+      view.unmount();
+    });
+
+    it("retains a validated detached reply reserve after streaming ends", async () => {
+      const messages = makeCompletedTranscript(20);
+      const anchorIndex = 1;
+      const reserveIndex = 18;
+      const instanceId = `t5-completed-valid-reserve-${Math.random().toString(36).slice(2)}`;
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(instanceId),
+        mode: "free-scrolling",
+        anchorMessageId: messages[anchorIndex].id,
+        anchorIndex,
+        offset: -300,
+        replyReserveMessageId: messages[reserveIndex].id,
+      });
+
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+        isChatStreaming: false,
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe(
+        messages[reserveIndex].id,
+      );
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+    });
+
+    it("keeps the pre-restore snapshot authoritative when a bootstrap mount unmounts before convergence", () => {
+      const messages = makeCompletedTranscript(20);
+      const anchorIndex = 8;
+      const reserveIndex = 18;
+      const instanceId = `t5-bootstrap-unmount-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      const expected = {
+        mode: "free-scrolling" as const,
+        anchorMessageId: messages[anchorIndex].id,
+        anchorIndex,
+        offset: -1_185,
+        replyReserveMessageId: messages[reserveIndex].id,
+      };
+      saveChatTabState({ identity, ...expected });
+
+      tileLiveness.live = true;
+      const bootstrap = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+        isChatStreaming: true,
+      });
+
+      // Strict Mode and rapid canvas switches can destroy this mount before
+      // the reserve and measured-row convergence complete. Its transient DOM
+      // geometry is not a reader decision and must not become last-writer-wins.
+      bootstrap.unmount();
+
+      expect(restoreChatTabState(identity, messages)).toEqual(expected);
+    });
+
+    it("publishes an explicit wheel detachment even when no follow-up scroll event fires before unmount", async () => {
+      const messages = makeCompletedTranscript(20);
+      const anchorIndex = 18;
+      const instanceId = `t5-bootstrap-reader-detach-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "anchoring-new-turn",
+        anchorMessageId: messages[anchorIndex].id,
+        anchorIndex,
+        offset: 0,
+      });
+
+      tileLiveness.live = true;
+      const bootstrap = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+        isChatStreaming: true,
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // The scroll node can appear one frame after the component's layout
+      // effect; wait only for its passive wheel listener, not anchor settle.
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+      fireEvent.wheel(getScrollNode(), { deltaY: -0.1 });
+      getScrollNode().scrollTop = 360;
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      bootstrap.unmount();
+
+      const saved = restoreChatTabState(identity, messages);
+      expect(saved.mode).toBe("free-scrolling");
+      expect(saved.anchorMessageId).not.toBeNull();
+      expect(saved.anchorIndex).not.toBeNull();
+    });
+
+    it("treats Strict Mode initial-index placement as a bootstrap and converges from measured reserve geometry", async () => {
+      const messages = makeCompletedTranscript(20);
+      const anchorIndex = 1;
+      const reserveIndex = 18;
+      const instanceId = `t5-strict-measured-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      setLegendListMessageRowHeightOverrides(
+        new Map([[messages[anchorIndex].id, 6_049]]),
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: messages[anchorIndex].id,
+        anchorIndex,
+        offset: -300,
+        replyReserveMessageId: messages[reserveIndex].id,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+        isChatStreaming: true,
+        strictMode: true,
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + 90 + 300;
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+      expect(restoreChatTabState(identity, messages)).toEqual({
+        mode: "free-scrolling",
+        anchorMessageId: messages[anchorIndex].id,
+        anchorIndex,
+        offset: -300,
+        replyReserveMessageId: messages[reserveIndex].id,
+      });
+    });
 
     it("captures the live DOM offset when an animated navigation has not settled before unmount", async () => {
       const messages = makeCompletedTranscript(30);
@@ -5627,7 +6241,7 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).not.toBe("following-end");
     });
 
-    it("collapses mid-anchor (anchoring-new-turn) unmount to free-scrolling on the next mount", async () => {
+    it("restores a just-sent turn's semantic anchor and reply reserve after a tab-switch remount", async () => {
       const messages = makeCompletedTranscript(16);
       const sendId = "t5-mid-anchor-send";
       const scrollStateKey = `t5-mid-anchor-${Math.random().toString(36).slice(2)}`;
@@ -5641,6 +6255,7 @@ describe("ChatMessages scroll policy", () => {
         instanceId,
         localProvenanceMessageIds: new Set([sendId]),
         composerOverlayHeight,
+        isChatStreaming: true,
       });
       await settleLegendList();
 
@@ -5657,61 +6272,211 @@ describe("ChatMessages scroll policy", () => {
       });
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
-      // Ticket 19 finding (investigated, confirmed unrelated to the capture
-      // classifier): in THIS fixture the anchor engine's own `scrollToIndex`
-      // is never issued at all - `list.scrollToIndex` stays at zero calls
-      // for several seconds past `waitForAnchorEngineSettle()`, and
-      // `list.getState().scroll` never leaves 0, even though the target row
-      // is fully measured (`positionAtIndex(16)` resolves). That means
-      // `onAnchorReady` (and with it, LegendList's own `anchoredEndSpace`
-      // reserve) never fires for this specific fixture - a pre-existing gap
-      // unrelated to this ticket's classifier (there is no departure event
-      // of any kind between the send and this point for the classifier to
-      // even act on). The original version of this test never surfaced that
-      // gap because it forced the DOM `scrollTop` directly - a technique
-      // ticket 19 now correctly reads as an unexplained departure, and
-      // through LegendList's own `scrollToOffset` API the reserve-dependent
-      // clamp caps any requested offset at `naturalMax` regardless (since
-      // the reserve is stuck at zero here), making the ABOVE-natural-max
-      // park this test used to construct unreachable through any real
-      // mechanism in this fixture. Flagged to the ticket-19 orchestrator
-      // rather than papered over; F3's underlying clamp FORMULA keeps its
-      // own dedicated coverage in chat-scroll-anchoring.test.ts
-      // (`describe("getChatNaturalMaxScrollWithoutAnchorReserve")`) - only
-      // THIS specific "unmount while genuinely parked above naturalMax"
-      // integration shape is untestable here until that separate gap is
-      // fixed.
-      //
-      // What remains fully testable, and is ticket 5's actual core claim:
-      // an unmount that catches a session GENUINELY still in
-      // `anchoring-new-turn` (no departure, no cheat) must still collapse to
-      // `free-scrolling` on save - `anchoring-new-turn` never round-trips
-      // through the cache, regardless of where `scrollTop` happens to sit.
+      // `scroll-yank-tab-switch.mov`: switch tabs immediately after the send,
+      // while the anchor operation is still allowed to be in flight.
       first.unmount();
 
       const saved = restoreChatTabState(
         makeDefaultTestIdentity(instanceId),
         afterSend,
       );
-      expect(saved.mode).toBe("free-scrolling");
-      expect(saved.mode).not.toBe("following-end");
-      // Active minimap/reading-line row (not necessarily the anchored send).
-      expect(saved.anchorMessageId).not.toBeNull();
+      expect(saved.mode).toBe("anchoring-new-turn");
+      expect(saved.anchorMessageId).toBe(sendId);
 
       const second = renderChatMessages({
         messages: afterSend,
         scrollStateKey,
         instanceId,
         composerOverlayHeight,
-        // Provenance already consumed; remount must not re-enter the engine.
+        isChatStreaming: true,
+        // Provenance was already consumed before the switch. Restoration must
+        // come from the saved semantic session, not reclassification as a new
+        // local send.
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("Expected an attached LegendList");
+      const sendIndex = afterSend.length - 1;
+      const restoredQueryTop =
+        list.getState().positionAtIndex(sendIndex) +
+        LEGEND_LIST_HEADER_PX -
+        getScrollNode().scrollTop;
+      expect(
+        Math.abs(restoredQueryTop - CHAT_LIST_ANCHOR_OFFSET),
+      ).toBeLessThanOrEqual(1);
+
+      // First streamed reply content consumes the already-reserved space. It
+      // must not turn the remount into a free-scroll resize/yank.
+      const scrollBeforeReply = getScrollNode().scrollTop;
+      const withReply = appendStreamingAssistantChunks(afterSend, 2, 778_000);
+      second.rerenderMessages(withReply);
+      await settleLegendList();
+      await waitForRevealPassTick();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop).toBe(scrollBeforeReply);
+
+      second.unmount();
+    });
+
+    it("preserves a detached streaming viewport and its reply reserve across repeated tab switches", async () => {
+      const history = makeCompletedTranscript(12);
+      const sendId = "t5-detached-reserve-send";
+      const instanceId = `t5-detached-reserve-${Math.random().toString(36).slice(2)}`;
+      const afterSend = appendOptimisticUserSend(history, sendId, 780_000);
+      const streaming = appendStreamingAssistantChunks(afterSend, 2, 781_000);
+
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages: history,
+        instanceId,
+        scrollStateKey: instanceId,
+        localProvenanceMessageIds: new Set([sendId]),
+        isChatStreaming: true,
+      });
+      await settleLegendList();
+
+      first.rerenderMessages(afterSend);
+      await waitForAnchorEngineSettle();
+      first.rerenderMessages(streaming);
+      await settleLegendList();
+
+      const anchoredScrollTop = getScrollNode().scrollTop;
+      fireEvent.wheel(getScrollNode(), { deltaY: -0.1 });
+      await fireScrollTopAndFlush(Math.max(0, anchoredScrollTop - 0.25));
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      const readingScrollTop = getScrollNode().scrollTop;
+      first.unmount();
+
+      const saved = restoreChatTabState(
+        makeDefaultTestIdentity(instanceId),
+        streaming,
+      );
+      // Scroll ownership and reply-space geometry have independent lifetimes.
+      // A detached reader must persist both, rather than clamping the viewport
+      // into no-reserve geometry and losing another line on every remount.
+      expect(saved).toHaveProperty("replyReserveMessageId", sendId);
+
+      const grownStreaming = appendStreamingAssistantChunks(
+        afterSend,
+        3,
+        781_000,
+      );
+      const second = renderChatMessages({
+        messages: grownStreaming,
+        instanceId,
+        scrollStateKey: instanceId,
+        isChatStreaming: true,
       });
       await settleLegendList();
       await settleLegendList();
 
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
-      expect(getScrollNode().dataset.scrollMode).not.toBe("anchoring-new-turn");
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe(sendId);
+      expect(getScrollNode().scrollTop).toBe(readingScrollTop);
 
       second.unmount();
+      const third = renderChatMessages({
+        messages: grownStreaming,
+        instanceId,
+        scrollStateKey: instanceId,
+        isChatStreaming: true,
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe(sendId);
+      expect(getScrollNode().scrollTop).toBe(readingScrollTop);
+      third.unmount();
+    });
+
+    it("resumes a saved new-turn anchor when hydration delivers its query after mount", async () => {
+      const history = makeCompletedTranscript(12);
+      const sendId = "t5-delayed-anchor-send";
+      const afterSend = appendOptimisticUserSend(history, sendId, 779_000);
+      const scrollStateKey = `t5-delayed-anchor-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(scrollStateKey);
+
+      saveChatTabState({
+        identity,
+        mode: "anchoring-new-turn",
+        anchorMessageId: sendId,
+        anchorIndex: afterSend.length - 1,
+        offset: 0,
+      });
+
+      // The tab can remount from a partial snapshot before the just-sent row
+      // is hydrated. Its temporary nearest-neighbor landing must be passive;
+      // once the original semantic id arrives, restore the anchor session
+      // instead of treating the query as an unrelated append.
+      const view = renderChatMessages({
+        messages: history,
+        scrollStateKey,
+        isChatStreaming: true,
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      view.rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      });
+      await waitForAnchorEngineSettle();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("Expected an attached LegendList");
+      const queryTop =
+        list.getState().positionAtIndex(afterSend.length - 1) +
+        LEGEND_LIST_HEADER_PX -
+        getScrollNode().scrollTop;
+      expect(Math.abs(queryTop - CHAT_LIST_ANCHOR_OFFSET)).toBeLessThanOrEqual(
+        1,
+      );
+    });
+
+    it("recreates a detached reply reserve delivered after a partial hydration mount before replaying the raw viewport", async () => {
+      const messages = makeCompletedTranscript(10);
+      const partial = messages.slice(0, 4);
+      const viewportAnchorId = messages[1]?.id;
+      const reserveMessageId = messages[8]?.id;
+      expect(viewportAnchorId).toBeTruthy();
+      expect(reserveMessageId).toBeTruthy();
+      const instanceId = `t5-delayed-detached-reserve-${Math.random().toString(36).slice(2)}`;
+
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(instanceId),
+        mode: "free-scrolling",
+        anchorMessageId: viewportAnchorId,
+        anchorIndex: 1,
+        offset: -24,
+        replyReserveMessageId: reserveMessageId,
+      });
+
+      const view = renderChatMessages({
+        messages: partial,
+        instanceId,
+        scrollStateKey: instanceId,
+        isChatStreaming: true,
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe("");
+
+      view.rerenderMessages(messages);
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe(
+        reserveMessageId,
+      );
+      // position(1)=90, header=40, viewOffset=-24 => scrollTop=154.
+      expect(getScrollNode().scrollTop).toBe(154);
+      view.unmount();
     });
 
     it("falls back cleanly when the saved anchor message is gone on remount", async () => {
@@ -5738,6 +6503,7 @@ describe("ChatMessages scroll policy", () => {
         anchorMessageId: null,
         anchorIndex: null,
         offset: 0,
+        replyReserveMessageId: null,
       });
 
       renderChatMessages({ messages, scrollStateKey });
@@ -5762,6 +6528,7 @@ describe("ChatMessages scroll policy", () => {
         anchorMessageId: null,
         anchorIndex: null,
         offset: 0,
+        replyReserveMessageId: null,
       });
 
       cleanup();
@@ -5916,7 +6683,7 @@ describe("ChatMessages scroll policy", () => {
       third.unmount();
     });
 
-    describe("F3: save-time offset clamps against no-reserve geometry", () => {
+    describe("free-scrolling coordinate capture", () => {
       function mockMeasurementSource(
         positionAtIndex: (index: number) => number,
         scroll: number,
@@ -5933,85 +6700,27 @@ describe("ChatMessages scroll policy", () => {
         };
       }
 
-      it("captures the raw offset when there is no natural-max-scroll bound (ordinary free-scrolling)", () => {
+      it("captures the raw visible offset without rewriting its geometry", () => {
         const list = mockMeasurementSource(() => 500, 2000, undefined);
-        expect(captureChatFreeScrollingOffset(list, 3, null)).toBe(500 - 2000);
-      });
-
-      it("clamps the captured scroll to the natural bound when it exceeds it (anchoring-new-turn reserve)", () => {
-        // Anchoring parked the anchor near the top by scrolling to 4484 - a
-        // position only reachable because anchoredEndSpace reserved blank
-        // trailing space below it for a reply that has not streamed in yet.
-        // The real (no-reserve) content only justifies scrolling to 3986.
-        const list = mockMeasurementSource(() => 4500, 4484, undefined);
-        const naturalMaxScroll = 3986;
-        expect(captureChatFreeScrollingOffset(list, 5, naturalMaxScroll)).toBe(
-          4500 - naturalMaxScroll,
-        );
-      });
-
-      it("leaves the captured scroll untouched when it is already within the natural bound", () => {
-        // A settled, caught-up anchored turn: the reveal-pass effect already
-        // converged scroll to (at most) the natural bound - clamping must be
-        // a no-op here, not double-subtract or otherwise distort a valid
-        // position.
-        const list = mockMeasurementSource(() => 4500, 3200, undefined);
-        const naturalMaxScroll = 3986;
-        expect(captureChatFreeScrollingOffset(list, 5, naturalMaxScroll)).toBe(
-          4500 - 3200,
-        );
+        expect(captureChatFreeScrollingOffset(list, 3)).toBe(500 - 2000);
       });
 
       it("folds topOffsetAdjustment into the offset so restore matches LegendList math", () => {
         // position=720, scroll=360, header=40 → viewOffset 400, which
         // round-trips: scroll = position - viewOffset + header = 360.
         const list = mockMeasurementSource(() => 720, 360, 40);
-        expect(captureChatFreeScrollingOffset(list, 8, null)).toBe(
-          720 + 40 - 360,
-        );
-      });
-
-      it("keeps the F3 clamp relative to the top-offset-corrected value", () => {
-        // Clamp scroll first, then add topOffset: (4500 + 40) - 3986, not
-        // (4500 + 40) - 4484.
-        const list = mockMeasurementSource(() => 4500, 4484, 40);
-        expect(captureChatFreeScrollingOffset(list, 5, 3986)).toBe(
-          4500 + 40 - 3986,
-        );
+        expect(captureChatFreeScrollingOffset(list, 8)).toBe(720 + 40 - 360);
       });
     });
   });
 
-  describe("bottom fade replaces the legacy overpaint div", () => {
-    it("no longer renders the legacy bg-linear-to-t overpaint div", async () => {
+  describe("native transcript edges", () => {
+    it("does not render a custom bottom-fade overpaint", async () => {
       const messages = makeCompletedTranscript(8);
       const { container } = renderChatMessages({ messages });
       await settleLegendList();
 
       expect(container.querySelector(".bg-linear-to-t")).toBeNull();
-    });
-
-    it("writes --chat-bottom-overlay-inset on the transcript container from the measured dock inset, tracking dock resize", async () => {
-      const messages = makeCompletedTranscript(8);
-      const { rerenderWith } = renderChatMessages({
-        messages,
-        composerOverlayHeight: 64,
-      });
-      await settleLegendList();
-
-      const container = screen.getByTestId("chat-transcript-container");
-      expect(
-        container.style.getPropertyValue("--chat-bottom-overlay-inset"),
-      ).toBe("64px");
-
-      // Dock grows (e.g. the files-changed panel opening) - the var must
-      // track the new measured height, not the value at mount.
-      rerenderWith({ composerOverlayHeight: 148 });
-      await settleLegendList();
-
-      expect(
-        container.style.getPropertyValue("--chat-bottom-overlay-inset"),
-      ).toBe("148px");
     });
   });
 
@@ -6032,6 +6741,7 @@ describe("ChatMessages scroll policy", () => {
     async function setupOverflowingAnchoredTurn(options: {
       readonly scrollStateKey: string;
       readonly sendId: string;
+      readonly additionalLocalProvenanceMessageIds?: ReadonlyArray<string>;
     }): Promise<{
       rerenderMessages: (messages: ReadonlyArray<ChatMessageModel>) => void;
       afterOverflow: ReadonlyArray<ChatMessageModel>;
@@ -6040,7 +6750,10 @@ describe("ChatMessages scroll policy", () => {
       const { rerenderMessages } = renderChatMessages({
         messages,
         scrollStateKey: options.scrollStateKey,
-        localProvenanceMessageIds: new Set([options.sendId]),
+        localProvenanceMessageIds: new Set([
+          options.sendId,
+          ...(options.additionalLocalProvenanceMessageIds ?? []),
+        ]),
       });
       await settleLegendList();
 
@@ -6092,36 +6805,38 @@ describe("ChatMessages scroll policy", () => {
       return { rerenderMessages, afterOverflow };
     }
 
-    it("(a) scroll-only overflow-to-tail flips to following-end, hides pill, next chunk advances", async () => {
+    it("(a) scroll-only overflow-to-tail stays detached with its reply reserve until explicit go-live", async () => {
       const { rerenderMessages, afterOverflow } =
         await setupOverflowingAnchoredTurn({
           scrollStateKey: "t11-a-scroll-only",
           sendId: "t11-a-send",
         });
 
-      // Scroll-ONLY route: native scrollbar drag never fires wheel/pointerdown,
-      // so generation ownership stays matched for the whole anchoring session.
-      // Without Ticket 11 reconciliation the terminal true report hits the
-      // stale-true equality fast-path and mode stays stranded anchoring.
+      // Scroll-ONLY route: the capture classifier recognizes a native
+      // scrollbar drag even without wheel/pointerdown and releases anchor
+      // ownership. Reaching the synthetic reserve's strict edge is geometry,
+      // not permission to destroy the reply viewport; only explicit go-live
+      // may clear that independent reserve.
       //
       // Walk scrollTop upward from the parked anchor (not the shim's huge
       // fixed scrollHeight max - that overshoots real content and leaves no
       // room for maintainScrollAtEnd to advance on the next chunk).
       const parkedAtAnchor = getScrollNode().scrollTop;
-      let flippedAt: number | null = null;
+      let reachedEndAt: number | null = null;
       for (let top = parkedAtAnchor; top <= parkedAtAnchor + 4_000; top += 80) {
         await fireScrollOnlyTo(top);
-        if (getScrollNode().dataset.scrollMode === "following-end") {
-          flippedAt = getScrollNode().scrollTop;
+        if (legendListRefHolder.current?.getState().isAtEnd === true) {
+          reachedEndAt = getScrollNode().scrollTop;
           break;
         }
       }
-      expect(flippedAt).not.toBeNull();
-      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(reachedEndAt).not.toBeNull();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe("t11-a-send");
       expect(isJumpPillVisible()).toBe(false);
 
-      // maintainScrollAtEnd re-engaged: subsequent stream growth advances
-      // past the content-end landing we just found.
+      // Stream growth consumes the retained reserve without reacquiring a
+      // mover or shifting the reader's physical viewport.
       const beforeChunk = getScrollNode().scrollTop;
       let afterChunk: ReadonlyArray<ChatMessageModel> = afterOverflow;
       for (let i = 0; i < 8; i += 1) {
@@ -6132,10 +6847,9 @@ describe("ChatMessages scroll policy", () => {
       await waitForRevealPassTick();
       await waitForRevealPassTick();
 
-      await waitFor(() => {
-        expect(getScrollNode().scrollTop).toBeGreaterThan(beforeChunk);
-      });
-      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(getScrollNode().scrollTop).toBe(beforeChunk);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe("t11-a-send");
     });
 
     it("(b) ordinary wheel cancel + pill-click path stays green (no regression)", async () => {
@@ -6162,6 +6876,47 @@ describe("ChatMessages scroll policy", () => {
       expect(isJumpPillVisible()).toBe(false);
     });
 
+    it("(b2) a scroll-only native scrollbar drag toward the strict tail reacquires follow", async () => {
+      const messages = makeTranscript(20);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "t11-b2-scroll-only-reattach",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      const scrollNode = getScrollNode();
+      await fireScrollOnlyTo(
+        Math.max(0, scrollNode.scrollHeight - scrollNode.clientHeight),
+      );
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("(b3) an MVCP-owned scroll adjustment does not impersonate a scrollbar drag", () => {
+      const libraryOwnedScrollTop = chatScrollCaptureLibraryOwnedTop(990, 990);
+      expect(
+        scrollOnlyMovementCarriesReaderIntent({
+          previousScrollTop: 900,
+          currentScrollTop: 990,
+          libraryOwnedScrollTop,
+        }),
+      ).toBe(false);
+      expect(
+        scrollOnlyMovementCarriesReaderIntent({
+          previousScrollTop: 900,
+          currentScrollTop: 990,
+          libraryOwnedScrollTop: chatScrollCaptureLibraryOwnedTop(990, 900),
+        }),
+      ).toBe(true);
+    });
+
     it("(c) pill click while anchoring immediately enters following-end", async () => {
       await setupOverflowingAnchoredTurn({
         scrollStateKey: "t11-c-pill-while-anchoring",
@@ -6174,6 +6929,59 @@ describe("ChatMessages scroll policy", () => {
       // scrollToEnd sets following-end unconditionally on click - no wait.
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("(c2) explicit go-live can tear down reply reserve and a later send cleanly recreates it", async () => {
+      const firstSendId = "t11-c2-first-send";
+      const secondSendId = "t11-c2-second-send";
+      const { rerenderMessages, afterOverflow } =
+        await setupOverflowingAnchoredTurn({
+          scrollStateKey: "t11-c2-reserve-lifecycle",
+          sendId: firstSendId,
+          additionalLocalProvenanceMessageIds: [secondSendId],
+        });
+
+      fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+      const trailingReply = afterOverflow.at(-1);
+      if (trailingReply === undefined) {
+        throw new Error("Expected a trailing assistant reply");
+      }
+      expect(trailingReply.role).toBe("assistant");
+      const completedFirstTurn: ReadonlyArray<ChatMessageModel> = [
+        ...afterOverflow.slice(0, -1),
+        {
+          ...trailingReply,
+          completedAt: 889_000,
+          runState: null,
+        },
+      ];
+      rerenderMessages(completedFirstTurn);
+      await settleLegendList();
+
+      const afterSecondSend = appendOptimisticUserSend(
+        completedFirstTurn,
+        secondSendId,
+        890_000,
+      );
+      rerenderMessages(afterSecondSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${secondSendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("Expected an attached LegendList");
+      const secondSendViewportTop =
+        list.getState().positionAtIndex(afterSecondSend.length - 1) +
+        LEGEND_LIST_HEADER_PX -
+        getScrollNode().scrollTop;
+      expect(
+        Math.abs(secondSendViewportTop - CHAT_LIST_ANCHOR_OFFSET),
+      ).toBeLessThanOrEqual(1);
     });
 
     it("(d) suppressed nav at tail stays free, hides pill at edge, shows pill on offscreen growth without scroll event", async () => {
@@ -7209,8 +8017,8 @@ describe("ChatMessages scroll policy", () => {
       // render, not just a unique `scrollStateKey` - `control` and
       // `subject` otherwise share the default epicId/taskId durable
       // chat-key. `control`'s unmount below now (correctly, per the round-3
-      // fix) commits a coherent durable entry for its collapsed
-      // "anchoring-new-turn" -> "free-scrolling" position; without this
+      // fix) commits a coherent durable entry for its active anchor session;
+      // without this
       // isolation, `subject`'s own mount would inherit it via
       // `hasSavedChatTabState`/`restoredTabState`, skipping the
       // following-end default this test's `subject` assumes.
@@ -7598,11 +8406,11 @@ describe("ChatMessages scroll policy", () => {
       });
     }
 
-    it("(pin A) send recovers via validated reissue to the exact 16px anchor offset after short landings", async () => {
+    it("(pin A) send recovers via validated reissue to the exact fade-safe anchor offset after short landings", async () => {
       // Regression pin for the validated-convergence loop (rootcause probe's
-      // "instant OR animated + reissue → 16px" half). jsdom cannot freeze a
-      // mid-flight animated pixel endpoint; F2 undershoot is the deterministic
-      // stand-in for estimate drift.
+      // "instant OR animated + reissue → fade-safe offset" half). jsdom
+      // cannot freeze a mid-flight animated pixel endpoint; F2 undershoot is
+      // the deterministic stand-in for estimate drift.
       const history = makeCompletedTranscript(40);
       const sendId = "t18-pin-a-send";
       const { rerenderMessages } = renderChatMessages({
@@ -7900,14 +8708,14 @@ describe("ChatMessages scroll policy", () => {
       await waitForRevealPassTick();
 
       // Repair must still run despite overflowsUsableViewport: scroll grows
-      // by exactly one row so the anchor holds its 16px offset.
+      // by exactly one row so the anchor holds its fade-safe offset.
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
       expect(getScrollNode().scrollTop - scrollAtOverflow).toBe(
         T18_ROW_HEIGHT_PX,
       );
     });
 
-    it("(pin F) same-turn steer path also converges to the exact 16px offset (not send-only)", async () => {
+    it("(pin F) same-turn steer path also converges to the exact fade-safe offset (not send-only)", async () => {
       // Decision #8 events share beginAnchoringNewTurn. Ticket 4 already pins
       // mode engagement for send/steer/queued/fresh-open; this extends the
       // NEW convergence landing assertion to the steer-shaped insert.
@@ -8069,6 +8877,21 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("releases both persistence gates when an unreachable saved coordinate exhausts restore retries", () => {
+      const restorePersistencePendingRef = { current: true };
+      const pendingMeasuredRestoreRef = {
+        current: { messageId: "saved-row", viewOffset: 10_000 },
+      };
+
+      acceptExhaustedPersistedRestoreFallback(
+        restorePersistencePendingRef,
+        pendingMeasuredRestoreRef,
+      );
+
+      expect(restorePersistencePendingRef.current).toBe(false);
+      expect(pendingMeasuredRestoreRef.current).toBeNull();
     });
 
     it("streaming fresh-open (no saved state) seeds following-end, not the idle anchor candidate", async () => {
@@ -8330,17 +9153,10 @@ describe("ChatMessages scroll policy", () => {
       const anchorIndex = 20;
       const anchorId = fullMessages[anchorIndex]?.id ?? null;
       expect(anchorId).toBeTruthy();
-      // The retry effect lands via `navigateToMessage` (same jump-and-land
-      // machinery every other programmatic navigation in this file already
-      // uses - minimap/find/deep-link), which targets a FIXED navigation
-      // padding, not the saved sub-row pixel offset (that refinement only
-      // ever applied to the ORIGINAL mount-time bootstrap, unaffected by
-      // this fix) - same formula T17's own pins use to verify a computed
-      // landing position independent of jsdom's faked scrollHeight.
+      // Hydration catch-up restores the original sub-row pixel offset, not
+      // the fixed minimap/find navigation padding.
       const expectedScrollTop =
-        anchorIndex * TICKET_13_ROW_HEIGHT_PX +
-        LEGEND_LIST_HEADER_PX -
-        CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
 
       // Repro: reopen races hydration - the FIRST commit only has the tail
       // of the transcript (chat.subscribe's snapshot can still grow after
@@ -8387,9 +9203,7 @@ describe("ChatMessages scroll policy", () => {
       const anchorId = fullMessages[anchorIndex]?.id ?? null;
       expect(anchorId).toBeTruthy();
       const expectedScrollTop =
-        anchorIndex * TICKET_13_ROW_HEIGHT_PX +
-        LEGEND_LIST_HEADER_PX -
-        CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
 
       const key = `t15-hydration-many-absent-${Math.random().toString(36).slice(2)}`;
       saveChatTabState({
@@ -8421,6 +9235,90 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
     });
 
+    it("preserves the unresolved raw hydration anchor across a normalized rapid remount", async () => {
+      const fullMessages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const anchorId = fullMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const expectedScrollTop =
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
+      const key = `t15-hydration-remount-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(key);
+      // The partial tail is long enough that the substituted local index is
+      // measurable away from its own edge, so the normalized fallback can
+      // settle and overwrite the ordinary cache before this rapid remount.
+      const partialMessages = fullMessages.slice(150);
+
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: 24,
+      });
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      first.unmount();
+
+      const normalizedAfterFirstUnmount = peekSavedChatTabState(identity);
+      expect(normalizedAfterFirstUnmount?.mode).toBe("free-scrolling");
+      expect(normalizedAfterFirstUnmount?.anchorMessageId).not.toBe(anchorId);
+      const second = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: key,
+      });
+      second.rerenderMessages(fullMessages);
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      second.unmount();
+    });
+
+    it("reader intent supersedes the session-retained raw hydration anchor", async () => {
+      const fullMessages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const anchorId = fullMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const rawAnchorScrollTop =
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
+      const readerRestoredScrollTop = 150 * TICKET_13_ROW_HEIGHT_PX;
+      const key = `t15-hydration-reader-${Math.random().toString(36).slice(2)}`;
+      const partialMessages = fullMessages.slice(150);
+
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(key),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: 24,
+      });
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      first.unmount();
+
+      const reopened = renderChatMessages({
+        messages: fullMessages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      expect(getScrollNode().scrollTop).toBe(readerRestoredScrollTop);
+      expect(getScrollNode().scrollTop).not.toBe(rawAnchorScrollTop);
+      reopened.unmount();
+    });
+
     it("hydration catch-up does not disturb the true-deletion nearest-neighbor fallback (branch-edited anchor, never resolves)", async () => {
       const messages = makeCompletedTranscript(16);
       const key = `t15-hydration-deleted-${Math.random().toString(36).slice(2)}`;
@@ -8432,18 +9330,36 @@ describe("ChatMessages scroll policy", () => {
         anchorIndex: 5,
         offset: 24,
       });
-      renderChatMessages({ messages, scrollStateKey: key });
+      tileLiveness.live = true;
+      const first = renderChatMessages({ messages, scrollStateKey: key });
+      await settleLegendList();
       await settleLegendList();
 
       // The round-1 stale-anchor nearest-neighbor fallback still applies
-      // exactly as before this fix - the hydration-retry effect never finds
-      // "gone-branch-deleted" (it does not exist in ANY commit, complete or
-      // not) and gives up within its bounded attempt budget rather than
-      // hanging or repeatedly disturbing the clamped position.
+      // exactly as before this fix. The measured neighboring-row landing is
+      // allowed to settle even while the same-mount hydration retry retains
+      // the original id, so unmount persists a coherent normalized anchor
+      // instead of re-saving the deleted id forever.
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(
         screen.queryByTestId("mock-message-gone-branch-deleted"),
       ).toBeNull();
+
+      first.unmount();
+      const normalized = peekSavedChatTabState(makeDefaultTestIdentity(key));
+      expect(normalized?.mode).toBe("free-scrolling");
+      expect(normalized?.anchorMessageId).not.toBe("gone-branch-deleted");
+      expect(
+        messages.some((message) => message.id === normalized?.anchorMessageId),
+      ).toBe(true);
+
+      const reopened = renderChatMessages({ messages, scrollStateKey: key });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(
+        screen.queryByTestId("mock-message-gone-branch-deleted"),
+      ).toBeNull();
+      reopened.unmount();
     });
 
     it("composer-resize alone does not write scroll state (endInset not in save-effect deps)", async () => {
@@ -8753,10 +9669,11 @@ describe("ChatMessages scroll policy", () => {
         const anchorIndex = 20;
         const anchorId = fullMessages[anchorIndex]?.id ?? null;
         expect(anchorId).toBeTruthy();
-        const expectedScrollTop =
+        const savedViewOffset = 24;
+        const estimatedScrollTop =
           anchorIndex * TICKET_13_ROW_HEIGHT_PX +
           LEGEND_LIST_HEADER_PX -
-          CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+          savedViewOffset;
 
         const catchupKey = `t20-hydration-single-frame-${Math.random().toString(36).slice(2)}`;
         saveChatTabState({
@@ -8764,7 +9681,7 @@ describe("ChatMessages scroll policy", () => {
           mode: "free-scrolling",
           anchorMessageId: anchorId,
           anchorIndex,
-          offset: 24,
+          offset: savedViewOffset,
         });
         const partialMessages = fullMessages.slice(180);
         const { rerenderMessages } = renderChatMessages({
@@ -8772,7 +9689,7 @@ describe("ChatMessages scroll policy", () => {
           scrollStateKey: catchupKey,
         });
         await settleLegendList();
-        expect(getScrollNode().scrollTop).not.toBe(expectedScrollTop);
+        expect(getScrollNode().scrollTop).not.toBe(estimatedScrollTop);
 
         const scrollNode = getScrollNode();
         const callsOnScrollNode = recordScrollToCallsOnNode(scrollNode);
@@ -8783,7 +9700,15 @@ describe("ChatMessages scroll policy", () => {
         rerenderMessages(fullMessages);
         await settleLegendList();
 
-        expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+        const measuredAnchorTop = legendListRefHolder.current
+          ?.getState()
+          .positionAtIndex(anchorIndex);
+        if (measuredAnchorTop === undefined) {
+          throw new Error("Expected hydrated anchor geometry");
+        }
+        expect(getScrollNode().scrollTop).toBe(
+          measuredAnchorTop + LEGEND_LIST_HEADER_PX - savedViewOffset,
+        );
         // RED-ON-BASELINE: before threading an explicit `animated` param
         // through `navigateToMessage`, this call hardcoded `animated: true`,
         // which LegendList translates to `behavior: "smooth"` - a reader
