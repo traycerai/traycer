@@ -481,6 +481,81 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
+  // An attachment atom serializes to `""` and `plainTextFromNodes` drops empties
+  // before joining, so this prompt still reads `/frontend-design polish this`.
+  // The boundary lives past the atom; refusing on "not a text node" would strip
+  // the chip's kind/path for no reason other than an image sitting next to it.
+  it("looks past a textless attachment to the boundary after it", () => {
+    const doc = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "$frontend-design",
+                marks: [{ type: "bold" }],
+              },
+              { type: "imageAttachment", attrs: { imageId: "img-1" } },
+              { type: "text", text: " polish this" },
+            ],
+          },
+        ],
+      },
+      CATALOG,
+    );
+
+    expect(doc.content?.[0].content).toEqual([
+      {
+        type: "slashCommand",
+        attrs: {
+          commandName: "frontend-design",
+          harnessId: "claude",
+          kind: "skill",
+          description: "Use frontend-design",
+          argumentHint: null,
+          path: "/repo/.agents/skills/frontend-design/SKILL.md",
+          trigger: "$",
+        },
+      },
+      { type: "imageAttachment", attrs: { imageId: "img-1" } },
+      { type: "text", text: " polish this" },
+    ]);
+  });
+
+  // The bound on that: reading past the atom must reach the REAL next character,
+  // so an attachment followed by punctuation is still refused.
+  it("refuses a token whose boundary past an attachment is punctuation", () => {
+    const doc = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "$frontend-design",
+                marks: [{ type: "bold" }],
+              },
+              { type: "imageAttachment", attrs: { imageId: "img-1" } },
+              { type: "text", text: "." },
+            ],
+          },
+        ],
+      },
+      CATALOG,
+    );
+
+    expect(doc.content?.[0].content).toEqual([
+      { type: "text", text: "$frontend-design", marks: [{ type: "bold" }] },
+      { type: "imageAttachment", attrs: { imageId: "img-1" } },
+      { type: "text", text: "." },
+    ]);
+  });
+
   it("leaves a non-leading $skill alone", () => {
     // Only the leading token is a command context, same as `/`.
     expect(submittedParagraph("please run $frontend-design", CATALOG)).toEqual([

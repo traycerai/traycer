@@ -276,38 +276,32 @@ function nodesWithLeadingSlashCommandNode(
   state: LeadingSlashScanState,
 ): JsonContent[] {
   return nodes.flatMap((node, index) => {
-    // `.at` so the out-of-range read is typed `| undefined`; index access here
-    // is not, and the optional chain would lint as unnecessary.
-    state.nextClosesToken = closesLeadingToken(nodes.at(index + 1));
+    // Only meaningful until the scan settles, and serializing the tail for every
+    // node after that would be quadratic for nothing.
+    if (!state.complete) {
+      state.nextClosesToken = closesLeadingToken(nodes.slice(index + 1));
+    }
     return nodeWithLeadingSlashCommandNode(node, state);
   });
 }
 
 /**
- * Whether `node` - the sibling right after a token that ends exactly at a node
- * boundary - supplies the whitespace-or-end that `LEADING_SLASH_COMMAND_REGEX`
- * requires after a command name.
+ * Whether the siblings after a token that ends exactly at a node boundary leave
+ * it terminated - i.e. the prompt still reads `/name` followed by whitespace or
+ * nothing, which is what `LEADING_SLASH_COMMAND_REGEX` requires.
  *
- * Formatting splits a run, so the character deciding whether the token is a
- * command often lives in the NEXT node: a bold `$review` can be followed by a
- * plain `-code`, or a plain `.`. In one node the regex rejects both
- * (`$review-code` is a different name, `$review.` has no boundary), and it has
- * to reach the same answer when a node edge falls between them - otherwise the
- * chip invokes `review` while the prompt still serializes as `/review-code` or
- * `/review.`, and a command the user never wrote runs.
- *
- * So this asks whether the sibling OPENS a boundary, not whether it continues
- * the name. Those differ exactly on punctuation, which continues no name yet
- * closes no token either.
+ * Formatting splits a run, so the character that decides this usually lives in
+ * a LATER node: a bold `$review` can be followed by a plain `-code`, a plain
+ * `.`, or an image atom that serializes to nothing at all. Answering per node
+ * type kept getting this wrong in a new way each time, so the question is
+ * delegated to the same serializer that builds the prompt - if the remainder
+ * starts with whitespace or is empty, the token is closed. Attachments drop out
+ * for free (they serialize to `""`), a hard break contributes a newline, and a
+ * mention or another chip contributes text that correctly refuses the boundary.
  */
-function closesLeadingToken(node: JsonContent | undefined): boolean {
-  // Nothing follows: the token really did end.
-  if (node === undefined) return true;
-  // A hard break serializes to a newline, which is whitespace.
-  if (node.type === "hardBreak") return true;
-  // Anything else that does not open with whitespace - punctuation, more name
-  // characters, a mention chip - leaves the token unterminated.
-  return node.type === "text" && /^\s/.test(node.text ?? "");
+function closesLeadingToken(rest: ReadonlyArray<JsonContent>): boolean {
+  const text = plainTextFromNodes(rest);
+  return text.length === 0 || /^\s/.test(text);
 }
 
 /**
