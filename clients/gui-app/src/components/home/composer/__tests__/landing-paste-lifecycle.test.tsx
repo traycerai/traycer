@@ -35,6 +35,11 @@ import {
   imageHashKeys,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  reserveLandingImageBudget,
+  resetLandingImageBudgetReservationsForTesting,
+} from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -375,11 +380,13 @@ beforeEach(async () => {
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   draftRuntimeRegistry.resetForTesting();
+  resetLandingImageBudgetReservationsForTesting();
 });
 
 afterEach(() => {
   cleanup();
   draftRuntimeRegistry.resetForTesting();
+  resetLandingImageBudgetReservationsForTesting();
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   vi.useRealTimers();
@@ -740,6 +747,60 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
         screen.getByTestId("lifecycle-attachment-pending").textContent,
       ).toBe("false");
     });
+  });
+
+  it("re-reserves a pending image after an inactive gap and rejects it when capacity was consumed", async () => {
+    const bytes = bytesOf([6, 6, 6]);
+    const hash = await sha256Hex(bytes);
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "gap.png"));
+
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    await act(async () => {
+      setGates.get(hash)?.release();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const competingReservation = reserveLandingImageBudget("other-draft", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(competingReservation).not.toBeNull();
+
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms).toHaveLength(0);
+    });
+    expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+      "Couldn't add the image.",
+      expect.objectContaining({
+        description: "Remove images or close a draft yourself, then try again.",
+      }),
+      expect.objectContaining({
+        message: "The image storage budget was exceeded.",
+      }),
+    );
+    competingReservation?.release();
   });
 
   // Seam 4: delete-before-write → rewrite false, reconcile, zero unrooted keys.

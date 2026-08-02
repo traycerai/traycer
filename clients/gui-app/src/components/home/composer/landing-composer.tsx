@@ -24,7 +24,10 @@ import {
   markLandingEditorMounted,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
-import { reserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
+import {
+  reserveLandingImageBudget,
+  type LandingImageBudgetReservation,
+} from "@/lib/composer/landing-image-budget";
 import {
   collectImageAtoms,
   type ComposerImageAtom,
@@ -103,6 +106,11 @@ interface LandingComposerProps {
   readonly pendingCreateId: string | null;
   readonly initialSettings: ChatRunSettings | null;
   readonly workspaceControls: (disabled: boolean) => ReactNode;
+}
+
+interface PendingImageIngestOptions {
+  readonly onSettled: (() => void) | undefined;
+  readonly reserveAfterStore: boolean;
 }
 
 function useLandingDraftComposerMode(
@@ -304,15 +312,18 @@ export function LandingComposer(props: LandingComposerProps) {
   // until it settles. Editor-gone / store-failure paths drop the node (if still
   // present) and reclaim the bytes. `onSettled` (when the caller holds a batch
   // budget reservation covering this image) fires exactly once, after every
-  // other branch below, regardless of which one is taken - `reingestPendingImages`
-  // passes `undefined` since it never reserves a new share (see its own comment).
+  // other branch below, regardless of which one is taken. A remount reserves
+  // the now-known hash after `putImage` settles and before rewriting the node;
+  // this avoids double-charging the original anonymous reservation while its
+  // aborted job is still awaiting the same single-flight write.
   const startPendingImageIngest = useCallback(
     (
       id: string,
       bytes: Uint8Array<ArrayBuffer>,
-      onSettled: (() => void) | undefined,
+      options: PendingImageIngestOptions,
     ) => {
       runPendingImageJob(async (signal) => {
+        let postStoreReservation: LandingImageBudgetReservation | null = null;
         try {
           const hash = await putImage(bytes);
           const handle = editorRef.current;
@@ -323,6 +334,16 @@ export function LandingComposer(props: LandingComposerProps) {
             // and re-roots this hash before the debounced sweep runs.)
             scheduleLandingImageReconcile();
             return;
+          }
+          if (options.reserveAfterStore) {
+            postStoreReservation = reserveLandingImageBudget(draftId, [
+              { hash, bytes: bytes.byteLength },
+            ]);
+            if (postStoreReservation === null) {
+              handle.removeImageAttachmentById(id);
+              scheduleLandingImageReconcile();
+              return;
+            }
           }
           if (!handle.rewriteImageAttachmentHashById(id, hash)) {
             // The pending node was removed (the user deleted it before the write
@@ -352,11 +373,12 @@ export function LandingComposer(props: LandingComposerProps) {
           );
           scheduleLandingImageReconcile();
         } finally {
-          onSettled?.();
+          postStoreReservation?.release();
+          options.onSettled?.();
         }
       });
     },
-    [runPendingImageJob],
+    [draftId, runPendingImageJob],
   );
   // Synchronously validate a landing paste's inline-base64 images (decode,
   // MIME/5MB, budget), mint a fresh id + start the background job for each
@@ -410,7 +432,10 @@ export function LandingComposer(props: LandingComposerProps) {
         }
         if (!budgetOk) return { kind: "rejected" };
         const id = uuidv4();
-        startPendingImageIngest(id, bytes, releaseReservationShare);
+        startPendingImageIngest(id, bytes, {
+          onSettled: releaseReservationShare,
+          reserveAfterStore: false,
+        });
         return { kind: "accepted", id };
       });
       if (corruptedCount > 0) {
@@ -438,9 +463,11 @@ export function LandingComposer(props: LandingComposerProps) {
   // in the canonical in-memory draft (`setDraftContent` no longer strips) and its
   // ingest resumes here. Idempotent by construction: `putImage` is content-
   // addressed + single-flight and the rewrite is by id, so re-ingesting a node an
-  // aborted prior job already stored just re-roots the same hash. Budget is NOT
-  // re-reserved — a node already in the document was admitted this session and the
-  // module-level budget survives the remount. Fired once per editor instance.
+  // aborted prior job already stored just re-roots the same hash. The restarted
+  // job re-reserves the measured, now-hashed bytes after the shared write settles:
+  // the original anonymous reservation is released first, while capacity consumed
+  // during an inactive gap correctly rejects and removes the pending node.
+  // Fired once per editor instance.
   const reingestPendingImages = useCallback(() => {
     const handle = editorRef.current;
     if (handle === null || !handle.isReady()) return;
@@ -463,7 +490,10 @@ export function LandingComposer(props: LandingComposerProps) {
         corruptedCount += 1;
         continue;
       }
-      startPendingImageIngest(atom.id, bytes, undefined);
+      startPendingImageIngest(atom.id, bytes, {
+        onSettled: undefined,
+        reserveAfterStore: true,
+      });
     }
     if (corruptedCount > 0) {
       reportableErrorToast(
