@@ -5799,10 +5799,10 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Optional host-local activity source reserved for a future explicit local
-  // desktop mode. Every current GUI environment continues using the per-user
-  // notification-room awareness path; entitlement must not select this method.
-  // Older hosts may omit it through ordinary optional-method negotiation.
+  // One activity capability, with its read plane selected by the host. Current
+  // production wiring selects cloud everywhere; local remains dormant until an
+  // explicit host mode exists. State frames report the selected plane, while
+  // renderers never choose a different RPC from entitlement state.
   "agent.activity.subscribe": {
     1: {
       latestMinor: 0,

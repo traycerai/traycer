@@ -24,9 +24,9 @@ import {
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
-  NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS,
-  NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS,
-} from "@/lib/notifications/notification-stream-reopen";
+  HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
+  HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
+} from "@/lib/host/stream-reopen";
 import {
   __resetHostNotificationsStoreForTests,
   compareHostNotificationEntries,
@@ -1768,7 +1768,7 @@ describe("host notifications store", () => {
       );
       // The reopen waits out the backoff — no synchronous redial storm.
       expect(client.subscribeCount).toBe(1);
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(2);
 
       // The replacement session owns the store projection from here.
@@ -1811,7 +1811,7 @@ describe("host notifications store", () => {
           upgradeGuidance: null,
         },
       });
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       const replacementSession = client.session;
       expect(replacementSession).not.toBe(firstSession);
 
@@ -1860,14 +1860,14 @@ describe("host notifications store", () => {
       };
 
       terminalClose();
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(2);
 
       // Second consecutive terminal close: the delay has doubled.
       terminalClose();
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(2);
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(3);
 
       // A raw transport `open` is NOT proof of a usable stream (the host
@@ -1875,11 +1875,9 @@ describe("host notifications store", () => {
       // escalating: this close waits the quadrupled delay.
       client.session.emitOpen();
       terminalClose();
-      vi.advanceTimersByTime(
-        3 * NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS,
-      );
+      vi.advanceTimersByTime(3 * HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(3);
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(4);
 
       // A schema-valid snapshot resets the backoff to the initial delay.
@@ -1892,11 +1890,11 @@ describe("host notifications store", () => {
         summary: EMPTY_SUMMARY,
       });
       terminalClose();
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(5);
 
       close();
-      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+      vi.advanceTimersByTime(HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
       expect(client.subscribeCount).toBe(5);
     } finally {
       vi.useRealTimers();
@@ -1937,7 +1935,7 @@ describe("host notifications store", () => {
           onStreamOpened: () => undefined,
         });
         client.session.emitClosed(reason);
-        vi.advanceTimersByTime(4 * NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+        vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
         expect(client.subscribeCount).toBe(1);
         close();
       }
@@ -1968,7 +1966,7 @@ describe("host notifications store", () => {
         },
       });
       close();
-      vi.advanceTimersByTime(4 * NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+      vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
       expect(client.subscribeCount).toBe(1);
     } finally {
       vi.useRealTimers();
