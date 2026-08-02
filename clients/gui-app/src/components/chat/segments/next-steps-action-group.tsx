@@ -1,5 +1,5 @@
 import { ArrowRight, Check, Copy } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -8,13 +8,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export interface NextStepActionHandler {
   readonly canSend: boolean;
-  /**
-   * Async because a `$skill` next step must resolve the command catalog before
-   * it can be chipped, and the tile's catalog subscription may still be cold
-   * when the option is clicked. Resolves `true` once the message is actually
-   * handed to the chat; the option is locked only then.
-   */
-  readonly onSend: (option: TraycerNextStepOption) => Promise<boolean>;
+  readonly onSend: (option: TraycerNextStepOption) => boolean;
 }
 
 interface NextStepsActionGroupProps {
@@ -77,7 +71,7 @@ interface NextStepActionProps {
 }
 
 function NextStepAction(props: NextStepActionProps) {
-  const { actionHandler, blockId, disabled, onLockOption, option } = props;
+  const { option } = props;
   const { copied, copy } = useClipboardCopy({
     resetMs: COPIED_RESET_MS,
     onSuccess: null,
@@ -88,27 +82,6 @@ function NextStepAction(props: NextStepActionProps) {
     [copy, option.prompt],
   );
   const copyLabel = copied ? "Copied" : `Copy next step: ${option.prompt}`;
-  // `onSend` awaits a cold command catalog, so the lock that used to land in
-  // the same tick as the click can now arrive a round trip later. The ref is
-  // what actually prevents a second send - two clicks in one tick would both
-  // read a `sending` state that React has not committed yet - while the state
-  // exists only to disable the button for that window.
-  const sendingRef = useRef(false);
-  const [sending, setSending] = useState(false);
-  const handleSend = useCallback((): void => {
-    if (actionHandler === null || disabled || sendingRef.current) return;
-    sendingRef.current = true;
-    setSending(true);
-    void actionHandler
-      .onSend(option)
-      .then((sent) => {
-        if (sent) onLockOption(blockId, option.id);
-      })
-      .finally(() => {
-        sendingRef.current = false;
-        setSending(false);
-      });
-  }, [actionHandler, blockId, disabled, onLockOption, option]);
 
   return (
     <div className="group/next-step relative flex w-full">
@@ -117,8 +90,13 @@ function NextStepAction(props: NextStepActionProps) {
         variant="outline"
         size="sm"
         className="h-auto min-h-7 w-full min-w-0 items-start justify-start whitespace-normal py-2 pr-10 pl-1 text-left"
-        disabled={disabled || sending}
-        onClick={handleSend}
+        disabled={props.disabled}
+        onClick={() => {
+          if (props.actionHandler === null || props.disabled) return;
+          if (props.actionHandler.onSend(option)) {
+            props.onLockOption(props.blockId, option.id);
+          }
+        }}
       >
         <ArrowRight data-icon="inline-start" aria-hidden className="mt-0.5" />
         <span className="min-w-0 whitespace-normal wrap-break-word">

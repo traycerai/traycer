@@ -1,4 +1,3 @@
-import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import "../../../../../__tests__/test-browser-apis";
 import { createRef, type RefObject } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
@@ -68,7 +67,7 @@ afterEach(() => {
 });
 
 describe("useChatComposerSubmit steer drift gate", () => {
-  it("sends after_safe_point immediately when settings match the running turn", async () => {
+  it("sends after_safe_point immediately when settings match the running turn", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const { result } = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -80,8 +79,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: null,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("mod-enter");
+    act(() => {
+      result.current.submitDraft("mod-enter");
     });
 
     expect(result.current.steerConflict.open).toBe(false);
@@ -91,7 +90,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(input.contentText).toBe("steer me");
   });
 
-  it("sends after_safe_point silently when only permissionMode differs", async () => {
+  it("sends after_safe_point silently when only permissionMode differs", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const { result } = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -103,8 +102,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: null,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("mod-enter");
+    act(() => {
+      result.current.submitDraft("mod-enter");
     });
 
     expect(result.current.steerConflict.open).toBe(false);
@@ -114,7 +113,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     );
   });
 
-  it("opens the conflict dialog and keeps composer text on model drift (does not send)", async () => {
+  it("opens the conflict dialog and keeps composer text on model drift (does not send)", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const editorRef = createRef<ComposerPromptEditorHandle | null>();
     const clear = vi.fn();
@@ -133,8 +132,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: null,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("mod-enter");
+    act(() => {
+      result.current.submitDraft("mod-enter");
     });
 
     expect(onSubmitMessage).not.toHaveBeenCalled();
@@ -143,7 +142,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(clear).not.toHaveBeenCalled();
   });
 
-  it("sends the staged after_safe_point input with the new settings on restart confirm", async () => {
+  it("sends the staged after_safe_point input with the new settings on restart confirm", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const { result } = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -155,8 +154,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: null,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("mod-enter");
+    act(() => {
+      result.current.submitDraft("mod-enter");
     });
     expect(result.current.steerConflict.open).toBe(true);
     expect(onSubmitMessage).not.toHaveBeenCalled();
@@ -176,7 +175,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(result.current.steerConflict.open).toBe(false);
   });
 
-  it("dismisses the staged conflict without sending when the dialog closes", async () => {
+  it("dismisses the staged conflict without sending when the dialog closes", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const { result } = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -188,8 +187,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: null,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("mod-enter");
+    act(() => {
+      result.current.submitDraft("mod-enter");
     });
     expect(result.current.steerConflict.open).toBe(true);
 
@@ -201,7 +200,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(onSubmitMessage).not.toHaveBeenCalled();
   });
 
-  it("does not run the drift gate for plain Enter (queues with auto)", async () => {
+  it("does not run the drift gate for plain Enter (queues with auto)", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const { result } = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -213,8 +212,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: null,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("enter");
+    act(() => {
+      result.current.submitDraft("enter");
     });
 
     expect(result.current.steerConflict.open).toBe(false);
@@ -222,7 +221,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(onSubmitMessage.mock.calls[0]?.[0]?.deliveryPolicy).toBe("auto");
   });
 
-  it("skips the drift dialog on an unsupported harness and sends after_safe_point directly", async () => {
+  it("skips the drift dialog on an unsupported harness and sends after_safe_point directly", () => {
     // Capability gates only the confirm dialog. Unsupported harnesses still
     // send after_safe_point so the host can mark a labeled fallback row.
     const onSubmitMessage = vi.fn(acceptSubmit);
@@ -236,8 +235,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: null,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("mod-enter");
+    act(() => {
+      result.current.submitDraft("mod-enter");
     });
 
     expect(result.current.steerConflict.open).toBe(false);
@@ -250,7 +249,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     );
   });
 
-  it("re-resolves onRestart to auto when steerProtocolSupported flips false while the dialog is open (F1)", async () => {
+  it("re-resolves onRestart to auto when steerProtocolSupported flips false while the dialog is open (F1)", () => {
     // Staged conflict stores INTENT only. Confirm re-runs
     // resolveSubmitDeliveryPolicy against CURRENT connection/turn state so a
     // host downgrade (1.5 → 1.4) while the dialog is open cannot emit a stale
@@ -266,8 +265,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       steerProtocolSupported: true,
     });
 
-    await act(async () => {
-      await mount.result.current.submitDraft("mod-enter");
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
     });
     expect(mount.result.current.steerConflict.open).toBe(true);
     expect(onSubmitMessage).not.toHaveBeenCalled();
@@ -296,7 +295,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(mount.result.current.steerConflict.open).toBe(false);
   });
 
-  it("keeps after_safe_point onRestart when steerProtocolSupported stays true (F1 mirror)", async () => {
+  it("keeps after_safe_point onRestart when steerProtocolSupported stays true (F1 mirror)", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const mount = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -312,8 +311,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       workspaceBlocked: false,
     });
 
-    await act(async () => {
-      await mount.result.current.submitDraft("mod-enter");
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
     });
     expect(mount.result.current.steerConflict.open).toBe(true);
 
@@ -344,7 +343,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(mount.result.current.steerConflict.open).toBe(false);
   });
 
-  it("degrades onRestart to auto when the live turn is a successor of the origin turn (T1→T2 stale consent)", async () => {
+  it("degrades onRestart to auto when the live turn is a successor of the origin turn (T1→T2 stale consent)", () => {
     // Consent is bound to originTurnId. Confirming after T1 is replaced by T2
     // must never interrupt-restart T2 on T1's consent - plain auto queue only.
     const onSubmitMessage = vi.fn(acceptSubmit);
@@ -368,8 +367,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       workspaceBlocked: false,
     });
 
-    await act(async () => {
-      await mount.result.current.submitDraft("mod-enter");
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
     });
     expect(mount.result.current.steerConflict.open).toBe(true);
     expect(onSubmitMessage).not.toHaveBeenCalled();
@@ -399,7 +398,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(mount.result.current.steerConflict.open).toBe(false);
   });
 
-  it("dismisses the dialog without sending when activeTurnStatus becomes stopping while open", async () => {
+  it("dismisses the dialog without sending when activeTurnStatus becomes stopping while open", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const mount = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -415,8 +414,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       workspaceBlocked: false,
     });
 
-    await act(async () => {
-      await mount.result.current.submitDraft("mod-enter");
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
     });
     expect(mount.result.current.steerConflict.open).toBe(true);
 
@@ -444,7 +443,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(mount.result.current.steerConflict.open).toBe(false);
   });
 
-  it("dismisses the dialog without sending when hasPendingApprovals becomes true while open", async () => {
+  it("dismisses the dialog without sending when hasPendingApprovals becomes true while open", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const mount = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -460,8 +459,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       workspaceBlocked: false,
     });
 
-    await act(async () => {
-      await mount.result.current.submitDraft("mod-enter");
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
     });
     expect(mount.result.current.steerConflict.open).toBe(true);
 
@@ -489,7 +488,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(mount.result.current.steerConflict.open).toBe(false);
   });
 
-  it("dismisses the dialog without sending when sendDisabled becomes true while open", async () => {
+  it("dismisses the dialog without sending when sendDisabled becomes true while open", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const mount = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -505,8 +504,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       workspaceBlocked: false,
     });
 
-    await act(async () => {
-      await mount.result.current.submitDraft("mod-enter");
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
     });
     expect(mount.result.current.steerConflict.open).toBe(true);
 
@@ -534,7 +533,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(mount.result.current.steerConflict.open).toBe(false);
   });
 
-  it("keeps after_safe_point onRestart when sameTurn and steerProtocolSupported stay true (positive control)", async () => {
+  it("keeps after_safe_point onRestart when sameTurn and steerProtocolSupported stay true (positive control)", () => {
     // Same origin turn + protocol still live → re-resolved steer policy.
     const onSubmitMessage = vi.fn(acceptSubmit);
     const mount = mountSubmit({
@@ -551,8 +550,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
       workspaceBlocked: false,
     });
 
-    await act(async () => {
-      await mount.result.current.submitDraft("mod-enter");
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
     });
     expect(mount.result.current.steerConflict.open).toBe(true);
 
@@ -661,13 +660,6 @@ function mountSubmit(input: MountSubmitInput): {
         taskId: "task-steer-1",
         editorRef,
         pickerStore,
-        buildSubmitContent: (content) =>
-          Promise.resolve(
-            buildSubmittedChatJSONContent(
-              content,
-              pickerStore.getState().knownSlashCommands,
-            ),
-          ),
         toolbarStore,
         activeTurnStatus: resolveStatus(props),
         steerCapable: props.steerCapable,

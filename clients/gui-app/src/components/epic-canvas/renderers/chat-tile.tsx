@@ -7,7 +7,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
@@ -130,8 +129,6 @@ import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
-import { slashCommandCatalogFrom } from "@/lib/composer/slash-command-catalog";
-import { useSlashCatalogResolver } from "@/hooks/composer/use-slash-catalog-resolver";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
@@ -1434,11 +1431,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // (`chatComposerFocused` → `chatTileCatalogActivity`): identical gating means an
   // off-screen tile still adds no `agent.gui.listCommands` subscription, and when
   // both are on, TanStack Query dedupes the two subscribers into one fetch.
-  //
-  // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
-  // context-usage chip above uses it: on a folder-fallback chat the two differ,
-  // and the raw set opens a SECOND, narrower cache entry. That loses the dedupe
-  // and can resolve a real `$skill` against a catalog the composer never saw.
   const tabHostClient = useTabHostClient();
   const {
     data: slashCommands,
@@ -1447,44 +1439,33 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   } = useSlashCommands("", {
     hostClient: tabHostClient,
     harnessId: currentComposerSettings.harnessId,
+    // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
+    // context-usage chip above uses it: on a folder-fallback chat the two differ,
+    // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
+    // and resolving against a catalog the composer never saw.
     workingDirectories: resolvedComposerMentionRoots,
     enabled: surfaceFocused,
   });
   // Null until loaded, which makes a `$` prompt stay plain text rather than
   // chip against a catalog we have not seen yet.
-  //
-  // `error` is part of that gate, not a detail. A failed `listCommands` leaves
+  // `error` is part of the gate, not a detail. A failed `listCommands` leaves
   // TanStack at `isLoading === false` with `data === []`, which would otherwise
-  // read as a legitimately EMPTY catalog - "loaded, and this workspace has no
-  // commands" - and take the fast path, sending a real `$skill` as prose and
-  // locking the next step as sent. An unanswered query is unresolved, not empty.
+  // read as a legitimately EMPTY catalog - "loaded, this workspace has no
+  // commands" - and chip nothing while looking resolved. An unanswered query is
+  // unresolved, not empty. The `$` then stays prose, which the host still
+  // resolves lexically; the cost is the pill, never the skill.
   const slashCatalog = useMemo<SlashCommandCatalog | null>(
     () =>
       surfaceFocused && !slashCommandsLoading && slashCommandsError === null
-        ? slashCommandCatalogFrom(slashCommands)
+        ? new Map(
+            slashCommands.map((command) => [
+              command.name.toLowerCase(),
+              command,
+            ]),
+          )
         : null,
     [surfaceFocused, slashCommands, slashCommandsLoading, slashCommandsError],
   );
-  // Builds submit content, waiting on the catalog only when the prompt actually
-  // needs it. The subscription above is `surfaceFocused`-gated and starts cold,
-  // so a next step clicked right after a tile opens would otherwise read a null
-  // catalog and ship `$skill` as prose - a silent no-op, since the host can see
-  // a skill neither structurally nor lexically there. A prompt with no `$` lead
-  // (a `/` command, plain prose, the fixed compact and implement-plan sends)
-  // resolves off the reactive value and never awaits.
-  // Same roots as the subscription above, so the imperative fetch lands on the
-  // slot that subscription reads rather than warming a third one. Returns null
-  // when the prompt needed the catalog and it could not be resolved - sending
-  // anyway would put a `$skill` on the wire as prose, which reads to the user
-  // as a delivered instruction and to the host as nothing.
-  const getSlashCatalog = useCallback(() => slashCatalog, [slashCatalog]);
-  const buildSubmitContent = useSlashCatalogResolver({
-    hostClient: tabHostClient,
-    hostId: activeHostId,
-    harnessId: currentComposerSettings.harnessId,
-    workingDirectories: resolvedComposerMentionRoots,
-    getLoadedCatalog: getSlashCatalog,
-  });
   const canModifyMessages = canModifyChatMessages({ canAct, state });
   const activeInlineEdit = normalizeInlineEditForSession(
     uiState.inlineEdit,
@@ -1589,7 +1570,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       canAct,
       currentComposerSettings,
       editSettings,
-      buildSubmitContent,
+      slashCatalog,
       mentionRoots: composerMentionRoots,
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
@@ -1686,52 +1667,21 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingApprovals,
       state.pendingFileEditApprovals.length,
     );
-  // `canSendNextStep` is read from a ref as well as captured, because resolving
-  // a cold catalog puts a host round trip between the guard and the send. A turn
-  // entering `stopping`, or a blocking approval arriving, disables the button
-  // during that window - the continuation must see that too, or it sends into a
-  // state the gate had already closed.
-  const canSendNextStepRef = useRef(canSendNextStep);
-  useEffect(() => {
-    canSendNextStepRef.current = canSendNextStep;
-  }, [canSendNextStep]);
   const sendNextStep = useCallback(
-    async (option: TraycerNextStepOption): Promise<boolean> => {
-      // Read into locals at both checks: narrowing `ref.current` directly here
-      // would make the post-await re-check below look statically impossible.
-      const canSendNow: boolean = canSendNextStepRef.current;
-      if (!canSendNow) return false;
+    (option: TraycerNextStepOption): boolean => {
+      if (!canSendNextStep) return false;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return false;
-      const content = await buildSubmitContent(
+      const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(option.prompt),
+        slashCatalog,
       );
-      if (content === null) {
-        reportableErrorToast(
-          "Couldn't load this agent's commands.",
-          undefined,
-          {
-            title: "Next step not sent",
-            message:
-              "The skill in this next step could not be resolved, so it was not sent. Try again.",
-            code: null,
-            source: "Commands",
-          },
-        );
-        return false;
-      }
-      // Re-checked after the await, not just before it. Read through an
-      // explicitly-typed local: TS narrows `ref.current` to `true` from the
-      // guard above and cannot see that awaiting the catalog gives the gate
-      // time to close, so the re-check would lint as always-falsy.
-      const stillSendable: boolean = canSendNextStepRef.current;
-      if (!stillSendable) return false;
       return (
         chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
         null
       );
     },
-    [buildSubmitContent, chatActions, nextStepSettings, profile],
+    [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
   );
   // Runs the harness's own compaction from the context-usage chip. Never
   // interrupts: with a turn running (or work already queued) the compact
@@ -1771,8 +1721,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       if (existing?.locked === true) return;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return;
-      // Stays synchronous: this prompt is always `/`-led, and `/` keeps the
-      // ungated lexical fallback, so it never has to wait on the catalog.
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(`/${commandName}`),
         slashCatalog,
@@ -1827,8 +1775,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     if (!canAct) return false;
     const sender = userMessageSenderForProfile(profile);
     if (sender === null) return false;
-    // Stays synchronous: a fixed prose prompt carries no trigger at all, so
-    // there is nothing for the catalog to resolve.
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
       slashCatalog,

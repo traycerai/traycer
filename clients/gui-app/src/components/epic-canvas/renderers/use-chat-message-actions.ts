@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -25,7 +25,10 @@ import {
   hasUndoableFileEditsFromMessage,
   scopedArtifactCountFromMessage,
 } from "@/lib/chat/file-edits-below-message";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  buildSubmittedChatJSONContent,
+  type SlashCommandCatalog,
+} from "@/lib/composer/tiptap-json-content";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   chatMessageEditingForInlineEdit,
@@ -50,14 +53,12 @@ export interface ChatMessageActionsInput {
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
   /**
-   * Builds submit content against the tile's command catalog, resolving a cold
-   * one first when the prompt needs it. An edit resubmit re-runs the same
-   * conversion the original send did, so a `$skill` the user retyped after
-   * deleting its chip must chip again rather than silently staying prose.
+   * The tile's loaded command catalog, or null when it has not loaded. An edit
+   * resubmit re-runs `buildSubmittedChatJSONContent`, so it needs the same
+   * catalog the original send used - otherwise a `$skill` the user retyped
+   * after deleting its chip would silently stay prose.
    */
-  readonly buildSubmitContent: (
-    promptContent: JsonContent,
-  ) => Promise<JsonContent | null>;
+  readonly slashCatalog: SlashCommandCatalog | null;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
@@ -120,7 +121,7 @@ export function useChatMessageActions(
     canAct,
     currentComposerSettings,
     editSettings,
-    buildSubmitContent,
+    slashCatalog,
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
@@ -167,15 +168,8 @@ export function useChatMessageActions(
     [dispatchUi],
   );
 
-  // Guards the window between claiming an edit submit and the edit being
-  // marked pending. A ref, not state: the two clicks race inside one tick,
-  // before React could commit a flag.
-  const editSubmitInFlightRef = useRef(false);
   const performEditSubmit = useCallback(
-    async (
-      revertFileChanges: boolean,
-      revertArtifacts: boolean,
-    ): Promise<void> => {
+    (revertFileChanges: boolean, revertArtifacts: boolean) => {
       // Always dismiss the modal first - if any guard below bails (the inline
       // edit was invalidated by an incoming snapshot, etc.) the modal must not
       // be left open with dead buttons.
@@ -184,52 +178,24 @@ export function useChatMessageActions(
       if (!canModifyMessages) return;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return;
-      // Claim the submit BEFORE awaiting. Resolving a cold catalog can take a
-      // host round trip, and "Send edit" stays enabled until an edit is marked
-      // pending - so without this a double-click starts two continuations and
-      // both dispatch an edit frame when the shared fetch resolves.
-      if (editSubmitInFlightRef.current) return;
-      editSubmitInFlightRef.current = true;
-      try {
-        // Awaits only when the edited text opens with `$` and the catalog is
-        // still cold; otherwise this resolves in the same tick as before.
-        const content = await buildSubmitContent(
+      const sent = chatActions.editUserMessage({
+        targetMessageId: activeInlineEdit.targetMessageId,
+        content: buildSubmittedChatJSONContent(
           activeInlineEdit.currentContent,
-        );
-        if (content === null) {
-          reportableErrorToast(
-            "Couldn't load this agent's commands.",
-            undefined,
-            {
-              title: "Edit not sent",
-              message:
-                "The skill in this message could not be resolved, so the edit was not sent. Try again.",
-              code: null,
-              source: "Commands",
-            },
-          );
-          return;
-        }
-        const sent = chatActions.editUserMessage({
-          targetMessageId: activeInlineEdit.targetMessageId,
-          content,
-          sender,
-          settings: editSettings,
-          revertFileChanges,
-          revertArtifacts,
-        });
-        if (sent === null) return;
-        dispatchUi({
-          type: "markInlineEditPending",
-          targetMessageId: activeInlineEdit.targetMessageId,
-          clientActionId: sent.clientActionId,
-          messageId: sent.messageId,
-        });
-      } finally {
-        // Cleared on every exit, so a refused or rejected submit leaves the
-        // editor usable rather than permanently latched.
-        editSubmitInFlightRef.current = false;
-      }
+          slashCatalog,
+        ),
+        sender,
+        settings: editSettings,
+        revertFileChanges,
+        revertArtifacts,
+      });
+      if (sent === null) return;
+      dispatchUi({
+        type: "markInlineEditPending",
+        targetMessageId: activeInlineEdit.targetMessageId,
+        clientActionId: sent.clientActionId,
+        messageId: sent.messageId,
+      });
       dispatchUi({
         type: "setConfirmingDeleteMessageId",
         confirmingDeleteMessageId: null,
@@ -237,12 +203,12 @@ export function useChatMessageActions(
     },
     [
       activeInlineEdit,
-      buildSubmitContent,
       canModifyMessages,
       chatActions,
       dispatchUi,
       editSettings,
       profile,
+      slashCatalog,
     ],
   );
 
@@ -262,7 +228,7 @@ export function useChatMessageActions(
       dispatchUi({ type: "setRevertOnEditOpen", open: true });
       return;
     }
-    void performEditSubmit(false, true);
+    performEditSubmit(false, true);
   }, [
     activeInlineEdit,
     canModifyMessages,
@@ -481,12 +447,9 @@ export function useChatMessageActions(
     revertOnEdit: {
       open: input.revertOnEditOpen,
       onOpenChange: handleRevertOnEditOpenChange,
-      onRevert: (revertArtifacts: boolean) => {
-        void performEditSubmit(true, revertArtifacts);
-      },
-      onDontRevert: () => {
-        void performEditSubmit(false, true);
-      },
+      onRevert: (revertArtifacts: boolean) =>
+        performEditSubmit(true, revertArtifacts),
+      onDontRevert: () => performEditSubmit(false, true),
       artifactCount: revertOnEditArtifactCount,
     },
   };

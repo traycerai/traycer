@@ -74,7 +74,6 @@ import {
   type AmbientDriftSendNotice,
 } from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
-import { useSlashCatalogResolver } from "@/hooks/composer/use-slash-catalog-resolver";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -371,26 +370,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
-  // The picker store's catalog is null while `listCommands` is in flight, and
-  // a paste-then-Enter can land inside that window. Submitting then would
-  // convert a leading `$skill` against no catalog and ship it as prose, so the
-  // submit resolves the catalog first when the draft needs it.
-  const getKnownSlashCommands = useCallback(
-    () => pickerStore.getState().knownSlashCommands,
-    [pickerStore],
-  );
-  const buildSubmitContent = useSlashCatalogResolver({
-    hostClient,
-    hostId: tabHostId,
-    harnessId,
-    workingDirectories: resolvedMentionRoots,
-    getLoadedCatalog: getKnownSlashCommands,
-  });
   const { submitDraft, steerConflict } = useChatComposerSubmit({
     taskId,
     editorRef,
     pickerStore,
-    buildSubmitContent,
     toolbarStore,
     activeTurnStatus,
     steerCapable,
@@ -415,11 +398,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
       lastSubmitSourceRef.current = source;
-      // `submitDraft` awaits a cold command catalog; nothing here consumes
-      // its completion, and a rejection would already have been surfaced.
-      ambientDrift.guardSubmit(() => {
-        void submitDraft(source);
-      });
+      ambientDrift.guardSubmit(() => submitDraft(source));
     },
     [ambientDrift, submitDraft],
   );
@@ -444,7 +423,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const continueAfterAmbientDrift = (): void => {
     ambientDrift.acknowledge(() => {
       if (rateLimitPrompt.kind === "visible") return;
-      void submitDraft(lastSubmitSourceRef.current);
+      submitDraft(lastSubmitSourceRef.current);
     });
   };
 

@@ -55,6 +55,14 @@ export type SlashCommandCatalog = ReadonlyMap<string, SlashCommand>;
  *   `$20 for the migration`, `$PATH is wrong` - and every one of those bodies
  *   fits the command-name grammar. Gating is the only thing that tells them
  *   apart, so with a `null` catalog a `$` prompt stays text.
+ *
+ *   That is safe to do, and this is the load-bearing part: the host's
+ *   `parseProviderSlashPrompt` accepts a leading `$name` as well as `/name` and
+ *   validates it against the real catalog. So a `$skill` left as prose here -
+ *   because the catalog was still loading, or failed - is still resolved by the
+ *   host, and `$20` still finds no command and stays prose. An unresolved
+ *   catalog costs the user the pill, never the skill. Without that fallback
+ *   every submit path in the app would have to await this catalog.
  * - `/` keeps its long-standing ungated lexical fallback, because a message that
  *   opens with `/word` is already a command by convention and the provider
  *   parses it that way regardless of what we chip.
@@ -232,41 +240,7 @@ export function parseLeadingSlashCommand(prompt: string): {
 interface LeadingSlashScanState {
   complete: boolean;
   changed: boolean;
-  /**
-   * Set when the leading token is a `$`, whose chip cannot be decided without
-   * the catalog. Read by {@link submittedContentNeedsSlashCatalog} so a caller
-   * can resolve a cold catalog before submitting rather than silently sending
-   * the skill as prose.
-   */
-  needsCatalog: boolean;
   readonly catalog: SlashCommandCatalog | null;
-}
-
-/**
- * Whether {@link buildSubmittedChatJSONContent} would consult the catalog for
- * this content - true only when the prompt opens with `$`, the catalog-gated
- * trigger. A leading `/` keeps its lexical fallback and a prompt with no
- * trigger has nothing to resolve, so neither should wait on a cold catalog.
- *
- * Lexical on purpose, exactly like the scan it shares: `$20 for lunch` answers
- * true too, because nothing short of the catalog separates that from a skill.
- * A caller that resolves on the back of this waits once and then sends the
- * prose unchanged.
- */
-export function submittedContentNeedsSlashCatalog(
-  promptContent: JsonContent,
-): boolean {
-  const state: LeadingSlashScanState = {
-    complete: false,
-    changed: false,
-    needsCatalog: false,
-    catalog: null,
-  };
-  nodesWithLeadingSlashCommandNode(
-    [normalizeComposerContent(promptContent)],
-    state,
-  );
-  return state.needsCatalog;
 }
 
 function contentWithLeadingSlashCommandNode(
@@ -276,7 +250,6 @@ function contentWithLeadingSlashCommandNode(
   const state: LeadingSlashScanState = {
     complete: false,
     changed: false,
-    needsCatalog: false,
     catalog,
   };
   const nodes = nodesWithLeadingSlashCommandNode([content], state);
@@ -305,7 +278,6 @@ function textWithLeadingSlashCommandNode(
   state.complete = true;
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return [node];
-  if (parsed.trigger === "$") state.needsCatalog = true;
   const resolved = state.catalog?.get(parsed.name.toLowerCase()) ?? null;
   // `$` is meaningless without a catalog hit - see the note on
   // `buildSubmittedChatJSONContent` - so leave the prose alone.

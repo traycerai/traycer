@@ -1,4 +1,3 @@
-import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import "../../../../../__tests__/test-browser-apis";
 import { createRef, type RefObject } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
@@ -64,7 +63,7 @@ afterEach(() => {
 });
 
 describe("chat-composer submit gate (path resolution)", () => {
-  it("blocks useChatComposerSubmit while attachmentPreparationPending is true", async () => {
+  it("blocks useChatComposerSubmit while attachmentPreparationPending is true", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const editorRef = createRef<ComposerPromptEditorHandle | null>();
     editorRef.current = editorHandle({ content: DIRTY, ready: true });
@@ -91,13 +90,6 @@ describe("chat-composer submit gate (path resolution)", () => {
           taskId: "task-1",
           editorRef,
           pickerStore,
-          buildSubmitContent: (content) =>
-            Promise.resolve(
-              buildSubmittedChatJSONContent(
-                content,
-                pickerStore.getState().knownSlashCommands,
-              ),
-            ),
           toolbarStore,
           activeTurnStatus: null,
           steerCapable: false,
@@ -114,11 +106,11 @@ describe("chat-composer submit gate (path resolution)", () => {
       { initialProps: true },
     );
 
-    await result.current.submitDraft("enter");
+    result.current.submitDraft("enter");
     expect(onSubmitMessage).not.toHaveBeenCalled();
 
     rerender(false);
-    await result.current.submitDraft("enter");
+    result.current.submitDraft("enter");
     expect(onSubmitMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -143,7 +135,7 @@ describe("chat-composer submit gate (path resolution)", () => {
  * would init from the same stale captured initial content and resurrect text.
  */
 describe("chat-composer submit gate (editor readiness)", () => {
-  it("blocks submit while the handle is not ready and leaves the draft uncleared", async () => {
+  it("blocks submit while the handle is not ready and leaves the draft uncleared", () => {
     const taskId = "task-not-ready-submit";
     const onSubmitMessage = vi.fn(acceptSubmit);
     const clear = vi.fn(() => undefined);
@@ -167,8 +159,8 @@ describe("chat-composer submit gate (editor readiness)", () => {
       onSubmitMessage,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("enter");
+    act(() => {
+      result.current.submitDraft("enter");
     });
 
     // Pre-ready submit must be a silent no-op - no message, no clear.
@@ -179,7 +171,7 @@ describe("chat-composer submit gate (editor readiness)", () => {
     expect(draft?.resetEpoch).toBe(epochBefore);
   });
 
-  it("accepts a submit once ready and clears the store draft (positive control)", async () => {
+  it("accepts a submit once ready and clears the store draft (positive control)", () => {
     const taskId = "task-ready-submit";
     const onSubmitMessage = vi.fn(acceptSubmit);
     const clear = vi.fn(() => undefined);
@@ -203,8 +195,8 @@ describe("chat-composer submit gate (editor readiness)", () => {
       onSubmitMessage,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("enter");
+    act(() => {
+      result.current.submitDraft("enter");
     });
 
     expect(onSubmitMessage).toHaveBeenCalledTimes(1);
@@ -219,7 +211,7 @@ describe("chat-composer submit gate (editor readiness)", () => {
     expect(draft.resetEpoch).toBe(epochBefore + 1);
   });
 
-  it("blocks pre-ready submit, then succeeds after markReady without resurrecting draft text", async () => {
+  it("blocks pre-ready submit, then succeeds after markReady without resurrecting draft text", () => {
     const taskId = "task-deferred-ready-submit";
     const onSubmitMessage = vi.fn(acceptSubmit);
     const clear = vi.fn(() => undefined);
@@ -253,8 +245,8 @@ describe("chat-composer submit gate (editor readiness)", () => {
       onSubmitMessage,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("enter");
+    act(() => {
+      result.current.submitDraft("enter");
     });
     expect(onSubmitMessage).not.toHaveBeenCalled();
     expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
@@ -265,8 +257,8 @@ describe("chat-composer submit gate (editor readiness)", () => {
     editor.markReady();
     rerenderDraft(1);
 
-    await act(async () => {
-      await result.current.submitDraft("enter");
+    act(() => {
+      result.current.submitDraft("enter");
     });
 
     expect(onSubmitMessage).toHaveBeenCalledTimes(1);
@@ -284,7 +276,7 @@ describe("chat-composer submit gate (editor readiness)", () => {
  * siblings must observe clearDraft's resetEpoch and setContent(empty).
  */
 describe("chat-composer submit multi-surface clear", () => {
-  it("clears a sibling composer's Tiptap document when A submits for the same taskId", async () => {
+  it("clears a sibling composer's Tiptap document when A submits for the same taskId", () => {
     const taskId = "task-multi-submit";
     const onSubmitMessage = vi.fn(acceptSubmit);
     const clearA = vi.fn(() => undefined);
@@ -332,8 +324,8 @@ describe("chat-composer submit multi-surface clear", () => {
       onSubmitMessage,
     });
 
-    await act(async () => {
-      await result.current.submitDraft("enter");
+    act(() => {
+      result.current.submitDraft("enter");
     });
 
     expect(onSubmitMessage).toHaveBeenCalledTimes(1);
@@ -375,13 +367,6 @@ function mountSubmitHook(args: {
       taskId: args.taskId,
       editorRef: args.editorRef,
       pickerStore,
-      buildSubmitContent: (content) =>
-        Promise.resolve(
-          buildSubmittedChatJSONContent(
-            content,
-            pickerStore.getState().knownSlashCommands,
-          ),
-        ),
       toolbarStore,
       activeTurnStatus: null,
       steerCapable: false,

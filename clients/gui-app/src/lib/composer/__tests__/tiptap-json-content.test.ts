@@ -4,7 +4,6 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
-  submittedContentNeedsSlashCatalog,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import type { SlashCommand } from "@/lib/composer/types";
@@ -293,56 +292,5 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     expect(submittedParagraph("please run $frontend-design", CATALOG)).toEqual([
       { type: "text", text: "please run $frontend-design" },
     ]);
-  });
-
-  // Drives whether a send waits for a cold catalog. It must answer true for
-  // every prompt whose conversion the catalog can change, and false for the
-  // ones it cannot - a false negative reintroduces the silent no-op, a false
-  // positive just costs one needless resolve.
-  describe("submittedContentNeedsSlashCatalog", () => {
-    function needsCatalog(prompt: string): boolean {
-      return submittedContentNeedsSlashCatalog({
-        type: "doc",
-        content: [
-          { type: "paragraph", content: [{ type: "text", text: prompt }] },
-        ],
-      });
-    }
-
-    it.each([
-      "$frontend-design build the page",
-      "$frontend-design",
-      // Lexically indistinguishable from a skill without the catalog, so these
-      // resolve too and then send unchanged.
-      "$20 for the migration",
-      "$PATH is wrong",
-      "$not-a-command at all",
-    ])("is true for %j", (prompt) => {
-      expect(needsCatalog(prompt)).toBe(true);
-    });
-
-    it.each([
-      // `/` keeps the ungated lexical fallback, so a cold catalog changes
-      // nothing about whether it chips.
-      "/plan ship it",
-      "/not-a-command either",
-      "just some prose",
-      "please run $frontend-design",
-      "$ 20 for the migration",
-      "",
-    ])("is false for %j", (prompt) => {
-      expect(needsCatalog(prompt)).toBe(false);
-    });
-
-    it("agrees with what the converter actually does with a $ prompt", () => {
-      // The predicate and the conversion share one scan; this pins that they
-      // cannot drift. A `$` prompt converts differently with and without a
-      // catalog, which is exactly what "needs" means.
-      const prompt = "$frontend-design build the page";
-      expect(needsCatalog(prompt)).toBe(true);
-      expect(submittedParagraph(prompt, null)).not.toEqual(
-        submittedParagraph(prompt, CATALOG),
-      );
-    });
   });
 });

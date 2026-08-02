@@ -7,7 +7,6 @@ import { useHostClient } from "@/lib/host";
 import type {
   GuiHarnessOption,
   GuiHarnessId,
-  ListGuiAgentCommandsRequest,
   ListGuiAgentCommandsResponse,
   ListGuiAgentModelsResponse,
   ListGuiHarnessesResponse,
@@ -345,17 +344,10 @@ export function useRefreshHarnessCatalog(): () => Promise<void> {
   }, [client, queryClient]);
 }
 
-/**
- * Exported so an imperative `fetchQuery` resolving a cold catalog at submit
- * time (`fetchSlashCommandCatalog`) keys on exactly what this hook's observer
- * keys on. A second params shape would silently open a parallel cache slot -
- * the fetch would work, but it would never be served by, or serve, the
- * composer's live subscription.
- */
-export function guiHarnessCommandsQueryParams(
+function guiHarnessCommandsQueryParams(
   harnessId: GuiHarnessId,
   workingDirectories: ReadonlyArray<string>,
-): ListGuiAgentCommandsRequest {
+) {
   const normalized = dedupeNonEmptyStrings(workingDirectories);
   return {
     harnessId,
