@@ -35,6 +35,7 @@ import {
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
 import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
+import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -558,7 +559,22 @@ function findActivePaneElement(paneId: string): HTMLElement | null {
   );
 }
 
+/**
+ * A hosted chat's body no longer sits inside a `[data-tab-instance-id]`
+ * pane-tab layer - `TabGroupView` still keeps that selected wrapper mounted
+ * around `TileSurfaceSlot`'s bare geometry anchor (it carries layout, tab
+ * strip, and DnD target duties independent of hosting), so it is always
+ * found by the physical query and would shadow the hosted fallback if tried
+ * second (design-review slice-4 finding 4). The hosted record, when one
+ * exists for this exact `tileInstanceId`, is therefore checked FIRST: its
+ * presence unambiguously means the real body lives there, never in the
+ * physical wrapper. With the stable-tile-surface-host switch off (or for a
+ * non-hosted tile kind) no hosted record ever exists, so this falls straight
+ * through to the same physical lookup as before - byte-equivalent.
+ */
 function findSelectedTileElement(tileInstanceId: string): HTMLElement | null {
+  const hosted = findHostedTileElement(document, tileInstanceId);
+  if (hosted !== null) return hosted;
   const elements = document.querySelectorAll<HTMLElement>(
     "[data-tab-instance-id][data-selected='true']",
   );

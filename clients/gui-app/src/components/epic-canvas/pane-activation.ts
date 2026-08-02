@@ -180,10 +180,51 @@ export function runAfterPaneActivationFocusIntent(
 }
 
 export interface PaneActivationOwnership {
+  readonly claimFocus: (event: PaneActivationClaimEvent) => void;
+  readonly claimPointerDown: (event: PaneActivationClaimEvent) => void;
   readonly focusIntent: PaneActivationFocusIntent;
   readonly onFocusCapture: (event: FocusEvent<HTMLElement>) => void;
   readonly onPointerCancelCapture: () => void;
   readonly onPointerDownCapture: (event: PointerEvent<HTMLElement>) => void;
+}
+
+export interface PaneActivationClaimEvent {
+  readonly defaultPrevented: boolean;
+  readonly scope: EventTarget | null;
+  readonly target: EventTarget | null;
+}
+
+type HostedPaneActivationClaim = (event: PaneActivationClaimEvent) => void;
+
+const hostedPaneActivationClaims = new Map<
+  string,
+  Map<string, HostedPaneActivationClaim>
+>();
+
+export function registerHostedPaneActivationClaim(
+  viewTabId: string,
+  paneId: string,
+  claim: HostedPaneActivationClaim,
+): () => void {
+  let claimsByPane = hostedPaneActivationClaims.get(viewTabId);
+  if (claimsByPane === undefined) {
+    claimsByPane = new Map();
+    hostedPaneActivationClaims.set(viewTabId, claimsByPane);
+  }
+  claimsByPane.set(paneId, claim);
+  return () => {
+    if (claimsByPane.get(paneId) !== claim) return;
+    claimsByPane.delete(paneId);
+    if (claimsByPane.size === 0) hostedPaneActivationClaims.delete(viewTabId);
+  };
+}
+
+export function claimHostedPaneActivation(
+  viewTabId: string,
+  paneId: string,
+  event: PaneActivationClaimEvent,
+): void {
+  hostedPaneActivationClaims.get(viewTabId)?.get(paneId)?.(event);
 }
 
 interface PaneGestureSubscriber {
@@ -291,11 +332,11 @@ export function usePaneActivationOwnership(input: {
     deferredGestureRef.current = null;
   }, []);
 
-  const onPointerDownCapture = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
+  const claimPointerDown = useCallback(
+    (event: PaneActivationClaimEvent) => {
       if (active || event.defaultPrevented) return;
       if (ownsPaneActivationFocus(event.target)) {
-        mark(event.target, event.currentTarget);
+        mark(event.target, event.scope);
       }
       if (isPaneActivationDeferred(event.target)) {
         deferredGestureRef.current = gestureEpochRef.current;
@@ -307,16 +348,38 @@ export function usePaneActivationOwnership(input: {
     [activate, active, clearDeferredGesture, mark],
   );
 
-  const onFocusCapture = useCallback(
-    (event: FocusEvent<HTMLElement>) => {
+  const claimFocus = useCallback(
+    (event: PaneActivationClaimEvent) => {
       if (active || event.defaultPrevented) return;
       // Mouse focus inside a deferred subtree belongs to the in-flight action;
       // activation completes after its click, not midway through the gesture.
       if (deferredGestureRef.current !== null) return;
-      mark(event.target, event.currentTarget);
+      mark(event.target, event.scope);
       activate();
     },
     [activate, active, mark],
+  );
+
+  const onPointerDownCapture = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      claimPointerDown({
+        defaultPrevented: event.defaultPrevented,
+        scope: event.currentTarget,
+        target: event.target,
+      });
+    },
+    [claimPointerDown],
+  );
+
+  const onFocusCapture = useCallback(
+    (event: FocusEvent<HTMLElement>) => {
+      claimFocus({
+        defaultPrevented: event.defaultPrevented,
+        scope: event.currentTarget,
+        target: event.target,
+      });
+    },
+    [claimFocus],
   );
 
   useEffect(() => {
@@ -356,6 +419,8 @@ export function usePaneActivationOwnership(input: {
   }, [clearDeferredGesture]);
 
   return {
+    claimFocus,
+    claimPointerDown,
     focusIntent,
     onFocusCapture,
     onPointerCancelCapture: clearDeferredGesture,
