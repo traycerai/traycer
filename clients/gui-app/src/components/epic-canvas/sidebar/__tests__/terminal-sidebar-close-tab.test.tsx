@@ -138,6 +138,18 @@ describe("terminal sidebar Close", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
+  it("highlights the terminal shown in the active canvas pane", () => {
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    expect(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).className.split(
+        " ",
+      ),
+    ).toContain("bg-accent");
+  });
+
   it("closes the open canvas tab and kills the session", () => {
     // Precondition: a canvas tab is open for this session.
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
