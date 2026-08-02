@@ -34,7 +34,10 @@ import type {
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import { displayTitle } from "@/lib/display-title";
-import { useRegisteredEpicLiveArtifactTitle } from "@/lib/epic-selectors";
+import {
+  useRegisteredEpicLiveArtifactTitle,
+  useRegisteredEpicLiveArtifactTitles,
+} from "@/lib/epic-selectors";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
 import {
@@ -335,6 +338,7 @@ function useResourceKillSelection(
   readonly cancelSelection: () => void;
   readonly selectAllVisible: () => void;
   readonly deselectAllVisible: () => void;
+  readonly clearSelection: () => void;
   readonly killSelected: () => void;
   readonly isKilling: boolean;
 } {
@@ -385,6 +389,7 @@ function useResourceKillSelection(
     },
     selectAllVisible: () => setSelected(new Map(topLevelTargets)),
     deselectAllVisible: () => setSelected(new Map()),
+    clearSelection: () => setSelected(new Map()),
     killSelected: () => {
       killTargets([...liveSelected.values()]);
       setSelectionMode(false);
@@ -464,6 +469,37 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       sortOption,
     ],
   );
+  const liveOwnerTitleEntries = useMemo(
+    () =>
+      taskRows.flatMap((task) =>
+        task.owners.map((owner) => ({
+          ownerKey: ownerKey(
+            owner.snapshot.owner.epicId,
+            owner.snapshot.owner.kind,
+            owner.snapshot.owner.ownerId,
+          ),
+          epicId: owner.snapshot.owner.epicId,
+          artifactId:
+            owner.snapshot.owner.kind === "terminal"
+              ? null
+              : owner.snapshot.owner.ownerId,
+        })),
+      ),
+    [taskRows],
+  );
+  const liveOwnerTitles = useRegisteredEpicLiveArtifactTitles(
+    liveOwnerTitleEntries,
+  );
+  const liveOwnerTitleByKey = useMemo(
+    () =>
+      new Map(
+        liveOwnerTitleEntries.map((entry, index) => [
+          entry.ownerKey,
+          liveOwnerTitles[index],
+        ]),
+      ),
+    [liveOwnerTitleEntries, liveOwnerTitles],
+  );
   const search = useMemo(
     () =>
       buildResourceSearchProjection({
@@ -471,12 +507,14 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
         hostApp: projection.app,
         other: supportsHostTree ? projection.other : null,
         taskRows,
+        liveOwnerTitleByKey,
         searchQuery,
       }),
     [
       desktopApp,
       projection.app,
       projection.other,
+      liveOwnerTitleByKey,
       searchQuery,
       supportsHostTree,
       taskRows,
@@ -503,6 +541,10 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
     killTargetIndex.live,
     killTargetIndex.topLevel,
   );
+  const updateSearchQuery = (value: string): void => {
+    killSelection.clearSelection();
+    setSearchQuery(value);
+  };
 
   const toggleOwner = (key: string): void => {
     setExpandedOwners((previous) => {
@@ -707,7 +749,10 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
             </div>
           </div>
 
-          <ResourceSearchInput value={searchQuery} onChange={setSearchQuery} />
+          <ResourceSearchInput
+            value={searchQuery}
+            onChange={updateSearchQuery}
+          />
 
           {summary === null ? (
             <div className="mt-4 text-ui-xs text-muted-foreground">
@@ -1606,12 +1651,7 @@ function OwnerTreeRow(props: {
     owner.epicId,
     owner.kind === "terminal" ? null : owner.ownerId,
   );
-  const label = ownerLabel(
-    props.row.snapshot,
-    ownerTileRef(props.row.location, props.row.closedTile),
-    props.row.record,
-    liveArtifactTitle,
-  );
+  const label = resolvedOwnerLabel(props.row, liveArtifactTitle);
   const processRows = buildProcessRows(
     props.row.snapshot.processes,
     props.expandedProcesses,
@@ -2141,12 +2181,26 @@ function ownerMetadataMatchesSearch(
   ]);
 }
 
+function resolvedOwnerLabel(
+  row: OwnerDisplayRow,
+  liveArtifactTitle: string | null,
+): string {
+  return ownerLabel(
+    row.snapshot,
+    ownerTileRef(row.location, row.closedTile),
+    row.record,
+    liveArtifactTitle,
+  );
+}
+
 function ownerRowMatchesSearch(
   row: OwnerDisplayRow,
   searchQuery: string,
+  liveArtifactTitle: string | null,
 ): boolean {
+  const label = resolvedOwnerLabel(row, liveArtifactTitle);
   return (
-    ownerMetadataMatchesSearch(row, row.label, searchQuery) ||
+    ownerMetadataMatchesSearch(row, label, searchQuery) ||
     row.snapshot.processes.some((process) =>
       processMatchesSearch(process, searchQuery),
     )
@@ -2172,13 +2226,24 @@ function buildOwnerProcessSearchProjection(
 function filterTaskRowsForSearch(
   rows: readonly TaskDisplayRow[],
   searchQuery: string,
+  liveOwnerTitleByKey: ReadonlyMap<string, string | null>,
 ): TaskDisplayRow[] {
   if (normalizeResourceSearch(searchQuery).length === 0) return [...rows];
   return rows.flatMap((task): TaskDisplayRow[] => {
     if (taskRowMatchesSearch(task, searchQuery)) return [task];
-    const owners = task.owners.filter((owner) =>
-      ownerRowMatchesSearch(owner, searchQuery),
-    );
+    const owners = task.owners.filter((owner) => {
+      const snapshotOwner = owner.snapshot.owner;
+      const key = ownerKey(
+        snapshotOwner.epicId,
+        snapshotOwner.kind,
+        snapshotOwner.ownerId,
+      );
+      return ownerRowMatchesSearch(
+        owner,
+        searchQuery,
+        liveOwnerTitleByKey.get(key) ?? null,
+      );
+    });
     return owners.length === 0 ? [] : [{ ...task, owners }];
   });
 }
@@ -2188,6 +2253,7 @@ function buildResourceSearchProjection(input: {
   readonly hostApp: AppResourceUsage | null;
   readonly other: OtherResourceUsage | null;
   readonly taskRows: readonly TaskDisplayRow[];
+  readonly liveOwnerTitleByKey: ReadonlyMap<string, string | null>;
   readonly searchQuery: string;
 }): ResourceSearchProjection {
   const desktopApp =
@@ -2205,7 +2271,11 @@ function buildResourceSearchProjection(input: {
     otherResourcesMatchSearch(input.other, input.searchQuery)
       ? input.other
       : null;
-  const taskRows = filterTaskRowsForSearch(input.taskRows, input.searchQuery);
+  const taskRows = filterTaskRowsForSearch(
+    input.taskRows,
+    input.searchQuery,
+    input.liveOwnerTitleByKey,
+  );
   const visibleOwnerKeys = new Set(
     taskRows.flatMap((task) =>
       task.owners.map((owner) =>

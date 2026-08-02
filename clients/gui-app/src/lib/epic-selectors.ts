@@ -659,6 +659,59 @@ export function useRegisteredEpicLiveArtifactTitle(
   );
 }
 
+export interface RegisteredEpicArtifactTitleRef {
+  readonly epicId: string;
+  readonly artifactId: string | null;
+}
+
+/**
+ * Reactive live titles for a dynamic collection of artifacts. Global list
+ * surfaces cannot call the single-artifact hook in a data-dependent loop, so
+ * this subscribes once to the registry and every currently referenced epic.
+ */
+export function useRegisteredEpicLiveArtifactTitles(
+  refs: readonly RegisteredEpicArtifactTitleRef[],
+): readonly (string | null)[] {
+  const registry = getOpenEpicRegistry();
+  const encodedTitles = useSyncExternalStore(
+    (listener) => {
+      const unsubscribers = [registry.subscribe(listener)];
+      const subscribedHandles = new Set<OpenEpicStoreHandle>();
+      for (const ref of refs) {
+        const handle = registry.peek(ref.epicId);
+        if (handle === null || subscribedHandles.has(handle)) continue;
+        subscribedHandles.add(handle);
+        unsubscribers.push(handle.store.subscribe(listener));
+      }
+      return () => {
+        for (const unsubscribe of unsubscribers) unsubscribe();
+      };
+    },
+    () =>
+      JSON.stringify(
+        refs.map((ref) =>
+          liveArtifactTitleFromHandle(
+            registry.peek(ref.epicId),
+            ref.artifactId,
+          ),
+        ),
+      ),
+    () => JSON.stringify(refs.map(() => null)),
+  );
+  return useMemo(
+    () => decodeRegisteredArtifactTitles(encodedTitles),
+    [encodedTitles],
+  );
+}
+
+function decodeRegisteredArtifactTitles(
+  encodedTitles: string,
+): readonly (string | null)[] {
+  const decoded: unknown = JSON.parse(encodedTitles);
+  if (!Array.isArray(decoded)) return [];
+  return decoded.map((title) => (typeof title === "string" ? title : null));
+}
+
 function liveArtifactTitleFromHandle(
   handle: OpenEpicStoreHandle | null,
   artifactId: string | null,

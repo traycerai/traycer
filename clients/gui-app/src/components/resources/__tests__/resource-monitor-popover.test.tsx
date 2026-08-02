@@ -94,6 +94,12 @@ vi.mock("@/lib/epic-selectors", () => ({
     _epicId: string,
     artifactId: string | null,
   ) => (artifactId === "chat-1" ? liveArtifactTitleMock.title : null),
+  useRegisteredEpicLiveArtifactTitles: (
+    refs: readonly { readonly artifactId: string | null }[],
+  ) =>
+    refs.map((ref) =>
+      ref.artifactId === "chat-1" ? liveArtifactTitleMock.title : null,
+    ),
 }));
 
 vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
@@ -611,8 +617,42 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
 
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "Generated" },
+      },
+    );
+
     expect(await screen.findByText("Generated chat title")).not.toBeNull();
     expect(screen.queryByText("Untitled chat")).toBeNull();
+  });
+
+  it("clears selected targets when a search hides them", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "not-a-resource" },
+      },
+    );
+
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
   });
 
   it("uses the persisted Agent title when the live title is empty", async () => {
