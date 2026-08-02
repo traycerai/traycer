@@ -35,6 +35,7 @@ vi.mock("@/components/home/composer/composer-shell", () => ({
     readonly onDragLeave: DragEventHandler<HTMLElement>;
     readonly dragOverlayVariant: FileTransferDragOverlayVariant | null;
     readonly utilityRail: ReactNode;
+    readonly attachmentsStrip: ReactNode;
     readonly editor: ReactNode;
   }) => (
     <div
@@ -47,7 +48,10 @@ vi.mock("@/components/home/composer/composer-shell", () => ({
       onDragEnter={props.onDragEnter}
       onDragLeave={props.onDragLeave}
     >
-      {props.utilityRail}
+      <div data-testid="composer-attachment-rail">
+        {props.attachmentsStrip}
+        {props.utilityRail}
+      </div>
       {props.editor}
     </div>
   ),

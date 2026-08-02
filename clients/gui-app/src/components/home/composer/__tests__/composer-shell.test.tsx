@@ -12,6 +12,7 @@ afterEach(cleanup);
 function renderComposerShell(
   variant: FileTransferDragOverlayVariant,
   utilityRail: ReactNode,
+  attachmentsStrip: ReactNode,
 ): void {
   render(
     <ComposerShell
@@ -22,7 +23,7 @@ function renderComposerShell(
       onDragLeave={() => undefined}
       dragOverlayVariant={variant}
       utilityRail={utilityRail}
-      attachmentsStrip={null}
+      attachmentsStrip={attachmentsStrip}
       editor={<div data-testid="composer-editor" />}
       toolbar={<div />}
     />,
@@ -31,14 +32,14 @@ function renderComposerShell(
 
 describe("ComposerShell file-drop overlay", () => {
   it("keeps the existing image copy", () => {
-    renderComposerShell("images", null);
+    renderComposerShell("images", null, null);
 
     expect(screen.getByText("Drop image to attach")).not.toBeNull();
     expect(screen.getByText("PNG, JPG, GIF up to 5MB")).not.toBeNull();
   });
 
   it("describes path insertion for non-image drags", () => {
-    renderComposerShell("paths", null);
+    renderComposerShell("paths", null, null);
 
     expect(screen.getByText("Drop to insert file path")).not.toBeNull();
     expect(
@@ -47,7 +48,7 @@ describe("ComposerShell file-drop overlay", () => {
   });
 
   it("describes both outcomes for mixed drags", () => {
-    renderComposerShell("mixed", null);
+    renderComposerShell("mixed", null, null);
 
     expect(
       screen.getByText("Drop to attach images and insert file paths"),
@@ -57,22 +58,32 @@ describe("ComposerShell file-drop overlay", () => {
     ).not.toBeNull();
   });
 
-  it("places utility chrome in flow before the editor", () => {
+  it("places attachments and utility chrome in one row before the editor", () => {
     renderComposerShell(
       "images",
       <div data-composer-utility-rail="" data-testid="composer-utility-rail">
         Stash 2
       </div>,
+      <div data-testid="composer-attachments">Images</div>,
     );
 
     const shell = document.querySelector("[data-composer-shell]");
-    const rail = screen.getByTestId("composer-utility-rail");
+    const utility = screen.getByTestId("composer-utility-rail");
+    const attachments = screen.getByTestId("composer-attachments");
     const editor = screen.getByTestId("composer-editor");
     const editorFrame = editor.closest("[data-composer-editor-frame]");
-    expect(shell?.contains(rail)).toBe(true);
-    expect(rail.compareDocumentPosition(editor)).toBe(
+    const attachmentRail = attachments.closest(
+      "[data-composer-attachment-rail]",
+    );
+    expect(shell?.contains(utility)).toBe(true);
+    expect(attachmentRail).toBe(utility.parentElement);
+    expect(attachments.compareDocumentPosition(utility)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(rail.nextElementSibling).toBe(editorFrame);
+    expect(utility.compareDocumentPosition(editor)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(attachmentRail?.parentElement).toBe(editorFrame);
+    expect(attachmentRail?.nextElementSibling).toBe(editor);
   });
 });

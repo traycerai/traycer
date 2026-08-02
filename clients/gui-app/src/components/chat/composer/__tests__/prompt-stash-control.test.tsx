@@ -185,11 +185,10 @@ describe("PromptStashControl", () => {
     });
     const rail = trigger.closest("[data-composer-utility-rail]");
     expect(rail).not.toBeNull();
-    expect(rail?.className).toContain("h-9");
-    expect(rail?.className).toContain("pl-3");
-    expect(rail?.className).toContain("pr-2");
-    expect(rail?.className).toContain("pt-2");
-    expect(rail?.className).toContain("pb-1");
+    expect(rail?.className).toContain("ml-auto");
+    expect(rail?.className).toContain("shrink-0");
+    expect(rail?.className).not.toContain("pl-3");
+    expect(rail?.className).not.toContain("pt-2");
     expect(rail?.className).not.toContain("absolute");
     expect(rail?.className).not.toContain("border-b");
     expect(rail?.className).not.toContain("bg-muted");

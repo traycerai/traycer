@@ -59,11 +59,26 @@
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
 
-/* A visible composer utility rail owns the card's existing top inset. Keep the
-   prompt close to the rail instead of stacking the default editor padding
-   underneath it; the no-rail composer retains its original spacing. */
-[data-composer-utility-rail] + [data-composer-editor-frame] {
-  padding-top: 0.25rem;
+/* Attachment previews share one compact row with composer utilities. The
+   trailing padding lets the final chip emerge fully when scrolled to the end,
+   while overflowing chips fade before the fixed stash control. */
+[data-composer-attachment-strip] {
+  scrollbar-width: none;
+}
+
+[data-composer-attachment-strip]::-webkit-scrollbar {
+  display: none;
+}
+
+[data-composer-attachment-rail]:has([data-composer-utility-rail])
+  [data-composer-attachment-strip] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    black 0%,
+    black 90%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to right, black 0%, black 90%, transparent 100%);
 }
 
 @media (prefers-reduced-motion: reduce) {

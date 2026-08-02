@@ -826,6 +826,7 @@ function InlineUserMessageEditor({
         pickerStore={pickerStore}
         overlay={null}
         utilityRail={null}
+        attachmentsStrip={null}
         editor={editorSlot}
         toolbar={toolbar}
       />

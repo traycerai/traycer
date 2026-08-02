@@ -54,6 +54,7 @@ export interface ComposerAreaProps {
   readonly pickerStore: ComposerPickerStore;
   readonly overlay: ReactNode;
   readonly utilityRail: ReactNode;
+  readonly attachmentsStrip: ReactNode;
   readonly editor: ReactNode;
   readonly toolbar: ReactNode | null;
 }
@@ -62,6 +63,7 @@ function ComposerAreaImpl({
   pickerStore,
   overlay,
   utilityRail,
+  attachmentsStrip,
   editor,
   toolbar,
 }: ComposerAreaProps): ReactNode {
@@ -73,8 +75,14 @@ function ComposerAreaImpl({
         className="relative rounded-lg bg-muted/30 ring-1 ring-border ring-inset focus-within:ring-ring/30"
       >
         {overlay}
-        {utilityRail}
         <div data-composer-editor-frame="" className="px-4 pt-4">
+          <div
+            data-composer-attachment-rail=""
+            className="flex min-w-0 items-start gap-2 pb-2 empty:hidden"
+          >
+            {attachmentsStrip}
+            {utilityRail}
+          </div>
           {editor}
         </div>
         {toolbar}
@@ -121,13 +129,6 @@ function ComposerShellImpl(props: ComposerShellProps) {
     dragOverlayVariant === null ? null : (
       <ComposerFileDropOverlay variant={dragOverlayVariant} />
     );
-  const editorSlot = (
-    <>
-      {attachmentsStrip}
-      {editor}
-    </>
-  );
-
   return (
     <ComposerNarrowProvider isNarrow={isNarrow}>
       <div
@@ -142,7 +143,8 @@ function ComposerShellImpl(props: ComposerShellProps) {
           pickerStore={pickerStore}
           overlay={overlay}
           utilityRail={utilityRail}
-          editor={editorSlot}
+          attachmentsStrip={attachmentsStrip}
+          editor={editor}
           toolbar={toolbar}
         />
       </div>

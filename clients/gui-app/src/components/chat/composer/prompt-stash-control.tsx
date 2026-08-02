@@ -99,7 +99,7 @@ function PromptStashTriggerButton(props: {
   return (
     <div
       data-composer-utility-rail=""
-      className="relative z-10 flex h-9 items-start pb-1 pl-3 pr-2 pt-2"
+      className="relative z-10 ml-auto shrink-0"
     >
       <PopoverTrigger asChild>
         <Button
@@ -323,7 +323,7 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
       {open ? (
         <PopoverContent
           side="top"
-          align="start"
+          align="end"
           sideOffset={6}
           className="w-[calc(100vw-2rem)] max-w-lg gap-0 overflow-hidden p-0"
           onOpenAutoFocus={(event) => event.preventDefault()}
