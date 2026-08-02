@@ -14,6 +14,26 @@ export const CHAT_ARROW_SCROLL_STEP_PX = 40;
 export const CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX = 48;
 
 const CHAT_ANCHOR_MOVER_DEPARTURE_EPSILON_PX = 1;
+const CHAT_SCROLL_ONLY_INTENT_EPSILON_PX = 1;
+
+export function scrollOnlyMovementCarriesReaderIntent(input: {
+  readonly previousScrollTop: number | null;
+  readonly currentScrollTop: number;
+  readonly libraryOwnedScrollTop: number | null;
+}): boolean {
+  if (input.previousScrollTop === null) return false;
+  if (
+    input.libraryOwnedScrollTop !== null &&
+    Math.abs(input.currentScrollTop - input.libraryOwnedScrollTop) <=
+      CHAT_SCROLL_ONLY_INTENT_EPSILON_PX
+  ) {
+    return false;
+  }
+  return (
+    input.currentScrollTop - input.previousScrollTop >
+    CHAT_SCROLL_ONLY_INTENT_EPSILON_PX
+  );
+}
 
 export function anchorMoverShouldYieldToReader(
   currentScrollTop: number,
@@ -185,6 +205,16 @@ export interface ChatAnchorScrollCapturePhysicalSnapshot {
 const CHAT_ANCHOR_CAPTURE_STATE_EQUALITY_EPSILON_PX = 1;
 const CHAT_ANCHOR_CAPTURE_CLAMP_EPSILON_PX = 1;
 
+export function chatScrollCaptureLibraryOwnedTop(
+  domScrollTop: number,
+  listStateScroll: number,
+): number | null {
+  return Math.abs(domScrollTop - listStateScroll) <=
+    CHAT_ANCHOR_CAPTURE_STATE_EQUALITY_EPSILON_PX
+    ? domScrollTop
+    : null;
+}
+
 /**
  * Design-review finding 3 (PLAUSIBLE MEDIUM, decision #31 binding condition
  * b): the exact browser-clamp signature - not a guessed distance or timing
@@ -280,8 +310,10 @@ export function chatAnchorScrollCaptureShouldCancel(
   if (!input.isAnchoringSessionOwned) return false;
   if (input.activeAnchorMotionOwnsGeneration) return false;
   if (
-    Math.abs(input.domScrollTop - input.listStateScroll) <=
-    CHAT_ANCHOR_CAPTURE_STATE_EQUALITY_EPSILON_PX
+    chatScrollCaptureLibraryOwnedTop(
+      input.domScrollTop,
+      input.listStateScroll,
+    ) !== null
   ) {
     // Library/app-owned correction: non-animated imperative scrollTo*/
     // scrollToOffset and MVCP requestAdjust both advance `state.scroll`

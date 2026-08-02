@@ -13,6 +13,7 @@ import {
   buildMessageIdToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
   chatAnchorScrollCaptureShouldCancel,
+  chatScrollCaptureLibraryOwnedTop,
   chatTimelineAnchorShouldAnimateInitialIssue,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
@@ -21,6 +22,7 @@ import {
   resolveChatAnchorTargetWithSetupCard,
   resolveChatTouchFollowIntent,
   resolveChatWheelFollowIntent,
+  scrollOnlyMovementCarriesReaderIntent,
   selectActiveUserMessageId,
   viewportAnchorMessageId,
   viewportActiveUserMessageId,
@@ -241,6 +243,7 @@ export const CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS = 2_600;
  *  (`metrics.scrollDeltaToRevealEnd <= 1`) so a fitting anchor's still-
  *  closing reserve near-end is never misread as "arrived". */
 const CHAT_TIMELINE_LIVE_EDGE_EPSILON_PX = 1;
+
 /** A smaller scrollTop is user movement away from an owned live-edge
  * position; equal or larger values are compatible with streaming growth. */
 const CHAT_TIMELINE_SCROLL_DEPARTURE_EPSILON_PX = 1;
@@ -1205,6 +1208,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // carry the same toward-tail intent as the pointer-aware path, while the
   // suppression/anchor guards below continue rejecting programmatic movers.
   const detachedLastScrollTopRef = useRef<number | null>(null);
+  const capturedLibraryOwnedScrollTopRef = useRef<number | null>(null);
   // Last physical position reported while follow ownership was intact.
   // LegendList's false reports alone cannot distinguish an OS-scrollbar drag
   // upward from content growth reopening the distance to end; their scrollTop
@@ -1997,6 +2001,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // classifier's concern.
       if (event.target !== scrollNode) return;
       const domScrollTop = scrollNode.scrollTop;
+      const listStateScroll = list.getState().scroll;
+      capturedLibraryOwnedScrollTopRef.current =
+        chatScrollCaptureLibraryOwnedTop(domScrollTop, listStateScroll);
       const currentMaxScrollTop = Math.max(
         0,
         scrollNode.scrollHeight - scrollNode.clientHeight,
@@ -2012,7 +2019,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           activeAnchorImperativeMotionGenerationRef.current ===
           anchorUserScrollGenerationRef.current,
         domScrollTop,
-        listStateScroll: list.getState().scroll,
+        listStateScroll,
         previousSnapshot: anchoringPhysicalSnapshotRef.current,
         currentMaxScrollTop,
       });
@@ -2382,13 +2389,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (currentScrollTop === undefined) return;
       const previousScrollTop = detachedLastScrollTopRef.current;
       detachedLastScrollTopRef.current = currentScrollTop;
+      const libraryOwnedScrollTop = capturedLibraryOwnedScrollTopRef.current;
+      capturedLibraryOwnedScrollTopRef.current = null;
       if (
-        previousScrollTop !== null &&
+        scrollOnlyMovementCarriesReaderIntent({
+          previousScrollTop,
+          currentScrollTop,
+          libraryOwnedScrollTop,
+        }) &&
         timelineScrollModeRef.current === "free-scrolling" &&
         timelineAnchorMessageIdRef.current === null &&
-        !suppressFollowRestoreRef.current &&
-        currentScrollTop - previousScrollTop >
-          CHAT_TIMELINE_LIVE_EDGE_EPSILON_PX
+        !suppressFollowRestoreRef.current
       ) {
         liveEdgeReattachArmedRef.current = true;
       }

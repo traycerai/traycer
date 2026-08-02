@@ -32,7 +32,9 @@ import {
   anchorMoverShouldYieldToReader,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
+  chatScrollCaptureLibraryOwnedTop,
   chatTimelineGetItemType,
+  scrollOnlyMovementCarriesReaderIntent,
   type ChatAnchorDriftRepairOutcome,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import {
@@ -6896,6 +6898,24 @@ describe("ChatMessages scroll policy", () => {
 
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("(b3) an MVCP-owned scroll adjustment does not impersonate a scrollbar drag", () => {
+      const libraryOwnedScrollTop = chatScrollCaptureLibraryOwnedTop(990, 990);
+      expect(
+        scrollOnlyMovementCarriesReaderIntent({
+          previousScrollTop: 900,
+          currentScrollTop: 990,
+          libraryOwnedScrollTop,
+        }),
+      ).toBe(false);
+      expect(
+        scrollOnlyMovementCarriesReaderIntent({
+          previousScrollTop: 900,
+          currentScrollTop: 990,
+          libraryOwnedScrollTop: chatScrollCaptureLibraryOwnedTop(990, 900),
+        }),
+      ).toBe(true);
     });
 
     it("(c) pill click while anchoring immediately enters following-end", async () => {
