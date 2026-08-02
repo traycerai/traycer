@@ -48,6 +48,12 @@ const streamVersionMock = vi.hoisted(() => ({
   version: null as { readonly major: number; readonly minor: number } | null,
 }));
 
+const activeHostMock = vi.hoisted(() => ({ hostId: null as string | null }));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => activeHostMock.hostId,
+}));
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
   useStreamMethodSupport: () => null,
@@ -472,6 +478,7 @@ afterEach(() => {
   canvasMock.resolveTargetTabForEpic.mockReturnValue("tab-2");
   __setResourcesStreamClientFactoryForTests(null);
   streamVersionMock.version = null;
+  activeHostMock.hostId = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
 });
@@ -1310,6 +1317,36 @@ describe("ResourceMonitorPopover", () => {
         .getByRole("button", { name: "Other processes expanded by search" })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("keeps a rendered Other root selectable when only its child matches", () => {
+    const stub = installStubFactory();
+    activeHostMock.hostId = "host-1";
+    renderPopover();
+
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(
+          projection({ app: app(), hostTree: hostTree({}), other: other({}) }),
+        );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "child" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [500],
+    });
   });
 
   it("shows compact basename labels for Other roots until expanded", () => {

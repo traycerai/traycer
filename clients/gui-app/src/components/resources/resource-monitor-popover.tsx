@@ -2459,6 +2459,20 @@ function buildSearchVisibleKillKeys(
     ? other.processes.map(processRowKey)
     : searchVisibleProcessKeys(other.processes, searchQuery, ["Other"]);
   for (const processKey of otherProcessKeys) visibleKeys.add(processKey);
+  if (!otherMatches) {
+    const matchingRootPids = matchingOtherRootPids(
+      other.processes,
+      searchQuery,
+    );
+    for (const process of other.processes) {
+      if (
+        process.pid === process.rootPid &&
+        matchingRootPids.has(process.pid)
+      ) {
+        visibleKeys.add(processRowKey(process));
+      }
+    }
+  }
   return visibleKeys;
 }
 
