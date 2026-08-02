@@ -691,6 +691,16 @@ describe("<NotificationsSessionProvider />", () => {
       ...(useAgentActivityStore.getState().byEpic.get("epic-1")?.working ?? []),
     ]).toEqual(["agent-1"]);
     expect(useNotificationsStore.getState().entryIds).toEqual([]);
+
+    act(() => {
+      streamClient.sessionFor("agent.activity.subscribe").emitStatus("closed");
+    });
+
+    expect(useAgentActivityStore.getState()).toMatchObject({
+      connectionStatus: "closed",
+      servedBy: null,
+    });
+    expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
   });
 
   it("turns only post-baseline cloud snapshot arrivals into notification displays", async () => {

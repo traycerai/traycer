@@ -49,7 +49,15 @@ export function openAgentActivityStream(
         }));
       },
       onConnectionStatus: (status, reason) => {
-        useAgentActivityStore.setState({ connectionStatus: status });
+        useAgentActivityStore.setState(
+          status === "closed"
+            ? {
+                connectionStatus: status,
+                servedBy: null,
+                byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
+              }
+            : { connectionStatus: status },
+        );
         if (status === "closed" && isUnauthorized(reason)) {
           onAuthError?.();
         }
