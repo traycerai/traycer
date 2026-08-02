@@ -2466,12 +2466,29 @@ interface ChatRowArchiveDecision {
  * Copy for a refused archive, matched to the tier so the row explains the
  * ACTUAL reason - "working" and "has background items running" are different
  * things to wait on, and a single generic string would misdescribe one of them.
+ *
+ * This tooltip is the ONLY message these rows get. The entry is soft-disabled,
+ * which prevents `onSelect`, so the host's own refusal - and the toast that
+ * rewrites it into user-facing copy - never fire from here. Advice that is
+ * wrong in this string is wrong with nothing behind it to correct it.
+ *
+ * So the background arm must not say "stop it". Every stop affordance routes
+ * into `ChatSession.stopActiveTurn()`, which early-returns when no turn is
+ * running, so an agent held only by a detached subagent, a workflow or a
+ * scheduled wake cannot be stopped into an archivable state - the user would
+ * press Stop, see nothing change, and be told the same thing again. It names
+ * the per-item controls in the chat instead, which is the affordance that
+ * actually clears them.
+ *
+ * The host's `archiveBlockedMessage` splits on exactly this distinction and
+ * keeps its two arms disjoint under test; this is the same split one surface
+ * earlier, where the user actually is.
  */
 function archiveBlockedReason(running: IndicatorRunningKind): string {
   if (running === "turn") {
-    return "Can't archive while this agent is working. Wait for it to finish, or stop it first.";
+    return "Can't archive while this agent is working. Wait for the turn to finish, or stop the agent.";
   }
-  return "Can't archive while this agent has background items running. Wait for them to finish, or stop it first.";
+  return "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.";
 }
 
 /**

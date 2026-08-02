@@ -311,6 +311,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     readonly "data-testid": string;
     readonly disabled: boolean;
     readonly "aria-disabled": boolean;
+    readonly "aria-describedby": string | undefined;
   }) => (
     <button
       type="button"
@@ -318,6 +319,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       data-testid={props["data-testid"]}
       disabled={props.disabled}
       aria-disabled={props["aria-disabled"]}
+      aria-describedby={props["aria-describedby"]}
       onClick={props.onSelect}
     >
       {props.children}
@@ -3348,7 +3350,7 @@ describe("chat row archive", () => {
     const turnWrapper = turnItem.parentElement;
     if (turnWrapper === null) throw new Error("expected tooltip wrapper");
     expect(tooltipTextIn(turnWrapper)).toBe(
-      "Can't archive while this agent is working. Wait for it to finish, or stop it first.",
+      "Can't archive while this agent is working. Wait for the turn to finish, or stop the agent.",
     );
 
     testState.activityTierById = new Map([["chat-root", "background"]]);
@@ -3360,8 +3362,14 @@ describe("chat row archive", () => {
     ).parentElement;
     if (bgWrapper === null) throw new Error("expected tooltip wrapper");
     expect(tooltipTextIn(bgWrapper)).toBe(
-      "Can't archive while this agent has background items running. Wait for them to finish, or stop it first.",
+      "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.",
     );
+    // The background arm must never advertise stopping the AGENT as the
+    // remedy. `stopActiveTurn()` early-returns with no turn running, and this
+    // tooltip is the only message a soft-disabled entry produces - the host's
+    // corrected refusal never fires because `onSelect` is prevented. Getting
+    // this wrong sends the user round a loop with nothing to correct it.
+    expect(tooltipTextIn(bgWrapper)).toContain("stop them from its chat");
 
     // While busy the entry is WRAPPED, so it no longer shares a parent with its
     // sibling entries...
@@ -3455,6 +3463,53 @@ describe("chat row archive", () => {
     const wrapper = item.parentElement;
     if (wrapper === null) throw new Error("expected tooltip wrapper");
     expect(wrapper.getAttribute("role")).toBe("none");
+  });
+
+  it("describes the FOCUSED item with the reason, not just the wrapper (B11)", () => {
+    // The tooltip alone does not reach a screen reader. `TooltipWrapper` uses
+    // `asChild`, so Radix owns `aria-describedby` on the WRAPPER while keyboard
+    // focus lands on the item inside it - and ARIA descriptions are not
+    // inherited by descendants. Without the item's own description the user
+    // hears "Archive, dimmed" and never the reason, which is the entire point
+    // of keeping the entry reachable.
+    //
+    // Asserted on the context menu because it runs against unmocked Radix: a
+    // mock could satisfy this by construction.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "background"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    const item = screen.getByTestId("epic-sidebar-context-archive-chat-root");
+    const describedBy = item.getAttribute("aria-describedby");
+    if (describedBy === null) {
+      throw new Error("expected the item itself to carry aria-describedby");
+    }
+    // Must RESOLVE - a dangling id reads to a screen reader as no description
+    // at all, which is exactly the bug this guards, wearing the right attribute.
+    const description = document.getElementById(describedBy);
+    if (description === null) {
+      throw new Error(`aria-describedby '${describedBy}' resolves to nothing`);
+    }
+    expect(description.textContent).toContain("background items running");
+    expect(description.textContent).toContain("stop them from its chat");
+    // Scoped to the item that owns it, so sibling rows cannot collide.
+    expect(item.contains(description)).toBe(true);
+  });
+
+  it("leaves an unexplained disabled entry undescribed (B11)", () => {
+    // A transient in-flight mutation is hard-disabled and carries no reason.
+    // Pointing `aria-describedby` at an element that does not exist would be
+    // worse than omitting it, so the id must be absent, not empty.
+    seedChatTree();
+    testState.activeAgentIds = new Set();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const item = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    expect(item.getAttribute("aria-describedby")).toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import {
   ContextMenuItem,
   ContextMenuSeparator,
@@ -91,9 +91,13 @@ function SidebarRowMenuItemTooltip(props: {
  * An entry disabled with no tooltip (a transient in-flight mutation) stays
  * hard-disabled: there is nothing to read, and it settles on its own.
  */
-function softDisabledProps(entry: SidebarRowMenuItemEntry): {
+function softDisabledProps(
+  entry: SidebarRowMenuItemEntry,
+  reasonIdPrefix: string,
+): {
   readonly disabled: boolean;
   readonly ariaDisabled: boolean;
+  readonly reasonId: string | undefined;
   readonly onSelect: (event: Event) => void;
 } {
   const explained = entry.disabled && entry.disabledTooltip !== null;
@@ -101,14 +105,46 @@ function softDisabledProps(entry: SidebarRowMenuItemEntry): {
     return {
       disabled: entry.disabled,
       ariaDisabled: false,
+      reasonId: undefined,
       onSelect: entry.onSelect,
     };
   }
   return {
     disabled: false,
     ariaDisabled: true,
+    reasonId: `${reasonIdPrefix}${entry.id}`,
     onSelect: (event: Event) => event.preventDefault(),
   };
+}
+
+/**
+ * The disabled reason, rendered INSIDE the item and referenced by its
+ * `aria-describedby`.
+ *
+ * The tooltip alone does not reach a screen reader here. `TooltipWrapper` uses
+ * `asChild`, so Radix puts the trigger - and the `aria-describedby` it manages
+ * while open - on the WRAPPER, while keyboard focus lands on the menu item
+ * inside it. ARIA descriptions are not inherited by descendants, so the user
+ * hears "Archive, dimmed" and never the reason this whole path exists to
+ * expose. Pointing the item at its own always-present copy of the text is what
+ * closes that, and it does not depend on the tooltip being open.
+ *
+ * Rendered inside the item rather than as a sibling so it cannot be orphaned
+ * by the portal, and so the id stays scoped to the item that owns it. Radix's
+ * typeahead reads the item's `textContent`, so it now sees the reason appended
+ * to the label - harmless, because matching is prefix-based and the label
+ * comes first.
+ */
+function SidebarRowMenuItemReason(props: {
+  readonly id: string | undefined;
+  readonly reason: string | null;
+}) {
+  if (props.id === undefined || props.reason === null) return null;
+  return (
+    <span id={props.id} className="sr-only">
+      {props.reason}
+    </span>
+  );
 }
 
 interface SidebarRowMenuSeparatorEntry {
@@ -122,16 +158,18 @@ export type SidebarRowMenuEntry =
 export function SidebarDropdownMenuItems(props: {
   readonly entries: ReadonlyArray<SidebarRowMenuEntry>;
 }) {
+  const reasonIdPrefix = useId();
   return props.entries.map((entry) => {
     if (entry.kind === "separator") {
       return <DropdownMenuSeparator key={entry.id} />;
     }
-    const state = softDisabledProps(entry);
+    const state = softDisabledProps(entry, reasonIdPrefix);
     return (
       <SidebarRowMenuItemTooltip key={entry.id} tooltip={entry.disabledTooltip}>
         <DropdownMenuItem
           disabled={state.disabled}
           aria-disabled={state.ariaDisabled}
+          aria-describedby={state.reasonId}
           className={cn(state.ariaDisabled && "opacity-50")}
           variant={entry.variant}
           data-testid={entry.testIds.dropdown}
@@ -139,6 +177,10 @@ export function SidebarDropdownMenuItems(props: {
         >
           {entry.icon}
           {entry.label}
+          <SidebarRowMenuItemReason
+            id={state.reasonId}
+            reason={entry.disabledTooltip}
+          />
         </DropdownMenuItem>
       </SidebarRowMenuItemTooltip>
     );
@@ -148,16 +190,18 @@ export function SidebarDropdownMenuItems(props: {
 export function SidebarContextMenuItems(props: {
   readonly entries: ReadonlyArray<SidebarRowMenuEntry>;
 }) {
+  const reasonIdPrefix = useId();
   return props.entries.map((entry) => {
     if (entry.kind === "separator") {
       return <ContextMenuSeparator key={entry.id} />;
     }
-    const state = softDisabledProps(entry);
+    const state = softDisabledProps(entry, reasonIdPrefix);
     return (
       <SidebarRowMenuItemTooltip key={entry.id} tooltip={entry.disabledTooltip}>
         <ContextMenuItem
           disabled={state.disabled}
           aria-disabled={state.ariaDisabled}
+          aria-describedby={state.reasonId}
           className={cn(state.ariaDisabled && "opacity-50")}
           variant={entry.variant}
           data-testid={entry.testIds.context}
@@ -165,6 +209,10 @@ export function SidebarContextMenuItems(props: {
         >
           {entry.icon}
           {entry.label}
+          <SidebarRowMenuItemReason
+            id={state.reasonId}
+            reason={entry.disabledTooltip}
+          />
         </ContextMenuItem>
       </SidebarRowMenuItemTooltip>
     );
