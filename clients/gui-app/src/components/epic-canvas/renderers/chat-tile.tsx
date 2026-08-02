@@ -7,8 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import type { JsonContent } from "@traycer/protocol/common/registry";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
@@ -129,11 +128,10 @@ import { type InitialChatHandoffScope } from "@/stores/epics/initial-chat-handof
 import { contentBlocksText } from "@/lib/chat/content-block-text";
 import {
   buildSubmittedChatJSONContent,
-  submittedContentNeedsSlashCatalog,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { slashCommandCatalogFrom } from "@/lib/composer/slash-command-catalog";
-import { fetchSlashCommandCatalog } from "@/lib/host/fetch-slash-command-catalog";
+import { useSlashCatalogResolver } from "@/hooks/composer/use-slash-catalog-resolver";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
@@ -1442,21 +1440,30 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // and the raw set opens a SECOND, narrower cache entry. That loses the dedupe
   // and can resolve a real `$skill` against a catalog the composer never saw.
   const tabHostClient = useTabHostClient();
-  const { data: slashCommands, isLoading: slashCommandsLoading } =
-    useSlashCommands("", {
-      hostClient: tabHostClient,
-      harnessId: currentComposerSettings.harnessId,
-      workingDirectories: resolvedComposerMentionRoots,
-      enabled: surfaceFocused,
-    });
+  const {
+    data: slashCommands,
+    isLoading: slashCommandsLoading,
+    error: slashCommandsError,
+  } = useSlashCommands("", {
+    hostClient: tabHostClient,
+    harnessId: currentComposerSettings.harnessId,
+    workingDirectories: resolvedComposerMentionRoots,
+    enabled: surfaceFocused,
+  });
   // Null until loaded, which makes a `$` prompt stay plain text rather than
   // chip against a catalog we have not seen yet.
+  //
+  // `error` is part of that gate, not a detail. A failed `listCommands` leaves
+  // TanStack at `isLoading === false` with `data === []`, which would otherwise
+  // read as a legitimately EMPTY catalog - "loaded, and this workspace has no
+  // commands" - and take the fast path, sending a real `$skill` as prose and
+  // locking the next step as sent. An unanswered query is unresolved, not empty.
   const slashCatalog = useMemo<SlashCommandCatalog | null>(
     () =>
-      surfaceFocused && !slashCommandsLoading
+      surfaceFocused && !slashCommandsLoading && slashCommandsError === null
         ? slashCommandCatalogFrom(slashCommands)
         : null,
-    [surfaceFocused, slashCommands, slashCommandsLoading],
+    [surfaceFocused, slashCommands, slashCommandsLoading, slashCommandsError],
   );
   // Builds submit content, waiting on the catalog only when the prompt actually
   // needs it. The subscription above is `surfaceFocused`-gated and starts cold,
@@ -1465,35 +1472,19 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // a skill neither structurally nor lexically there. A prompt with no `$` lead
   // (a `/` command, plain prose, the fixed compact and implement-plan sends)
   // resolves off the reactive value and never awaits.
-  const slashCatalogQueryClient = useQueryClient();
-  const buildSubmitContent = useCallback(
-    async (promptContent: JsonContent): Promise<JsonContent> => {
-      if (
-        slashCatalog !== null ||
-        !submittedContentNeedsSlashCatalog(promptContent)
-      ) {
-        return buildSubmittedChatJSONContent(promptContent, slashCatalog);
-      }
-      // Same roots as the subscription above, so the imperative fetch lands on
-      // the slot that subscription reads rather than warming a third one.
-      const resolved = await fetchSlashCommandCatalog({
-        queryClient: slashCatalogQueryClient,
-        client: tabHostClient,
-        hostId: activeHostId,
-        harnessId: currentComposerSettings.harnessId,
-        workingDirectories: resolvedComposerMentionRoots,
-      });
-      return buildSubmittedChatJSONContent(promptContent, resolved);
-    },
-    [
-      activeHostId,
-      currentComposerSettings.harnessId,
-      resolvedComposerMentionRoots,
-      slashCatalog,
-      slashCatalogQueryClient,
-      tabHostClient,
-    ],
-  );
+  // Same roots as the subscription above, so the imperative fetch lands on the
+  // slot that subscription reads rather than warming a third one. Returns null
+  // when the prompt needed the catalog and it could not be resolved - sending
+  // anyway would put a `$skill` on the wire as prose, which reads to the user
+  // as a delivered instruction and to the host as nothing.
+  const getSlashCatalog = useCallback(() => slashCatalog, [slashCatalog]);
+  const buildSubmitContent = useSlashCatalogResolver({
+    hostClient: tabHostClient,
+    hostId: activeHostId,
+    harnessId: currentComposerSettings.harnessId,
+    workingDirectories: resolvedComposerMentionRoots,
+    getLoadedCatalog: getSlashCatalog,
+  });
   const canModifyMessages = canModifyChatMessages({ canAct, state });
   const activeInlineEdit = normalizeInlineEditForSession(
     uiState.inlineEdit,
@@ -1695,26 +1686,52 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingApprovals,
       state.pendingFileEditApprovals.length,
     );
+  // `canSendNextStep` is read from a ref as well as captured, because resolving
+  // a cold catalog puts a host round trip between the guard and the send. A turn
+  // entering `stopping`, or a blocking approval arriving, disables the button
+  // during that window - the continuation must see that too, or it sends into a
+  // state the gate had already closed.
+  const canSendNextStepRef = useRef(canSendNextStep);
+  useEffect(() => {
+    canSendNextStepRef.current = canSendNextStep;
+  }, [canSendNextStep]);
   const sendNextStep = useCallback(
     async (option: TraycerNextStepOption): Promise<boolean> => {
-      if (!canSendNextStep) return false;
+      // Read into locals at both checks: narrowing `ref.current` directly here
+      // would make the post-await re-check below look statically impossible.
+      const canSendNow: boolean = canSendNextStepRef.current;
+      if (!canSendNow) return false;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return false;
       const content = await buildSubmitContent(
         plainTextPromptContent(option.prompt),
       );
+      if (content === null) {
+        reportableErrorToast(
+          "Couldn't load this agent's commands.",
+          undefined,
+          {
+            title: "Next step not sent",
+            message:
+              "The skill in this next step could not be resolved, so it was not sent. Try again.",
+            code: null,
+            source: "Commands",
+          },
+        );
+        return false;
+      }
+      // Re-checked after the await, not just before it. Read through an
+      // explicitly-typed local: TS narrows `ref.current` to `true` from the
+      // guard above and cannot see that awaiting the catalog gives the gate
+      // time to close, so the re-check would lint as always-falsy.
+      const stillSendable: boolean = canSendNextStepRef.current;
+      if (!stillSendable) return false;
       return (
         chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
         null
       );
     },
-    [
-      buildSubmitContent,
-      canSendNextStep,
-      chatActions,
-      nextStepSettings,
-      profile,
-    ],
+    [buildSubmitContent, chatActions, nextStepSettings, profile],
   );
   // Runs the harness's own compaction from the context-usage chip. Never
   // interrupts: with a turn running (or work already queued) the compact

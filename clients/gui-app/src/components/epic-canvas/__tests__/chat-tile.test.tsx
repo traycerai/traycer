@@ -111,16 +111,26 @@ const slashCatalogHarness = vi.hoisted(() => {
     // Flipped by the cold-catalog test to reproduce the window between a tile
     // opening and `agent.gui.listCommands` resolving.
     loading: false,
+    // A FAILED `listCommands`: TanStack leaves `isLoading` false with an empty
+    // `data`, which must not read as a legitimately empty catalog.
+    errored: false,
+    // Makes the submit-time resolve fail too, so the send has no catalog at all.
+    resolveFails: false,
     fetched: 0,
   };
 });
 
 vi.mock("@/hooks/composer/use-slash-commands", () => ({
   useSlashCommands: () => ({
-    data: slashCatalogHarness.loading ? [] : [slashCatalogHarness.skill],
+    data:
+      slashCatalogHarness.loading || slashCatalogHarness.errored
+        ? []
+        : [slashCatalogHarness.skill],
     isLoading: slashCatalogHarness.loading,
     isFetching: slashCatalogHarness.loading,
-    error: null,
+    error: slashCatalogHarness.errored
+      ? new Error("listCommands failed")
+      : null,
     refetch: () => Promise.resolve(undefined),
   }),
 }));
@@ -131,6 +141,7 @@ vi.mock("@/hooks/composer/use-slash-commands", () => ({
 vi.mock("@/lib/host/fetch-slash-command-catalog", () => ({
   fetchSlashCommandCatalog: () => {
     slashCatalogHarness.fetched += 1;
+    if (slashCatalogHarness.resolveFails) return Promise.resolve(null);
     return Promise.resolve(
       new Map([
         [
@@ -930,6 +941,8 @@ describe("<ChatTile />", () => {
     // Module-level and mutated by the cold-catalog test, so reset per test or
     // a warm-catalog assertion silently runs against a loading catalog.
     slashCatalogHarness.loading = false;
+    slashCatalogHarness.errored = false;
+    slashCatalogHarness.resolveFails = false;
     slashCatalogHarness.fetched = 0;
     installLegendListViewportMetrics();
     window.localStorage.clear();
@@ -1080,7 +1093,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(sendButton);
 
-    expect(chatHarness.sent).toHaveLength(1);
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     expect(chatHarness.sent[0]?.kind).toBe("send");
 
     const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
@@ -1258,6 +1271,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(SESSION_SETTINGS);
@@ -1507,7 +1521,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(within(fileQueue).getByRole("button", { name: "Approve" }));
 
-    expect(chatHarness.sent).toHaveLength(1);
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "fileEditApprovalDecision") {
       throw new Error("expected fileEditApprovalDecision frame");
@@ -1646,6 +1660,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(UPDATED_QUEUE_SETTINGS);
@@ -1665,6 +1680,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(QUEUED_SETTINGS);
@@ -1687,6 +1703,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(QUEUED_SETTINGS);
@@ -1715,6 +1732,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(QUEUED_SETTINGS);
@@ -1736,6 +1754,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(SESSION_SETTINGS);
@@ -1755,6 +1774,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(SESSION_SETTINGS);
@@ -1787,6 +1807,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(SESSION_SETTINGS);
@@ -1822,6 +1843,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(chatHarness.sent.length).toBeGreaterThan(0));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.settings).toEqual(QUEUED_SETTINGS);
@@ -2004,6 +2026,77 @@ describe("<ChatTile />", () => {
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.content).toEqual(SKILL_CHIP_DOC);
     expect(slashCatalogHarness.fetched).toBe(1);
+  });
+
+  // A FAILED `listCommands` leaves TanStack at `isLoading === false` with an
+  // empty `data`. Read as "loaded, no commands", that takes the fast path and
+  // sends the skill as prose - the exact silent no-op the gate exists to stop.
+  // An unanswered query is unresolved, so the send must still try to resolve.
+  it("retries a $-prefixed next step when the catalog query errored", async () => {
+    slashCatalogHarness.errored = true;
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skillNextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    fireEvent.click(
+      getButtonContainingText(
+        "$traycer-implement Implement the runtime ticket.",
+      ),
+    );
+
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.content).toEqual(SKILL_CHIP_DOC);
+    expect(slashCatalogHarness.fetched).toBe(1);
+  });
+
+  // When the catalog cannot be resolved at all, sending anyway would put the
+  // skill on the wire as prose and lock the option as sent. Refuse instead, so
+  // the next step stays clickable.
+  it("does not send a $-prefixed next step when the catalog cannot resolve", async () => {
+    slashCatalogHarness.loading = true;
+    slashCatalogHarness.resolveFails = true;
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skillNextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    const button = getButtonContainingText(
+      "$traycer-implement Implement the runtime ticket.",
+    );
+    fireEvent.click(button);
+
+    await waitFor(() => expect(slashCatalogHarness.fetched).toBe(1));
+    expect(chatHarness.sent).toHaveLength(0);
+    await waitFor(() => {
+      expect(
+        getButtonContainingText(
+          "$traycer-implement Implement the runtime ticket.",
+        ).disabled,
+      ).toBe(false);
+    });
   });
 
   it("disables next-step sends while a turn is stopping", async () => {
@@ -2581,10 +2674,12 @@ describe("<ChatTile />", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(chatHarness.sent.map((frame) => frame.kind)).toEqual([
-      "queueEdit",
-      "queueSettingsUpdate",
-    ]);
+    await waitFor(() =>
+      expect(chatHarness.sent.map((frame) => frame.kind)).toEqual([
+        "queueEdit",
+        "queueSettingsUpdate",
+      ]),
+    );
     const settingsFrame = chatHarness.sent.find(
       (
         frame,
@@ -2708,7 +2803,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(chatHarness.sent).toHaveLength(1);
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.content).toEqual(PENDING_DRAFT_CONTENT);

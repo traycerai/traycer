@@ -11,9 +11,9 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import {
   buildAttachmentsFromJSONContent,
-  buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import {
@@ -31,6 +31,14 @@ interface UseChatComposerSubmitArgs {
   readonly taskId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly pickerStore: ComposerPickerStore;
+  /**
+   * Builds the submitted document, resolving the command catalog first when the
+   * draft needs it. Returns `null` when a needed catalog could not be resolved;
+   * the submit must then bail rather than send a `$skill` as prose.
+   */
+  readonly buildSubmitContent: (
+    promptContent: JsonContent,
+  ) => Promise<JsonContent | null>;
   /**
    * Toolbar settings source. Read via `getState()` at submit time (the
    * sanctioned escape hatch) so this callback stays referentially stable
@@ -107,7 +115,7 @@ interface PendingSteerConflict {
 }
 
 export interface ChatComposerSubmitResult {
-  readonly submitDraft: (source: ChatComposerSubmitSource) => void;
+  readonly submitDraft: (source: ChatComposerSubmitSource) => Promise<void>;
   /**
    * Confirm-dialog state for a `Mod-Enter` steer whose settings differ from the
    * running turn's baked settings (decision 6). Open means the send is staged
@@ -129,6 +137,7 @@ export function useChatComposerSubmit(
     taskId,
     editorRef,
     pickerStore,
+    buildSubmitContent,
     toolbarStore,
     activeTurnStatus,
     steerCapable,
@@ -198,7 +207,7 @@ export function useChatComposerSubmit(
   );
 
   const submitDraft = useCallback(
-    (source: ChatComposerSubmitSource): void => {
+    async (source: ChatComposerSubmitSource): Promise<void> => {
       if (submitBlocked()) return;
       const toolbar = toolbarStore.getState();
       if (toolbar.selection.modelSlug.length === 0) return;
@@ -229,10 +238,24 @@ export function useChatComposerSubmit(
         serviceTier: toolbar.serviceTier,
       });
 
-      const submittedContent = buildSubmittedChatJSONContent(
-        editorContent,
-        pickerStore.getState().knownSlashCommands,
-      );
+      // Awaits only when the draft opens with `$` and the catalog is not
+      // loaded; otherwise this resolves in the same tick as before. The editor
+      // is not cleared until `finalizeSend`, so nothing is lost if we bail.
+      const submittedContent = await buildSubmitContent(editorContent);
+      if (submittedContent === null) {
+        reportableErrorToast(
+          "Couldn't load this agent's commands.",
+          undefined,
+          {
+            title: "Message not sent",
+            message:
+              "The skill in this message could not be resolved, so it was not sent. Your draft is unchanged - try again.",
+            code: null,
+            source: "Commands",
+          },
+        );
+        return;
+      }
       const attachments = buildAttachmentsFromJSONContent(submittedContent);
       const deliveryPolicy = resolveSubmitDeliveryPolicy({
         source,
@@ -276,9 +299,9 @@ export function useChatComposerSubmit(
     },
     [
       activeTurnStatus,
+      buildSubmitContent,
       editorRef,
       finalizeSend,
-      pickerStore,
       getActiveTurnForSteer,
       steerCapable,
       steerEnabled,

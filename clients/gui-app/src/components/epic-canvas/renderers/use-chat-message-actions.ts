@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -25,6 +25,7 @@ import {
   hasUndoableFileEditsFromMessage,
   scopedArtifactCountFromMessage,
 } from "@/lib/chat/file-edits-below-message";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   chatMessageEditingForInlineEdit,
@@ -56,7 +57,7 @@ export interface ChatMessageActionsInput {
    */
   readonly buildSubmitContent: (
     promptContent: JsonContent,
-  ) => Promise<JsonContent>;
+  ) => Promise<JsonContent | null>;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
@@ -166,6 +167,10 @@ export function useChatMessageActions(
     [dispatchUi],
   );
 
+  // Guards the window between claiming an edit submit and the edit being
+  // marked pending. A ref, not state: the two clicks race inside one tick,
+  // before React could commit a flag.
+  const editSubmitInFlightRef = useRef(false);
   const performEditSubmit = useCallback(
     async (
       revertFileChanges: boolean,
@@ -179,24 +184,52 @@ export function useChatMessageActions(
       if (!canModifyMessages) return;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return;
-      // Awaits only when the edited text opens with `$` and the catalog is
-      // still cold; otherwise this resolves in the same tick as before.
-      const content = await buildSubmitContent(activeInlineEdit.currentContent);
-      const sent = chatActions.editUserMessage({
-        targetMessageId: activeInlineEdit.targetMessageId,
-        content,
-        sender,
-        settings: editSettings,
-        revertFileChanges,
-        revertArtifacts,
-      });
-      if (sent === null) return;
-      dispatchUi({
-        type: "markInlineEditPending",
-        targetMessageId: activeInlineEdit.targetMessageId,
-        clientActionId: sent.clientActionId,
-        messageId: sent.messageId,
-      });
+      // Claim the submit BEFORE awaiting. Resolving a cold catalog can take a
+      // host round trip, and "Send edit" stays enabled until an edit is marked
+      // pending - so without this a double-click starts two continuations and
+      // both dispatch an edit frame when the shared fetch resolves.
+      if (editSubmitInFlightRef.current) return;
+      editSubmitInFlightRef.current = true;
+      try {
+        // Awaits only when the edited text opens with `$` and the catalog is
+        // still cold; otherwise this resolves in the same tick as before.
+        const content = await buildSubmitContent(
+          activeInlineEdit.currentContent,
+        );
+        if (content === null) {
+          reportableErrorToast(
+            "Couldn't load this agent's commands.",
+            undefined,
+            {
+              title: "Edit not sent",
+              message:
+                "The skill in this message could not be resolved, so the edit was not sent. Try again.",
+              code: null,
+              source: "Commands",
+            },
+          );
+          return;
+        }
+        const sent = chatActions.editUserMessage({
+          targetMessageId: activeInlineEdit.targetMessageId,
+          content,
+          sender,
+          settings: editSettings,
+          revertFileChanges,
+          revertArtifacts,
+        });
+        if (sent === null) return;
+        dispatchUi({
+          type: "markInlineEditPending",
+          targetMessageId: activeInlineEdit.targetMessageId,
+          clientActionId: sent.clientActionId,
+          messageId: sent.messageId,
+        });
+      } finally {
+        // Cleared on every exit, so a refused or rejected submit leaves the
+        // editor usable rather than permanently latched.
+        editSubmitInFlightRef.current = false;
+      }
       dispatchUi({
         type: "setConfirmingDeleteMessageId",
         confirmingDeleteMessageId: null,
