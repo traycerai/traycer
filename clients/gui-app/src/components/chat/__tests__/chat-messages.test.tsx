@@ -6875,6 +6875,29 @@ describe("ChatMessages scroll policy", () => {
       expect(isJumpPillVisible()).toBe(false);
     });
 
+    it("(b2) a scroll-only native scrollbar drag toward the strict tail reacquires follow", async () => {
+      const messages = makeTranscript(20);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "t11-b2-scroll-only-reattach",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      const scrollNode = getScrollNode();
+      await fireScrollOnlyTo(
+        Math.max(0, scrollNode.scrollHeight - scrollNode.clientHeight),
+      );
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+    });
+
     it("(c) pill click while anchoring immediately enters following-end", async () => {
       await setupOverflowingAnchoredTurn({
         scrollStateKey: "t11-c-pill-while-anchoring",
@@ -9176,6 +9199,88 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
 
       expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+    });
+
+    it("preserves the unresolved raw hydration anchor across a normalized rapid remount", async () => {
+      const fullMessages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const anchorId = fullMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const expectedScrollTop =
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
+      const key = `t15-hydration-remount-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(key);
+      // The partial tail is long enough that the substituted local index is
+      // measurable away from its own edge, so the normalized fallback can
+      // settle and overwrite the ordinary cache before this rapid remount.
+      const partialMessages = fullMessages.slice(150);
+
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: 24,
+      });
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      first.unmount();
+
+      const normalizedAfterFirstUnmount = peekSavedChatTabState(identity);
+      expect(normalizedAfterFirstUnmount?.mode).toBe("free-scrolling");
+      expect(normalizedAfterFirstUnmount?.anchorMessageId).not.toBe(anchorId);
+      const second = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: key,
+      });
+      second.rerenderMessages(fullMessages);
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      second.unmount();
+    });
+
+    it("reader intent supersedes the session-retained raw hydration anchor", async () => {
+      const fullMessages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const anchorId = fullMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const rawAnchorScrollTop =
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
+      const key = `t15-hydration-reader-${Math.random().toString(36).slice(2)}`;
+      const partialMessages = fullMessages.slice(150);
+
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(key),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: 24,
+      });
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      first.unmount();
+
+      const reopened = renderChatMessages({
+        messages: fullMessages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      expect(getScrollNode().scrollTop).not.toBe(rawAnchorScrollTop);
+      reopened.unmount();
     });
 
     it("hydration catch-up does not disturb the true-deletion nearest-neighbor fallback (branch-edited anchor, never resolves)", async () => {

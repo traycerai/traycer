@@ -74,6 +74,7 @@ import { getOrCreateA2AOpenStore } from "@/stores/chats/a2a-open-store-context";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
 import {
   chatTabPersistenceChatKey,
+  chatTabPersistenceTabKey,
   type ChatTabPersistenceIdentity,
 } from "@/stores/chats/chat-tab-persistence-key";
 import {
@@ -160,6 +161,48 @@ export interface ChatMessageScrollRequest {
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const PILL_SHOW_DEBOUNCE_MS = 150;
 const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
+const MAX_PENDING_HYDRATION_RESTORES = 100;
+// The ordinary caches are normalized to a measured surviving neighbor so a
+// deleted anchor cannot hold persistence behind a restore gate forever. Keep
+// the original snapshot separately for the narrower reconnect/backfill race:
+// a rapid remount may still see the missing row later in the same renderer
+// session. Reader/navigation intent and successful catch-up remove the entry;
+// the LRU-style cap prevents abandoned tabs from growing this registry.
+const pendingHydrationRestoreByTabKey = new Map<
+  string,
+  SavedChatTabScrollState
+>();
+
+function rememberPendingHydrationRestore(
+  identity: ChatTabPersistenceIdentity,
+  saved: SavedChatTabScrollState,
+): void {
+  const key = chatTabPersistenceTabKey(identity);
+  pendingHydrationRestoreByTabKey.delete(key);
+  pendingHydrationRestoreByTabKey.set(key, saved);
+  const oldestKey = pendingHydrationRestoreByTabKey.keys().next().value;
+  if (
+    pendingHydrationRestoreByTabKey.size > MAX_PENDING_HYDRATION_RESTORES &&
+    oldestKey !== undefined
+  ) {
+    pendingHydrationRestoreByTabKey.delete(oldestKey);
+  }
+}
+
+function pendingHydrationRestore(
+  identity: ChatTabPersistenceIdentity,
+): SavedChatTabScrollState | null {
+  return (
+    pendingHydrationRestoreByTabKey.get(chatTabPersistenceTabKey(identity)) ??
+    null
+  );
+}
+
+function forgetPendingHydrationRestore(
+  identity: ChatTabPersistenceIdentity,
+): void {
+  pendingHydrationRestoreByTabKey.delete(chatTabPersistenceTabKey(identity));
+}
 
 function firstTouchClientY(touches: TouchList): number | null {
   if (touches.length === 0) return null;
@@ -948,8 +991,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // clamp. Hydration retry needs both the original anchor id and its semantic
   // mode: a delayed free-reading anchor replays a measured location, while a
   // delayed new-turn anchor must recreate the anchor engine and reply reserve.
-  const [rawSavedTabState] = useState<SavedChatTabScrollState | null>(() =>
-    peekSavedChatTabState(identity),
+  const [rawSavedTabState] = useState<SavedChatTabScrollState | null>(
+    () => pendingHydrationRestore(identity) ?? peekSavedChatTabState(identity),
   );
   const pendingHydrationRestoreAnchorId =
     resolvePendingHydrationRestoreAnchorId(restoredTabState, rawSavedTabState);
@@ -961,6 +1004,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const pendingHydrationRestoreAnchorIdRef = useRef<string | null>(
     pendingHydrationRestoreAnchorId,
   );
+  useLayoutEffect(() => {
+    if (pendingHydrationRestoreAnchorId !== null && rawSavedTabState !== null) {
+      rememberPendingHydrationRestore(identity, rawSavedTabState);
+    }
+  }, [identity, pendingHydrationRestoreAnchorId, rawSavedTabState]);
   const pendingHydrationDetachedReplyReserveIdRef = useRef<string | null>(
     resolvePendingHydrationDetachedReplyReserveId(
       restoredTabState,
@@ -1152,6 +1200,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // pointerdown at a link/card with no scroll remains a pure departure.
   const activePointerLastScrollTopRef = useRef<number | null>(null);
   const activePointerMovedRef = useRef(false);
+  // Some platform scrollbar drags emit only `scroll`, with no pointer event
+  // on the content element. This baseline lets those real scroll callbacks
+  // carry the same toward-tail intent as the pointer-aware path, while the
+  // suppression/anchor guards below continue rejecting programmatic movers.
+  const detachedLastScrollTopRef = useRef<number | null>(null);
   // Last physical position reported while follow ownership was intact.
   // LegendList's false reports alone cannot distinguish an OS-scrollbar drag
   // upward from content growth reopening the distance to end; their scrollTop
@@ -1367,6 +1420,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         liveEdgeReattachArmedRef.current = false;
         liveFollowUserScrollGenerationRef.current = null;
         lastOwnedScrollTopRef.current = null;
+        detachedLastScrollTopRef.current =
+          chatTimelineRef.current?.getScrollableNode().scrollTop ?? null;
       }
       expectedAnchorScrollTopRef.current = null;
       setScrollMode(next);
@@ -1375,11 +1430,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   const setFollowingEndFromTimelinePosition = useCallback((): void => {
+    if (liveEdgeReattachArmedRef.current) {
+      pendingHydrationRestoreAnchorIdRef.current = null;
+      forgetPendingHydrationRestore(identity);
+    }
     if (timelineScrollModeRef.current === "anchoring-new-turn") {
       releaseTimelineAnchorOwnership();
     }
     setTimelineMode("following-end");
-  }, [releaseTimelineAnchorOwnership, setTimelineMode]);
+  }, [identity, releaseTimelineAnchorOwnership, setTimelineMode]);
 
   const clearMissingTimelineAnchorReserve = useCallback((): void => {
     const reserveMessageId = timelineAnchorMessageIdRef.current;
@@ -1445,6 +1504,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       pendingRestoredDetachedReplyReserveRef.current = null;
       pendingMeasuredFreeRestoreRef.current = null;
       if (publishesReaderPosition) {
+        pendingHydrationRestoreAnchorIdRef.current = null;
+        forgetPendingHydrationRestore(identity);
         // Wheel/touch/keyboard intent is itself authoritative even when the
         // browser coalesces a sub-pixel movement and emits no scroll event.
         // Bare pointerdown stays gated: it may only be the inline navigation
@@ -1452,6 +1513,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         restorePersistencePendingRef.current = false;
       }
       timelineScrollModeRef.current = "free-scrolling";
+      detachedLastScrollTopRef.current =
+        chatTimelineRef.current?.getScrollableNode().scrollTop ?? null;
       // A retained new-turn reserve makes LegendList's strict end the end of
       // synthetic reply space, not the transcript's real live edge. Never let
       // a gesture arm implicit follow against that geometry: reaching it
@@ -1494,7 +1557,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         anchorScrollRestoreFrameRef.current = null;
       }
     },
-    [cancelPillShow, releaseTimelineAnchorOwnership],
+    [cancelPillShow, identity, releaseTimelineAnchorOwnership],
   );
   const cancelTimelineLiveFollowForRealUserGesture = useCallback(
     (intent: ChatLiveFollowCancelIntent): void => {
@@ -1595,6 +1658,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // re-decides whether the click counts as "following".
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
+      pendingHydrationRestoreAnchorIdRef.current = null;
+      forgetPendingHydrationRestore(identity);
       releaseTimelineAnchorOwnership();
       setTimelineMode("following-end");
       pendingTimelineAnchorRef.current = null;
@@ -1640,6 +1705,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [
       beginImperativeScrollOperation,
       finishImperativeScrollOperation,
+      identity,
       reconcileInvalidTimelineLanding,
       releaseTimelineAnchorOwnership,
       setTimelineMode,
@@ -1661,6 +1727,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // A newly submitted/steered turn supersedes any older mount snapshot.
         // Restored anchor sessions pass `false` and remain settle-gated until
         // their measured landing validates.
+        pendingHydrationRestoreAnchorIdRef.current = null;
+        forgetPendingHydrationRestore(identity);
         restorePersistencePendingRef.current = false;
       }
       pendingMeasuredFreeRestoreRef.current = null;
@@ -1716,7 +1784,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       timelineAnchorMessageIdRef.current = messageId;
       setTimelineAnchorMessageId(messageId);
     },
-    [cancelPillShow],
+    [cancelPillShow, identity],
   );
 
   // Ticket 13 (decision #28, the "hard half"): a setup card can weave in
@@ -2309,6 +2377,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [],
   );
 
+  const captureDetachedScrollOnlyDirection = useCallback(
+    (currentScrollTop: number | undefined): void => {
+      if (currentScrollTop === undefined) return;
+      const previousScrollTop = detachedLastScrollTopRef.current;
+      detachedLastScrollTopRef.current = currentScrollTop;
+      if (
+        previousScrollTop !== null &&
+        timelineScrollModeRef.current === "free-scrolling" &&
+        timelineAnchorMessageIdRef.current === null &&
+        !suppressFollowRestoreRef.current &&
+        currentScrollTop - previousScrollTop >
+          CHAT_TIMELINE_LIVE_EDGE_EPSILON_PX
+      ) {
+        liveEdgeReattachArmedRef.current = true;
+      }
+    },
+    [],
+  );
+
   const reconcileOverflowedAnchorAtLiveEdge = useCallback(
     (isAtEnd: boolean): boolean => {
       if (!isAtEnd) return false;
@@ -2347,6 +2434,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const currentScrollTop =
         chatTimelineRef.current?.getScrollableNode().scrollTop;
       captureActivePointerScrollDirection(currentScrollTop);
+      captureDetachedScrollOnlyDirection(currentScrollTop);
       const previousOwnedScrollTop = lastOwnedScrollTopRef.current;
       const generationOwned =
         liveFollowUserScrollGenerationRef.current ===
@@ -2440,6 +2528,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [
       captureActivePointerScrollDirection,
+      captureDetachedScrollOnlyDirection,
       cancelPillShow,
       maybeShowPillDebounced,
       reconcileOverflowedAnchorAtLiveEdge,
@@ -3222,6 +3311,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // wherever the bounded retries land, still correctly free-scrolling.
   const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
     (location: ChatTimelineNavigationLocation): void => {
+      activeNavigationSettleCleanupRef.current?.();
       suppressFollowRestoreRef.current = true;
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
@@ -3418,6 +3508,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // release, no freeze: the navigation's own scroll (right below, via
       // scrollToTimelineLocationSuppressingFollowRestore) takes over
       // immediately regardless.
+      forgetPendingHydrationRestore(identity);
+      pendingHydrationRestoreAnchorIdRef.current = null;
       cancelTimelineLiveFollowForUserNavigation({
         freezeInFlightScroll: false,
         armLiveEdgeReattach: false,
@@ -3437,6 +3529,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [
       cancelTimelineLiveFollowForUserNavigation,
+      identity,
       scrollToTimelineLocationSuppressingFollowRestore,
       setScrolledActiveUserMessageIdIfChanged,
       showNavigationHighlight,
@@ -3479,6 +3572,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         if (rawSavedTabState?.mode === "anchoring-new-turn") {
           beginAnchoringNewTurn(anchorId, false);
           pendingHydrationRestoreAnchorIdRef.current = null;
+          forgetPendingHydrationRestore(identity);
           return;
         }
         const rawOffset = rawSavedTabState?.offset ?? 0;
@@ -3491,12 +3585,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             viewOffset: rawOffset,
           };
           pendingHydrationRestoreAnchorIdRef.current = null;
+          forgetPendingHydrationRestore(identity);
           pendingHydrationDetachedReplyReserveIdRef.current = null;
           timelineAnchorMessageIdRef.current = reserveMessageId;
           setTimelineAnchorMessageId(reserveMessageId);
           return;
         }
         pendingHydrationRestoreAnchorIdRef.current = null;
+        forgetPendingHydrationRestore(identity);
         scrollToTimelineLocationSuppressingFollowRestore({
           index,
           viewOffset: rawOffset,
@@ -3519,6 +3615,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // replays the raw row+offset only after the reserve is mounted.
   }, [
     beginAnchoringNewTurn,
+    identity,
     messages,
     rawSavedTabState,
     scrollToTimelineLocationSuppressingFollowRestore,
@@ -3532,12 +3629,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Find navigation is not a real gesture (like navigateToMessage) - a plain
   // release, no freeze.
   const cancelManualNavigationForFind = useCallback((): void => {
+    forgetPendingHydrationRestore(identity);
+    pendingHydrationRestoreAnchorIdRef.current = null;
     cancelTimelineLiveFollowForUserNavigation({
       freezeInFlightScroll: false,
       armLiveEdgeReattach: false,
       publishesReaderPosition: false,
     });
-  }, [cancelTimelineLiveFollowForUserNavigation]);
+  }, [cancelTimelineLiveFollowForUserNavigation, identity]);
 
   // --- Disclosure preservation (replaces ChatMeasuredItemChangeContext's old
   //     scroll-modifier-based approach with a flushSync + geometric delta) -
