@@ -341,6 +341,27 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   // Applying is itself the fastest route back to a running host and
   // re-registers on the way, so a ready stage keeps its precedence rather
   // than paying for a separate recovery first.
+  // `activation: "unavailable"` describes the RUNNING runtime, so a machine
+  // that has never installed a host reports it too. Recovering there would
+  // provision and start a background host before sign-in, bypassing the
+  // renderer's signed-in provisioning gate.
+  it("does not provision a host that was never installed", async () => {
+    const controller = fakeHostController(
+      { ...fakeStatus(false, "unavailable", false), installedVersion: null },
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
   it("keeps apply-first precedence when an update is already staged", async () => {
     const controller = fakeHostController(
       fakeStatus(true, "unavailable", false),

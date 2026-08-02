@@ -145,6 +145,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -165,6 +166,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(renamedSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -178,6 +180,7 @@ describe("HostDirectoryService", () => {
       Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] });
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher,
     });
     await directory.start();
@@ -203,6 +206,7 @@ describe("HostDirectoryService", () => {
       });
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher,
     });
     await directory.start();
@@ -220,6 +224,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -231,6 +236,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -245,6 +251,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -271,6 +278,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({
           kind: "hosts",
@@ -288,6 +296,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -300,6 +309,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -322,6 +332,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -343,6 +354,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({
           kind: "hosts",
@@ -370,6 +382,7 @@ describe("HostDirectoryService", () => {
       });
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -396,6 +409,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -425,6 +439,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -462,6 +477,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -487,6 +503,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -515,6 +532,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -554,6 +572,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -586,6 +605,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -604,6 +624,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -619,6 +640,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -641,6 +663,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -677,6 +700,7 @@ describe("HostDirectoryService", () => {
 
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -698,6 +722,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -721,6 +746,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -746,6 +772,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -772,6 +799,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -805,6 +833,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -833,6 +862,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -854,6 +884,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -880,6 +911,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -911,6 +943,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -945,6 +978,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -970,6 +1004,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -995,6 +1030,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -1021,6 +1057,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -1052,6 +1089,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -1086,6 +1124,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -1115,6 +1154,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
       });
@@ -1141,6 +1181,7 @@ describe("HostDirectoryService", () => {
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: remotes }),
       });
@@ -1173,6 +1214,7 @@ describe("HostDirectoryService", () => {
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: remotes }),
       });
@@ -1189,6 +1231,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: null,
       });
       await directory.start();
@@ -1210,6 +1253,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
       });
@@ -1261,6 +1305,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(null);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({
             kind: "hosts",
@@ -1297,6 +1342,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(null);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
       });
@@ -1325,6 +1371,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(null);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({
             kind: "hosts",
@@ -1353,6 +1400,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(null);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
       });
@@ -1374,6 +1422,7 @@ describe("HostDirectoryService", () => {
       const firstLaunchHost = makeHost(localSnapshot);
       const firstLaunch = makeDirectory({
         runnerHost: firstLaunchHost,
+        localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
       });
       await firstLaunch.start();
@@ -1386,6 +1435,7 @@ describe("HostDirectoryService", () => {
       const secondLaunchHost = makeHost(null);
       const secondLaunch = makeDirectory({
         runnerHost: secondLaunchHost,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
       });
@@ -1419,6 +1469,7 @@ describe("HostDirectoryService", () => {
       });
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
       });
@@ -1464,6 +1515,7 @@ describe("HostDirectoryService", () => {
       const onLocalHostChange = vi.spyOn(host, "onLocalHostChange");
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
       });
 
@@ -1483,6 +1535,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(null);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({
             kind: "hosts",

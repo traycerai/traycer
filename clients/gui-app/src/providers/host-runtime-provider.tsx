@@ -180,6 +180,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         runnerHost,
         remoteFetcher:
           remoteFetcher ?? buildDefaultRemoteFetcher(auth, runnerHost),
+        localHostIdSeeder: null,
       });
 
       let runtime: HostRuntime<Registry> | null = null;

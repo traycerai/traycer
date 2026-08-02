@@ -104,8 +104,18 @@ export async function runLaunchHostConvergeReconcile(
   // of a WAN transfer. An already-staged update keeps its apply-first
   // precedence instead: applying is itself the fastest route to a running
   // host, and it re-registers on the way.
+  //
+  // Gated on `installedVersion` because `activation: "unavailable"` describes
+  // the RUNNING runtime only: a fresh machine that has never installed a host
+  // reports exactly the same state. Without this, launch would provision and
+  // start a background host before the user has even signed in, bypassing the
+  // renderer's `authStatus === "signed-in"` gate. This arm repairs a service
+  // that went missing from under an INSTALLED host; it must never be the thing
+  // that performs the first install.
   const recovery =
-    !initialStatus.updateReady && initialStatus.activation === "unavailable"
+    !initialStatus.updateReady &&
+    initialStatus.activation === "unavailable" &&
+    initialStatus.installedVersion !== null
       ? await hostController.convergeReady(false)
       : null;
   if (recovery !== null) {
@@ -137,10 +147,15 @@ export async function runLaunchHostConvergeReconcile(
     status.activation === "activationUnknown"
   ) {
     outcome = await hostController.activateInstalled(false);
-  } else if (status.activation === "unavailable" && recovery === null) {
-    // Only when the pre-stage pass did not already run it: staging can itself
-    // surface an `unavailable` service, but re-running a recovery that just
-    // failed would only repeat the same failure a few seconds later.
+  } else if (
+    status.activation === "unavailable" &&
+    status.installedVersion !== null &&
+    recovery === null
+  ) {
+    // Same two conditions as the pre-stage pass. `installedVersion` keeps this
+    // from performing a first install before sign-in; `recovery === null` keeps
+    // it from re-running a recovery the pre-stage pass already attempted, since
+    // repeating a failure seconds later helps nobody.
     outcome = await hostController.convergeReady(false);
   }
 

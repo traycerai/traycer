@@ -32,6 +32,15 @@ export interface HostDirectoryServiceOptions {
    * assert merged directory behavior.
    */
   readonly remoteFetcher: RemoteHostFetcher | null;
+  /**
+   * Resolves this machine's durable local host id (see
+   * `lastKnownLocalHostId`). Injected like `remoteFetcher` rather than read off
+   * `runnerHost` inside the service: this class is constructed outside React
+   * and cannot use hooks, so the composition root stays the one place that
+   * decides HOW a shell request is made. `null` uses the runner-host bridge,
+   * which is what every production shell wants; tests pass their own.
+   */
+  readonly localHostIdSeeder: (() => Promise<string | null>) | null;
 }
 
 export type HostDirectoryListener = (
@@ -60,6 +69,7 @@ export type HostDirectoryListener = (
 export class HostDirectoryService implements IHostDirectoryService {
   private readonly runnerHost: IRunnerHost;
   private readonly remoteFetcher: RemoteHostFetcher;
+  private readonly localHostIdSeeder: () => Promise<string | null>;
   private localEntry: HostDirectoryEntry | null = null;
   /**
    * The hostId this MACHINE's local host last published.
@@ -166,6 +176,10 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.runnerHost = options.runnerHost;
     this.remoteFetcher =
       options.remoteFetcher === null ? fetchRemoteHosts : options.remoteFetcher;
+    this.localHostIdSeeder =
+      options.localHostIdSeeder === null
+        ? () => options.runnerHost.getLastKnownLocalHostId()
+        : options.localHostIdSeeder;
   }
 
   /**
@@ -522,7 +536,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     let hostId: string | null;
     try {
-      hostId = await this.runnerHost.getLastKnownLocalHostId();
+      hostId = await this.localHostIdSeeder();
     } catch (error) {
       appLogger.warn("[host-directory] local host id seed failed", {
         error: describeLogError(error),
