@@ -45,6 +45,7 @@ import {
   evictChatTabState,
   evictChatTabStateForChat,
   hasSavedChatTabState,
+  peekSavedChatTabState,
   restoreChatTabState,
   saveChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
@@ -9188,18 +9189,36 @@ describe("ChatMessages scroll policy", () => {
         anchorIndex: 5,
         offset: 24,
       });
-      renderChatMessages({ messages, scrollStateKey: key });
+      tileLiveness.live = true;
+      const first = renderChatMessages({ messages, scrollStateKey: key });
+      await settleLegendList();
       await settleLegendList();
 
       // The round-1 stale-anchor nearest-neighbor fallback still applies
-      // exactly as before this fix - the hydration-retry effect never finds
-      // "gone-branch-deleted" (it does not exist in ANY commit, complete or
-      // not) and gives up within its bounded attempt budget rather than
-      // hanging or repeatedly disturbing the clamped position.
+      // exactly as before this fix. The measured neighboring-row landing is
+      // allowed to settle even while the same-mount hydration retry retains
+      // the original id, so unmount persists a coherent normalized anchor
+      // instead of re-saving the deleted id forever.
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(
         screen.queryByTestId("mock-message-gone-branch-deleted"),
       ).toBeNull();
+
+      first.unmount();
+      const normalized = peekSavedChatTabState(makeDefaultTestIdentity(key));
+      expect(normalized?.mode).toBe("free-scrolling");
+      expect(normalized?.anchorMessageId).not.toBe("gone-branch-deleted");
+      expect(
+        messages.some((message) => message.id === normalized?.anchorMessageId),
+      ).toBe(true);
+
+      const reopened = renderChatMessages({ messages, scrollStateKey: key });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(
+        screen.queryByTestId("mock-message-gone-branch-deleted"),
+      ).toBeNull();
+      reopened.unmount();
     });
 
     it("composer-resize alone does not write scroll state (endInset not in save-effect deps)", async () => {

@@ -827,13 +827,8 @@ interface ChatLiveFollowCancelIntent {
 
 function resolvePendingMeasuredFreeRestore(
   restored: SavedChatTabScrollState,
-  pendingHydrationRestoreAnchorId: string | null,
 ): PendingMeasuredFreeRestore | null {
-  if (
-    pendingHydrationRestoreAnchorId !== null ||
-    restored.mode !== "free-scrolling" ||
-    restored.anchorMessageId === null
-  ) {
+  if (restored.mode !== "free-scrolling" || restored.anchorMessageId === null) {
     return null;
   }
   return {
@@ -986,10 +981,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
   const pendingMeasuredFreeRestoreRef =
     useRef<PendingMeasuredFreeRestore | null>(
-      resolvePendingMeasuredFreeRestore(
-        restoredTabState,
-        pendingHydrationRestoreAnchorId,
-      ),
+      resolvePendingMeasuredFreeRestore(restoredTabState),
     );
 
   const chatTimelineRef = useRef<LegendListRef | null>(null);
