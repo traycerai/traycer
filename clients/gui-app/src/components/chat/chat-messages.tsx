@@ -3009,6 +3009,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       instanceId,
       messages,
       messagesRef,
+      backgroundToolBlockIds,
+      backgroundToolBlockIdsRef,
       messageIndexByIdRef,
       getScroller,
       getViewportAnchorListState,

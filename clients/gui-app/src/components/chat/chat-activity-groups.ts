@@ -7,6 +7,7 @@ import {
   toolUseIdFromInterviewBlockId,
 } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { filePathFromInputDetail } from "@/lib/segment-summary";
+import { formatClockDuration } from "@/lib/format-duration";
 import { formatSingleLine } from "@/lib/utils";
 import type {
   ApprovalSegment,
@@ -14,6 +15,7 @@ import type {
   FileChangeSegment,
   InterviewSegment,
   MessageSegment,
+  ReasoningSegment,
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
@@ -29,9 +31,14 @@ export type ActivitySegment =
   | SubagentSegment
   | ApprovalSegment;
 
-// Reasoning is promoted to its own inline segment; activity groups carry only
-// operational activity.
-export type ActivityGroupDetailSegment = ActivitySegment;
+// Reasoning folds into the surrounding activity group for its whole life -
+// streaming AND completed - and its duration accumulates into the "Thought for
+// Xm Ys" summary clause. Admitting it unconditionally is the point: a block
+// that changed container the instant it stopped streaming (born standalone,
+// absorbed into a COLLAPSED group, so it vanished whole in one frame) is what
+// made #597 jarring enough to revert. Nothing here may depend on `isStreaming`
+// for placement - only for how the row renders itself.
+export type ActivityGroupDetailSegment = ActivitySegment | ReasoningSegment;
 
 export interface ActivityGroupModel {
   readonly id: string;
@@ -73,6 +80,18 @@ export type ChatActivityTimelineItem =
     };
 
 interface ActivitySummaryCounts {
+  // Summed duration of every completed reasoning block folded into the group.
+  thinkingDurationMs: number;
+  // A reasoning block in the group is still streaming, so the group's summary
+  // leads with "Thinking" instead of a duration that does not exist yet.
+  thinkingStreaming: boolean;
+  // The group contains reasoning AT ALL. Tracked separately from the duration
+  // because a completed block can legitimately have none: `completedDurationMs`
+  // returns null when the block carries no `startedAt` (persisted history), and
+  // 0 when it started and finished inside the same millisecond. Without this,
+  // both summed to 0 and the summary fell through to the generic "Ran activity"
+  // - losing the "Thought" line the block used to render for itself.
+  thinkingPresent: boolean;
   exploredFiles: number;
   readFiles: number;
   searched: number;
@@ -160,6 +179,9 @@ const RUN_TOOL_NAMES = new Set(["bash", "shell", "run_command", "command"]);
 
 function createEmptyCounts(): ActivitySummaryCounts {
   return {
+    thinkingDurationMs: 0,
+    thinkingStreaming: false,
+    thinkingPresent: false,
     exploredFiles: 0,
     readFiles: 0,
     searched: 0,
@@ -220,6 +242,21 @@ function buildChatActivityTimelineImpl(
 
   const flushRun = (): void => {
     if (run.length === 0) return;
+    // Every run becomes a group, including a run that is one lone reasoning
+    // block. #597 special-cased that to a standalone segment to avoid rendering
+    // "Thought for Xs" twice (group summary + the child's own header), but a
+    // standalone-vs-group decision that can flip mid-turn - the moment a tool
+    // call joins the lone block - is exactly the container change this design
+    // exists to eliminate.
+    //
+    // The duplicate is accepted, deliberately and in both containers. A
+    // reasoning block keeps its own nested header wherever it renders: that
+    // header is what carries its "Thinking" / "Thought for Xs" label, its
+    // collapse on completion and its find anchor, and stripping it in one place
+    // made the same rows read differently depending on where you saw them.
+    // Suppressing it conditionally is worse still - the condition can only be
+    // the group's segment count, which flips under a growing run and takes the
+    // child's body with it. A redundant line costs far less than either.
     const group = activityGroupFromRun(run);
     out.push({ kind: "activity_group", id: group.id, group });
     run = [];
@@ -274,9 +311,9 @@ function buildChatActivityTimelineImpl(
       run.push(segment);
       continue;
     }
-    // Everything else - reasoning (now a first-class inline segment), text,
-    // etc. - stands on its own in chronological position rather than folding
-    // into the operational activity group.
+    // Everything else - text, errors, plans, etc. - stands on its own in
+    // chronological position rather than folding into the activity group.
+    // Reasoning is NOT in this bucket at any point in its life.
     flushRun();
     out.push({ kind: "segment", id: segment.id, segment });
   }
@@ -318,6 +355,7 @@ export function activityGroupSummary(
   const counts = createEmptyCounts();
   segments.forEach((segment) => countActivitySegment(counts, segment));
   const parts = [
+    thinkingPhrase(counts),
     countPhrase(counts.exploredFiles, "explored", "file", "files"),
     countPhrase(counts.readFiles, "read", "file", "files"),
     countPhrase(counts.searched, "searched", "place", "places"),
@@ -504,7 +542,7 @@ function markTrailingActivityGroupActive(
 
 function isActivitySegment(
   segment: MessageSegment,
-): segment is ActivitySegment {
+): segment is ActivityGroupDetailSegment {
   if (
     segment.kind === "tool" ||
     segment.kind === "command" ||
@@ -513,10 +551,17 @@ function isActivitySegment(
   ) {
     return true;
   }
-  return segment.kind === "approval" && segment.decision !== null;
+  if (segment.kind === "approval") return segment.decision !== null;
+  // Unconditional, streaming included - see `ActivityGroupDetailSegment`. A
+  // reasoning block must occupy the same container from its first token to the
+  // end of the turn.
+  if (segment.kind === "reasoning") return true;
+  return false;
 }
 
-function isStreamingActivitySegment(segment: ActivitySegment): boolean {
+function isStreamingActivitySegment(
+  segment: ActivityGroupDetailSegment,
+): boolean {
   if (segment.kind === "approval") return false;
   return segment.isStreaming;
 }
@@ -556,8 +601,12 @@ function isSuppressedQuestionTool(
 
 function countActivitySegment(
   counts: ActivitySummaryCounts,
-  segment: ActivitySegment,
+  segment: ActivityGroupDetailSegment,
 ): void {
+  if (segment.kind === "reasoning") {
+    countReasoningSegment(counts, segment);
+    return;
+  }
   if (segment.kind === "command") {
     counts.ranCommands += 1;
     return;
@@ -629,6 +678,44 @@ function countPhrase(
 ): string | null {
   if (count === 0) return null;
   return `${verb} ${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * Split out of `countActivitySegment` purely to keep that switch under the
+ * complexity ceiling - reasoning is the one child kind that contributes two
+ * independent facts to the summary rather than a single count.
+ */
+function countReasoningSegment(
+  counts: ActivitySummaryCounts,
+  segment: ReasoningSegment,
+): void {
+  counts.thinkingPresent = true;
+  if (segment.isStreaming) counts.thinkingStreaming = true;
+  if (segment.durationMs !== null) {
+    counts.thinkingDurationMs += segment.durationMs;
+  }
+}
+
+/**
+ * Leading clause of a group summary that contains reasoning.
+ *
+ * A still-streaming block has no duration yet, so it reads "thinking" - which
+ * also gives a sole-reasoning group a real label from its very first token
+ * (without it the summary would fall through to the generic "Ran activity"
+ * until the block completed). Streaming wins over the accumulated duration:
+ * while one block streams, a settled earlier one's total is not the headline.
+ *
+ * A completed block with no usable duration reads a bare "thought", mirroring
+ * `reasoningSummaryLabel`'s own null fallback. Falling through to null here
+ * would hand the group the generic "Ran activity" label and erase every trace
+ * of the thinking from both the summary and the find index.
+ */
+function thinkingPhrase(counts: ActivitySummaryCounts): string | null {
+  if (counts.thinkingStreaming) return "thinking";
+  if (!counts.thinkingPresent) return null;
+  if (counts.thinkingDurationMs <= 0) return "thought";
+  const seconds = Math.max(1, Math.round(counts.thinkingDurationMs / 1000));
+  return `thought for ${formatClockDuration(seconds)}`;
 }
 
 function capitalizeFirst(value: string): string {
