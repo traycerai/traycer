@@ -683,11 +683,16 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
-  // No polling: the fork-detected notification is what tells a client to
-  // refetch, not a cadence - a fork is rare and the event is host-pushed on
-  // change, so an interval would spend requests on an answer that is almost
-  // always unchanged.
-  "host.chatFork.get": { ...LATEST_SCHEDULING, poll: null },
+  // Polled: no host-pushed invalidation channel exists for this event today
+  // (see the implementation report), so without a cadence a fork detected
+  // after this query first cached would never surface. 45s sits between the
+  // publisher's own ~30s detection sweep and "expensive enough to matter" -
+  // the point of a fork prompt is time-to-resolution, not zero-latency, and
+  // this is a single small unary call.
+  "host.chatFork.get": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 45_000 },
+  },
   "host.chatFork.resolve": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.chatFork.readCandidateHead": { ...LATEST_SCHEDULING, poll: null },
   // Opening paths changes state in the user's editor.

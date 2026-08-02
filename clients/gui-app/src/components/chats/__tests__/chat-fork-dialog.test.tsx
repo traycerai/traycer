@@ -82,7 +82,9 @@ vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
   useChatForkCandidateHeadQuery: () => ({
     data: undefined,
     isLoading: false,
+    isError: false,
   }),
+  useChatForkReadCandidateHeadSupported: () => true,
 }));
 
 describe("ChatForkDialog + ChatForkIndicatorBanner", () => {

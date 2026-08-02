@@ -133,13 +133,42 @@ export type ChatForkResolveRequest = z.infer<
   typeof chatForkResolveRequestSchema
 >;
 
-export const chatForkResolveChatOutcomeSchema = z.object({
-  taskId: z.string().min(1),
-  chatId: z.string().min(1),
-  resolved: z.boolean(),
-  repairEpoch: z.number().int().nonnegative().nullable(),
-  cloneChatId: z.string().nullable(),
-});
+/**
+ * Three outcomes per chat, not a boolean - each needs a different render:
+ *
+ * - `resolved` - a decision covers this chat; show the clone mapping.
+ * - `stale` - THIS chat's repair era raced (a delayed submission, a fork that
+ *   moved on since the episode was fetched). Distinct from the top-level
+ *   `outcome: "stale"` above: that means the whole episode view is stale;
+ *   this means one chat's server-side resolve specifically lost a race. The
+ *   client's contract is the same either way - re-fetch via `get`.
+ * - `not-ready` - the host detected this fork and surfaced it, but its
+ *   durable report has not reached the server yet. Never collapsed into
+ *   `resolved`: a caller that did would tell the owner "recorded" for a
+ *   decision the server has nowhere to act on yet.
+ */
+export const chatForkResolveChatOutcomeSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({
+      taskId: z.string().min(1),
+      chatId: z.string().min(1),
+      status: z.literal("resolved"),
+      repairEpoch: z.number().int().nonnegative(),
+      cloneChatId: z.string().nullable(),
+    }),
+    z.object({
+      taskId: z.string().min(1),
+      chatId: z.string().min(1),
+      status: z.literal("stale"),
+    }),
+    z.object({
+      taskId: z.string().min(1),
+      chatId: z.string().min(1),
+      status: z.literal("not-ready"),
+    }),
+  ],
+);
 export type ChatForkResolveChatOutcome = z.infer<
   typeof chatForkResolveChatOutcomeSchema
 >;

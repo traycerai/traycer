@@ -8,6 +8,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host/runtime";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { chatForkMutationKeys } from "@/lib/query-keys";
 
 /**
@@ -18,26 +20,37 @@ import { chatForkMutationKeys } from "@/lib/query-keys";
  * one open tab (`useHostClient()`, matching the indicator/dialog's own
  * scope - never `useTabHostClient()`).
  *
- * All three degrade the same way every optional RPC does: an older host
- * answers `E_HOST_UNSUPPORTED`, retried is disabled, and the dialog/indicator
- * simply have nothing to show - no broken surface, no toast about an old
- * host.
+ * ## Degradation is NOT just retry suppression
+ *
+ * `retry: (…) => error.code !== "E_HOST_UNSUPPORTED"` stops a doomed retry
+ * loop, but it does not stop the FIRST request - an older host still gets
+ * asked, still answers `E_HOST_UNSUPPORTED`, and the query still resolves
+ * (to an error, not silence). The three hooks below additionally gate on the
+ * NEGOTIATED manifest (`useHostSupportsMethod`) so the surface never asks an
+ * older host at all: `get`/`resolve` gate together (both come from the same
+ * host wiring, and a dialog that can observe a fork but not resolve it is
+ * worse than none), `readCandidateHead` gates independently (it is the
+ * dialog's "view" link, not the dialog's ability to function).
  */
 
 /**
  * The current host-level fork event, or null when none is open.
  *
- * Not polled - see `HOST_METHOD_POLL_TABLE`'s note on this method: the event
- * is host-pushed on change, so a client refetches on mount/focus (React
- * Query defaults) rather than an interval. This is also the ONE query the
- * dialog and the indicator both read, so a resolve's invalidation
- * (`chatFork.get`) is what makes them agree the moment a decision lands.
+ * Polled (`poll: true`, table-owned cadence - see
+ * `HOST_METHOD_POLL_TABLE["host.chatFork.get"]`) rather than left to refetch
+ * on mount/focus alone: no host-pushed invalidation channel exists for this
+ * event today (the OS-toast/notification-center path was deliberately not
+ * wired - see the implementation report), so without a cadence a fork
+ * detected after this query first cached would never surface.
  */
 export function useChatForkEventQuery(): UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "host.chatFork.get">,
   HostRpcError
 > {
   const client = useHostClient();
+  const hostId = useReactiveActiveHostId();
+  const supportsGet = useHostSupportsMethod(hostId, "host.chatFork.get");
+  const supportsResolve = useHostSupportsMethod(hostId, "host.chatFork.resolve");
   const params = useMemo(() => ({}), []);
   return useHostQuery<HostRpcRegistry, "host.chatFork.get">({
     cacheKeyIdentity: undefined,
@@ -45,7 +58,8 @@ export function useChatForkEventQuery(): UseQueryResult<
     method: "host.chatFork.get",
     params,
     options: {
-      enabled: client !== null,
+      enabled: client !== null && supportsGet && supportsResolve,
+      poll: true,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
@@ -85,6 +99,11 @@ export function useChatForkCandidateHeadQuery(args: {
   HostRpcError
 > {
   const client = useHostClient();
+  const hostId = useReactiveActiveHostId();
+  const supportsReadCandidateHead = useHostSupportsMethod(
+    hostId,
+    "host.chatFork.readCandidateHead",
+  );
   const params = useMemo(
     () => ({
       taskId: args.taskId,
@@ -101,9 +120,19 @@ export function useChatForkCandidateHeadQuery(args: {
     method: "host.chatFork.readCandidateHead",
     params,
     options: {
-      enabled: args.enabled && client !== null,
+      enabled: args.enabled && client !== null && supportsReadCandidateHead,
       staleTime: Infinity,
       retry: false,
     },
   });
+}
+
+/**
+ * Whether the "view candidate" link should render at all - the independent
+ * half of degradation. Exported so the dialog can hide the control rather
+ * than rendering a button that will only ever answer `E_HOST_UNSUPPORTED`.
+ */
+export function useChatForkReadCandidateHeadSupported(): boolean {
+  const hostId = useReactiveActiveHostId();
+  return useHostSupportsMethod(hostId, "host.chatFork.readCandidateHead");
 }

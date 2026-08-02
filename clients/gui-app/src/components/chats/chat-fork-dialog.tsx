@@ -3,6 +3,7 @@ import type {
   ChatForkChatNotice,
   ChatForkDecisionOption,
   ChatForkEvent,
+  ChatForkResolveChatOutcome,
 } from "@traycer/protocol/host/chat-fork/schemas";
 import {
   Dialog,
@@ -19,6 +20,7 @@ import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import {
   useChatForkCandidateHeadQuery,
   useChatForkEventQuery,
+  useChatForkReadCandidateHeadSupported,
   useChatForkResolveMutation,
 } from "@/hooks/chats/use-chat-fork-queries";
 
@@ -32,7 +34,9 @@ import {
  * 2. Candidates described BY CONTENT, never by device: every field rendered
  *    below comes straight off `ChatForkCandidateSummary` (when / how far /
  *    how much) - `diagnostic` is the only sentence mentioning machine
- *    provenance, and it is rendered as a CAUSE, not an identity.
+ *    provenance, and it is rendered as a CAUSE, not an identity. Both
+ *    candidates are labeled by what they ARE ("Published" / "Candidate"),
+ *    never by which machine holds them.
  * 3. Dismissible; the indicator persists: closing (`Escape`, overlay click,
  *    or the header's close control) only clears local dialog-open state.
  *    Nothing here mutates host or server state on dismiss, and the
@@ -49,11 +53,7 @@ export function ChatForkDialog() {
   const event = eventQuery.data?.event ?? null;
   const [confirmation, setConfirmation] = useState<{
     readonly episodeId: string;
-    readonly results: ReadonlyArray<{
-      readonly taskId: string;
-      readonly chatId: string;
-      readonly cloneChatId: string | null;
-    }>;
+    readonly results: readonly ChatForkResolveChatOutcome[];
   } | null>(null);
 
   const handleOpenChange = (next: boolean) => {
@@ -71,6 +71,7 @@ export function ChatForkDialog() {
         {confirmation !== null ? (
           <ForkResolvedConfirmation
             results={confirmation.results}
+            onRetry={() => setConfirmation(null)}
             onDone={() => handleOpenChange(false)}
           />
         ) : event === null ? (
@@ -105,13 +106,7 @@ function ForkDialogEmptyState(props: { readonly isLoading: boolean }) {
 
 function ForkDialogBody(props: {
   readonly event: ChatForkEvent;
-  readonly onResolved: (
-    results: ReadonlyArray<{
-      readonly taskId: string;
-      readonly chatId: string;
-      readonly cloneChatId: string | null;
-    }>,
-  ) => void;
+  readonly onResolved: (results: readonly ChatForkResolveChatOutcome[]) => void;
 }) {
   const { event } = props;
   const [selectedLabel, setSelectedLabel] = useState<
@@ -126,13 +121,7 @@ function ForkDialogBody(props: {
       {
         onSuccess: (data) => {
           if (data.outcome === "stale") return;
-          props.onResolved(
-            data.results.map((r) => ({
-              taskId: r.taskId,
-              chatId: r.chatId,
-              cloneChatId: r.cloneChatId,
-            })),
-          );
+          props.onResolved(data.results);
         },
       },
     );
@@ -169,7 +158,7 @@ function ForkDialogBody(props: {
               />
               {option.label === "keep-cloud-lineage"
                 ? "Keep the published history"
-                : "Keep this device's history"}
+                : "Keep the candidate's history"}
             </span>
             <span className="text-muted-foreground">{option.detail}</span>
           </label>
@@ -215,11 +204,11 @@ function ChatForkChatComparison(props: { readonly chat: ChatForkChatNotice }) {
         />
         {chat.candidate === null ? (
           <div className="text-muted-foreground">
-            This device has no readable candidate for this chat.
+            No candidate is available for this chat.
           </div>
         ) : (
           <ChatForkCandidateSummaryCard
-            title="This device"
+            title="Candidate"
             taskId={chat.taskId}
             chatId={chat.chatId}
             candidate={chat.candidate}
@@ -238,6 +227,7 @@ function ChatForkCandidateSummaryCard(props: {
 }) {
   const { candidate } = props;
   const [inspecting, setInspecting] = useState(false);
+  const readSupported = useChatForkReadCandidateHeadSupported();
   const candidateHeadQuery = useChatForkCandidateHeadQuery({
     taskId: props.taskId,
     chatId: props.chatId,
@@ -257,23 +247,27 @@ function ChatForkCandidateSummaryCard(props: {
       <div className="text-muted-foreground">
         {candidate.partCount} part{candidate.partCount === 1 ? "" : "s"}
       </div>
-      {props.title === "This device" && (
-        <>
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto justify-start p-0 text-xs"
-            onClick={() => setInspecting(true)}
-          >
-            {inspecting ? "Refresh view" : "View"}
-          </Button>
-          {inspecting && (
-            <ChatForkCandidateHeadPreview
-              isLoading={candidateHeadQuery.isLoading}
-              outcome={candidateHeadQuery.data?.outcome ?? null}
-            />
-          )}
-        </>
+      {/* Both candidates are equally inspectable - the link-to-inspect ruling
+          does not single out either side. Hidden entirely (not disabled)
+          when the host predates `readCandidateHead`: that RPC degrades
+          independently of get/resolve, so the dialog stays functional with
+          only the stats above. */}
+      {readSupported && !inspecting && (
+        <Button
+          type="button"
+          variant="link"
+          className="h-auto justify-start p-0 text-xs"
+          onClick={() => setInspecting(true)}
+        >
+          View
+        </Button>
+      )}
+      {inspecting && (
+        <ChatForkCandidateHeadPreview
+          isLoading={candidateHeadQuery.isLoading}
+          isError={candidateHeadQuery.isError}
+          outcome={candidateHeadQuery.data?.outcome ?? null}
+        />
       )}
     </div>
   );
@@ -281,6 +275,7 @@ function ChatForkCandidateSummaryCard(props: {
 
 function ChatForkCandidateHeadPreview(props: {
   readonly isLoading: boolean;
+  readonly isError: boolean;
   readonly outcome:
     | { readonly status: "ok"; readonly head: string }
     | { readonly status: "not-found" }
@@ -295,6 +290,18 @@ function ChatForkCandidateHeadPreview(props: {
       />
     );
   }
+  // An RPC failure (network, 401/403 from a denied/expired session) is NOT
+  // the same state as "not-found" - conflating them told the user their
+  // candidate was gone when the real answer was "couldn't ask". `isError`
+  // arrives from the query's own error channel, never inferred from a
+  // missing `outcome`.
+  if (props.isError) {
+    return (
+      <p className="text-xs text-destructive">
+        Couldn't load this candidate. Try again.
+      </p>
+    );
+  }
   if (props.outcome === null || props.outcome.status === "not-found") {
     return (
       <p className="text-xs text-muted-foreground">
@@ -303,46 +310,76 @@ function ChatForkCandidateHeadPreview(props: {
     );
   }
   return (
-    <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs">
-      {props.outcome.head}
-    </pre>
+    <div className="flex flex-col gap-1">
+      {/*
+       * NOTE: this renders the candidate's raw head record, not a readable
+       * transcript. The settled ruling calls for inspecting the CHAT, which
+       * needs the same assembly pipeline `useCloudChatRead` uses (resolve a
+       * head -> fetch parts -> render). That pipeline take an IDENTITY and
+       * always resolves the chat's CURRENT (incumbent) head; wiring it to a
+       * specific candidate head needs a small adapter port, not new RPCs -
+       * but actually mounting the assembled result needs whatever component
+       * renders `AssembledChat` today, which this pass did not locate under
+       * time budget. Flagged to the assigning agent rather than guessed at.
+       */}
+      <p className="text-[11px] text-muted-foreground">
+        Raw record (not a readable transcript - see the implementation
+        report)
+      </p>
+      <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs">
+        {props.outcome.head}
+      </pre>
+    </div>
   );
 }
 
 function ForkResolvedConfirmation(props: {
-  readonly results: ReadonlyArray<{
-    readonly taskId: string;
-    readonly chatId: string;
-    readonly cloneChatId: string | null;
-  }>;
+  readonly results: readonly ChatForkResolveChatOutcome[];
+  readonly onRetry: () => void;
   readonly onDone: () => void;
 }) {
+  const allResolved = props.results.every((r) => r.status === "resolved");
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Decision recorded</DialogTitle>
+        <DialogTitle>
+          {allResolved ? "Decision recorded" : "Still finalizing"}
+        </DialogTitle>
         <DialogDescription>
-          The divergent history for each chat is preserved as a new chat
-          rather than discarded.
+          {allResolved
+            ? "The divergent history for each chat is preserved as a new chat rather than discarded."
+            : "The host detected this fork but hasn't finished filing it yet. Try again in a moment."}
         </DialogDescription>
       </DialogHeader>
       <ul className="flex flex-col gap-2 text-sm">
         {props.results.map((result) => (
           <li key={`${result.taskId}:${result.chatId}`}>
-            {result.cloneChatId === null ? (
-              <span>Chat {result.chatId}: nothing to preserve.</span>
+            {result.status === "resolved" ? (
+              result.cloneChatId === null ? (
+                <span>Chat {result.chatId}: nothing to preserve.</span>
+              ) : (
+                <span>
+                  Chat {result.chatId} → cloned as {result.cloneChatId}
+                </span>
+              )
+            ) : result.status === "not-ready" ? (
+              <span>Chat {result.chatId}: not filed yet.</span>
             ) : (
-              <span>
-                Chat {result.chatId} → cloned as {result.cloneChatId}
-              </span>
+              <span>Chat {result.chatId}: this changed since you chose - retry.</span>
             )}
           </li>
         ))}
       </ul>
       <DialogFooter>
-        <Button type="button" onClick={props.onDone}>
-          Done
-        </Button>
+        {allResolved ? (
+          <Button type="button" onClick={props.onDone}>
+            Done
+          </Button>
+        ) : (
+          <Button type="button" onClick={props.onRetry}>
+            Try again
+          </Button>
+        )}
       </DialogFooter>
     </>
   );
