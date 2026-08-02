@@ -21,6 +21,7 @@ import {
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
+import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconciliation";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 
@@ -147,8 +148,38 @@ function LandingTerminalTileLive(props: {
 }): ReactNode {
   const { handle, tab, onExited } = props;
   const status = useStore(handle.store, (state) => state.status);
+  const snapshotLoaded = useStore(
+    handle.store,
+    (state) => state.snapshotLoaded,
+  );
   const effectiveCols = useStore(handle.store, (state) => state.effectiveCols);
   const effectiveRows = useStore(handle.store, (state) => state.effectiveRows);
+  const title = useStore(handle.store, (state) => state.title);
+  const activeProcessName = useStore(
+    handle.store,
+    (state) => state.activeProcessName,
+  );
+  const currentCwd = useStore(handle.store, (state) => state.currentCwd);
+  const currentCwdReported = useStore(
+    handle.store,
+    (state) => state.currentCwdReported,
+  );
+  const syncDefaultTitle = useLandingTerminalStore(
+    (state) => state.syncDefaultTitle,
+  );
+  const syncedTitle = resolveLandingTerminalSyncedTitle({
+    snapshotLoaded,
+    title,
+    activeProcessName,
+    currentCwd,
+    currentCwdReported,
+    launchCwd: tab.cwd,
+  });
+
+  useEffect(() => {
+    if (syncedTitle === null) return;
+    syncDefaultTitle(tab.instanceId, syncedTitle);
+  }, [syncedTitle, syncDefaultTitle, tab.instanceId]);
 
   useEffect(() => {
     if (status !== "exited") return;

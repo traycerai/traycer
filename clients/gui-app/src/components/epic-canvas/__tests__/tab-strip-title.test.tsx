@@ -25,8 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
   publishAgentActivity,
-  resetAgentActivityPresence,
-} from "@/__tests__/agent-activity-presence-harness";
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -215,7 +215,7 @@ describe("TabStrip title", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
-    resetAgentActivityPresence();
+    resetAgentActivity();
     harness.teardown();
     useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   });

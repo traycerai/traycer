@@ -73,6 +73,7 @@ export function useTerminalsOpenerItems(
           name: terminalSessionTitle({
             title: session.title,
             activeProcessName: session.activeProcessName,
+            currentCwd: session.currentCwd,
           }),
           titleSource: deriveTitleSourceFromSessionTitle(session.title),
           hostId: defaultHostId,

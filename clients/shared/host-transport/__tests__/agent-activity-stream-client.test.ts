@@ -68,12 +68,11 @@ describe("AgentActivityStreamClient", () => {
   it("dispatches frames and status changes, then closes idempotently", () => {
     const session = new StubSession();
     const wsStreamClient = makeWsStreamClient(session);
-    const onSnapshot = vi.fn();
-    const onUpdate = vi.fn();
+    const onState = vi.fn();
     const onConnectionStatus = vi.fn();
     const client = new AgentActivityStreamClient({
       wsStreamClient,
-      callbacks: { onSnapshot, onUpdate, onConnectionStatus },
+      callbacks: { onState, onConnectionStatus },
     });
 
     expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
@@ -81,25 +80,27 @@ describe("AgentActivityStreamClient", () => {
       {},
     );
 
-    const snapshot = {
+    const localState = {
       "epic-1": { working: ["agent-1"], turn: ["agent-1"] },
     };
-    const update = {
+    const cloudState = {
       "epic-1": { working: ["agent-1", "agent-2"], turn: ["agent-2"] },
     };
     session.emitFrame({
-      kind: "snapshot",
-      byEpic: snapshot,
+      kind: "state",
+      servedBy: "local",
+      byEpic: localState,
       hasBinaryPayload: false,
     });
     session.emitFrame({
-      kind: "update",
-      byEpic: update,
+      kind: "state",
+      servedBy: "cloud",
+      byEpic: cloudState,
       hasBinaryPayload: false,
     });
 
-    expect(onSnapshot).toHaveBeenCalledWith(snapshot);
-    expect(onUpdate).toHaveBeenCalledWith(update);
+    expect(onState).toHaveBeenNthCalledWith(1, "local", localState);
+    expect(onState).toHaveBeenNthCalledWith(2, "cloud", cloudState);
 
     const reason: StreamCloseReason = { kind: "caller" };
     session.emitStatus("closed", reason);

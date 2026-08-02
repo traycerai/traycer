@@ -28,6 +28,7 @@ import type { ChatViewportAnchorListState } from "@/components/chat/chat-message
 import { makeMessage } from "./chat-message-fixtures";
 
 const TILE_INSTANCE_ID = "find-controller-tile";
+const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set<string>();
 const SUBAGENT_ID = "subagent-find-ctrl";
 const UNIQUE_NEEDLE = "find-ctrl-unique-needle-xyz";
 
@@ -134,10 +135,15 @@ describe("useChatFindController - measured chain-open on reveal", () => {
         messagesRef.current = messages;
         const messageIndexByIdRef = useRef(messageIndexById);
         messageIndexByIdRef.current = messageIndexById;
+        const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
+          EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
+        );
         return useChatFindController({
           instanceId: TILE_INSTANCE_ID,
           messages,
           messagesRef,
+          backgroundToolBlockIds: EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
+          backgroundToolBlockIdsRef,
           messageIndexByIdRef,
           getScroller: () => scroller,
           getViewportAnchorListState,

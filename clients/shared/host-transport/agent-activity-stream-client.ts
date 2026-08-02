@@ -1,6 +1,7 @@
 import {
   agentActivitySubscribeServerFrameSchema,
   type AgentActivityByEpic,
+  type AgentActivityServedBy,
 } from "@traycer/protocol/host/agent/activity";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -9,11 +10,13 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IHostStreamClient } from "./host-stream-client";
 
 export interface AgentActivityStreamCallbacks {
-  readonly onSnapshot: (byEpic: AgentActivityByEpic) => void;
-  readonly onUpdate: (byEpic: AgentActivityByEpic) => void;
+  readonly onState: (
+    servedBy: AgentActivityServedBy,
+    byEpic: AgentActivityByEpic,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -21,11 +24,15 @@ export interface AgentActivityStreamCallbacks {
 }
 
 export interface AgentActivityStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  // `IHostStreamClient`, not the concrete `WsStreamClient`: this client only
+  // calls `.subscribe()`, and every sibling stream client here takes the
+  // interface so a remote host can supply its own transport. Arrived from main
+  // on the concrete type because that branch had no remote transport yet.
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly callbacks: AgentActivityStreamCallbacks;
 }
 
-/** Typed client for the optional host-local activity stream. */
+/** Typed client for the host-selected local/cloud activity stream. */
 export class AgentActivityStreamClient {
   private readonly session: IStreamSession;
   private closed = false;
@@ -53,10 +60,8 @@ export class AgentActivityStreamClient {
     const parsed = agentActivitySubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
-    if (frame.kind === "snapshot") {
-      this.options.callbacks.onSnapshot(frame.byEpic);
-    } else if (frame.kind === "update") {
-      this.options.callbacks.onUpdate(frame.byEpic);
+    if (frame.kind === "state") {
+      this.options.callbacks.onState(frame.servedBy, frame.byEpic);
     }
   }
 }

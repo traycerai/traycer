@@ -28,11 +28,13 @@ import {
 } from "@/lib/windows/desktop-epic-ownership";
 import {
   EpicSessionContext,
+  EpicSessionHostClientContext,
   getEpicStreamClientFactoryOverride,
   getOpenEpicRegistry,
   handleHostIds,
   handleOwnerIdentityKeys,
 } from "@/lib/registries/epic-session-registry";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 
 export interface EpicSessionProviderProps {
   readonly epicId: string;
@@ -65,6 +67,10 @@ export function EpicSessionProvider(
   const ownerIdentityKey = useReactiveOwnerIdentityKey(
     binding === null ? null : binding.hostClient,
   );
+  // One explicit-host resolver per retained Epic surface. Sidebar rows share
+  // the result through context instead of each mounting a directory listener,
+  // query observer, and transient client for this same host.
+  const resolvedSessionHostClient = useHostClientForHostId(activeHostId);
   const authService = useAuthService();
   const queryClient = use(QueryClientContext);
   const navigate = useNavigate();
@@ -253,7 +259,11 @@ export function EpicSessionProvider(
 
   return (
     <EpicSessionContext.Provider value={handle}>
-      {children}
+      <EpicSessionHostClientContext.Provider
+        value={handle === null ? null : resolvedSessionHostClient}
+      >
+        {children}
+      </EpicSessionHostClientContext.Provider>
     </EpicSessionContext.Provider>
   );
 }

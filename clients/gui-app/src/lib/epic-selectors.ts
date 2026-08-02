@@ -48,8 +48,8 @@ import {
 import {
   agentActivityTiers,
   type AgentActivityTier,
-} from "@/lib/notifications/agent-activity-presence";
-import { useEpicAgentActivity } from "@/stores/notifications/notifications-store";
+} from "@/lib/agent-activity";
+import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -74,6 +74,7 @@ import type {
   OpenEpicStoreHandle,
   SnapshotFetchError,
 } from "@/stores/epics/open-epic/store";
+import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -657,6 +658,85 @@ export function useRegisteredEpicLiveArtifactTitle(
     () => liveArtifactTitleFromHandle(handle, artifactId),
     () => null,
   );
+}
+
+export interface RegisteredEpicArtifactTitleRef {
+  readonly epicId: string;
+  readonly artifactId: string | null;
+}
+
+/**
+ * Reactive live titles for a dynamic collection of artifacts. Global list
+ * surfaces cannot call the single-artifact hook in a data-dependent loop, so
+ * this subscribes once to the registry and every currently referenced epic.
+ */
+export function useRegisteredEpicLiveArtifactTitles(
+  refs: readonly RegisteredEpicArtifactTitleRef[],
+): readonly (string | null)[] {
+  const registry = getOpenEpicRegistry();
+  const encodedTitles = useSyncExternalStore(
+    (listener) => {
+      const unsubscribeByHandle = new Map<object, () => void>();
+      const reconcileHandleSubscriptions = () => {
+        const currentHandles = new Set<object>();
+        for (const ref of refs) {
+          const handle = registry.peek(ref.epicId);
+          if (handle === null || currentHandles.has(handle)) continue;
+          currentHandles.add(handle);
+          if (!unsubscribeByHandle.has(handle)) {
+            unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+          }
+        }
+        for (const [handle, unsubscribe] of unsubscribeByHandle) {
+          if (currentHandles.has(handle)) continue;
+          unsubscribe();
+          unsubscribeByHandle.delete(handle);
+        }
+      };
+      reconcileHandleSubscriptions();
+      const unsubscribeRegistry = registry.subscribe(() => {
+        reconcileHandleSubscriptions();
+        listener();
+      });
+      return () => {
+        unsubscribeRegistry();
+        for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
+      };
+    },
+    () => registeredArtifactTitlesSnapshot(registry, refs),
+    () => JSON.stringify(refs.map(() => [0, null])),
+  );
+  return useMemo(
+    () => decodeRegisteredArtifactTitles(encodedTitles),
+    [encodedTitles],
+  );
+}
+
+function registeredArtifactTitlesSnapshot(
+  registry: OpenEpicSessionRegistry,
+  refs: readonly RegisteredEpicArtifactTitleRef[],
+): string {
+  return JSON.stringify(
+    refs.map((ref) => {
+      const handle = registry.peek(ref.epicId);
+      return [
+        handle === null ? 0 : 1,
+        liveArtifactTitleFromHandle(handle, ref.artifactId),
+      ];
+    }),
+  );
+}
+
+function decodeRegisteredArtifactTitles(
+  encodedTitles: string,
+): readonly (string | null)[] {
+  const decoded: unknown = JSON.parse(encodedTitles);
+  if (!Array.isArray(decoded)) return [];
+  return decoded.map((entry) => {
+    if (!Array.isArray(entry)) return null;
+    const title: unknown = entry[1];
+    return typeof title === "string" ? title : null;
+  });
 }
 
 function liveArtifactTitleFromHandle(

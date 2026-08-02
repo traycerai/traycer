@@ -32,6 +32,7 @@ const hostBindingRef = vi.hoisted(
     value: null,
   }),
 );
+const sessionHostClient = vi.hoisted(() => ({ request: vi.fn() }));
 
 // The provider now opens its own durable transport via this factory, but every
 // test installs an `__setEpicStreamClientFactoryForTests` override that
@@ -52,6 +53,10 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => hostState.id,
 }));
 
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => sessionHostClient,
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => hostBindingRef.value,
   useAuthService: () => authServiceStub,
@@ -67,6 +72,7 @@ import {
   __setEpicStreamClientFactoryForTests,
 } from "@/lib/registries/epic-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -127,6 +133,17 @@ function HandleProbe(props: {
       data-ready={handle === null ? "false" : "true"}
     />
   );
+}
+
+function SessionHostClientProbe(props: {
+  onClient: (client: unknown) => void;
+}) {
+  const { onClient } = props;
+  const client = useEpicSessionHostClient();
+  useEffect(() => {
+    onClient(client);
+  }, [client, onClient]);
+  return null;
 }
 
 function createDesktopWindowsBridgeForTests(
@@ -323,6 +340,39 @@ describe("<EpicSessionProvider />", () => {
     resetCanvasStore();
     resetAuth("signed-out", null);
     hostBindingRef.value = null;
+  });
+
+  it("shares one resolved host client with every session consumer", async () => {
+    const seenClients: unknown[] = [];
+    __setEpicStreamClientFactoryForTests(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    render(
+      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+        <SessionHostClientProbe
+          onClient={(client) => {
+            seenClients.push(client);
+          }}
+        />
+        <SessionHostClientProbe
+          onClient={(client) => {
+            seenClients.push(client);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        seenClients.filter((client) => client === sessionHostClient),
+      ).toHaveLength(2);
+    });
   });
 
   it("reacquires a fresh handle when the signed-in identity changes", async () => {

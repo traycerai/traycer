@@ -25,6 +25,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -49,7 +50,10 @@ import {
   __resetTabSyncCoordinatorForTesting,
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  resolveTabEpicIdentity,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   flattenLayoutRefs,
@@ -1753,6 +1757,101 @@ describe("T3 rev-3 adversarial: coordinator ledger & structural restore", () => 
     expectLedgerReleased();
   });
 
+  it("migrated-epic activation throws (no focus, no placement) when a listener races the resolution to a different epic first", () => {
+    const phase = openEpic("phase-race", "Phase");
+    useEpicCanvasStore.getState().closeTab(phase.tabId);
+    seedCommittedLayout({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+    });
+    const layoutBefore = useTabsStore.getState().items;
+    const activeBefore = useEpicCanvasStore.getState().activeTabId;
+    // `execute`'s listeners fire before `applySources` (see execute() in
+    // tab-command-coordinator.ts), so this racer wins BEFORE this
+    // activation's own resolution call ever runs - its own resolution then
+    // finds a stale `expectedCurrentEpicId` and rejects at that precondition.
+    // This is the pre-commit window (closed since round 1/2), not the
+    // round-3 window - see the pin below this one for a listener that races
+    // the commit itself via a raw `useEpicCanvasStore.subscribe`. Both are
+    // real, both must hold: this one still exercises "must not silently
+    // succeed" end to end. Unlike the ledger-snapshot-safety pins above
+    // (which drive a call that eventually places its source), this one
+    // deliberately throws and never places anything -
+    // `expectLedgerReleased()` below is the applicable contract here,
+    // matching "fresh source failure preserves T2 error precedence".
+    const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
+      const current = useEpicCanvasStore.getState().tabsById[phase.tabId];
+      if (current?.epicId === "phase-race") {
+        resolveTabEpicIdentity(phase.tabId, "phase-race", "epic-racer");
+      }
+    });
+    onTestFinished(unsubscribeRace);
+
+    const thrown = runAndCaptureError(() => {
+      tabCommandCoordinator.activateTab({
+        kind: "migrated-epic",
+        sourceEpicId: "phase-race",
+        epicId: "epic-canonical",
+        tabId: phase.tabId,
+      });
+    });
+    expect(thrown).toBeInstanceOf(Error);
+    expect(useTabsStore.getState().items).toEqual(layoutBefore);
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(activeBefore);
+    expect(useEpicCanvasStore.getState().tabsById[phase.tabId]?.epicId).toBe(
+      "epic-racer",
+    );
+    expectLedgerReleased();
+  });
+
+  it("migrated-epic activation throws (no focus, no placement) when a raw store subscriber supersedes the resolution DURING its own commit", () => {
+    // The round-3 window: `rawPublicSetState` inside `resolveTabEpicIdentity`
+    // notifies zustand subscribers SYNCHRONOUSLY, mid-commit - a listener
+    // observing the just-landed epicId can call the same authorized action
+    // AGAIN before the outer `resolveTabEpicIdentity` call ever returns to
+    // its caller. The precondition passes (the outer write already landed),
+    // so a claim recorded at write time would be wrong; the fix reads
+    // `getState()` back AFTER the write instead. The listener is
+    // self-limiting: it only fires while the tab's epicId still equals the
+    // outer target, which stops being true once the racer's own write lands
+    // (including on the racer's own re-entrant notification), so this
+    // terminates without a manual guard.
+    const phase = openEpic("phase-race-commit", "Phase");
+    useEpicCanvasStore.getState().closeTab(phase.tabId);
+    seedCommittedLayout({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+    });
+    const layoutBefore = useTabsStore.getState().items;
+    const activeBefore = useEpicCanvasStore.getState().activeTabId;
+    const unsubscribeRace = useEpicCanvasStore.subscribe((state) => {
+      if (state.tabsById[phase.tabId]?.epicId === "epic-canonical") {
+        resolveTabEpicIdentity(phase.tabId, "epic-canonical", "epic-racer");
+      }
+    });
+    onTestFinished(unsubscribeRace);
+
+    const thrown = runAndCaptureError(() => {
+      tabCommandCoordinator.activateTab({
+        kind: "migrated-epic",
+        sourceEpicId: "phase-race-commit",
+        epicId: "epic-canonical",
+        tabId: phase.tabId,
+      });
+    });
+    expect(thrown).toBeInstanceOf(Error);
+    expect(useTabsStore.getState().items).toEqual(layoutBefore);
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(activeBefore);
+    expect(useEpicCanvasStore.getState().tabsById[phase.tabId]?.epicId).toBe(
+      "epic-racer",
+    );
+    expectLedgerReleased();
+  });
+
   it("fresh source failure preserves T2 error precedence and releases the ledger", () => {
     seedCommittedLayout({
       version: 2,
@@ -2124,6 +2223,60 @@ describe("T3 rev-3 adversarial: Resource Monitor nested + Phase completion", () 
       tabId: first.tabId,
     });
     expect(nav.lastOptions().replace).toBe(true);
+  });
+
+  it("Phase completion activation returns false (no navigate, no focus change) when a listener races the resolution first", () => {
+    const first = openEpic("epic-phase", "Phase Epic");
+    const second = openEpic("epic-phase", "Phase Epic other tab");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(first.ref), ref: first.ref },
+        { kind: "tab", id: tabItemId(second.ref), ref: second.ref },
+      ],
+      activeItemId: tabItemId(first.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const focusedBefore = focusedRefKey();
+    const nav = makeDeferredNavigate();
+    // Same interleaving as the coordinator-level pin above, driven this time
+    // through the public `activateTabIntent` entry point that a real Phase
+    // completion trigger goes through - `executeActivation`
+    // (tab-navigation.ts) must convert the coordinator's throw into a clean
+    // `false`, not an uncaught exception.
+    const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
+      const current = useEpicCanvasStore.getState().tabsById[first.tabId];
+      if (current?.epicId === "epic-phase") {
+        resolveTabEpicIdentity(first.tabId, "epic-phase", "epic-racer");
+      }
+    });
+    onTestFinished(unsubscribeRace);
+
+    let result: boolean | undefined;
+    expect(() => {
+      result = activateTabIntent(
+        nav.asNavigate,
+        completeEpicMigrationIntent({
+          sourceEpicId: "epic-phase",
+          epicId: "epic-migrated",
+          tabId: first.tabId,
+          focus: {
+            focusedAt: 123,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            migrationSource: undefined,
+          },
+          nestedFocus: null,
+        }),
+        { replace: true },
+      );
+    }).not.toThrow();
+    expect(result).toBe(false);
+    expect(nav.calls.length).toBe(0);
+    expect(useEpicCanvasStore.getState().tabsById[first.tabId]?.epicId).toBe(
+      "epic-racer",
+    );
+    expect(focusedRefKey()).toBe(focusedBefore);
   });
 });
 
