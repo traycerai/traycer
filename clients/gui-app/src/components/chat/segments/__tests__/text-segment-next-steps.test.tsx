@@ -3,6 +3,7 @@ import {
   fireEvent,
   render as testingRender,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -154,7 +155,7 @@ describe("TextSegment next steps rendering", () => {
         findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
-        nextStepActions={{ canSend: true, onSend: () => true }}
+        nextStepActions={{ canSend: true, onSend: () => Promise.resolve(true) }}
       />,
     );
 
@@ -190,7 +191,7 @@ describe("TextSegment next steps rendering", () => {
         findUnitId={null}
         markdown={COMPLETE_BLOCK.replace("\n</TRAYCER_NEXT_STEPS>", "")}
         isStreaming
-        nextStepActions={{ canSend: true, onSend: () => true }}
+        nextStepActions={{ canSend: true, onSend: () => Promise.resolve(true) }}
       />,
     );
 
@@ -200,8 +201,8 @@ describe("TextSegment next steps rendering", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("keeps unsent options enabled after a successful send", () => {
-    const onSend = vi.fn(() => true);
+  it("keeps unsent options enabled after a successful send", async () => {
+    const onSend = vi.fn(() => Promise.resolve(true));
     render(
       <TextSegment
         findUnitId={null}
@@ -218,11 +219,15 @@ describe("TextSegment next steps rendering", () => {
     );
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: "Use /implementation-validation to validate the work",
-      }).disabled,
-    ).toBe(true);
+    // `onSend` resolves a cold command catalog before it sends, so the lock
+    // lands a tick after the click rather than inside it.
+    await waitFor(() => {
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Use /implementation-validation to validate the work",
+        }).disabled,
+      ).toBe(true);
+    });
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Review the changed files with /review-files",
@@ -238,8 +243,45 @@ describe("TextSegment next steps rendering", () => {
     expect(onSend).toHaveBeenCalledTimes(2);
   });
 
+  it("sends a next step once when it is double-clicked before the catalog resolves", async () => {
+    let releaseSend = (): void => {};
+    const onSend = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseSend = () => resolve(true);
+        }),
+    );
+    render(
+      <TextSegment
+        findUnitId={null}
+        markdown={COMPLETE_BLOCK}
+        isStreaming={false}
+        nextStepActions={{ canSend: true, onSend }}
+      />,
+    );
+
+    const button = screen.getByRole("button", {
+      name: "Use /implementation-validation to validate the work",
+    });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    // The second click lands inside the await window, where the option is not
+    // locked yet - only the in-flight guard stops it becoming a second message.
+    expect(onSend).toHaveBeenCalledTimes(1);
+    releaseSend();
+    await waitFor(() => {
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Use /implementation-validation to validate the work",
+        }).disabled,
+      ).toBe(true);
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it("copies a prompt from the trailing next step copy button", () => {
-    const onSend = vi.fn(() => true);
+    const onSend = vi.fn(() => Promise.resolve(true));
     render(
       <TextSegment
         findUnitId={null}
@@ -273,7 +315,7 @@ describe("TextSegment next steps rendering", () => {
           "</TRAYCER_NEXT_STEPS>",
         ].join("\n")}
         isStreaming={false}
-        nextStepActions={{ canSend: true, onSend: () => true }}
+        nextStepActions={{ canSend: true, onSend: () => Promise.resolve(true) }}
       />,
     );
 
@@ -288,7 +330,7 @@ describe("TextSegment next steps rendering", () => {
         findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
-        nextStepActions={{ canSend: true, onSend: () => true }}
+        nextStepActions={{ canSend: true, onSend: () => Promise.resolve(true) }}
       />,
     );
 
@@ -305,7 +347,7 @@ describe("TextSegment next steps rendering", () => {
         findUnitId={null}
         markdown="<TRAYCER_NEXT_STEPS"
         isStreaming
-        nextStepActions={{ canSend: true, onSend: () => true }}
+        nextStepActions={{ canSend: true, onSend: () => Promise.resolve(true) }}
       />,
     );
 

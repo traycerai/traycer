@@ -4,6 +4,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
 import type { HostRpcRegistry } from "@/lib/host";
+import { slashCommandCatalogFrom } from "@/lib/composer/slash-command-catalog";
 import type { SlashCommand } from "@/lib/composer/types";
 
 import type { ComposerPickerStore } from "./composer-picker-store";
@@ -60,11 +61,7 @@ function useKnownSlashCommandNames(params: UseComposerPickerItemsParams): void {
   });
   const knownCommands = useMemo<ReadonlyMap<string, SlashCommand> | null>(
     () =>
-      params.isActive && !isLoading
-        ? new Map(
-            commands.map((command) => [command.name.toLowerCase(), command]),
-          )
-        : null,
+      params.isActive && !isLoading ? slashCommandCatalogFrom(commands) : null,
     [params.isActive, commands, isLoading],
   );
   useEffect(() => {

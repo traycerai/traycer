@@ -1,16 +1,10 @@
 import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
-  GuiAgentCommandOption,
-  GuiHarnessId,
-} from "@traycer/protocol/host/index";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useGuiHarnessCommandsQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { HostRpcRegistry } from "@/lib/host";
-import type {
-  MentionPreview,
-  ProviderSlashCommand,
-  SlashCommand,
-} from "@/lib/composer/types";
+import { slashCommandsFromOptions } from "@/lib/composer/slash-command-catalog";
+import type { SlashCommand } from "@/lib/composer/types";
 
 export interface UseSlashCommandsResult {
   data: ReadonlyArray<SlashCommand>;
@@ -56,16 +50,13 @@ export function useSlashCommands(
     { enabled: params.enabled, subscribed: params.enabled },
   );
   const trimmed = query.trim();
-  const allCommands = useMemo<ReadonlyArray<SlashCommand>>(() => {
-    const providerCommands: ReadonlyArray<ProviderSlashCommand> = (
-      commandsQuery.data?.commands ?? []
-    ).map((command): ProviderSlashCommand => ({
-      ...command,
-      source: "provider",
-      preview: slashCommandPreview(command),
-    }));
-    return dedupeSlashCommands(providerCommands).toSorted(compareCommandNames);
-  }, [commandsQuery.data?.commands]);
+  const allCommands = useMemo<ReadonlyArray<SlashCommand>>(
+    () =>
+      slashCommandsFromOptions(commandsQuery.data?.commands ?? []).toSorted(
+        compareCommandNames,
+      ),
+    [commandsQuery.data?.commands],
+  );
   const data = useMemo<ReadonlyArray<SlashCommand>>(() => {
     if (!trimmed) return allCommands;
     const lower = trimmed.toLowerCase();
@@ -91,34 +82,4 @@ export function useSlashCommands(
     error: commandsQuery.error,
     refetch: commandsQuery.refetch,
   };
-}
-
-/**
- * The full command description plus its usage hint (when the command takes
- * arguments), as the preview panel's single named field for a slash entry.
- */
-function slashCommandPreview(command: GuiAgentCommandOption): MentionPreview {
-  const usage = command.argumentHint;
-  return {
-    kind: "text",
-    primary:
-      usage === null || usage.length === 0
-        ? command.description
-        : `${command.description} ${usage}`,
-    secondary: null,
-    mono: false,
-  };
-}
-
-function dedupeSlashCommands(
-  commands: ReadonlyArray<SlashCommand>,
-): ReadonlyArray<SlashCommand> {
-  const byName = new Map<string, SlashCommand>();
-  for (const command of commands) {
-    const key = command.name.toLowerCase();
-    if (!byName.has(key)) {
-      byName.set(key, command);
-    }
-  }
-  return Array.from(byName.values());
 }

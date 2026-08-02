@@ -90,30 +90,56 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 // catalog would stay loading forever and every `$` prompt would (correctly) be
 // left as prose. Serve one skill so the gated conversion has something to
 // resolve; unknown names still fall through to the ungated `/` fallback.
+const slashCatalogHarness = vi.hoisted(() => {
+  const skill = {
+    harnessId: "claude",
+    name: "traycer-implement",
+    description: "Implement a ticket",
+    argumentHint: null,
+    kind: "skill",
+    metadata: { path: "/repo/.agents/skills/traycer-implement/SKILL.md" },
+    source: "provider",
+    preview: {
+      kind: "text",
+      primary: "Implement a ticket",
+      secondary: null,
+      mono: false,
+    },
+  };
+  return {
+    skill,
+    // Flipped by the cold-catalog test to reproduce the window between a tile
+    // opening and `agent.gui.listCommands` resolving.
+    loading: false,
+    fetched: 0,
+  };
+});
+
 vi.mock("@/hooks/composer/use-slash-commands", () => ({
   useSlashCommands: () => ({
-    data: [
-      {
-        harnessId: "claude",
-        name: "traycer-implement",
-        description: "Implement a ticket",
-        argumentHint: null,
-        kind: "skill",
-        metadata: { path: "/repo/.agents/skills/traycer-implement/SKILL.md" },
-        source: "provider",
-        preview: {
-          kind: "text",
-          primary: "Implement a ticket",
-          secondary: null,
-          mono: false,
-        },
-      },
-    ],
-    isLoading: false,
-    isFetching: false,
+    data: slashCatalogHarness.loading ? [] : [slashCatalogHarness.skill],
+    isLoading: slashCatalogHarness.loading,
+    isFetching: slashCatalogHarness.loading,
     error: null,
     refetch: () => Promise.resolve(undefined),
   }),
+}));
+
+// The submit-time resolver. Mocked rather than driven through the fake host
+// client, whose `request` never resolves - the point under test is that the
+// send WAITS for this and chips the result, not how the RPC is issued.
+vi.mock("@/lib/host/fetch-slash-command-catalog", () => ({
+  fetchSlashCommandCatalog: () => {
+    slashCatalogHarness.fetched += 1;
+    return Promise.resolve(
+      new Map([
+        [
+          slashCatalogHarness.skill.name.toLowerCase(),
+          slashCatalogHarness.skill,
+        ],
+      ]),
+    );
+  },
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
@@ -567,6 +593,33 @@ function nextStepsAssistantMessage(): Message {
 
 // The `$` sibling of the fixture above. Kept separate rather than parameterized
 // because every other next-step case asserts against the `/` prompt text.
+// What the `$traycer-implement` next step must serialize to on the wire: a chip
+// carrying `kind: "skill"` and the definition path, which is what lets the host
+// resolve it structurally. `trigger` is display-only.
+const SKILL_CHIP_DOC = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "slashCommand",
+          attrs: {
+            commandName: "traycer-implement",
+            harnessId: "claude",
+            kind: "skill",
+            description: "Implement a ticket",
+            argumentHint: null,
+            path: "/repo/.agents/skills/traycer-implement/SKILL.md",
+            trigger: "$",
+          },
+        },
+        { type: "text", text: " Implement the runtime ticket." },
+      ],
+    },
+  ],
+};
+
 function skillNextStepsAssistantMessage(): Message {
   return {
     role: "assistant",
@@ -874,6 +927,10 @@ function registerWaitingChatHandoff(): void {
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    // Module-level and mutated by the cold-catalog test, so reset per test or
+    // a warm-catalog assertion silently runs against a loading catalog.
+    slashCatalogHarness.loading = false;
+    slashCatalogHarness.fetched = 0;
     installLegendListViewportMetrics();
     window.localStorage.clear();
     useAuthStore.setState({
@@ -1136,7 +1193,7 @@ describe("<ChatTile />", () => {
     fireEvent.click(getButtonByAriaLabel("Edit message"));
     fireEvent.click(getButtonByAriaLabel("Send edit"));
 
-    expect(chatHarness.sent).toHaveLength(1);
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "editUserMessage") {
       throw new Error("expected editUserMessage frame");
@@ -1162,6 +1219,7 @@ describe("<ChatTile />", () => {
       expect(sendEditButton.disabled).toBe(true);
     });
 
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "editUserMessage") {
       throw new Error("expected editUserMessage frame");
@@ -1849,7 +1907,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(nextStepButton);
 
-    expect(chatHarness.sent).toHaveLength(1);
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.sender).toEqual({ type: "user", userId: "owner-1" });
@@ -1902,32 +1960,50 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(nextStepButton);
 
-    expect(chatHarness.sent).toHaveLength(1);
+    // Awaited: the send resolves the catalog before it converts, so the frame
+    // lands a microtask after the click even when the catalog is already warm.
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
-    expect(frame.content).toEqual({
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "slashCommand",
-              attrs: {
-                commandName: "traycer-implement",
-                harnessId: "claude",
-                kind: "skill",
-                description: "Implement a ticket",
-                argumentHint: null,
-                path: "/repo/.agents/skills/traycer-implement/SKILL.md",
-                trigger: "$",
-              },
-            },
-            { type: "text", text: " Implement the runtime ticket." },
-          ],
-        },
-      ],
+    expect(frame.content).toEqual(SKILL_CHIP_DOC);
+    // Warm catalog: nothing to resolve, so no submit-time fetch.
+    expect(slashCatalogHarness.fetched).toBe(0);
+  });
+
+  // The gate that makes `$` safe also makes it silent: with the catalog still
+  // loading, the leading `$skill` stays prose, and prose is exactly what the
+  // host cannot resolve - structurally or lexically. A next step clicked right
+  // after a tile opens hits that window, so the send has to wait for the
+  // catalog rather than convert against a null one.
+  it("resolves a cold catalog before sending a $-prefixed next step", async () => {
+    slashCatalogHarness.loading = true;
+    slashCatalogHarness.fetched = 0;
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skillNextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
     });
+
+    fireEvent.click(
+      getButtonContainingText(
+        "$traycer-implement Implement the runtime ticket.",
+      ),
+    );
+
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.content).toEqual(SKILL_CHIP_DOC);
+    expect(slashCatalogHarness.fetched).toBe(1);
   });
 
   it("disables next-step sends while a turn is stopping", async () => {
@@ -2054,7 +2130,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(nextStepButton);
 
-    expect(chatHarness.sent).toHaveLength(1);
+    await waitFor(() => expect(chatHarness.sent).toHaveLength(1));
     expect(chatHarness.sent[0]?.kind).toBe("send");
   });
 

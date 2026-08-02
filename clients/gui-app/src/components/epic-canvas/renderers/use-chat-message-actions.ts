@@ -25,10 +25,6 @@ import {
   hasUndoableFileEditsFromMessage,
   scopedArtifactCountFromMessage,
 } from "@/lib/chat/file-edits-below-message";
-import {
-  buildSubmittedChatJSONContent,
-  type SlashCommandCatalog,
-} from "@/lib/composer/tiptap-json-content";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   chatMessageEditingForInlineEdit,
@@ -53,12 +49,14 @@ export interface ChatMessageActionsInput {
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
   /**
-   * The tile's loaded command catalog, or null when it has not loaded. An edit
-   * resubmit re-runs `buildSubmittedChatJSONContent`, so it needs the same
-   * catalog the original send used - otherwise a `$skill` the user retyped
-   * after deleting its chip would silently stay prose.
+   * Builds submit content against the tile's command catalog, resolving a cold
+   * one first when the prompt needs it. An edit resubmit re-runs the same
+   * conversion the original send did, so a `$skill` the user retyped after
+   * deleting its chip must chip again rather than silently staying prose.
    */
-  readonly slashCatalog: SlashCommandCatalog | null;
+  readonly buildSubmitContent: (
+    promptContent: JsonContent,
+  ) => Promise<JsonContent>;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
@@ -121,7 +119,7 @@ export function useChatMessageActions(
     canAct,
     currentComposerSettings,
     editSettings,
-    slashCatalog,
+    buildSubmitContent,
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
@@ -169,7 +167,10 @@ export function useChatMessageActions(
   );
 
   const performEditSubmit = useCallback(
-    (revertFileChanges: boolean, revertArtifacts: boolean) => {
+    async (
+      revertFileChanges: boolean,
+      revertArtifacts: boolean,
+    ): Promise<void> => {
       // Always dismiss the modal first - if any guard below bails (the inline
       // edit was invalidated by an incoming snapshot, etc.) the modal must not
       // be left open with dead buttons.
@@ -178,12 +179,12 @@ export function useChatMessageActions(
       if (!canModifyMessages) return;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return;
+      // Awaits only when the edited text opens with `$` and the catalog is
+      // still cold; otherwise this resolves in the same tick as before.
+      const content = await buildSubmitContent(activeInlineEdit.currentContent);
       const sent = chatActions.editUserMessage({
         targetMessageId: activeInlineEdit.targetMessageId,
-        content: buildSubmittedChatJSONContent(
-          activeInlineEdit.currentContent,
-          slashCatalog,
-        ),
+        content,
         sender,
         settings: editSettings,
         revertFileChanges,
@@ -203,12 +204,12 @@ export function useChatMessageActions(
     },
     [
       activeInlineEdit,
+      buildSubmitContent,
       canModifyMessages,
       chatActions,
       dispatchUi,
       editSettings,
       profile,
-      slashCatalog,
     ],
   );
 
@@ -228,7 +229,7 @@ export function useChatMessageActions(
       dispatchUi({ type: "setRevertOnEditOpen", open: true });
       return;
     }
-    performEditSubmit(false, true);
+    void performEditSubmit(false, true);
   }, [
     activeInlineEdit,
     canModifyMessages,
@@ -447,9 +448,12 @@ export function useChatMessageActions(
     revertOnEdit: {
       open: input.revertOnEditOpen,
       onOpenChange: handleRevertOnEditOpenChange,
-      onRevert: (revertArtifacts: boolean) =>
-        performEditSubmit(true, revertArtifacts),
-      onDontRevert: () => performEditSubmit(false, true),
+      onRevert: (revertArtifacts: boolean) => {
+        void performEditSubmit(true, revertArtifacts);
+      },
+      onDontRevert: () => {
+        void performEditSubmit(false, true);
+      },
       artifactCount: revertOnEditArtifactCount,
     },
   };

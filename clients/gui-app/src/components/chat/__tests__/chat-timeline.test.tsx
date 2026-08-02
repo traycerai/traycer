@@ -316,7 +316,7 @@ describe("ChatTimeline", () => {
     );
     const nextStepActions: NextStepActionHandler = {
       canSend: true,
-      onSend: () => true,
+      onSend: () => Promise.resolve(true),
     };
     const backgroundToolBlockIds = new Set(["tool-block-1"]);
 
