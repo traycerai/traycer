@@ -225,7 +225,9 @@ export function usePointerDragCommit(
       if (dragRef.current === null) return;
       dragRef.current = null;
       detach();
-      handleElement.releasePointerCapture(pointerId);
+      if (handleElement.hasPointerCapture(pointerId)) {
+        handleElement.releasePointerCapture(pointerId);
+      }
       const active = activePointerResizeInteractionId === interactionId;
       stopPanelResizeInteraction();
       if (commit && active) {

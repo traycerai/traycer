@@ -397,6 +397,68 @@ describe("<SplitResizeHandle />", () => {
     expect(onCommitSizes.mock.calls[0][0]).toBe(GROUP_ID);
   });
 
+  it("finishes cancellation when the browser has already released pointer capture", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, unmount } = renderHandle([0.5, 0.5], onCommitSizes);
+    vi.spyOn(handle, "hasPointerCapture").mockReturnValue(false);
+    const releasePointerCapture = vi
+      .spyOn(handle, "releasePointerCapture")
+      .mockImplementation(() => {
+        throw new DOMException(
+          "Pointer capture was already lost",
+          "NotFoundError",
+        );
+      });
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 82,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    expect(() => unmount()).not.toThrow();
+    expect(releasePointerCapture).not.toHaveBeenCalled();
+    expect(onCommitSizes).not.toHaveBeenCalled();
+    expect(
+      document.documentElement.classList.contains("traycer-panel-resizing"),
+    ).toBe(false);
+
+    const second = renderHandle([0.5, 0.5], onCommitSizes);
+    fireEvent(
+      second.handle,
+      pointerEvent("pointerdown", {
+        pointerId: 83,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second.handle,
+      pointerEvent("pointermove", {
+        pointerId: 83,
+        clientX: 550,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second.handle,
+      pointerEvent("pointerup", {
+        pointerId: 83,
+        clientX: 550,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+  });
+
   it("restores instead of committing when the drag returns to the starting fractions", () => {
     const onCommitSizes =
       vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
