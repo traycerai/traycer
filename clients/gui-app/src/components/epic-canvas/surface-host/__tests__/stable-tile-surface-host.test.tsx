@@ -710,7 +710,7 @@ function fakeDomRect(rect: {
   };
 }
 
-describe("default-off proof", () => {
+describe("default-on proof (slice 6)", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -726,7 +726,7 @@ describe("default-off proof", () => {
     resetAll();
   });
 
-  it("TopLevelTabHost's render output contains no stable-tile-surface-host plane while the switch is off", () => {
+  it("TopLevelTabHost's render output mounts the stable-tile-surface-host plane with the switch enabled", () => {
     useEpicCanvasStore.getState().openEpicTabWithId("epic-a", "epic-a", "Epic A");
     useTabsStore.setState((state) => ({
       ...state,
@@ -746,6 +746,6 @@ describe("default-off proof", () => {
     expect(screen.getByTestId("top-level-surface-epic-epic-a")).not.toBeNull();
     expect(
       screen.queryByTestId("stable-tile-surface-host"),
-    ).toBeNull();
+    ).not.toBeNull();
   });
 });
