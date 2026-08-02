@@ -63,21 +63,15 @@ describe("captureChatTimelineVisibleRows", () => {
 
     captureChatTimelineVisibleRows(scroller);
 
-    expect(above.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-      false,
-    );
-    expect(
-      straddleTop.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE),
-    ).toBe(true);
-    expect(visible.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+    expect(above.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+    expect(straddleTop.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
       true,
     );
+    expect(visible.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(true);
     expect(
       straddleBottom.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE),
     ).toBe(true);
-    expect(below.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-      false,
-    );
+    expect(below.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
   });
 
   it("only marks rows within the given scrollable node's own subtree", () => {
@@ -131,12 +125,8 @@ describe("clearChatTimelineVisibleRows", () => {
     scroller.appendChild(marked1);
     scroller.appendChild(marked2);
     captureChatTimelineVisibleRows(scroller);
-    expect(marked1.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-      true,
-    );
-    expect(marked2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-      true,
-    );
+    expect(marked1.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(true);
+    expect(marked2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(true);
 
     clearChatTimelineVisibleRows(scroller);
 

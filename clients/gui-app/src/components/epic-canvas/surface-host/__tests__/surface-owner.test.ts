@@ -27,9 +27,8 @@ async function loadSurfaceOwnerFor(
   vi.doMock(SWITCH_MODULE_PATH, () => ({
     STABLE_TILE_SURFACE_HOST_ENABLED: enabled,
   }));
-  const mod = await import(
-    "@/components/epic-canvas/surface-host/surface-owner"
-  );
+  const mod =
+    await import("@/components/epic-canvas/surface-host/surface-owner");
   return mod.surfaceOwnerFor;
 }
 
@@ -41,29 +40,29 @@ afterEach(() => {
 describe("surfaceOwnerFor", () => {
   it("stays inline for a live chat while the switch is off", async () => {
     const surfaceOwnerFor = await loadSurfaceOwnerFor(false);
-    expect(
-      surfaceOwnerFor({ node: CHAT_REF, isRemoteDeleted: false }),
-    ).toBe("inline");
+    expect(surfaceOwnerFor({ node: CHAT_REF, isRemoteDeleted: false })).toBe(
+      "inline",
+    );
   });
 
   it("hosts a live chat once the switch is on", async () => {
     const surfaceOwnerFor = await loadSurfaceOwnerFor(true);
-    expect(
-      surfaceOwnerFor({ node: CHAT_REF, isRemoteDeleted: false }),
-    ).toBe("hosted");
+    expect(surfaceOwnerFor({ node: CHAT_REF, isRemoteDeleted: false })).toBe(
+      "hosted",
+    );
   });
 
   it("keeps a remote-deleted chat inline even with the switch on", async () => {
     const surfaceOwnerFor = await loadSurfaceOwnerFor(true);
-    expect(
-      surfaceOwnerFor({ node: CHAT_REF, isRemoteDeleted: true }),
-    ).toBe("inline");
+    expect(surfaceOwnerFor({ node: CHAT_REF, isRemoteDeleted: true })).toBe(
+      "inline",
+    );
   });
 
   it("keeps a non-chat node inline even with the switch on", async () => {
     const surfaceOwnerFor = await loadSurfaceOwnerFor(true);
-    expect(
-      surfaceOwnerFor({ node: SPEC_REF, isRemoteDeleted: false }),
-    ).toBe("inline");
+    expect(surfaceOwnerFor({ node: SPEC_REF, isRemoteDeleted: false })).toBe(
+      "inline",
+    );
   });
 });

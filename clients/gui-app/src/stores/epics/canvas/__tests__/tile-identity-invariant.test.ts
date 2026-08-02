@@ -20,7 +20,10 @@ import {
   findTileIdentityViolation,
   type TileIdentityTuple,
 } from "@/stores/epics/canvas/tile-identity-invariant";
-import type { EpicCanvasState, EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicCanvasState,
+  EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 import { pane } from "./canvas-test-fixtures";
 import { CHAT_A, SPEC_A, SPEC_B, TEST_HOST_ID } from "./canvas-test-fixtures";
 
@@ -32,9 +35,7 @@ function canvasOf(tiles: ReadonlyArray<EpicCanvasTileRef>): EpicCanvasState {
   return {
     root: p,
     activePaneId: p.id,
-    tilesByInstanceId: Object.fromEntries(
-      tiles.map((t) => [t.instanceId, t]),
-    ),
+    tilesByInstanceId: Object.fromEntries(tiles.map((t) => [t.instanceId, t])),
     sizesByGroupId: {},
   };
 }
@@ -75,7 +76,9 @@ describe("findTileIdentityViolation", () => {
   it("returns null for a fresh mint (absent from previous)", () => {
     const previous = new Map<string, TileIdentityTuple>();
     const canvasByTabId = { "tab-a": canvasOf([SPEC_A]) };
-    expect(findTileIdentityViolation(previous, canvasByTabId, EPIC_A)).toBeNull();
+    expect(
+      findTileIdentityViolation(previous, canvasByTabId, EPIC_A),
+    ).toBeNull();
   });
 
   it("returns null when an instanceId is retained with the SAME tuple", () => {
@@ -84,7 +87,9 @@ describe("findTileIdentityViolation", () => {
       EPIC_A,
     );
     const canvasByTabId = { "tab-a": canvasOf([SPEC_A]) };
-    expect(findTileIdentityViolation(previous, canvasByTabId, EPIC_A)).toBeNull();
+    expect(
+      findTileIdentityViolation(previous, canvasByTabId, EPIC_A),
+    ).toBeNull();
   });
 
   it("returns null when an instanceId simply closes (absent from the candidate)", () => {
@@ -93,7 +98,9 @@ describe("findTileIdentityViolation", () => {
       EPIC_A,
     );
     const canvasByTabId = { "tab-a": canvasOf([]) };
-    expect(findTileIdentityViolation(previous, canvasByTabId, EPIC_A)).toBeNull();
+    expect(
+      findTileIdentityViolation(previous, canvasByTabId, EPIC_A),
+    ).toBeNull();
   });
 
   it("detects a repoint: same instanceId, changed content id, against `previous`", () => {
@@ -103,7 +110,11 @@ describe("findTileIdentityViolation", () => {
     );
     const repointed = { ...SPEC_B, instanceId: SPEC_A.instanceId };
     const canvasByTabId = { "tab-a": canvasOf([repointed]) };
-    const violation = findTileIdentityViolation(previous, canvasByTabId, EPIC_A);
+    const violation = findTileIdentityViolation(
+      previous,
+      canvasByTabId,
+      EPIC_A,
+    );
     expect(violation).not.toBeNull();
     expect(violation?.instanceId).toBe(SPEC_A.instanceId);
     expect(violation?.previous.contentId).toBe(SPEC_A.id);
@@ -115,9 +126,17 @@ describe("findTileIdentityViolation", () => {
       { "tab-a": canvasOf([SPEC_A]) },
       EPIC_A,
     );
-    const repointed = { ...CHAT_A, instanceId: SPEC_A.instanceId, id: SPEC_A.id };
+    const repointed = {
+      ...CHAT_A,
+      instanceId: SPEC_A.instanceId,
+      id: SPEC_A.id,
+    };
     const canvasByTabId = { "tab-a": canvasOf([repointed]) };
-    const violation = findTileIdentityViolation(previous, canvasByTabId, EPIC_A);
+    const violation = findTileIdentityViolation(
+      previous,
+      canvasByTabId,
+      EPIC_A,
+    );
     expect(violation?.previous.tileKind).toBe("spec");
     expect(violation?.incoming.tileKind).toBe("chat");
   });
@@ -129,7 +148,11 @@ describe("findTileIdentityViolation", () => {
     );
     const repointed = { ...SPEC_A, hostId: "other-host" };
     const canvasByTabId = { "tab-a": canvasOf([repointed]) };
-    const violation = findTileIdentityViolation(previous, canvasByTabId, EPIC_A);
+    const violation = findTileIdentityViolation(
+      previous,
+      canvasByTabId,
+      EPIC_A,
+    );
     expect(violation?.previous.hostId).toBe(TEST_HOST_ID);
     expect(violation?.incoming.hostId).toBe("other-host");
   });
@@ -141,7 +164,11 @@ describe("findTileIdentityViolation", () => {
       "tab-a": canvasOf([SPEC_A]),
       "tab-b": canvasOf([conflicting]),
     };
-    const violation = findTileIdentityViolation(previous, canvasByTabId, EPIC_A);
+    const violation = findTileIdentityViolation(
+      previous,
+      canvasByTabId,
+      EPIC_A,
+    );
     expect(violation).not.toBeNull();
     expect(violation?.instanceId).toBe(SPEC_A.instanceId);
   });

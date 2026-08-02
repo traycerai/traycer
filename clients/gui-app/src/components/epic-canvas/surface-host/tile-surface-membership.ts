@@ -44,7 +44,10 @@
  */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
-import { collectPanes, resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
+import {
+  collectPanes,
+  resolveActivePaneTab,
+} from "@/stores/epics/canvas/tile-tree";
 import { useTabsStore } from "@/stores/tabs/store";
 import { flattenStripItemRefs, tabRefKey } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";

@@ -998,9 +998,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // ticket 18's settle lifecycle (`positionAnchor` below). Armed
   // immediately before each issue, cleared symmetrically in
   // begin/retarget/cancel/valid/invalid - see each site's own comment.
-  const activeAnchorImperativeMotionGenerationRef = useRef<number | null>(
-    null,
-  );
+  const activeAnchorImperativeMotionGenerationRef = useRef<number | null>(null);
   // Ticket 22: coalesces item-size/viewport-layout triggers into ONE pending
   // two-rAF geometry-repair pass at a time - `scheduleChatAnchorGeometryRepair`'s
   // own doc comment covers why.
@@ -2389,8 +2387,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // anchor/settle sequence left to resume, so it collapses to
     // `free-scrolling` at wherever it had settled - same as any other
     // unpinned reading position.
-    const wasAnchoring =
-      timelineScrollModeRef.current === "anchoring-new-turn";
+    const wasAnchoring = timelineScrollModeRef.current === "anchoring-new-turn";
     const mode: ChatTabScrollMode =
       timelineScrollModeRef.current === "following-end"
         ? "following-end"
@@ -2453,10 +2450,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     let naturalMaxScroll: number | null = null;
     if (wasAnchoring && list !== null) {
       const listState = list.getState();
-      const lastBottom = getChatRowBottom(
-        listState,
-        listState.data.length - 1,
-      );
+      const lastBottom = getChatRowBottom(listState, listState.data.length - 1);
       if (lastBottom !== null) {
         naturalMaxScroll = getChatNaturalMaxScrollWithoutAnchorReserve({
           headerSize: listTopOffsetAdjustmentRef.current,

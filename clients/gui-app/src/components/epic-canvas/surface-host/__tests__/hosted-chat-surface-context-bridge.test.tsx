@@ -45,24 +45,20 @@ interface CaptureState {
   lastPanePortalContainer: HTMLElement | null;
 }
 
-const capture = vi.hoisted(
-  (): CaptureState => ({
-    lastIsActive: null,
-    lastViewTabId: null,
-    lastOpenEpicHandle: null,
-    lastPanePortalContainer: null,
-  }),
-);
+const capture = vi.hoisted((): CaptureState => ({
+  lastIsActive: null,
+  lastViewTabId: null,
+  lastOpenEpicHandle: null,
+  lastPanePortalContainer: null,
+}));
 
 interface PermissionRoleState {
   role: string | null;
 }
 
-const permissionRole = vi.hoisted(
-  (): PermissionRoleState => ({
-    role: "owner",
-  }),
-);
+const permissionRole = vi.hoisted((): PermissionRoleState => ({
+  role: "owner",
+}));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => permissionRole.role,
@@ -173,7 +169,9 @@ describe("HostedChatSurfaceContextBridge", () => {
     expect(screen.getByTestId("hosted-bridge-probe")).not.toBeNull();
     expect(capture.lastViewTabId).toBe(VIEW_TAB_ID);
     expect(
-      screen.getByTestId("hosted-bridge-probe").getAttribute("data-view-tab-id"),
+      screen
+        .getByTestId("hosted-bridge-probe")
+        .getAttribute("data-view-tab-id"),
     ).toBe(VIEW_TAB_ID);
   });
 

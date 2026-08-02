@@ -119,7 +119,8 @@ function TileSurfaceRecord(props: {
 }): ReactNode {
   const { instanceId } = props;
   const subscribe = useCallback(
-    (listener: () => void) => subscribeTileSurfaceEnvironment(instanceId, listener),
+    (listener: () => void) =>
+      subscribeTileSurfaceEnvironment(instanceId, listener),
     [instanceId],
   );
   const getSnapshot = useCallback(
@@ -173,7 +174,8 @@ function TileSurfaceRecord(props: {
       {...(environment !== null
         ? {
             [HOSTED_TILE_PANE_ID_ATTRIBUTE]: environment.placement.paneId,
-            [HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE]: environment.placement.viewTabId,
+            [HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE]:
+              environment.placement.viewTabId,
           }
         : {})}
     >

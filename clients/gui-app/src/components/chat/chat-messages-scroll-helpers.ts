@@ -109,7 +109,10 @@ export function applyChatAnchorDriftRepair(input: {
   }
   expectedAnchorScrollTopRef.current = currentExpectedScrollTop;
   if (outcome.kind === "corrected") {
-    void list.scrollToOffset({ offset: outcome.nextScrollTop, animated: false });
+    void list.scrollToOffset({
+      offset: outcome.nextScrollTop,
+      animated: false,
+    });
     return "corrected";
   }
   return "settled";

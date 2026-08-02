@@ -415,14 +415,12 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
     const paneId = requireActivePaneId(tabId);
 
     expect(() =>
-      useEpicCanvasStore
-        .getState()
-        .splitPaneWithTab(tabId, {
-          sourcePaneId: paneId,
-          tabId: SPEC_B.instanceId,
-          targetPaneId: paneId,
-          position: "right",
-        }),
+      useEpicCanvasStore.getState().splitPaneWithTab(tabId, {
+        sourcePaneId: paneId,
+        tabId: SPEC_B.instanceId,
+        targetPaneId: paneId,
+        position: "right",
+      }),
     ).not.toThrow();
 
     const afterSplit = requireCanvas(tabId);
@@ -516,7 +514,10 @@ describe("canvas tile identity invariant: public setState ingress is always stri
               ...currentCanvas,
               tilesByInstanceId: {
                 ...currentCanvas.tilesByInstanceId,
-                [SPEC_A.instanceId]: { ...SPEC_B, instanceId: SPEC_A.instanceId },
+                [SPEC_A.instanceId]: {
+                  ...SPEC_B,
+                  instanceId: SPEC_A.instanceId,
+                },
               },
             },
           },
@@ -576,8 +577,8 @@ describe("canvas tile identity invariant: resolveTabEpicIdentity (the sole autho
   // parameter. Both real callers publish success from a POST-commit
   // `getState()` read-back rather than trusting a return value from this
   // function (see their own doc comments in tab-command-coordinator.ts) -
-  // their reentrant-race coverage lives in t3-rev3-adversarial.test.ts and
-  // phase-migration-controller.test.ts. These pins exercise
+  // their reentrant-race coverage lives in the tab-navigation adversarial and
+  // phase-migration controller suites. These pins exercise
   // `resolveTabEpicIdentity` itself: the legitimate commit and its own
   // preconditions, observed through resulting store state (this function
   // returns void).
@@ -826,9 +827,9 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
     );
     expect(requireCanvas(hiddenTabId)).toBe(beforeHidden);
     expect(requireCanvas(visibleTabId)).toBe(beforeVisible);
-    expect(requireCanvas(hiddenTabId).tilesByInstanceId[SPEC_A.instanceId]).toEqual(
-      SPEC_A,
-    );
+    expect(
+      requireCanvas(hiddenTabId).tilesByInstanceId[SPEC_A.instanceId],
+    ).toEqual(SPEC_A);
   });
 
   it("releases applyingDesktopProjection after a rejected inbound projection, so the next local mutation still reaches the bridge", () => {
@@ -948,7 +949,10 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
               },
               activePaneId: "pane-persisted",
               tilesByInstanceId: {
-                [SPEC_A.instanceId]: { ...SPEC_C, instanceId: SPEC_A.instanceId },
+                [SPEC_A.instanceId]: {
+                  ...SPEC_C,
+                  instanceId: SPEC_A.instanceId,
+                },
               },
               sizesByGroupId: {},
             }),
@@ -970,7 +974,9 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
     expect(requireCanvas(tabId).tilesByInstanceId[SPEC_A.instanceId]).toEqual(
       SPEC_A,
     );
-    expect(useEpicCanvasStore.getState().tabsById["tab-persisted"]).toBeUndefined();
+    expect(
+      useEpicCanvasStore.getState().tabsById["tab-persisted"],
+    ).toBeUndefined();
   });
 
   it("fails closed when a parse/migrate-shaped legacy blob repoints a live instanceId", async () => {
@@ -1084,7 +1090,10 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
               },
               activePaneId: "pane-persisted",
               tilesByInstanceId: {
-                [SPEC_A.instanceId]: { ...SPEC_C, instanceId: SPEC_A.instanceId },
+                [SPEC_A.instanceId]: {
+                  ...SPEC_C,
+                  instanceId: SPEC_A.instanceId,
+                },
               },
               sizesByGroupId: {},
             }),
@@ -1112,7 +1121,9 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
     expect(requireCanvas(tabId).tilesByInstanceId[SPEC_A.instanceId]).toEqual(
       SPEC_A,
     );
-    expect(useEpicCanvasStore.getState().tabsById["tab-persisted"]).toBeUndefined();
+    expect(
+      useEpicCanvasStore.getState().tabsById["tab-persisted"],
+    ).toBeUndefined();
 
     unsubscribe();
   });
@@ -1142,7 +1153,9 @@ describe("canvas tile identity invariant: legitimate flows pass untouched", () =
     store.openTileInTab(tabId, SPEC_A);
     store.openTileInTab(tabId, SPEC_B);
 
-    expect(() => useEpicCanvasStore.getState().duplicateTab(tabId)).not.toThrow();
+    expect(() =>
+      useEpicCanvasStore.getState().duplicateTab(tabId),
+    ).not.toThrow();
   });
 
   it("cross-pane move and edge split retain the moved instanceId's tuple", () => {
@@ -1246,15 +1259,13 @@ describe("canvas tile identity invariant: legitimate flows pass untouched", () =
         useEpicCanvasStore.getState().openTileInTab(tab1, WORKSPACE_FILE_A);
 
         const pane1 = requireActivePaneId(tab1);
-        useEpicCanvasStore
-          .getState()
-          .splitPaneWithNode(tab1, pane1, "right", {
-            id: `chaos-split-${suffix}`,
-            instanceId: `inst-chaos-split-${suffix}`,
-            type: "spec",
-            name: `Split ${suffix}`,
-            hostId: TEST_HOST_ID,
-          });
+        useEpicCanvasStore.getState().splitPaneWithNode(tab1, pane1, "right", {
+          id: `chaos-split-${suffix}`,
+          instanceId: `inst-chaos-split-${suffix}`,
+          type: "spec",
+          name: `Split ${suffix}`,
+          hostId: TEST_HOST_ID,
+        });
 
         const afterSplit = requireCanvas(tab1);
         const panes = collectPanes(afterSplit.root);
@@ -1272,9 +1283,15 @@ describe("canvas tile identity invariant: legitimate flows pass untouched", () =
           targetPaneId: rightPane.id,
           targetIndex: 0,
         });
-        useEpicCanvasStore.getState().setActiveTileTab(tab1, rightPane.id, a.instanceId);
-        useEpicCanvasStore.getState().renameTab(tab1, `Chaos One renamed ${suffix}`);
-        useEpicCanvasStore.getState().renameArtifactInTab(tab1, a.id, `A renamed ${suffix}`);
+        useEpicCanvasStore
+          .getState()
+          .setActiveTileTab(tab1, rightPane.id, a.instanceId);
+        useEpicCanvasStore
+          .getState()
+          .renameTab(tab1, `Chaos One renamed ${suffix}`);
+        useEpicCanvasStore
+          .getState()
+          .renameArtifactInTab(tab1, a.id, `A renamed ${suffix}`);
 
         useEpicCanvasStore.getState().tearOffTabIntoNewHeaderTab({
           sourceTabId: tab2,

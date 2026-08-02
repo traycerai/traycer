@@ -260,7 +260,8 @@ describe("TileSurfaceSlot environment publish", () => {
     if (published === undefined) {
       throw new Error("expected published presentation");
     }
-    const collapsedFocused = published.topLevelVisible && published.topLevelFocused;
+    const collapsedFocused =
+      published.topLevelVisible && published.topLevelFocused;
     expect(published.topLevelFocused).toBe(true);
     expect(collapsedFocused).toBe(false);
   });

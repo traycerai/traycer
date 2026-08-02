@@ -50,7 +50,12 @@ function tileIdentityTuple(
   node: EpicCanvasTileRef,
   epicId: string,
 ): TileIdentityTuple {
-  return { tileKind: node.type, contentId: node.id, epicId, hostId: node.hostId };
+  return {
+    tileKind: node.type,
+    contentId: node.id,
+    epicId,
+    hostId: node.hostId,
+  };
 }
 
 function tileIdentityTuplesEqual(

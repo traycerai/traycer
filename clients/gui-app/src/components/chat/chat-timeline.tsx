@@ -80,8 +80,9 @@ function useIsNavigationHighlighted(
   store: NavigationHighlightStore,
   messageId: string,
 ): boolean {
-  return useSyncExternalStore(store.subscribe, () =>
-    store.getSnapshot() === messageId,
+  return useSyncExternalStore(
+    store.subscribe,
+    () => store.getSnapshot() === messageId,
   );
 }
 

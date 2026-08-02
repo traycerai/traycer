@@ -503,9 +503,9 @@ describe("paneRemovalDissolveHandoffTargets", () => {
   });
 
   it("returns [] when removing the bare-pane root (no parent group to dissolve)", () => {
-    expect(paneRemovalDissolveHandoffTargets(pane("root", ["t-root"]), "root")).toEqual(
-      [],
-    );
+    expect(
+      paneRemovalDissolveHandoffTargets(pane("root", ["t-root"]), "root"),
+    ).toEqual([]);
   });
 
   it("returns [] for a null root or an absent pane id", () => {

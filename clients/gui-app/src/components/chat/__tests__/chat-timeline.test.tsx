@@ -607,9 +607,7 @@ describe("ChatTimeline", () => {
     readonly initialMessages: ReadonlyArray<ChatMessageModel>;
     readonly initialHighlight: string | null;
     readonly onExposeSetters: (setters: {
-      readonly setMessages: (
-        messages: ReadonlyArray<ChatMessageModel>,
-      ) => void;
+      readonly setMessages: (messages: ReadonlyArray<ChatMessageModel>) => void;
       readonly setHighlight: (id: string | null) => void;
     }) => void;
   }): ReactElement {
@@ -789,7 +787,9 @@ describe("ChatTimeline", () => {
     );
     expect(rowHasHighlightRing(highlighted)).toBe(true);
 
-    for (const id of messages.map((m) => m.id).filter((id) => id !== "message-2")) {
+    for (const id of messages
+      .map((m) => m.id)
+      .filter((id) => id !== "message-2")) {
       const row = container.querySelector(`[data-message-id="${id}"]`);
       expect(row?.getAttribute("data-navigation-highlighted")).toBeNull();
       expect(rowHasHighlightRing(row)).toBe(false);
@@ -944,9 +944,7 @@ describe("ChatTimeline", () => {
       await flushFrame();
 
       const expected =
-        previousHighlight === null
-          ? [nextId]
-          : [previousHighlight, nextId];
+        previousHighlight === null ? [nextId] : [previousHighlight, nextId];
       expect(new Set(renderedSince(messages, before))).toEqual(
         new Set(expected),
       );
@@ -1121,24 +1119,16 @@ describe("ChatTimeline", () => {
       expect(row1.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
         "true",
       );
-      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-        false,
-      );
+      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
 
       stop();
 
       expect(
         document.documentElement.classList.contains(PANEL_RESIZING_CLASS),
       ).toBe(false);
-      expect(row0.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-        false,
-      );
-      expect(row1.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-        false,
-      );
-      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-        false,
-      );
+      expect(row0.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+      expect(row1.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
     });
 
     it("clears this timeline's own markers on unmount, even mid-drag", async () => {
@@ -1159,17 +1149,13 @@ describe("ChatTimeline", () => {
       row.getBoundingClientRect = () => rectOf(0, 100);
 
       const stop = beginPanelResizeInteraction(1, () => undefined);
-      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-        "true",
-      );
+      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe("true");
 
       expect(() => {
         unmount();
       }).not.toThrow();
 
-      expect(row.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-        false,
-      );
+      expect(row.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
 
       // The now-unregistered participant must not be invoked (and must not
       // throw) when the drag ends afterward.
@@ -1206,9 +1192,7 @@ describe("ChatTimeline", () => {
       // Only ONE capture ran for the currently-mounted timeline - the first
       // (unmounted) instance's participant was unregistered, not left
       // dangling to double-mark or throw against detached DOM.
-      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
-        "true",
-      );
+      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe("true");
       stop();
     });
   });

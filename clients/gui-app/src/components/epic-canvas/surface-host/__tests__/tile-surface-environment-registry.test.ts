@@ -78,7 +78,8 @@ function environment(
       // Slice 2 has no real session wiring yet - a synthetic handle is the
       // deliberate fixture seam the design calls for (real host/session
       // integration is slice 5).
-      openEpicHandle: {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
+      openEpicHandle:
+        {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
       geometryAnchorElement: document.createElement("div"),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
@@ -206,8 +207,14 @@ describe("tile surface environment registry", () => {
   it("isolates subscriptions per instance: publishing for B never notifies A's subscribers", () => {
     seedMember("chat-a", "tab-a");
     useEpicCanvasStore.setState((state) => ({
-      tabsById: { ...state.tabsById, "tab-b": { tabId: "tab-b", epicId: "tab-b", name: "tab-b" } },
-      canvasByTabId: { ...state.canvasByTabId, "tab-b": canvasWithChat("chat-b") },
+      tabsById: {
+        ...state.tabsById,
+        "tab-b": { tabId: "tab-b", epicId: "tab-b", name: "tab-b" },
+      },
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        "tab-b": canvasWithChat("chat-b"),
+      },
       openTabOrder: [...state.openTabOrder, "tab-b"],
     }));
     useTabsStore.setState((state) => ({
@@ -363,9 +370,8 @@ describe("tile surface environment registry", () => {
     expect(getTileSurfaceMembership().has(doomedInstanceId)).toBe(false);
     expect(getTileSurfaceMembership().has(`chat-${ref5.id}`)).toBe(true);
     expect(
-      refs.filter((ref) =>
-        getTileSurfaceMembership().has(`chat-${ref.id}`),
-      ).length,
+      refs.filter((ref) => getTileSurfaceMembership().has(`chat-${ref.id}`))
+        .length,
     ).toBe(MAX_RETAINED_TOP_LEVEL_SURFACES);
     expect(getTileSurfaceEnvironment(doomedInstanceId)).toBeNull();
     expect(notifications).toBe(1);
@@ -479,8 +485,14 @@ describe("tile surface environment registry", () => {
   it("design-review F3: the record is always keyed by the environment's own identity.instanceId - no independent key parameter exists to disagree with it", () => {
     seedMember("chat-a", "tab-a");
     useEpicCanvasStore.setState((state) => ({
-      tabsById: { ...state.tabsById, "tab-b": { tabId: "tab-b", epicId: "tab-b", name: "tab-b" } },
-      canvasByTabId: { ...state.canvasByTabId, "tab-b": canvasWithChat("chat-b") },
+      tabsById: {
+        ...state.tabsById,
+        "tab-b": { tabId: "tab-b", epicId: "tab-b", name: "tab-b" },
+      },
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        "tab-b": canvasWithChat("chat-b"),
+      },
       openTabOrder: [...state.openTabOrder, "tab-b"],
     }));
     useTabsStore.setState((state) => ({
@@ -522,7 +534,9 @@ describe("tile surface environment registry", () => {
     const gotA = getTileSurfaceEnvironment("chat-a");
     const gotB = getTileSurfaceEnvironment("chat-b");
     if (gotA === null || gotB === null) {
-      throw new Error("expected both instances to have a published environment");
+      throw new Error(
+        "expected both instances to have a published environment",
+      );
     }
     expect(gotA.identity.instanceId).toBe("chat-a");
     expect(gotB.identity.instanceId).toBe("chat-b");

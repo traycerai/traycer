@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { paneTabRefs, setActiveTab } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import {
@@ -1059,9 +1067,7 @@ describe("epic canvas store header tabs", () => {
 
     expect(newPane.activeTabId).toBe(SPEC_A.instanceId);
     expect(newPane.tabInstanceIds).toEqual([SPEC_A.instanceId]);
-    expect(newCanvas.tilesByInstanceId[SPEC_A.instanceId]?.id).toBe(
-      SPEC_A.id,
-    );
+    expect(newCanvas.tilesByInstanceId[SPEC_A.instanceId]?.id).toBe(SPEC_A.id);
   });
 
   it("closes every header tab for a deleted epic", () => {
@@ -2254,21 +2260,18 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(flushSpy).toHaveBeenCalledWith([]);
   });
 
-  it(
-    "closeCanvasPane: multi-pane promoted survivor flushes EVERY descendant active tab",
-    () => {
-      seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas(), "epic-t20");
-      withPreMutationCheck("tab-1", "pane-gone");
+  it("closeCanvasPane: multi-pane promoted survivor flushes EVERY descendant active tab", () => {
+    seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-gone");
 
-      useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-gone");
+    useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-gone");
 
-      expect(flushSpy).toHaveBeenCalledTimes(1);
-      expect(flushSpy).toHaveBeenCalledWith([
-        SPEC_B.instanceId,
-        SPEC_C.instanceId,
-      ]);
-    },
-  );
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([
+      SPEC_B.instanceId,
+      SPEC_C.instanceId,
+    ]);
+  });
 
   // ---- tearOffTabIntoNewHeaderTab ---------------------------------------
 

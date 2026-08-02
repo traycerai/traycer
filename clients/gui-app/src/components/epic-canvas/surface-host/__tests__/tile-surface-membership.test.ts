@@ -180,10 +180,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     // Reorder: add a second (background) tab, then swap which is active -
@@ -216,10 +216,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     useEpicCanvasStore.setState((state) => ({
@@ -240,10 +240,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     useEpicCanvasStore.setState((state) => ({
@@ -279,10 +279,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     function canvasWithActiveTab(activeTabId: string): EpicCanvasState {
@@ -375,10 +375,10 @@ describe("tile surface membership - live store integration", () => {
         openTabOrder: ["tab-1"],
         activeTabId: "tab-1",
       });
-      seedSingleTabStrip(
-        [{ kind: "epic", id: "tab-1" }],
-        { kind: "epic", id: "tab-1" },
-      );
+      seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+        kind: "epic",
+        id: "tab-1",
+      });
       expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
       const samples: boolean[] = [];
@@ -439,10 +439,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     const samples: boolean[] = [];
@@ -496,10 +496,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
     expect(getTileSurfaceMembership().has("chat-2")).toBe(false);
 
@@ -528,9 +528,7 @@ describe("tile surface membership - live store integration", () => {
       expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
       expect(getTileSurfaceMembership().has("chat-2")).toBe(true);
 
-      const chat2Pane = panes.find((p) =>
-        p.tabInstanceIds.includes("chat-2"),
-      );
+      const chat2Pane = panes.find((p) => p.tabInstanceIds.includes("chat-2"));
       if (chat2Pane === undefined) {
         throw new Error("expected pane hosting chat-2 after split");
       }
@@ -578,10 +576,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
 
     // First create a real second pane via edge split, then move chat-1 onto it.
     useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
@@ -591,7 +589,8 @@ describe("tile surface membership - live store integration", () => {
       position: "right",
     });
     const afterSplit = useEpicCanvasStore.getState().canvasByTabId["tab-1"];
-    if (afterSplit === undefined) throw new Error("expected canvas after split");
+    if (afterSplit === undefined)
+      throw new Error("expected canvas after split");
     const panes = collectPanes(afterSplit.root);
     expect(panes.length).toBe(2);
     const chat1Pane = panes.find((p) => p.tabInstanceIds.includes("chat-1"));
@@ -642,10 +641,10 @@ describe("tile surface membership - live store integration", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     let membershipNotifications = 0;
@@ -790,10 +789,10 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
         openTabOrder: ["tab-1"],
         activeTabId: "tab-1",
       });
-      seedSingleTabStrip(
-        [{ kind: "epic", id: "tab-1" }],
-        { kind: "epic", id: "tab-1" },
-      );
+      seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+        kind: "epic",
+        id: "tab-1",
+      });
       expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
       // Mirrors what `TileSurfaceSlot` does once mounted for a real hosted
@@ -830,10 +829,10 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     reportChatRemoteDeletionState("chat-1", true);
     expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
 

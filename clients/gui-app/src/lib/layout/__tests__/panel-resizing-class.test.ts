@@ -213,9 +213,7 @@ describe("panel-resizing-class participant registry", () => {
         document.documentElement.classList.contains(PANEL_RESIZING_CLASS),
       ).toBe(true);
 
-      window.dispatchEvent(
-        new PointerEvent("pointercancel", { pointerId: 3 }),
-      );
+      window.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 3 }));
 
       expect(
         document.documentElement.classList.contains(PANEL_RESIZING_CLASS),

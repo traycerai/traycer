@@ -51,13 +51,11 @@ describe("retainedTopLevelSurfaceKeys (pure)", () => {
       "draft:4",
       "epic:new",
     ];
-    const retained = retainedTopLevelSurfaceKeys(available, ["epic:new"], [
-      "draft:4",
-      "draft:3",
-      "draft:2",
-      "draft:1",
-      "epic:old",
-    ]);
+    const retained = retainedTopLevelSurfaceKeys(
+      available,
+      ["epic:new"],
+      ["draft:4", "draft:3", "draft:2", "draft:1", "epic:old"],
+    );
     expect(retained).not.toContain("epic:old");
     expect(retained).toContain("epic:new");
     expect(retained.length).toBe(MAX_RETAINED_TOP_LEVEL_SURFACES);

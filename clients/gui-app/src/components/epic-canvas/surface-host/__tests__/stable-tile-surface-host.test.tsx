@@ -109,10 +109,10 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     publishTileSurfaceEnvironment(
       buildSyntheticTileSurfaceEnvironment("chat-1", {}),
     );
@@ -193,9 +193,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     const wrapRoot = afterWrap.root;
     const wrapPath = findPanePath(wrapRoot, chat1PaneId);
     if (wrapPath === null || wrapPath.length === 0) {
-      throw new Error(
-        "expected chat-1's pane to be nested under a wrap group",
-      );
+      throw new Error("expected chat-1's pane to be nested under a wrap group");
     }
     const wrapParent = getNodeAtPath(wrapRoot, wrapPath.slice(0, -1));
     if (wrapParent.kind !== "group") throw new Error("expected a group");
@@ -226,8 +224,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
         .getState()
         .closeCanvasTab("tab-1", chat3Pane.id, "chat-3");
     });
-    const afterDissolve =
-      useEpicCanvasStore.getState().canvasByTabId["tab-1"];
+    const afterDissolve = useEpicCanvasStore.getState().canvasByTabId["tab-1"];
     if (afterDissolve === undefined) throw new Error("expected canvas");
     if (afterDissolve.root === null || afterDissolve.root.kind !== "group") {
       throw new Error("expected the outer group to survive");
@@ -295,10 +292,10 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
     publishTileSurfaceEnvironment(
       buildSyntheticTileSurfaceEnvironment("chat-1", {}),
     );
@@ -389,10 +386,10 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
   }
 
   it("plane root carries no aria-hidden of its own", () => {
@@ -477,10 +474,10 @@ describe("StableTileSurfaceHost presentation-loss blur (design-review finding 5)
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
   }
 
   it("blurs a focused descendant of a record that goes top-level-hidden", () => {
@@ -570,10 +567,10 @@ describe("StableTileSurfaceHost hosted DOM identity", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
 
     const renderer = createSyntheticTileSurfaceBodyRenderer();
     render(
@@ -583,9 +580,9 @@ describe("StableTileSurfaceHost hosted DOM identity", () => {
     const dormantRecord = screen.getByTestId(
       "stable-tile-surface-record-chat-1",
     );
-    expect(
-      dormantRecord.getAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE),
-    ).toBe("chat-1");
+    expect(dormantRecord.getAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE)).toBe(
+      "chat-1",
+    );
     expect(dormantRecord.hasAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE)).toBe(
       false,
     );
@@ -596,12 +593,8 @@ describe("StableTileSurfaceHost hosted DOM identity", () => {
       );
     });
 
-    const readyRecord = screen.getByTestId(
-      "stable-tile-surface-record-chat-1",
-    );
-    expect(readyRecord.getAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE)).toBe(
-      "p1",
-    );
+    const readyRecord = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(readyRecord.getAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE)).toBe("p1");
   });
 });
 
@@ -621,10 +614,10 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
       openTabOrder: ["tab-1"],
       activeTabId: "tab-1",
     });
-    seedSingleTabStrip(
-      [{ kind: "epic", id: "tab-1" }],
-      { kind: "epic", id: "tab-1" },
-    );
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
 
     const slot = document.createElement("div");
     document.body.appendChild(slot);
@@ -668,9 +661,7 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
       const renderer = createSyntheticTileSurfaceBodyRenderer();
       render(
         <StrictMode>
-          <StableTileSurfaceHost
-            renderRecordBody={renderer.renderRecordBody}
-          />
+          <StableTileSurfaceHost renderRecordBody={renderer.renderRecordBody} />
         </StrictMode>,
       );
 
@@ -727,7 +718,9 @@ describe("default-on proof (slice 6)", () => {
   });
 
   it("TopLevelTabHost's render output mounts the stable-tile-surface-host plane with the switch enabled", () => {
-    useEpicCanvasStore.getState().openEpicTabWithId("epic-a", "epic-a", "Epic A");
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId("epic-a", "epic-a", "Epic A");
     useTabsStore.setState((state) => ({
       ...state,
       items: [
@@ -744,8 +737,6 @@ describe("default-on proof (slice 6)", () => {
     render(<TopLevelTabHost />);
 
     expect(screen.getByTestId("top-level-surface-epic-epic-a")).not.toBeNull();
-    expect(
-      screen.queryByTestId("stable-tile-surface-host"),
-    ).not.toBeNull();
+    expect(screen.queryByTestId("stable-tile-surface-host")).not.toBeNull();
   });
 });

@@ -1229,7 +1229,11 @@ export class TabCommandCoordinator {
       projectSourceCompatibility: true,
       applySources: () => {
         this.applyExpectedSourceMutation(() => {
-          resolveTabEpicIdentity(command.tabId, command.phaseId, command.epicId);
+          resolveTabEpicIdentity(
+            command.tabId,
+            command.phaseId,
+            command.epicId,
+          );
           useEpicCanvasStore.setState((state) => {
             const current = state.tabsById[command.tabId];
             // Gated on the epicId resolution having ACTUALLY landed (whether

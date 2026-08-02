@@ -150,12 +150,16 @@ describe("host-root movement invalidates every registered slot", () => {
     const slotA = document.createElement("div");
     stubRect(slotA, { left: 100, top: 100, width: 50, height: 50 });
     const rectsA: TileSurfaceRect[] = [];
-    registerTileSurfaceGeometrySlot("chat-a", slotA, (rect) => rectsA.push(rect));
+    registerTileSurfaceGeometrySlot("chat-a", slotA, (rect) =>
+      rectsA.push(rect),
+    );
 
     const slotB = document.createElement("div");
     stubRect(slotB, { left: 300, top: 300, width: 50, height: 50 });
     const rectsB: TileSurfaceRect[] = [];
-    registerTileSurfaceGeometrySlot("chat-b", slotB, (rect) => rectsB.push(rect));
+    registerTileSurfaceGeometrySlot("chat-b", slotB, (rect) =>
+      rectsB.push(rect),
+    );
 
     rectsA.length = 0;
     rectsB.length = 0;
@@ -199,11 +203,15 @@ describe("unregister and re-registration", () => {
     const slot = document.createElement("div");
     stubRect(slot, { left: 0, top: 0, width: 100, height: 100 });
     const rectsFirst: TileSurfaceRect[] = [];
-    const unregisterFirst = registerTileSurfaceGeometrySlot("chat-1", slot, (rect) =>
-      rectsFirst.push(rect),
+    const unregisterFirst = registerTileSurfaceGeometrySlot(
+      "chat-1",
+      slot,
+      (rect) => rectsFirst.push(rect),
     );
     const rectsSecond: TileSurfaceRect[] = [];
-    registerTileSurfaceGeometrySlot("chat-1", slot, (rect) => rectsSecond.push(rect));
+    registerTileSurfaceGeometrySlot("chat-1", slot, (rect) =>
+      rectsSecond.push(rect),
+    );
     rectsSecond.length = 0;
 
     // The first registration's own cleanup fires late, after the second
