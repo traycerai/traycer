@@ -526,14 +526,24 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * Best-effort: a shell that cannot answer must not stop the directory from
-   * starting. Failing closed here would trade a mislabelled row for a app that
-   * never lists any host at all.
+   * The shell's answer WINS over the persisted one whenever it has one.
+   *
+   * Consulting the shell only when the cache was empty made the persisted value
+   * authoritative, and it is not: the host can be re-enrolled while the
+   * renderer is not running, leaving a stale id behind. On the next launch that
+   * stale value would neutralise an obsolete twin while THIS machine's current
+   * registry entry stayed remote-kind - relay-dialable and auto-selectable -
+   * which is the exact failure this seed exists to prevent, just pointed at a
+   * different id.
+   *
+   * The persisted value survives only as the fallback for a shell that cannot
+   * answer (web/mobile, or a machine that has never enrolled).
+   *
+   * Best-effort throughout: a shell that throws must not stop the directory
+   * from starting. Failing closed here would trade a mislabelled row for an app
+   * that lists no hosts at all.
    */
   private async seedLocalHostIdFromShell(): Promise<void> {
-    if (this.lastKnownLocalHostId !== null) {
-      return;
-    }
     let hostId: string | null;
     try {
       hostId = await this.localHostIdSeeder();
@@ -543,7 +553,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       });
       return;
     }
-    if (hostId === null) {
+    if (hostId === null || hostId === this.lastKnownLocalHostId) {
       return;
     }
     this.lastKnownLocalHostId = hostId;

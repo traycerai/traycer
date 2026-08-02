@@ -1527,6 +1527,39 @@ describe("HostDirectoryService", () => {
       expect(onLocalHostChange).not.toHaveBeenCalled();
     });
 
+    /**
+     * Regression (CodeRabbit P2 on OSS #913): the host can be re-enrolled while
+     * the renderer is not running. Treating the persisted value as
+     * authoritative would neutralise the OBSOLETE twin while this machine's
+     * current registry entry stayed remote-kind and relay-dialable.
+     */
+    it("prefers the shell's id over a stale persisted one after re-enrollment", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        "stale-host-id-from-a-previous-enrollment",
+      );
+      const reEnrolledTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: "re-enrolled-host-id",
+      };
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [reEnrolledTwin] }),
+      });
+      await directory.start();
+
+      expect((await directory.list())[0]).toMatchObject({
+        hostId: "re-enrolled-host-id",
+        kind: "local",
+        websocketUrl: null,
+      });
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        "re-enrolled-host-id",
+      );
+    });
+
     it("leaves other machines' remote hosts untouched", async () => {
       window.localStorage.setItem(
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
