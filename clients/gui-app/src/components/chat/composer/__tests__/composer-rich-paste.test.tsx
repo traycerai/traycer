@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import { DOMSerializer } from "@tiptap/pm/model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { SlashCommand } from "@/lib/composer/types";
 
 import {
   buildComposerClipboardHtml,
@@ -562,6 +563,46 @@ describe("composer rich clipboard paste", () => {
     expect(remainderText(editor)).toBe(" review the diff");
   });
 
+  // `$` is the picker's other trigger, so raw text leading with it has to chip
+  // exactly like `/` does - and the chip records which character the paste led
+  // with, so it reads back as what was pasted.
+  it("converts a leading $ skill paste into a chip that reads back as $name", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+
+    pastePlainText(editor, "$plan review the diff");
+
+    expect(collectSlashCommands(editor)).toEqual(["plan"]);
+    expect(collectSlashTriggers(editor)).toEqual(["$"]);
+    expect(remainderText(editor)).toBe(" review the diff");
+  });
+
+  // A pasted chip has to carry the resolved option's `kind`, not just its name:
+  // the host reads skills structurally off `kind`, and the editor's leading
+  // guard deletes a kindless chip the moment it stops being leading.
+  it("carries the catalog option's kind and path onto a pasted skill chip", () => {
+    const editor = makeEditor([...KNOWN_SLASH_NAMES, "frontend-design"]);
+
+    pastePlainText(editor, "$frontend-design polish the header");
+
+    expect(collectSlashAttrs(editor)).toEqual([
+      {
+        commandName: "frontend-design",
+        kind: "skill",
+        path: "/repo/.agents/skills/frontend-design/SKILL.md",
+        trigger: "$",
+      },
+    ]);
+  });
+
+  it("does not convert a $ name that is not in the catalog", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+
+    pastePlainText(editor, "$not-a-command do the thing");
+
+    expect(collectSlashCommands(editor)).toEqual([]);
+    expect(remainderText(editor)).toBe("$not-a-command do the thing");
+  });
+
   it("keeps an existing leading slash chip when another slash command is pasted before it", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
     editor.commands.setContent({
@@ -711,6 +752,33 @@ function collectSlashCommands(editor: Editor): string[] {
   return names;
 }
 
+function collectSlashTriggers(editor: Editor): string[] {
+  const triggers: string[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "slashCommand") {
+      triggers.push(
+        typeof node.attrs.trigger === "string" ? node.attrs.trigger : "",
+      );
+    }
+  });
+  return triggers;
+}
+
+function collectSlashAttrs(editor: Editor): Record<string, unknown>[] {
+  const attrs: Record<string, unknown>[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== "slashCommand") return true;
+    attrs.push({
+      commandName: node.attrs.commandName,
+      kind: node.attrs.kind,
+      path: node.attrs.path,
+      trigger: node.attrs.trigger,
+    });
+    return false;
+  });
+  return attrs;
+}
+
 function collectImageIds(editor: Editor): string[] {
   const ids: string[] = [];
   editor.state.doc.descendants((node) => {
@@ -744,6 +812,27 @@ function remainderText(editor: Editor): string {
 }
 
 const KNOWN_SLASH_NAMES = ["plan", "code-review", "implement"];
+
+// `frontend-design` is the catalog's only skill, so a test can tell a chip built
+// from a resolved option (carries `kind`) from the bare lexical fallback.
+function catalogCommand(name: string): SlashCommand {
+  const isSkill = name.toLowerCase() === "frontend-design";
+  return {
+    harnessId: "claude",
+    name,
+    description: `Use ${name}`,
+    argumentHint: null,
+    kind: isSkill ? "skill" : "slash-command",
+    metadata: isSkill ? { path: `/repo/.agents/skills/${name}/SKILL.md` } : {},
+    source: "provider",
+    preview: {
+      kind: "text",
+      primary: `Use ${name}`,
+      secondary: null,
+      mono: false,
+    },
+  };
+}
 
 function imageAttrs(id: string) {
   return {
@@ -783,7 +872,9 @@ function makeEditorWithPastedImagePresenceGetter(
     pickerStore
       .getState()
       .setKnownSlashCommands(
-        new Map(slashNames.map((name) => [name.toLowerCase(), name])),
+        new Map(
+          slashNames.map((name) => [name.toLowerCase(), catalogCommand(name)]),
+        ),
       );
   }
   const editor = new Editor({
