@@ -74,7 +74,7 @@ import { cn } from "@/lib/utils";
 import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
-  useIsActiveEpicArtifact,
+  useIsActiveTile,
 } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
@@ -304,7 +304,7 @@ function TerminalRow(props: TerminalRowProps) {
   const { hostId, epicId, tabId, session, onOpen } = props;
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
-  const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
+  const isActive = useIsActiveTile(tabId, session.sessionId);
   const kill = useTerminalKill();
   const rename = useTerminalRename();
   const navigateNested = useEpicNestedFocusNavigation();
