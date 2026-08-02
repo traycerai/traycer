@@ -40,6 +40,7 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { NotificationNavigate } from "@/lib/notifications";
+import { HOST_STREAM_REOPEN_MAX_BACKOFF_MS } from "@/lib/host/stream-reopen";
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 
 interface HostState {
@@ -701,6 +702,58 @@ describe("<NotificationsSessionProvider />", () => {
       servedBy: null,
     });
     expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
+  });
+
+  it("reopens activity after a recoverable terminal close", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        streamClient
+          .sessionFor("agent.activity.subscribe")
+          .emitClosed(fatalClose("UNAUTHORIZED"));
+      });
+      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(streamClient.subscribedMethods).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+        "agent.activity.subscribe",
+      ]);
+      act(() => {
+        streamClient
+          .sessionFor("agent.activity.subscribe")
+          .emitClosed(fatalClose("INCOMPATIBLE"));
+        vi.advanceTimersByTime(2 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
+      });
+      expect(streamClient.subscribedMethods).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("turns only post-baseline cloud snapshot arrivals into notification displays", async () => {

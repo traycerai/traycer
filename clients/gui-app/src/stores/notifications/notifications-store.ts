@@ -14,7 +14,10 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   parseNotificationRoomEntry,
 } from "@traycer/protocol/notifications/notification-room";
-import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
 
 /** The surface `openNotificationsStream` needs from a stream client; the
  * only two members production and test doubles both provide. */
@@ -268,11 +271,11 @@ export function openNotificationsStream(
   let currentClient: NotificationsStreamClientHandle | null = null;
   let generation = 0;
 
-  const reopenScheduler = createNotificationStreamReopenScheduler(() => {
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
     currentClient?.close();
     currentClient = null;
     openClient();
-  });
+  }, isReopenableNotificationsStreamClose);
 
   function openClient(): void {
     if (disposed) return;

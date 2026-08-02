@@ -14,6 +14,10 @@ import {
   reconcileAgentActivityByEpic,
   type EpicAgentActivity,
 } from "@/lib/agent-activity";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableHostStreamClose,
+} from "@/lib/host/stream-reopen";
 
 interface AgentActivityState {
   readonly servedBy: AgentActivityServedBy | null;
@@ -39,33 +43,60 @@ export function openAgentActivityStream(
   wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
 ): () => void {
-  const client = new AgentActivityStreamClient({
-    wsStreamClient,
-    callbacks: {
-      onState: (servedBy, byEpic) => {
-        useAgentActivityStore.setState((state) => ({
-          servedBy,
-          byEpic: reconcileAgentActivityByEpic(byEpic, state.byEpic),
-        }));
+  let disposed = false;
+  let currentClient: AgentActivityStreamClient | null = null;
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
+    const client = currentClient;
+    currentClient = null;
+    client?.close();
+    openClient();
+  }, isReopenableHostStreamClose);
+
+  function openClient(): void {
+    if (disposed) return;
+    let client: AgentActivityStreamClient | null = null;
+    client = new AgentActivityStreamClient({
+      wsStreamClient,
+      callbacks: {
+        onState: (servedBy, byEpic) => {
+          if (currentClient !== client) return;
+          // A host-stamped state frame is the usable-session proof. A raw
+          // transport open can still be followed by resolver initialization
+          // failure, so it must not collapse the retry backoff.
+          reopenScheduler.resetBackoff();
+          useAgentActivityStore.setState((state) => ({
+            servedBy,
+            byEpic: reconcileAgentActivityByEpic(byEpic, state.byEpic),
+          }));
+        },
+        onConnectionStatus: (status, reason) => {
+          if (currentClient !== client) return;
+          useAgentActivityStore.setState(
+            status === "closed"
+              ? {
+                  connectionStatus: status,
+                  servedBy: null,
+                  byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
+                }
+              : { connectionStatus: status },
+          );
+          if (status === "closed") {
+            reopenScheduler.scheduleAfterClose(reason);
+            if (isUnauthorized(reason)) onAuthError?.();
+          }
+        },
       },
-      onConnectionStatus: (status, reason) => {
-        useAgentActivityStore.setState(
-          status === "closed"
-            ? {
-                connectionStatus: status,
-                servedBy: null,
-                byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
-              }
-            : { connectionStatus: status },
-        );
-        if (status === "closed" && isUnauthorized(reason)) {
-          onAuthError?.();
-        }
-      },
-    },
-  });
+    });
+    currentClient = client;
+  }
+
+  openClient();
   return () => {
-    client.close();
+    disposed = true;
+    reopenScheduler.dispose();
+    const client = currentClient;
+    currentClient = null;
+    client?.close();
   };
 }
 
