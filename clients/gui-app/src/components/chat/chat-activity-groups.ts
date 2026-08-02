@@ -249,13 +249,14 @@ function buildChatActivityTimelineImpl(
     // call joins the lone block - is exactly the container change this design
     // exists to eliminate.
     //
-    // The duplicate is accepted in the expanded body, deliberately. Suppressing
-    // it there means deriving a render flag from the group's segment count, and
-    // any such flag flips under a growing run: the child re-renders in a
-    // different mode and drops the body the reader was in the middle of. A
-    // redundant line is a far smaller cost than content vanishing. The collapsed
-    // live window, whose shape cannot change this way, does suppress it (see
-    // `ActivityGroupSegment`).
+    // The duplicate is accepted, deliberately and in both containers. A
+    // reasoning block keeps its own nested header wherever it renders: that
+    // header is what carries its "Thinking" / "Thought for Xs" label, its
+    // collapse on completion and its find anchor, and stripping it in one place
+    // made the same rows read differently depending on where you saw them.
+    // Suppressing it conditionally is worse still - the condition can only be
+    // the group's segment count, which flips under a growing run and takes the
+    // child's body with it. A redundant line costs far less than either.
     const group = activityGroupFromRun(run);
     out.push({ kind: "activity_group", id: group.id, group });
     run = [];

@@ -798,7 +798,7 @@ function AssistantSegment({
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
-          headerless={false}
+          bodyBoundedByParent={false}
         />
       );
     case "tool": {

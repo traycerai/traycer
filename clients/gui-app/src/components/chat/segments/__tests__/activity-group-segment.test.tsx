@@ -234,24 +234,44 @@ describe("<ActivityGroupSegment /> live window", () => {
     }
   });
 
-  it("renders a reasoning child headerless in the window, where the trigger is already its header", () => {
+  // The window is a VIEWPORT onto the rows the expanded group shows, not a
+  // different rendering of them. A reasoning block keeps its nested header and
+  // its find anchor in here; the only thing the window takes over is the height
+  // cap, so the block drops its own inner scroller and nothing else.
+  it("keeps the reasoning child's nested header and anchor inside the window", () => {
     renderActivityGroup(SOLE_REASONING_GROUP);
 
-    // The group summary is the header. A second "Thinking" would be the
-    // duplicate #597 special-cased the lone block away to avoid.
-    expect(screen.getAllByText("Thinking")).toHaveLength(1);
+    // Twice: the group's own summary line, and the block's nested header.
+    expect(screen.getAllByText("Thinking")).toHaveLength(2);
     expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
 
-    // No child find anchor in the window. Nothing is lost: find force-opens the
-    // group first, and the open container renders the headed child that owns
-    // this id.
     const childUnitId = chatFindActivityGroupChildHeaderUnitId(
       SOLE_REASONING_GROUP.id,
       REASONING_SEGMENT.id,
     );
     expect(
       document.querySelector(`[data-chat-find-unit="${childUnitId}"]`),
-    ).toBeNull();
+    ).not.toBeNull();
+  });
+
+  // The window caps the height and follows the tail itself. A `ReasoningTail`
+  // in here would be a second `overflow-y-auto` inside the first: two scroll
+  // positions, two tail pins, two stacked top masks over the same lines.
+  it("drops the reasoning child's own scroller inside the window, and keeps it outside", () => {
+    renderActivityGroup({
+      ...SOLE_REASONING_GROUP,
+      segments: [REASONING_SEGMENT, COMMAND_SEGMENT],
+      label: "Thinking, ran 1 command",
+      summary: "Thinking, ran 1 command",
+    });
+
+    const scroller = screen.getByTestId("activity-live-window-scroller");
+    expect(scroller.querySelector("[data-testid='reasoning-tail']")).toBeNull();
+
+    // Expanding hands the rows to a container that caps nothing, so the block
+    // has to bound itself again.
+    fireEvent.click(screen.getByRole("button", { name: /ran 1 command/ }));
+    expect(screen.getByTestId("reasoning-tail")).toBeTruthy();
   });
 
   // `headerless` is a property of the CONTAINER, not of the group's shape. It

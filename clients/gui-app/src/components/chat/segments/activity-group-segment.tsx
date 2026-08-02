@@ -65,20 +65,25 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   // rewrites an inline `&&` into `? … : null`, which is right for children and
   // wrong for a boolean prop.
   const liveWindowShown = group.isActive && !open;
-  // `headerless` is decided by the CONTAINER a child renders in, never by the
-  // group's shape. An earlier revision derived it from "this group is one lone
-  // reasoning block", which flips the instant a tool call joins the run - and a
-  // reasoning child that flips to headed loses its body in the same frame,
-  // because `ReasoningSegment` owns an `expanded` state that defaults to false.
-  // That is the very discontinuity this whole design exists to remove, so the
-  // flag is now constant per container and cannot flip under a growing run.
-  const renderChildren = (headerless: boolean): ReactNode =>
+  // The ONLY difference between the two containers is who caps the height. Both
+  // render the same rows, with the same headers, the same labels and the same
+  // collapse-on-completion - the window is a viewport onto the expanded body,
+  // not a second rendering of it.
+  //
+  // Decided by the CONTAINER, never by the group's shape. An earlier revision
+  // derived a render mode from "this group is one lone reasoning block", which
+  // flips the instant a tool call joins the run - and a reasoning child that
+  // flips loses its body in the same frame, because `ReasoningSegment` owns an
+  // `expanded` state that defaults to false. That is the very discontinuity
+  // this design exists to remove, so the flag is constant per container and
+  // cannot flip under a growing run.
+  const renderChildren = (bodyBoundedByParent: boolean): ReactNode =>
     group.segments.map((segment) => (
       <ActivityChildSegment
         key={segment.id}
         groupId={group.id}
         segment={segment}
-        headerless={headerless}
+        bodyBoundedByParent={bodyBoundedByParent}
       />
     ));
 
@@ -139,18 +144,15 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
           window and `CollapsibleContent` at once: a find unit rendered twice
           would double-count.
 
-          Headerless in here, always: the window already bounds and tail-pins
-          the region, and the trigger directly above is the header. It also
-          keeps a streaming reasoning child from rendering its own `ReasoningTail`
-          - a second `overflow-y-auto` nested inside this one would fight it for
-          the wheel and give the reader two scroll positions to reconcile. */}
+          The window caps the height, so a streaming reasoning child must not
+          also render its own `ReasoningTail` - a second `overflow-y-auto`
+          nested inside this one would fight it for the wheel. Its header,
+          label, find anchor and collapse-on-completion are untouched. */}
       <LiveActivityWindow shown={liveWindowShown}>
         {open ? null : renderChildren(true)}
       </LiveActivityWindow>
-      {/* Headed in here, always: this container has no height cap and no tail
-          pin, so a streaming reasoning child must keep its own bounded
-          `ReasoningTail`. Headed also means every child keeps a find anchor and
-          its own collapse control. */}
+      {/* No height cap and no tail pin here, so a streaming reasoning child
+          keeps its own bounded `ReasoningTail`. */}
       <CollapsibleContent>
         <div className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3">
           {renderChildren(false)}
@@ -166,14 +168,14 @@ interface ActivityChildSegmentProps {
   /**
    * True inside the live window, false inside `CollapsibleContent` - a property
    * of the container, fixed for as long as the child is mounted in it. Only
-   * reasoning honours it: the window bounds and tail-pins its own region, so a
-   * reasoning child there wants neither its own header nor its own scroller.
+   * reasoning honours it, and only to drop its own inner scroller; nothing
+   * about how the row reads changes between the two.
    */
-  readonly headerless: boolean;
+  readonly bodyBoundedByParent: boolean;
 }
 
 function ActivityChildSegment(props: ActivityChildSegmentProps) {
-  const { groupId, segment, headerless } = props;
+  const { groupId, segment, bodyBoundedByParent } = props;
   const headerFindUnitId = chatFindActivityGroupChildHeaderUnitId(
     groupId,
     segment.id,
@@ -246,15 +248,11 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
     case "reasoning":
       return (
         <ReasoningSegment
-          // Headerless renders no anchor element, so it carries no find unit id.
-          // Nothing is lost: find force-opens the group before it reveals, and
-          // the open container always renders the headed child that owns this
-          // id. The projection indexes that child unconditionally.
-          findUnitId={headerless ? null : headerFindUnitId}
+          findUnitId={headerFindUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
-          headerless={headerless}
+          bodyBoundedByParent={bodyBoundedByParent}
         />
       );
     case "approval":

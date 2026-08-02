@@ -19,12 +19,17 @@ interface ReasoningSegmentProps {
   isStreaming: boolean;
   durationMs: number | null;
   /**
-   * Render the trace body with no header row of its own. Set by a group whose
-   * only content is this reasoning block: the group's summary line already
-   * reads "Thinking" / "Thought for Xs", so a second identical header would be
-   * a duplicate, and the group's own disclosure owns visibility.
+   * The container already caps this block's height and follows its tail, so it
+   * must not add a `ReasoningTail` of its own - a second `overflow-y-auto`
+   * nested inside the first would fight it for the wheel and give the reader
+   * two scroll positions to reconcile. Set by the live activity window.
+   *
+   * Everything else is unchanged: the header row, the "Thinking" /
+   * "Thought for Xs" label, the collapse on completion, the find anchor. The
+   * window is a viewport onto exactly the rows the expanded group shows, not a
+   * different rendering of them.
    */
-  headerless: boolean;
+  bodyBoundedByParent: boolean;
 }
 
 interface ReasoningContentProps {
@@ -66,7 +71,8 @@ function ReasoningContent(props: ReasoningContentProps) {
 }
 
 export function ReasoningSegment(props: ReasoningSegmentProps) {
-  const { findUnitId, markdown, isStreaming, durationMs, headerless } = props;
+  const { findUnitId, markdown, isStreaming, durationMs, bodyBoundedByParent } =
+    props;
   // `expanded` shows the full trace. Default (false) means the streaming tail
   // preview while thinking, or the collapsed "Thought for Xs" line once done. A
   // click toggles and sticks for the segment's lifetime.
@@ -105,29 +111,13 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
     [toggle],
   );
 
-  const showTail = isStreaming && !expanded;
+  // The tail preview is this block's OWN bounded scroller. Inside a container
+  // that already bounds and pins it, that scroller is not just redundant but
+  // harmful - two nested `overflow-y-auto`s fighting for one wheel - so the
+  // body renders in full and the container does the capping.
+  const showTail = isStreaming && !expanded && !bodyBoundedByParent;
   const bodyShown = isStreaming || expanded;
   const label = isStreaming ? "Thinking" : reasoningSummaryLabel(durationMs);
-
-  // Headerless: body only, and deliberately the FULL content rather than
-  // `ReasoningTail`. The only caller is the live activity window, which already
-  // bounds and tail-pins its region; nesting a second `overflow-y-auto` inside
-  // it would fight the outer one for the wheel and give the reader two scroll
-  // positions to reconcile. An expanded activity group is NOT such a caller -
-  // its body has no height cap - so it always renders the headed branch below
-  // and keeps this block's own bounded tail.
-  //
-  // No vertical padding: the window sizes itself in `lh` units off this exact
-  // line-height, and padding here would push the last line out of the bound.
-  if (headerless) {
-    return (
-      <ReasoningContent
-        markdown={markdown}
-        className="text-ui-sm leading-6 text-muted-foreground"
-        isStreaming={isStreaming}
-      />
-    );
-  }
 
   let body: ReactNode = null;
   if (bodyShown) {
@@ -241,6 +231,7 @@ function ReasoningTail({ markdown }: { readonly markdown: string }) {
     <div
       ref={scrollRef}
       onScroll={handleScroll}
+      data-testid="reasoning-tail"
       className={cn(
         "max-h-[7.5rem] overflow-y-auto py-1 text-ui-sm leading-6 text-muted-foreground",
         "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",

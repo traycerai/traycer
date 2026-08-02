@@ -17,7 +17,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming
         durationMs={null}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -33,7 +33,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming
         durationMs={null}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -52,7 +52,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming={false}
         durationMs={12000}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -68,7 +68,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming={false}
         durationMs={null}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -82,7 +82,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -98,7 +98,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming
         durationMs={null}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -117,7 +117,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -136,7 +136,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -166,7 +166,7 @@ describe("<ReasoningSegment />", () => {
           markdown="Detailed chain of thought"
           isStreaming={false}
           durationMs={3000}
-          headerless={false}
+          bodyBoundedByParent={false}
         />
       </div>,
     );
@@ -194,7 +194,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -214,7 +214,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming={false}
         durationMs={3_661_000}
-        headerless={false}
+        bodyBoundedByParent={false}
       />,
     );
 
