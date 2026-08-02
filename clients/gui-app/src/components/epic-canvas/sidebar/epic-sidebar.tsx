@@ -1412,6 +1412,13 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
             }),
           ]);
           selection.clearSelectedIds([...successfulSubtreeIds]);
+          // If a collaborator moves a selected row beneath this root after
+          // the response snapshot, the later archive projection can be the
+          // event that removes the final selection. Arm that one projection
+          // path so it exits instead of leaving a zero-selected toolbar.
+          if (successfulRootIds.length > 0) {
+            selection.armSelectablePruneExit();
+          }
         },
       },
     );
