@@ -343,6 +343,71 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
+  // The mirror of the case above: a split run whose FIRST node is only the
+  // indent. The editor and the host both treat those spaces as transparent, so
+  // the trigger in the next node is still leading and must still be examined.
+  it("looks past a whitespace-only node to the trigger that follows", () => {
+    const doc = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "   ", marks: [{ type: "bold" }] },
+              { type: "text", text: "$frontend-design polish this" },
+            ],
+          },
+        ],
+      },
+      CATALOG,
+    );
+
+    expect(doc.content?.[0].content).toEqual([
+      { type: "text", text: "   ", marks: [{ type: "bold" }] },
+      {
+        type: "slashCommand",
+        attrs: {
+          commandName: "frontend-design",
+          harnessId: "claude",
+          kind: "skill",
+          description: "Use frontend-design",
+          argumentHint: null,
+          path: "/repo/.agents/skills/frontend-design/SKILL.md",
+          trigger: "$",
+        },
+      },
+      { type: "text", text: " polish this" },
+    ]);
+  });
+
+  // A whitespace-only node is transparent, but a hard break is not: it ends the
+  // line, so anything after it is no longer the leading token.
+  it("still refuses a trigger that a hard break pushes onto the next line", () => {
+    const doc = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "  " },
+              { type: "hardBreak" },
+              { type: "text", text: "$frontend-design polish this" },
+            ],
+          },
+        ],
+      },
+      CATALOG,
+    );
+
+    expect(doc.content?.[0].content).toEqual([
+      { type: "text", text: "  " },
+      { type: "hardBreak" },
+      { type: "text", text: "$frontend-design polish this" },
+    ]);
+  });
+
   it("leaves a non-leading $skill alone", () => {
     // Only the leading token is a command context, same as `/`.
     expect(submittedParagraph("please run $frontend-design", CATALOG)).toEqual([

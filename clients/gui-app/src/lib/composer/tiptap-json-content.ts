@@ -24,6 +24,11 @@ import { normalizeComposerContent } from "@/lib/composer/composer-content-normal
 const LEADING_SLASH_COMMAND_REGEX =
   /^([ \t]*)([/$])([A-Za-z0-9][A-Za-z0-9:_-]*)(?=$|\s)/;
 
+// A text node the scan reads through rather than stopping on. Deliberately the
+// same class the regex above accepts as indent, so "what counts as leading" has
+// one definition whether the indent shares the trigger's node or not.
+const INDENT_ONLY_REGEX = /^[ \t]*$/;
+
 const ARTIFACT_CONTEXT_TYPES: ReadonlyArray<EpicArtifactKind> = [
   "spec",
   "ticket",
@@ -294,7 +299,12 @@ function textWithLeadingSlashCommandNode(
   state: LeadingSlashScanState,
 ): JsonContent[] {
   const text = node.text ?? "";
-  if (text.length === 0) return [node];
+  // Indent, not the leading token. Formatting splits a run, so a marked `"   "`
+  // can sit before the trigger; the editor and the host's prompt trim both read
+  // straight through those spaces, and ending the scan here would hide the
+  // trigger in the next node entirely. Same `[ \t]` the leading regex calls
+  // indent - a hard break is a different node type and still ends the line.
+  if (INDENT_ONLY_REGEX.test(text)) return [node];
   state.complete = true;
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return [node];
