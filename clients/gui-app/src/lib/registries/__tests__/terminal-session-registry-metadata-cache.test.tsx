@@ -273,6 +273,22 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
       data?.sessions.find((session) => session.sessionId === SESSION_ID)
         ?.currentCwd,
     ).toBe("/work/next");
+
+    act(() => {
+      harness.callbacks().onSessionUpdated({
+        kind: "sessionUpdated",
+        hasBinaryPayload: false,
+        sessionId: SESSION_ID,
+        session: sessionInfo({ currentCwd: "" }),
+      });
+    });
+
+    expect(
+      harness.queryClient
+        .getQueryData<ListTerminalsResponseV22>(listKey)
+        ?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("");
     expect(data?.homeCwd).toBe(HOME_CWD);
     expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
       false,

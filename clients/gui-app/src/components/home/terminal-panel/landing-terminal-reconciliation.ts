@@ -1,5 +1,8 @@
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
-import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   terminalSessionKey,
   type LandingTerminalTabRef,
@@ -9,7 +12,9 @@ export interface LandingTerminalReconciliationInput {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly activeHostId: string;
-  readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
+  readonly sessions: ReadonlyArray<
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd
+  >;
   /** Tombstones captured before their kill retries begin. */
   readonly excludedSessionKeys: ReadonlySet<string>;
   readonly mintInstanceId: () => string;
@@ -65,7 +70,9 @@ export function reconcileLandingTerminalTabs(
       exitedInstanceIds.push(tab.instanceId);
       return [];
     }
-    return [tab];
+    if (tab.titleSource === "manual") return [tab];
+    const name = defaultLandingTerminalTitle(session, tab.cwd);
+    return [name === tab.name ? tab : { ...tab, name }];
   });
 
   const adoptedTabs = sessions.flatMap((session) => {
@@ -80,7 +87,7 @@ export function reconcileLandingTerminalTabs(
       sessionId: session.sessionId,
       hostId: input.activeHostId,
       cwd: session.cwd,
-      name: workspaceFolderName(session.cwd),
+      name: defaultLandingTerminalTitle(session, session.cwd),
       titleSource: "default",
     };
     return [tab];
@@ -101,6 +108,22 @@ export function reconcileLandingTerminalTabs(
       (exitedInstanceIds.length > 0 ||
         survivingTabs.length !== input.tabs.length),
   };
+}
+
+function defaultLandingTerminalTitle(
+  session:
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+  launchCwd: string,
+): string {
+  const liveCwd =
+    "currentCwd" in session && session.currentCwd.length > 0
+      ? session.currentCwd
+      : launchCwd;
+  return terminalSessionTitle({
+    title: session.title,
+    activeProcessName: session.activeProcessName,
+    currentCwd: liveCwd,
+  });
 }
 
 function resolveActiveInstanceId(

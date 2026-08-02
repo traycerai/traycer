@@ -220,10 +220,11 @@ export function useTerminalSessionHandle(
     let previousCurrentCwd = initialState.currentCwd;
     return handle.store.subscribe((state) => {
       const statusChanged = state.status !== previousStatus;
+      const currentCwdChanged = state.currentCwd !== previousCurrentCwd;
       const metadataChanged =
         state.title !== previousTitle ||
         state.activeProcessName !== previousActiveProcessName ||
-        state.currentCwd !== previousCurrentCwd;
+        currentCwdChanged;
       previousStatus = state.status;
       previousTitle = state.title;
       previousActiveProcessName = state.activeProcessName;
@@ -246,7 +247,9 @@ export function useTerminalSessionHandle(
               (session) => session.sessionId === args.sessionId,
             );
             if (target === undefined) return data;
-            const currentCwd = state.currentCwd ?? target.currentCwd;
+            const currentCwd = currentCwdChanged
+              ? (state.currentCwd ?? "")
+              : target.currentCwd;
             if (
               target.title === state.title &&
               (target.activeProcessName ?? null) === state.activeProcessName &&

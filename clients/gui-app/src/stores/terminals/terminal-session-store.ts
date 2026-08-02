@@ -244,8 +244,8 @@ function currentCwdFromSession(
     | CanonicalTerminalSessionInfoWithCurrentCwd
     | CanonicalTerminalSessionInfo
     | TerminalSessionInfo,
-): string | null {
-  if (!("currentCwd" in session)) return null;
+): string | null | undefined {
+  if (!("currentCwd" in session)) return undefined;
   return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
@@ -404,6 +404,7 @@ export function createTerminalSessionStore(
     const callbacks: TerminalStreamCallbacks = {
       onSnapshot: (frame, scrollback) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         // First host frame for this session: the scrollback is in hand even
         // if xterm hasn't registered its writer yet (it lands in pendingWrites).
         markTerminalLoad(options.sessionId, "snapshot");
@@ -464,7 +465,7 @@ export function createTerminalSessionStore(
           lastOutputPreview,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
-          currentCwd: currentCwdFromSession(frame.session) ?? get().currentCwd,
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
         });
         flushRequestedResize();
       },
@@ -519,12 +520,13 @@ export function createTerminalSessionStore(
       },
       onSessionUpdated: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         set({
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
-          currentCwd: currentCwdFromSession(frame.session) ?? get().currentCwd,
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
         });
       },
       onConnectionStatus: (

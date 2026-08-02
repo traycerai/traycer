@@ -425,6 +425,35 @@ describe("createTerminalSessionStore", () => {
     expect(harness.handle.store.getState().currentCwd).toBe(
       "/repo/packages/gui",
     );
+
+    harness.callbacks().onSessionUpdated(sessionUpdated("vim"));
+    expect(harness.handle.store.getState().currentCwd).toBe(
+      "/repo/packages/gui",
+    );
+
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        sessionId: "terminal-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionKind: "terminal",
+        cwd: "/repo",
+        currentCwd: "",
+        shellCommand: "zsh",
+        shellArgs: [],
+        cols: 80,
+        rows: 24,
+        status: "running",
+        exitCode: null,
+        createdAt: 1,
+        title: null,
+        activeProcessName: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().currentCwd).toBeNull();
   });
 
   it("clears active process metadata when the session exits", () => {
