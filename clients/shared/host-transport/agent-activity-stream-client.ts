@@ -1,6 +1,7 @@
 import {
   agentActivitySubscribeServerFrameSchema,
   type AgentActivityByEpic,
+  type AgentActivityServedBy,
 } from "@traycer/protocol/host/agent/activity";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -12,8 +13,10 @@ import type {
 import type { WsStreamClient } from "./ws-stream-client";
 
 export interface AgentActivityStreamCallbacks {
-  readonly onSnapshot: (byEpic: AgentActivityByEpic) => void;
-  readonly onUpdate: (byEpic: AgentActivityByEpic) => void;
+  readonly onState: (
+    servedBy: AgentActivityServedBy,
+    byEpic: AgentActivityByEpic,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -25,7 +28,7 @@ export interface AgentActivityStreamClientOptions {
   readonly callbacks: AgentActivityStreamCallbacks;
 }
 
-/** Typed client for the optional host-local activity stream. */
+/** Typed client for the host-selected local/cloud activity stream. */
 export class AgentActivityStreamClient {
   private readonly session: IStreamSession;
   private closed = false;
@@ -53,10 +56,8 @@ export class AgentActivityStreamClient {
     const parsed = agentActivitySubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
-    if (frame.kind === "snapshot") {
-      this.options.callbacks.onSnapshot(frame.byEpic);
-    } else if (frame.kind === "update") {
-      this.options.callbacks.onUpdate(frame.byEpic);
+    if (frame.kind === "state") {
+      this.options.callbacks.onState(frame.servedBy, frame.byEpic);
     }
   }
 }

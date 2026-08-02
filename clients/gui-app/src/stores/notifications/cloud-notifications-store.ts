@@ -11,7 +11,10 @@ import {
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
 
 export type CloudNotificationsConnectionState =
   "connecting" | "connected" | "reconnecting" | "unavailable";
@@ -321,11 +324,11 @@ export function openCloudNotificationsStream(
   // client resets the store before opening its controller; delayed callbacks
   // from this one must never repopulate that new ownership epoch.
   const sessionEpoch = useCloudNotificationsStore.getState().sessionEpoch;
-  const reopenScheduler = createNotificationStreamReopenScheduler(() => {
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
     currentSession?.close();
     currentSession = null;
     openSession();
-  });
+  }, isReopenableNotificationsStreamClose);
 
   const reconnect = (): void => {
     if (disposed) return;

@@ -2,8 +2,6 @@ import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { Awareness, encodeAwarenessUpdate } from "y-protocols/awareness";
-import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -42,6 +40,10 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { NotificationNavigate } from "@/lib/notifications";
+import {
+  HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
+  HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
+} from "@/lib/host/stream-reopen";
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 
 interface HostState {
@@ -220,7 +222,11 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
-import { AGENT_ACTIVITY_AWARENESS_FIELD } from "@/lib/notifications/agent-activity-presence";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
+  useAgentActivityStore,
+} from "@/stores/agent-activity-store";
 
 function NotificationsSessionProvider(props: {
   readonly children: ReactNode;
@@ -343,23 +349,6 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   }
 }
 
-function encodeAgentActivityPresence(
-  epicId: string,
-  agentId: string,
-): Uint8Array {
-  const doc = new Y.Doc();
-  const awareness = new Awareness(doc);
-  awareness.setLocalState({
-    [AGENT_ACTIVITY_AWARENESS_FIELD]: {
-      [epicId]: { working: [agentId], turn: [agentId] },
-    },
-  });
-  const bytes = encodeAwarenessUpdate(awareness, [awareness.clientID]);
-  awareness.destroy();
-  doc.destroy();
-  return bytes;
-}
-
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
   userId: string | null,
@@ -403,16 +392,6 @@ function appendEntry(entry: NotificationEntry): void {
   doc.transact(() => {
     arr.push([createNotificationRoomEntryMap(entry)]);
   }, "stream");
-}
-
-function encodeNotificationSnapshot(entry: NotificationEntry): Uint8Array {
-  const doc = new Y.Doc();
-  doc
-    .getArray<NotificationRoomEntryMap>(NOTIFICATIONS_ARRAY_KEY)
-    .push([createNotificationRoomEntryMap(entry)]);
-  const bytes = Y.encodeStateAsUpdate(doc);
-  doc.destroy();
-  return bytes;
 }
 
 function hostEntry(input: {
@@ -637,6 +616,7 @@ describe("<NotificationsSessionProvider />", () => {
     );
     activationHookState.navigate = null;
     __resetNotificationsStoreForTests();
+    __resetAgentActivityStoreForTests();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
     useAppLocalNotificationsStore.getState().resetForTests();
@@ -657,7 +637,7 @@ describe("<NotificationsSessionProvider />", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps global activity presence while cloud relay owns notification rows", async () => {
+  it("uses the dedicated host-selected activity stream while cloud relay owns notification rows", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
@@ -694,7 +674,7 @@ describe("<NotificationsSessionProvider />", () => {
 
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
-        "notifications.subscribe",
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
       expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
@@ -702,26 +682,82 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     act(() => {
-      const globalSession = streamClient.sessionFor("notifications.subscribe");
-      globalSession.emitBinaryServerFrame(
-        {
-          kind: "snapshot",
-          hasBinaryPayload: true,
-          meta: { schemaVersion: "1.1.0" },
+      streamClient.sessionFor("agent.activity.subscribe").emitServerFrame({
+        kind: "state",
+        servedBy: "cloud",
+        byEpic: {
+          "epic-1": { working: ["agent-1"], turn: ["agent-1"] },
         },
-        encodeNotificationSnapshot(invitedEntry("legacy-room-entry", "epic-1")),
-      );
-      globalSession.emitBinaryServerFrame(
-        { kind: "awareness", hasBinaryPayload: true },
-        encodeAgentActivityPresence("epic-1", "agent-1"),
-      );
+        hasBinaryPayload: false,
+      });
     });
 
     expect([
-      ...(useNotificationsStore.getState().agentActivityByEpic.get("epic-1")
-        ?.working ?? []),
+      ...(useAgentActivityStore.getState().byEpic.get("epic-1")?.working ?? []),
     ]).toEqual(["agent-1"]);
     expect(useNotificationsStore.getState().entryIds).toEqual([]);
+
+    act(() => {
+      streamClient.sessionFor("agent.activity.subscribe").emitStatus("closed");
+    });
+
+    expect(useAgentActivityStore.getState()).toMatchObject({
+      connectionStatus: "closed",
+      servedBy: null,
+    });
+    expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
+  });
+
+  it("reopens activity after a recoverable terminal close", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        streamClient
+          .sessionFor("agent.activity.subscribe")
+          .emitClosed(fatalClose("UNAUTHORIZED"));
+      });
+      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(streamClient.subscribedMethods).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+        "agent.activity.subscribe",
+      ]);
+      act(() => {
+        streamClient
+          .sessionFor("agent.activity.subscribe")
+          .emitClosed(fatalClose("INCOMPATIBLE"));
+        vi.advanceTimersByTime(2 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
+      });
+      expect(streamClient.subscribedMethods).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("turns only post-baseline cloud snapshot arrivals into notification displays", async () => {
@@ -743,7 +779,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
-        "notifications.subscribe",
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
     });
@@ -815,7 +851,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
-        "notifications.subscribe",
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
     });
@@ -854,9 +890,9 @@ describe("<NotificationsSessionProvider />", () => {
     });
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
-        "notifications.subscribe",
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
-        "notifications.subscribe",
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
       expect(useCloudNotificationsStore.getState().hasSnapshot).toBe(false);
@@ -886,7 +922,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     await waitFor(() => {
       expect(firstClient.subscribedMethods).toEqual([
-        "notifications.subscribe",
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
     });
@@ -907,7 +943,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     await waitFor(() => {
       expect(replacementClient.subscribedMethods).toEqual([
-        "notifications.subscribe",
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
       const cloud = useCloudNotificationsStore.getState();
@@ -941,6 +977,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
+        "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
     });
@@ -1017,6 +1054,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     await waitFor(() => {
       expect(subscribeSpy.mock.calls.map(([method]) => method)).toEqual([
+        "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.feed.subscribe",
       ]);
@@ -1086,6 +1124,15 @@ describe("<NotificationsSessionProvider />", () => {
       },
       summary: { unreadCount: 1, attentionCount: 0 },
     });
+    __setAgentActivityStateForTests(
+      {
+        "epic-alpha": {
+          working: ["agent-before-host-switch"],
+          turn: ["agent-before-host-switch"],
+        },
+      },
+      "local",
+    );
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-user-switch",
       target: {
@@ -1289,6 +1336,8 @@ describe("<NotificationsSessionProvider />", () => {
       expect(useNotificationsStore.getState().entries).toHaveLength(1);
       expect(useHostNotificationsStore.getState().byId).toEqual({});
       expect(useHostNotificationsStore.getState().summary).toBeNull();
+      expect(useAgentActivityStore.getState().servedBy).toBeNull();
+      expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
       expect(
         Object.keys(useAppLocalNotificationsStore.getState().byId),
       ).not.toHaveLength(0);
@@ -1746,6 +1795,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(firstClient.session.clientFrames).toHaveLength(1);
     });
     expect([...firstClient.subscribedMethods].sort()).toEqual([
+      "agent.activity.subscribe",
       "host.notifications.feed.subscribe",
       "notifications.subscribe",
     ]);
@@ -1785,10 +1835,14 @@ describe("<NotificationsSessionProvider />", () => {
       expect(secondClient.session.clientFrames).toHaveLength(1);
     });
     expect([...secondClient.subscribedMethods].sort()).toEqual([
+      "agent.activity.subscribe",
       "host.notifications.feed.subscribe",
       "notifications.subscribe",
     ]);
     expect(firstClient.sessionFor("notifications.subscribe").closeCount).toBe(
+      1,
+    );
+    expect(firstClient.sessionFor("agent.activity.subscribe").closeCount).toBe(
       1,
     );
     expect(
