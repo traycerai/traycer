@@ -2228,11 +2228,19 @@ function ownerHierarchyMatchesSearch(
   liveArtifactTitle: string | null,
 ): boolean {
   const label = resolvedOwnerLabel(row, liveArtifactTitle);
-  return matchesResourceSearch(searchQuery, [
+  const ownerTerms = [
     ...taskSearchTerms(task),
     ...ownerMetadataSearchTerms(row, label),
-    ...row.snapshot.processes.flatMap(processSearchTerms),
-  ]);
+  ];
+  return (
+    matchesResourceSearch(searchQuery, ownerTerms) ||
+    row.snapshot.processes.some((process) =>
+      matchesResourceSearch(searchQuery, [
+        ...ownerTerms,
+        ...processSearchTerms(process),
+      ]),
+    )
+  );
 }
 
 function buildOwnerProcessSearchProjection(input: {

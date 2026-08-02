@@ -620,6 +620,25 @@ describe("ResourceMonitorPopover", () => {
     ).toBe(true);
   });
 
+  it("does not retain an owner when tokens only match separate processes", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "dev-server make" } },
+    );
+
+    expect(
+      screen.getByText("No resources match “dev-server make”."),
+    ).not.toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+  });
+
   it("matches across the host header and process metadata", () => {
     const stub = installStubFactory();
     renderPopover();
