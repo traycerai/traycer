@@ -9286,6 +9286,7 @@ describe("ChatMessages scroll policy", () => {
       expect(anchorId).toBeTruthy();
       const rawAnchorScrollTop =
         anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
+      const readerRestoredScrollTop = 150 * TICKET_13_ROW_HEIGHT_PX;
       const key = `t15-hydration-reader-${Math.random().toString(36).slice(2)}`;
       const partialMessages = fullMessages.slice(150);
 
@@ -9313,6 +9314,7 @@ describe("ChatMessages scroll policy", () => {
         scrollStateKey: key,
       });
       await settleLegendList();
+      expect(getScrollNode().scrollTop).toBe(readerRestoredScrollTop);
       expect(getScrollNode().scrollTop).not.toBe(rawAnchorScrollTop);
       reopened.unmount();
     });
