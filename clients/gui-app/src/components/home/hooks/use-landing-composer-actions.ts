@@ -59,6 +59,7 @@ import {
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
   stringValue,
+  type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
 import {
@@ -102,6 +103,13 @@ export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
   readonly draftId: string | null;
   readonly editor: ComposerPromptEditorHandle | null;
+  /**
+   * The composer's loaded command catalog, or null when it has not loaded.
+   * Submit-time chip conversion resolves a written `/command` / `$skill`
+   * against it - see `buildSubmittedChatJSONContent`. Read at submit time by
+   * the caller, which owns the picker store.
+   */
+  readonly slashCatalog: SlashCommandCatalog | null;
   readonly toolbar: {
     readonly selection: HarnessModelSelection;
     readonly reasoning: ReasoningLevel;
@@ -275,7 +283,10 @@ export function useLandingComposerActions(): LandingComposerActions {
         return;
       }
 
-      const submittedContent = buildSubmittedChatJSONContent(resolvedContent);
+      const submittedContent = buildSubmittedChatJSONContent(
+        resolvedContent,
+        args.slashCatalog,
+      );
       const profile = useAuthStore.getState().profile;
 
       const settings = buildChatRunSettings({

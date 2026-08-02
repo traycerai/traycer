@@ -34,11 +34,11 @@ function quoteDraft(): JsonContent {
 describe("blockquote submit round-trip", () => {
   it("passes a draft containing a blockquote through buildSubmittedChatJSONContent unchanged", () => {
     const draft = quoteDraft();
-    expect(buildSubmittedChatJSONContent(draft)).toEqual(draft);
+    expect(buildSubmittedChatJSONContent(draft, null)).toEqual(draft);
   });
 
   it("renders the submitted content through ComposerContentRenderer with the quote styling", () => {
-    const submitted = buildSubmittedChatJSONContent(quoteDraft());
+    const submitted = buildSubmittedChatJSONContent(quoteDraft(), null);
     const { container } = render(
       <ComposerContentRenderer
         content={submitted}

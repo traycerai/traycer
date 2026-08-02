@@ -198,3 +198,15 @@ export type ProviderSlashCommand = GuiAgentCommandOption & {
 };
 
 export type SlashCommand = ProviderSlashCommand;
+
+/**
+ * Character that opened a slash picker, or that a raw-text prompt led with.
+ * Purely what the user pressed - it does not narrow the catalog. The menu echoes
+ * it so a row picked with `$` does not read as `/name`, and the chip keeps it for
+ * the same reason; translating a skill into the form a provider expects (Codex
+ * takes `$name`, everything else `/name`) is the harness layer's job.
+ *
+ * Lives here rather than beside the picker so the text-to-chip converters in
+ * `tiptap-json-content.ts` can name it without importing from the editor.
+ */
+export type SlashCommandTrigger = "/" | "$";

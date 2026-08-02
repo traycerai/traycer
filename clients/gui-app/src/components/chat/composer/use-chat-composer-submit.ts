@@ -229,7 +229,10 @@ export function useChatComposerSubmit(
         serviceTier: toolbar.serviceTier,
       });
 
-      const submittedContent = buildSubmittedChatJSONContent(editorContent);
+      const submittedContent = buildSubmittedChatJSONContent(
+        editorContent,
+        pickerStore.getState().knownSlashCommands,
+      );
       const attachments = buildAttachmentsFromJSONContent(submittedContent);
       const deliveryPolicy = resolveSubmitDeliveryPolicy({
         source,
@@ -275,6 +278,7 @@ export function useChatComposerSubmit(
       activeTurnStatus,
       editorRef,
       finalizeSend,
+      pickerStore,
       getActiveTurnForSteer,
       steerCapable,
       steerEnabled,

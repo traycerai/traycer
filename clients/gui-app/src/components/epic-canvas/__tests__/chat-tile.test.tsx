@@ -84,6 +84,38 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
 }));
 
+// The tile subscribes to the command catalog itself, because its next-step /
+// compact / implement-plan sends bypass the composer and its picker store. The
+// mocked host client above never resolves a request, so without this the
+// catalog would stay loading forever and every `$` prompt would (correctly) be
+// left as prose. Serve one skill so the gated conversion has something to
+// resolve; unknown names still fall through to the ungated `/` fallback.
+vi.mock("@/hooks/composer/use-slash-commands", () => ({
+  useSlashCommands: () => ({
+    data: [
+      {
+        harnessId: "claude",
+        name: "traycer-implement",
+        description: "Implement a ticket",
+        argumentHint: null,
+        kind: "skill",
+        metadata: { path: "/repo/.agents/skills/traycer-implement/SKILL.md" },
+        source: "provider",
+        preview: {
+          kind: "text",
+          primary: "Implement a ticket",
+          secondary: null,
+          mono: false,
+        },
+      },
+    ],
+    isLoading: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(undefined),
+  }),
+}));
+
 vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
   ...(await importActual<
     typeof import("@/hooks/epic/use-epic-chat-mutations")
@@ -518,6 +550,45 @@ function nextStepsAssistantMessage(): Message {
           "Implementation is complete.",
           "",
           "- [] /implementation-validation all",
+          "</TRAYCER_NEXT_STEPS>",
+        ].join("\n"),
+        status: "completed",
+        timestamp: 2,
+        providerNotice: null,
+      },
+    ],
+    timestamp: 2,
+    turnId: "turn-next-steps",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+}
+
+// The `$` sibling of the fixture above. Kept separate rather than parameterized
+// because every other next-step case asserts against the `/` prompt text.
+function skillNextStepsAssistantMessage(): Message {
+  return {
+    role: "assistant",
+    messageId: "next-steps-msg",
+    startedAt: 1,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: "next-steps-block",
+        text: [
+          "<TRAYCER_NEXT_STEPS>",
+          "Implementation is complete.",
+          "",
+          "- [] $traycer-implement Implement the runtime ticket.",
           "</TRAYCER_NEXT_STEPS>",
         ].join("\n"),
         status: "completed",
@@ -1791,9 +1862,68 @@ describe("<ChatTile />", () => {
           content: [
             {
               type: "slashCommand",
-              attrs: { commandName: "implementation-validation" },
+              attrs: {
+                commandName: "implementation-validation",
+                trigger: "/",
+              },
             },
             { type: "text", text: " all" },
+          ],
+        },
+      ],
+    });
+  });
+
+  // A next-step click never touches the composer, so the chip has to come out of
+  // `buildSubmittedChatJSONContent`. When that converter was `/`-only the `$`
+  // prompt stayed prose, which cost more than the pill: with neither a
+  // `slashCommand` node nor a leading `/name` in the text, the host resolved no
+  // invocation at all and the skill silently never ran.
+  it("sends a $-prefixed next step as a skill chip", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skillNextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "$traycer-implement Implement the runtime ticket.",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.content).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "slashCommand",
+              attrs: {
+                commandName: "traycer-implement",
+                harnessId: "claude",
+                kind: "skill",
+                description: "Implement a ticket",
+                argumentHint: null,
+                path: "/repo/.agents/skills/traycer-implement/SKILL.md",
+                trigger: "$",
+              },
+            },
+            { type: "text", text: " Implement the runtime ticket." },
           ],
         },
       ],

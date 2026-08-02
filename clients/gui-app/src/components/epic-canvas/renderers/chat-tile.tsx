@@ -125,7 +125,10 @@ import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-termi
 import { emitChatStreamErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { type InitialChatHandoffScope } from "@/stores/epics/initial-chat-handoff-store";
 import { contentBlocksText } from "@/lib/chat/content-block-text";
-import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  buildSubmittedChatJSONContent,
+  type SlashCommandCatalog,
+} from "@/lib/composer/tiptap-json-content";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
@@ -1422,6 +1425,47 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const nextStepSettings = currentComposerSettings;
   const editSettings = nextStepSettings;
+  // The tile's own send paths - next steps, compact, inline edit - never touch
+  // the composer, so they cannot read the catalog off its picker store. Subscribe
+  // to the same query under the SAME `surfaceFocused` predicate the composer uses
+  // (`chatComposerFocused` → `chatTileCatalogActivity`): identical gating means an
+  // off-screen tile still adds no `agent.gui.listCommands` subscription, and when
+  // both are on, TanStack Query dedupes the two subscribers into one fetch.
+  const tabHostClient = useTabHostClient();
+  const {
+    data: slashCommands,
+    isLoading: slashCommandsLoading,
+    error: slashCommandsError,
+  } = useSlashCommands("", {
+    hostClient: tabHostClient,
+    harnessId: currentComposerSettings.harnessId,
+    // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
+    // context-usage chip above uses it: on a folder-fallback chat the two differ,
+    // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
+    // and resolving against a catalog the composer never saw.
+    workingDirectories: resolvedComposerMentionRoots,
+    enabled: surfaceFocused,
+  });
+  // Null until loaded, which makes a `$` prompt stay plain text rather than
+  // chip against a catalog we have not seen yet.
+  // `error` is part of the gate, not a detail. A failed `listCommands` leaves
+  // TanStack at `isLoading === false` with `data === []`, which would otherwise
+  // read as a legitimately EMPTY catalog - "loaded, this workspace has no
+  // commands" - and chip nothing while looking resolved. An unanswered query is
+  // unresolved, not empty. The `$` then stays prose, which the host still
+  // resolves lexically; the cost is the pill, never the skill.
+  const slashCatalog = useMemo<SlashCommandCatalog | null>(
+    () =>
+      surfaceFocused && !slashCommandsLoading && slashCommandsError === null
+        ? new Map(
+            slashCommands.map((command) => [
+              command.name.toLowerCase(),
+              command,
+            ]),
+          )
+        : null,
+    [surfaceFocused, slashCommands, slashCommandsLoading, slashCommandsError],
+  );
   const canModifyMessages = canModifyChatMessages({ canAct, state });
   const activeInlineEdit = normalizeInlineEditForSession(
     uiState.inlineEdit,
@@ -1526,6 +1570,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       canAct,
       currentComposerSettings,
       editSettings,
+      slashCatalog,
       mentionRoots: composerMentionRoots,
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
@@ -1629,13 +1674,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       if (sender === null) return false;
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(option.prompt),
+        slashCatalog,
       );
       return (
         chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
         null
       );
     },
-    [canSendNextStep, chatActions, nextStepSettings, profile],
+    [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
   );
   // Runs the harness's own compaction from the context-usage chip. Never
   // interrupts: with a turn running (or work already queued) the compact
@@ -1677,6 +1723,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       if (sender === null) return;
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(`/${commandName}`),
+        slashCatalog,
       );
       // A cheap re-entrancy guard against a double-click firing two real
       // compactions: the optimistic-queue dedupe only suppresses the second
@@ -1714,6 +1761,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       handle.store,
       nextStepSettings,
       profile,
+      slashCatalog,
     ],
   );
   const nextStepActions = useMemo(
@@ -1729,12 +1777,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     if (sender === null) return false;
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
+      slashCatalog,
     );
     return (
       chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
       null
     );
-  }, [canAct, chatActions, nextStepSettings, profile]);
+  }, [canAct, chatActions, nextStepSettings, profile, slashCatalog]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
     () => ({
       epicId: currentEpicId,
