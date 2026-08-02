@@ -57,6 +57,15 @@ export interface CommGraphEdgeData extends Record<string, unknown> {
   readonly edgeId: string;
   readonly hasOpenThread: boolean;
   /**
+   * This edge holds keyboard focus. Tracked by the canvas because the wrapper
+   * that receives focus is React Flow's, not ours - see `edges` there. The one
+   * state allowed to touch the base stroke: React Flow's stylesheet strips the
+   * <g>'s outline and paints its own focus stroke only for a `selectable` edge,
+   * which this canvas is not, so a focused edge would otherwise look identical
+   * to an unfocused one.
+   */
+  readonly focused: boolean;
+  /**
    * Set when the cursor sits on a row carried by THIS pair, so the canvas shows
    * which exchange the playhead is on. `request` vs `reply` comes from
    * `inReplyTo`; `notice` is the broker giving up rather than an agent speaking.
@@ -145,11 +154,18 @@ export const CommGraphEdgeView = memo(function CommGraphEdgeView(
       : commGraphEdgeEndpoints(sourceBox, targetBox);
   const [path, labelX, labelY] = getBezierPath(endpoints);
   if (data === undefined) return <BaseEdge id={props.id} path={path} />;
-  // The ONLY thing that ever varies on the base stroke. Activity does not
-  // recolor, thicken or pulse it - see the header: the traveling circle IS the
-  // activity treatment, and a stroke that also reacted would be a second,
-  // redundant channel that breaks the uniform-line contract.
-  const style = data.hasOpenThread ? { strokeDasharray: "4 3" } : props.style;
+  // Activity does not recolor, thicken or pulse the base stroke - see the
+  // header: the traveling circle IS the activity treatment, and a stroke that
+  // also reacted would be a second, redundant channel that breaks the
+  // uniform-line contract. The dash (an open thread) and the focus ring are the
+  // only two exceptions, and the second is not activity at all: it is where
+  // the keyboard is, on one edge, only while it is there.
+  const threadStyle = data.hasOpenThread
+    ? { strokeDasharray: "4 3" }
+    : props.style;
+  const style = data.focused
+    ? { ...threadStyle, stroke: "var(--color-ring)", strokeWidth: 2 }
+    : threadStyle;
   return (
     <>
       <BaseEdge id={props.id} path={path} style={style} />

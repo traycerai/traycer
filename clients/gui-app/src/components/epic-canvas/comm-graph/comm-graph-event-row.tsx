@@ -85,9 +85,6 @@ export interface CommGraphEventRowProps {
   /** Created-row jump to the child's transcript start - see `CommGraphJump`. */
   readonly canJumpToCreated: boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  /** Notice-row jump to the idle agent's tail - see `CommGraphJump`. */
-  readonly canJumpToNoticed: boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   /** Open an endpoint's tile when this row has no transcript anchor for it. */
   readonly onOpenAgent: (agentId: string) => void;
 }
@@ -183,13 +180,11 @@ export const CommGraphEventRow = memo(function CommGraphEventRow(
     agentNames,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     epicId,
     event,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgent,
     testIdPrefix,
@@ -208,8 +203,6 @@ export const CommGraphEventRow = memo(function CommGraphEventRow(
       onJumpToSender={onJumpToSender}
       canJumpToCreated={canJumpToCreated}
       onJumpToCreated={onJumpToCreated}
-      canJumpToNoticed={canJumpToNoticed}
-      onJumpToNoticed={onJumpToNoticed}
       onOpenAgent={onOpenAgent}
     />
   );
@@ -232,21 +225,17 @@ function CommGraphRowHeader(props: {
   readonly onJumpToSender: (event: CommGraphEvent) => void;
   readonly canJumpToCreated: boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  readonly canJumpToNoticed: boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   readonly onOpenAgent: (agentId: string) => void;
 }) {
   const {
     agentNames,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     event,
     kind,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgent,
     rowId,
@@ -266,8 +255,6 @@ function CommGraphRowHeader(props: {
           onJumpToSender={onJumpToSender}
           canJumpToCreated={canJumpToCreated}
           onJumpToCreated={onJumpToCreated}
-          canJumpToNoticed={canJumpToNoticed}
-          onJumpToNoticed={onJumpToNoticed}
           onOpenAgent={onOpenAgent}
           testIdPrefix={`${testIdPrefix}-${rowId}`}
         />
@@ -307,9 +294,13 @@ const SUBJECT_CLASS =
  *   to its own "Sent message" card, resolved at jump time from block
  *   metadata, when its transcript can carry it (a projected GUI chat).
  * - notice rows: the WAITING agent (arrow's receiver) scrolls to the
- *   delivered notice when the row carries an anchor; the IDLE agent (arrow's
- *   sender) scrolls to the TAIL of its transcript - where the evidence for
- *   the notice lives.
+ *   delivered notice when the row carries an anchor - that notice is a real
+ *   message in its transcript. The IDLE agent (arrow's sender) is a plain
+ *   open: NOTHING in its transcript is the notice. The broker observed it
+ *   going quiet; the agent never wrote a message saying so, so there is no
+ *   anchor to land on and the endpoint must not claim one. Its transcript
+ *   tail is merely "whatever it was doing", which drifts as the agent keeps
+ *   working and is not the row the reader clicked.
  * - created rows: the CREATED agent scrolls to the START of its transcript
  *   (its birth); the creator is a plain open - its create call carries no
  *   resolvable anchor today.
@@ -330,8 +321,6 @@ function CommGraphSubject(props: {
   readonly onJumpToSender: (event: CommGraphEvent) => void;
   readonly canJumpToCreated: boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  readonly canJumpToNoticed: boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   readonly onOpenAgent: (agentId: string) => void;
   readonly testIdPrefix: string;
 }) {
@@ -339,12 +328,10 @@ function CommGraphSubject(props: {
     agentNames,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     event,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgent,
     testIdPrefix,
@@ -374,16 +361,6 @@ function CommGraphSubject(props: {
       return {
         onOpen: () => onJumpToCreated(event),
         scrollSuffix: " and scroll to the start",
-      };
-    }
-    if (
-      event.kind === "a2a_notice" &&
-      canJumpToNoticed &&
-      agentId === event.receiverAgentId
-    ) {
-      return {
-        onOpen: () => onJumpToNoticed(event),
-        scrollSuffix: " and scroll to the latest activity",
       };
     }
     if (canJumpToSender && agentId === event.senderAgentId) {
@@ -442,22 +419,18 @@ function CommGraphSectionedRow(props: {
   readonly onJumpToSender: (event: CommGraphEvent) => void;
   readonly canJumpToCreated: boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  readonly canJumpToNoticed: boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   readonly onOpenAgent: (agentId: string) => void;
 }) {
   const {
     agentNames,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     epicId,
     event,
     kind,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgent,
     rowId,
@@ -505,8 +478,6 @@ function CommGraphSectionedRow(props: {
       onJumpToSender={onJumpToSender}
       canJumpToCreated={canJumpToCreated}
       onJumpToCreated={onJumpToCreated}
-      canJumpToNoticed={canJumpToNoticed}
-      onJumpToNoticed={onJumpToNoticed}
       onOpenAgent={onOpenAgent}
     />
   );
