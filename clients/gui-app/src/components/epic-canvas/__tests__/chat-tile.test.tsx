@@ -842,6 +842,17 @@ function queryButtonByAriaLabel(label: string): HTMLButtonElement | null {
   return button;
 }
 
+function pasteInlineEditText(text: string): void {
+  fireEvent.paste(screen.getByRole("textbox", { name: "Edit message" }), {
+    clipboardData: {
+      files: [],
+      items: [],
+      types: ["text/plain"],
+      getData: (type: string) => (type === "text/plain" ? text : ""),
+    },
+  });
+}
+
 function getButtonContainingText(text: string): HTMLButtonElement {
   const button = screen.getByText(text).closest("button");
   if (!(button instanceof HTMLButtonElement)) {
@@ -1135,6 +1146,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
+    pasteInlineEditText(" updated");
     fireEvent.click(getButtonByAriaLabel("Send edit"));
 
     expect(chatHarness.sent).toHaveLength(1);
@@ -1152,6 +1164,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
+    pasteInlineEditText(" updated");
     expect(getButtonByAriaLabel("Send edit")).not.toBeNull();
 
     fireEvent.click(getButtonByAriaLabel("Send edit"));
