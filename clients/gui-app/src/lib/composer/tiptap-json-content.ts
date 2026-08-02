@@ -22,7 +22,7 @@ import { normalizeComposerContent } from "@/lib/composer/composer-content-normal
 // serializes to the canonical `/name`, so nothing downstream of the composer has
 // to learn about `$`.
 const LEADING_SLASH_COMMAND_REGEX =
-  /^([/$])([A-Za-z0-9][A-Za-z0-9:_-]*)(?=$|\s)/;
+  /^([ \t]*)([/$])([A-Za-z0-9][A-Za-z0-9:_-]*)(?=$|\s)/;
 
 const ARTIFACT_CONTEXT_TYPES: ReadonlyArray<EpicArtifactKind> = [
   "spec",
@@ -225,21 +225,26 @@ export function mentionPlainTextFromAttrs(
 
 export function parseLeadingSlashCommand(prompt: string): {
   readonly name: string;
+  /** Offset of the trigger character; everything before it is indent. */
+  readonly start: number;
   readonly end: number;
   readonly trigger: SlashCommandTrigger;
 } | null {
   const match = LEADING_SLASH_COMMAND_REGEX.exec(prompt);
   if (match === null) return null;
   return {
-    name: match[2],
+    name: match[3],
+    start: match[1].length,
     end: match[0].length,
-    trigger: match[1] === "$" ? "$" : "/",
+    trigger: match[2] === "$" ? "$" : "/",
   };
 }
 
 interface LeadingSlashScanState {
   complete: boolean;
   changed: boolean;
+  /** Text of the sibling following the node being scanned, when it is text. */
+  nextText: string | null;
   readonly catalog: SlashCommandCatalog | null;
 }
 
@@ -250,6 +255,7 @@ function contentWithLeadingSlashCommandNode(
   const state: LeadingSlashScanState = {
     complete: false,
     changed: false,
+    nextText: null,
     catalog,
   };
   const nodes = nodesWithLeadingSlashCommandNode([content], state);
@@ -261,7 +267,21 @@ function nodesWithLeadingSlashCommandNode(
   nodes: ReadonlyArray<JsonContent>,
   state: LeadingSlashScanState,
 ): JsonContent[] {
-  return nodes.flatMap((node) => nodeWithLeadingSlashCommandNode(node, state));
+  return nodes.flatMap((node, index) => {
+    // The sibling that would continue this node's text. Formatting splits a
+    // run - a bold `$review` beside a plain `-code` - into separate text nodes,
+    // so a token can look complete here while the prompt reads `/review-code`.
+    // `.at` so the out-of-range read is typed `| undefined`; index access
+    // here is not, and the optional chain would lint as unnecessary.
+    const next = nodes.at(index + 1);
+    state.nextText = next?.type === "text" ? (next.text ?? null) : null;
+    return nodeWithLeadingSlashCommandNode(node, state);
+  });
+}
+
+/** Whether `text` continues a command name rather than ending it. */
+function continuesCommandName(text: string | null): boolean {
+  return text !== null && /^[A-Za-z0-9:_-]/.test(text);
 }
 
 /**
@@ -278,13 +298,23 @@ function textWithLeadingSlashCommandNode(
   state.complete = true;
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return [node];
+  const rest = text.slice(parsed.end);
+  // The token only LOOKS complete because this node ends. Chipping a prefix
+  // here is worse than not converting at all: the chip resolves and is sent
+  // structurally as `review` while the text still reads `/review-code`, so the
+  // WRONG skill runs - whereas leaving it as prose lets the host resolve the
+  // full concatenated name lexically.
+  if (rest.length === 0 && continuesCommandName(state.nextText)) return [node];
   const resolved = state.catalog?.get(parsed.name.toLowerCase()) ?? null;
   // `$` is meaningless without a catalog hit - see the note on
   // `buildSubmittedChatJSONContent` - so leave the prose alone.
   if (resolved === null && parsed.trigger === "$") return [node];
-  const rest = text.slice(parsed.end);
+  const indent = text.slice(0, parsed.start);
   state.changed = true;
   return [
+    // Indent kept as its own node: the editor treats a command after leading
+    // spaces as leading, and dropping them would silently edit the user's text.
+    ...(indent.length === 0 ? [] : [{ ...node, text: indent }]),
     resolved === null
       ? slashCommandNodeFromName(parsed.name, parsed.trigger)
       : slashCommandNodeFromCommand(resolved, parsed.trigger),

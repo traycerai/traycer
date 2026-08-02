@@ -287,6 +287,62 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
+  it("chips a $skill written after leading spaces, keeping the indent", () => {
+    // The editor treats a command after leading spaces as leading and the host
+    // trims the prompt, so this is a real command - it just must not silently
+    // lose the user's whitespace on the way to becoming a chip.
+    expect(
+      submittedParagraph("   $frontend-design polish this", CATALOG),
+    ).toEqual([
+      { type: "text", text: "   " },
+      {
+        type: "slashCommand",
+        attrs: {
+          commandName: "frontend-design",
+          harnessId: "claude",
+          kind: "skill",
+          description: "Use frontend-design",
+          argumentHint: null,
+          path: "/repo/.agents/skills/frontend-design/SKILL.md",
+          trigger: "$",
+        },
+      },
+      { type: "text", text: " polish this" },
+    ]);
+  });
+
+  // Formatting splits a run into separate text nodes, so a token can look
+  // complete at a node boundary while the prompt reads `/frontend-designer`.
+  // Chipping the prefix would be WORSE than not converting: the structural node
+  // says `frontend-design` and the wrong skill runs, where prose would have let
+  // the host resolve the full name.
+  it("does not chip a leading token that an adjacent text node continues", () => {
+    const doc = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "$frontend-design",
+                marks: [{ type: "bold" }],
+              },
+              { type: "text", text: "er the header" },
+            ],
+          },
+        ],
+      },
+      CATALOG,
+    );
+
+    expect(doc.content?.[0].content).toEqual([
+      { type: "text", text: "$frontend-design", marks: [{ type: "bold" }] },
+      { type: "text", text: "er the header" },
+    ]);
+  });
+
   it("leaves a non-leading $skill alone", () => {
     // Only the leading token is a command context, same as `/`.
     expect(submittedParagraph("please run $frontend-design", CATALOG)).toEqual([
