@@ -387,7 +387,6 @@ function renderPickerWithFixture(
       selection,
       reasoning: "",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: false,

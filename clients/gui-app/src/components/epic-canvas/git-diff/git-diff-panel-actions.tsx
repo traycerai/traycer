@@ -1,21 +1,32 @@
 import { useCallback } from "react";
-import { FolderTree, List, RotateCcw } from "lucide-react";
-import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
+import { FolderTree, List, MoreHorizontal } from "lucide-react";
+import type { LeftPanelHeaderSlotProps } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { cn } from "@/lib/utils";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
 } from "@/stores/epics/git-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useGitSubmoduleSnapshotRefresh } from "@/hooks/git/use-git-submodule-snapshot-refresh";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 
 // Safety cap so a hung host fetch can't wedge the spinning/disabled state.
 const GIT_REFRESH_TIMEOUT_MS = 10_000;
 
-export function GitDiffPanelActions(props: LeftPanelSlotProps) {
+export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
   const listLayout = useGitPanelStore(
     (s) => selectGitPanelEpicState(props.epicId)(s).listLayout,
   );
@@ -50,46 +61,75 @@ export function GitDiffPanelActions(props: LeftPanelSlotProps) {
     externalRefreshing: isRefreshing,
     timeoutMs: GIT_REFRESH_TIMEOUT_MS,
   });
+  const menuOpen = usePanelHeaderMenuOpen(props.tabId, "git-diff", "more");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
+  const setPanelSectionCollapsed = useEpicLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
+  const handleMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && props.collapsed) {
+        setPanelSectionCollapsed("git-diff", false);
+      }
+      setMenuOpen(props.tabId, "git-diff", "more", open);
+    },
+    [props.collapsed, props.tabId, setMenuOpen, setPanelSectionCollapsed],
+  );
 
   return (
-    <div className="flex items-center gap-0.5">
+    <DropdownMenu open={menuOpen} onOpenChange={handleMenuOpenChange}>
       <TooltipWrapper
-        label={layoutToggleLabel}
-        side="bottom"
-        sideOffset={4}
-        align="end"
+        label="More Git Diff actions"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={handleToggleLayout}
-          aria-label={layoutToggleLabel}
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="More Git Diff actions"
+            data-testid="git-diff-panel-more"
+            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+          >
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+      </TooltipWrapper>
+      <DropdownMenuContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        avoidCollisions={false}
+        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
+      >
+        <DropdownMenuItem
+          onSelect={handleToggleLayout}
           data-testid="git-diff-panel-layout-toggle"
-          className="text-muted-foreground hover:text-foreground"
         >
           {listLayout === "sections" ? (
             <FolderTree className="size-4" />
           ) : (
             <List className="size-4" />
           )}
-        </Button>
-      </TooltipWrapper>
-
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={refresh.trigger}
-        aria-label="Refresh"
-        disabled={selectedRepo === null || refresh.refreshing}
-        data-testid="git-diff-panel-refresh"
-        className="text-muted-foreground hover:text-foreground"
-      >
-        <RotateCcw
-          className={cn("size-4", refresh.refreshing && "animate-spin")}
-        />
-      </Button>
-    </div>
+          {layoutToggleLabel}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={refresh.trigger}
+          disabled={selectedRepo === null || refresh.refreshing}
+          data-testid="git-diff-panel-refresh"
+        >
+          {refresh.refreshing ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Refresh
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

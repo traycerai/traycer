@@ -35,10 +35,10 @@ import type { CommandFn } from "../runner/runner";
  * profile.
  *
  * GUI permission selection (`--permission-mode`) defaults to `full_access`.
- * Callers pass a more restrictive mode when the agent selection guide directs
- * them to do so. The choice is carried by `agent.create@3.0`; transport
- * downgrade to released v1/v2 hosts fails with upgrade guidance rather than
- * discarding it.
+ * Callers pass a more restrictive mode only when the user's agent selection
+ * guide explicitly directs them to do so. The choice is carried by
+ * `agent.create@3.0`; transport downgrade to released v1/v2 hosts fails with
+ * upgrade guidance rather than discarding it.
  */
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
@@ -47,7 +47,6 @@ export function buildAgentCreateCommand(opts: {
   readonly surface: string | null;
   readonly harness: string | null;
   readonly model: string | null;
-  readonly agentMode: string | null;
   readonly reasoningEffort: string | null;
   readonly fast: boolean;
   readonly permissionMode: string | null;
@@ -70,7 +69,9 @@ export function buildAgentCreateCommand(opts: {
       surface: opts.surface,
       harnessId: opts.harness,
       model: opts.model,
-      agentMode: opts.agentMode,
+      // Epic Mode was removed from the product; the protocol still carries the
+      // field, so every create states the one remaining mode.
+      agentMode: "regular",
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast ? true : null,
       permissionMode: opts.permissionMode ?? "full_access",

@@ -36,6 +36,7 @@ import type {
   SupportSubmitReportResult,
   WindowSummary,
 } from "../../ipc-contracts/window-types";
+import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 import type {
   CredentialsMigrationOutcome,
   StoredAuthTokens,
@@ -600,6 +601,31 @@ export class RunnerIpcBridge {
   }
 
   /**
+   * Relays a renderer-owned notification to the focused renderer when the
+   * emitter lives in another window. The originating renderer already drew
+   * its own toast, so same-window focus needs no duplicate delivery.
+   */
+  deliverForegroundNotificationDisplay(
+    senderWebContentsId: number | null,
+    display: DesktopNotificationForegroundDisplay,
+  ): boolean {
+    const focused = this.findFocusedLiveRecord();
+    if (focused === null) return false;
+    if (focused.webContentsId === senderWebContentsId) return true;
+    const delivered = this.safeSendToWindow(
+      focused.windowId,
+      RunnerHostEvent.notificationForegroundDisplay,
+      display,
+    );
+    if (!delivered) {
+      log.warn("[runner-ipc] foreground notification relay failed", {
+        windowId: focused.windowId,
+      });
+    }
+    return delivered;
+  }
+
+  /**
    * Forwards a tray epic-click epicId to the renderer so the mounted
    * `gui-app` can open the selected epic. Routes to the window that already
    * owns the epic when there is one, else the MRU window. Called by the tray
@@ -1033,18 +1059,24 @@ export class RunnerIpcBridge {
   private resolveRendererHostedCommandTarget(
     command: MenuCommandId,
   ): IpcWindowRecord | null {
-    const focused = this.windowRegistry
-      .records()
-      .find(
-        (record) => record.window.isFocused() && !record.window.isDestroyed(),
-      );
-    if (focused !== undefined) {
+    const focused = this.findFocusedLiveRecord();
+    if (focused !== null) {
       return focused;
     }
     if (isMruFallbackMenuCommand(command)) {
       return this.windowRegistry.getMruRecord();
     }
     return null;
+  }
+
+  private findFocusedLiveRecord(): IpcWindowRecord | null {
+    return (
+      this.windowRegistry
+        .records()
+        .find(
+          (record) => !record.window.isDestroyed() && record.window.isFocused(),
+        ) ?? null
+    );
   }
 
   pruneClosedWindowState(): void {

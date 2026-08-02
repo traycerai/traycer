@@ -17,7 +17,65 @@ import type {
   SupportSubmitReportRequest,
   SupportSubmitReportResult,
 } from "../ipc-contracts/window-types";
+import type {
+  DesktopNotificationForegroundAppLocal,
+  DesktopNotificationForegroundDisplay,
+} from "../ipc-contracts/notification-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
+
+const MAX_BUFFERED_FOREGROUND_NOTIFICATION_DISPLAYS = 20;
+
+interface ForegroundNotificationDisplayChannel {
+  subscribe(
+    handler: Listener<DesktopNotificationForegroundDisplay>,
+  ): Disposable;
+}
+
+/**
+ * Installs the main -> preload listener as soon as the bridge is built, before
+ * React can mount. Events that arrive during renderer startup/reload are kept
+ * until the first GUI subscriber is ready, then delivered exactly once.
+ */
+function createForegroundNotificationDisplayChannel(): ForegroundNotificationDisplayChannel {
+  const handlers = new Set<Listener<DesktopNotificationForegroundDisplay>>();
+  const buffered: DesktopNotificationForegroundDisplay[] = [];
+
+  ipcRenderer.on(
+    RunnerHostEvent.notificationForegroundDisplay,
+    (_event: unknown, payload: unknown): void => {
+      const display = payload as DesktopNotificationForegroundDisplay;
+      if (handlers.size === 0) {
+        if (buffered.length >= MAX_BUFFERED_FOREGROUND_NOTIFICATION_DISPLAYS) {
+          const dropped = buffered.shift();
+          console.warn(
+            "[preload] dropped buffered foreground notification display",
+            { deliveryKey: dropped?.deliveryKey ?? null },
+          );
+        }
+        buffered.push(display);
+        return;
+      }
+      for (const handler of handlers) {
+        handler(display);
+      }
+    },
+  );
+
+  return {
+    subscribe: (handler) => {
+      handlers.add(handler);
+      const pending = buffered.splice(0);
+      for (const display of pending) {
+        handler(display);
+      }
+      return {
+        dispose: () => {
+          handlers.delete(handler);
+        },
+      };
+    },
+  };
+}
 
 export interface SupportBridgeSurface {
   openExternalLink(url: string): Promise<void>;
@@ -33,8 +91,12 @@ export interface SupportBridgeSurface {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      foregroundAppLocal: DesktopNotificationForegroundAppLocal | null,
     ): Promise<void>;
     onClick(handler: Listener<unknown>): Disposable;
+    onForegroundDisplay(
+      handler: Listener<DesktopNotificationForegroundDisplay>,
+    ): Disposable;
   };
   workspaceFolders: {
     pickFolders(): Promise<readonly string[]>;
@@ -69,6 +131,8 @@ export interface SupportBridgeSurface {
 }
 
 export function buildSupportBridge(): SupportBridgeSurface {
+  const foregroundNotificationDisplays =
+    createForegroundNotificationDisplayChannel();
   return {
     openExternalLink: (url) =>
       ipcRenderer.invoke(RunnerHostInvoke.openExternalLink, url),
@@ -88,7 +152,14 @@ export function buildSupportBridge(): SupportBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.openMicrophoneSettings),
 
     notifications: {
-      show: (title, body, payload, replaceKey, deliveryKey) =>
+      show: (
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+        foregroundAppLocal,
+      ) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.notificationShow,
           title,
@@ -96,9 +167,12 @@ export function buildSupportBridge(): SupportBridgeSurface {
           payload,
           replaceKey,
           deliveryKey,
+          foregroundAppLocal,
         ),
       onClick: (handler) =>
         subscribe<unknown>(RunnerHostEvent.notificationClick, handler),
+      onForegroundDisplay: (handler) =>
+        foregroundNotificationDisplays.subscribe(handler),
     },
 
     workspaceFolders: {

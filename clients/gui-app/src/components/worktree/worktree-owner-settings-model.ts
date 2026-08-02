@@ -6,7 +6,6 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import {
-  type AgentMode,
   findReasoningLabel,
   isFastModeEnabled,
   modelDisplayLabel,
@@ -48,9 +47,6 @@ export interface OwnerSettingsHeaderView {
    *  what let this surface drift into hardcoding one padlock for all three
    *  modes. */
   readonly permissionMode: PermissionMode | null;
-  /** Terminal-agent run mode. Mutually exclusive with the GUI-chat-only
-   * `permissionMode` segment. */
-  readonly agentMode: AgentMode | null;
 }
 
 export interface OwnerSettingsHeaderInput {
@@ -64,8 +60,6 @@ export interface OwnerSettingsHeaderInput {
   readonly tuiModel: string | null;
   /** Terminal agent's persisted reasoning effort (`null` for GUI chats). */
   readonly tuiReasoningEffort: string | null;
-  /** Terminal agent's persisted run mode (`null` for GUI chats). */
-  readonly tuiAgentMode: AgentMode | null;
   /** Terminal agent's persisted provider profile (`null` means ambient). */
   readonly tuiProfileId: string | null;
   /** Live GUI harness catalog entries - the dynamic label source. Empty while
@@ -113,7 +107,6 @@ function deriveChatHeader(
       input.profiles,
     ),
     permissionMode: settings.permissionMode,
-    agentMode: null,
   };
 }
 
@@ -138,7 +131,6 @@ function deriveTerminalAgentHeader(
         ? null
         : resolveProfileAccentDot(input.tuiProfileId, input.profiles),
     permissionMode: null,
-    agentMode: input.tuiAgentMode,
   };
 }
 

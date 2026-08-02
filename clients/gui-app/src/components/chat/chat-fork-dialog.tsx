@@ -20,7 +20,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
-import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
@@ -175,8 +174,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
-  const agentMode = useStore(toolbarStore, (s) => s.agentMode);
-  const setAgentMode = useStore(toolbarStore, (s) => s.setAgentMode);
   const modelPickerKey =
     target === null ? "fork-dialog-closed" : forkDialogModelPickerKey(target);
   const trimmedTitle = title.trim();
@@ -248,7 +245,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
-      agentMode: toolbar.agentMode,
     });
     createChat.mutate(
       {
@@ -348,14 +344,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 runTargetHostId={tabHostId}
                 profileAdmission={null}
               />
-              <div className="shrink-0">
-                <AgentModeToggle
-                  value={agentMode}
-                  disabled={createChat.isPending}
-                  showTooltip={false}
-                  onChange={setAgentMode}
-                />
-              </div>
             </div>
           </section>
           <ActiveHostWorkspaceControls

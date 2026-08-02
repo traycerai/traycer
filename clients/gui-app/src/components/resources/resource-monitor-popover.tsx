@@ -2772,6 +2772,7 @@ function ownerLabel(
     return terminalSessionTitle({
       title: null,
       activeProcessName: snapshot.activeProcessName,
+      currentCwd: null,
     });
   }
   if (snapshot.owner.kind === "chat") {

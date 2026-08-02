@@ -400,9 +400,13 @@ export const chatActiveTurnSchemaPreV15 = z.object({
   // when the harness/model exposes no such control (or uses the default tier).
   reasoningEffort: z.string().nullable().default(null),
   serviceTier: z.string().nullable().default(null),
-  // agentMode the turn started under, mirrored from its `ChatRunSettings` so the
-  // GUI can detect an epic<->regular change against the live toolbar. Defaults to
-  // "regular" so turns persisted before this field was added still parse.
+  // agentMode the turn started under, mirrored from its `ChatRunSettings`.
+  // Epic Mode was removed from the product and nothing in a current client
+  // reads this, but it is RETAINED until the released client floor passes this
+  // version: a v1.1.8 client still compares it against its own persisted
+  // settings, and an omitted field would default to "regular" there and
+  // manufacture a spurious "agent mode changed" restart prompt on a legacy
+  // Epic chat. Goes with `chatRunSettings.agentMode`, not before it.
   agentMode: agentModeSchema.default("regular"),
   // profileId the turn's provider process was spawned under, mirrored from its
   // `ChatRunSettings` so the GUI can detect a mid-turn profile switch against the

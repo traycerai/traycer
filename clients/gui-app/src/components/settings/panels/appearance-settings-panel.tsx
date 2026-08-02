@@ -18,6 +18,7 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import {
@@ -65,6 +66,12 @@ export function AppearanceSettingsPanel() {
   const pointerCursors = useSettingsStore((state) => state.pointerCursors);
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
+  );
+  const chatTurnMinimapSide = useSettingsStore(
+    (state) => state.chatTurnMinimapSide,
+  );
+  const setChatTurnMinimapSide = useSettingsStore(
+    (state) => state.setChatTurnMinimapSide,
   );
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
@@ -177,6 +184,39 @@ export function AppearanceSettingsPanel() {
                 )}
                 aria-label="Use pointer cursors"
               />
+            }
+          />
+          <SettingsRow
+            label="Message minimap side"
+            description="Place the chat turn minimap on either transcript edge, or hide it entirely."
+            control={
+              <Select
+                value={chatTurnMinimapSide}
+                onValueChange={(value) => {
+                  if (
+                    value !== "left" &&
+                    value !== "right" &&
+                    value !== "hide"
+                  ) {
+                    return;
+                  }
+                  trackAppearanceSetting("chatTurnMinimapSide");
+                  setChatTurnMinimapSide(value);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Message minimap side"
+                  className="w-[min(40vw,8rem)]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="right">Right</SelectItem>
+                  <SelectItem value="left">Left</SelectItem>
+                  <SelectItem value="hide">Hide</SelectItem>
+                </SelectContent>
+              </Select>
             }
           />
         </SettingsGroup>

@@ -110,7 +110,13 @@ describe("<NewTerminalPicker /> double-launch guard", () => {
 
   it("opens a single terminal when Launch fires twice after row selection", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
-    render(<NewTerminalPicker epicId="epic-1" tabId={tabId} />);
+    render(
+      <NewTerminalPicker
+        epicId="epic-1"
+        tabId={tabId}
+        onBeforeOpen={undefined}
+      />,
+    );
     fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
 
     fireEvent.click(screen.getByTestId("double-pick-row"));

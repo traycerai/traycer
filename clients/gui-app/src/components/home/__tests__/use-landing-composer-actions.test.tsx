@@ -326,7 +326,6 @@ describe("useLandingComposerActions", () => {
       result.current.selectTerminalAgent(
         {
           harnessId: "claude",
-          agentMode: "regular",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
@@ -377,7 +376,6 @@ describe("useLandingComposerActions", () => {
       result.current.selectTerminalAgent(
         {
           harnessId: "claude",
-          agentMode: "regular",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
@@ -1770,7 +1768,6 @@ describe("useLandingComposerActions", () => {
       result.current.selectTerminalAgent(
         {
           harnessId: "claude",
-          agentMode: "regular",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
@@ -1899,7 +1896,6 @@ function defaultToolbar() {
     reasoning: "high" as const,
     serviceTier: "" as const,
     permission: "supervised" as const,
-    agentMode: "regular" as const,
   };
 }
 

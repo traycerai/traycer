@@ -512,6 +512,14 @@ export const agentConfigureSettingsSchema = z.object({
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean(),
   permissionMode: permissionModeSchema,
+  /**
+   * RETAINED even though Epic Mode was removed from the product. `agent.configure`
+   * v3.0 is itself RELEASED, and its baseline requires this key on the response -
+   * a released peer parsing a payload built from this tree would fail outright if
+   * it were dropped. The host states the one remaining mode. It goes when the
+   * released floor passes this version, together with the equally-blocked
+   * `chatActiveTurn.agentMode` and `createAgentRequestSchemaV30.agentMode`.
+   */
   agentMode: agentModeSchema,
 });
 export type AgentConfigureSettings = z.infer<

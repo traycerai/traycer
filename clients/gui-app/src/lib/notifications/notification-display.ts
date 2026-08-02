@@ -1,4 +1,8 @@
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
+import type {
+  NotificationForegroundAppLocal,
+  NotificationForegroundDisplay,
+} from "@traycer-clients/shared/platform/runner-host";
 import { createElement } from "react";
 import { toast } from "sonner";
 import {
@@ -26,17 +30,62 @@ export interface NotificationDisplayTarget {
   readonly onToastClick: (row: MergedNotificationRow) => void;
 }
 
+interface NativeNotificationDisplayOptions {
+  readonly deliveryKey: string | null;
+  readonly originHostId: string | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
+}
+
+export function displayForwardedForegroundNotification(
+  display: NotificationForegroundDisplay,
+  target: {
+    readonly playChime: () => void;
+    readonly onToastClick: (payload: unknown) => void;
+  },
+): void {
+  const actionable = display.payload !== null;
+  const title = actionable
+    ? createElement(
+        "button",
+        {
+          type: "button",
+          "aria-label": `${display.title} ${display.body}`,
+          "data-notification-toast-action": "",
+          className: "min-w-0 text-left",
+          onClick: () => target.onToastClick(display.payload),
+        },
+        createElement(
+          "span",
+          { className: "block font-medium leading-normal" },
+          display.title,
+        ),
+        createElement(
+          "span",
+          {
+            className:
+              "mt-0.5 block text-sm leading-snug text-muted-foreground",
+          },
+          display.body,
+        ),
+      )
+    : display.title;
+  toast(title, {
+    description: actionable ? undefined : display.body,
+    id: display.replaceKey ?? undefined,
+  });
+  target.playChime();
+}
+
 export function displayNotificationRows(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
-  void displayNotificationRowsAwaitNative(
-    rows,
-    target,
-    null,
+  void displayNotificationRowsAwaitNative(rows, target, {
+    deliveryKey: null,
     originHostId,
-  ).catch(() => {
+    foregroundAppLocal: null,
+  }).catch(() => {
     // The feed remains authoritative; a failed native toast is non-critical.
   });
 }
@@ -44,8 +93,7 @@ export function displayNotificationRows(
 async function displayNotificationRowsAwaitNative(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
-  deliveryKey: string | null,
-  originHostId: string | null,
+  options: NativeNotificationDisplayOptions,
 ): Promise<void> {
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
@@ -55,7 +103,7 @@ async function displayNotificationRowsAwaitNative(
       : buildNotificationActivationEnvelope({
           route: content.payload,
           feed: { source: content.row.source, id: content.row.sourceId },
-          originHostId,
+          originHostId: options.originHostId,
         });
   let nativeDisplay: Promise<void>;
   try {
@@ -64,7 +112,8 @@ async function displayNotificationRowsAwaitNative(
       body: content.body,
       payload: nativePayload,
       replaceKey: content.replaceKey,
-      deliveryKey,
+      deliveryKey: options.deliveryKey,
+      foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
     renderNotificationToast(content, target);
@@ -172,12 +221,16 @@ export function displayAppLocalNotification(
   entry: AppLocalNotificationEntry,
   target: NotificationDisplayTarget,
   deliveryKey: string,
+  userId: string,
 ): Promise<void> {
   return displayNotificationRowsAwaitNative(
     [rowFromAppLocalEntry(entry)],
     target,
-    deliveryKey,
-    null,
+    {
+      deliveryKey,
+      originHostId: null,
+      foregroundAppLocal: { userId, entry },
+    },
   );
 }
 

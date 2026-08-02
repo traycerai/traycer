@@ -2396,6 +2396,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const quoteReplyEnabled = useSettingsStore(
     (state) => state.quoteReplyEnabled,
   );
+  const chatTurnMinimapSide = useSettingsStore(
+    (state) => state.chatTurnMinimapSide,
+  );
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteReplyEnabled && visible && !systemOverlayActive,
@@ -3049,7 +3052,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               data-testid="chat-messages-scroll"
               data-scroll-mode={scrollMode}
             />
-            {hasContent ? (
+            {hasContent && chatTurnMinimapSide !== "hide" ? (
               <ChatTurnMinimap
                 messages={messages}
                 inViewRefreshRef={minimapInViewRefreshRef}
@@ -3059,6 +3062,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 bottomInset={endInset}
                 onSelect={onMinimapItemSelect}
                 identity={identity}
+                side={chatTurnMinimapSide}
               />
             ) : null}
             {hasContent ? (

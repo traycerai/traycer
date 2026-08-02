@@ -7,7 +7,6 @@ import {
 import type {
   ModelOption,
   PermissionMode,
-  AgentMode,
   HarnessModelSelection,
   ReasoningLevel,
   ServiceTier,
@@ -29,9 +28,8 @@ export function buildChatRunSettings(input: {
   permission: PermissionMode;
   reasoning: ReasoningLevel;
   serviceTier: ServiceTier;
-  agentMode: AgentMode;
 }): ChatRunSettings {
-  const { selection, permission, reasoning, serviceTier, agentMode } = input;
+  const { selection, permission, reasoning, serviceTier } = input;
   const trimmedServiceTier = serviceTier.trim();
   return {
     harnessId: selection.harnessId,
@@ -41,7 +39,10 @@ export function buildChatRunSettings(input: {
     // Trim before sentinel collapse so a whitespace-only stored preference
     // ("   ", "\n", etc.) never reaches the host as a bogus tier id.
     serviceTier: trimmedServiceTier.length === 0 ? null : trimmedServiceTier,
-    agentMode: agentMode,
+    // Epic Mode was removed from the product. The protocol's persisted
+    // `ChatRunSettings` still carries the field, so state the one remaining
+    // mode; nothing reads it back.
+    agentMode: "regular",
     profileId: selection.profileId,
   };
 }
@@ -76,12 +77,6 @@ export function serviceTierFromChatRunSettings(
   settings: ChatRunSettings,
 ): ServiceTier {
   return settings.serviceTier ?? "";
-}
-
-export function agentModeFromChatRunSettings(
-  settings: ChatRunSettings,
-): AgentMode {
-  return settings.agentMode;
 }
 
 export function modelSupportsImageAttachments(model: ModelOption): boolean {
