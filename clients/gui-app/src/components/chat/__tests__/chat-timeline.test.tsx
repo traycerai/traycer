@@ -118,7 +118,6 @@ interface RenderTimelineOptions {
   readonly listRef?: RefObject<LegendListRef | null>;
   readonly className?: string;
   readonly "data-testid"?: string;
-  readonly topFadeEnabled?: boolean;
   readonly followEnabled?: boolean;
   readonly onItemSizeChanged?: () => void;
   /** Ticket 22: forwarded to LegendList for viewport-length changes. */
@@ -153,7 +152,6 @@ function renderTimeline(options: RenderTimelineOptions) {
         listRef={listRef}
         className={options.className ?? "h-full"}
         data-testid={options["data-testid"]}
-        topFadeEnabled={options.topFadeEnabled}
         followEnabled={options.followEnabled}
         onItemSizeChanged={options.onItemSizeChanged}
         onLayout={options.onLayout}
@@ -477,12 +475,7 @@ describe("ChatTimeline", () => {
     });
   });
 
-  // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both` reserves the
-  // scrollbar's track width on both edges so the centered column never
-  // shifts when the bar appears/disappears - replaces the old one-sided
-  // `mr-1` margin hack (see index.css's `.chat-timeline-scroll-fade` for the
-  // matching gutter-exclusion band on the fade mask).
-  it("reserves a symmetric scrollbar gutter via scrollbar-gutter-both, not the old one-sided mr-1 margin", () => {
+  it("uses the native Legend List scroll owner without custom hiding or gutter treatment", () => {
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
     const { getByTestId } = renderTimeline({
       messages,
@@ -490,8 +483,13 @@ describe("ChatTimeline", () => {
     });
 
     const listElement = getByTestId("chat-timeline");
-    expect(listElement.className).toContain("scrollbar-gutter-both");
-    expect(listElement.className).not.toContain("mr-1");
+    expect(listElement.getAttribute("data-native-scrollbar")).toBe("true");
+    expect(listElement.className).toContain("overflow-y-auto");
+    expect(listElement.className).not.toContain("scrollbar-gutter");
+    expect(listElement.className).not.toContain("scrollbar-native-thin");
+    expect(listElement.className).not.toContain(
+      "legend-list-scrollbar-y-hidden",
+    );
   });
 
   // M4 (ticket 16 spacer alignment): header/footer 40px -> 12/16px, fade
@@ -507,18 +505,8 @@ describe("ChatTimeline", () => {
       ).map((node) => node.getAttribute("class") ?? "");
     }
 
-    const { container } = renderTimeline({ messages, topFadeEnabled: false });
+    const { container } = renderTimeline({ messages });
     expect(spacerClasses(container)).toEqual(["h-3 sm:h-4", "h-3 sm:h-4"]);
-    cleanup();
-
-    const { container: fadeContainer } = renderTimeline({
-      messages,
-      topFadeEnabled: true,
-    });
-    expect(spacerClasses(fadeContainer)).toEqual([
-      "h-10 sm:h-12",
-      "h-3 sm:h-4",
-    ]);
   });
 
   // Ticket 24 (painted-chat lifecycle audit, finding 5): the shared row

@@ -3,7 +3,6 @@ import {
   CHAT_LIST_ANCHOR_OFFSET,
   chatTimelineRealContentOverflowsViewport,
   getChatAnchoredTurnMetrics,
-  getChatNaturalMaxScrollWithoutAnchorReserve,
   getChatRowBottom,
   resolveChatListAnchoredEndSpace,
   resolveChatTimelineIsAtEnd,
@@ -30,8 +29,8 @@ function makeState(input: {
 }
 
 describe("CHAT_LIST_ANCHOR_OFFSET", () => {
-  it("is the flat 16px top anchor offset", () => {
-    expect(CHAT_LIST_ANCHOR_OFFSET).toBe(16);
+  it("starts below the compact 40px fade header", () => {
+    expect(CHAT_LIST_ANCHOR_OFFSET).toBe(40);
   });
 });
 
@@ -263,73 +262,6 @@ describe("getChatAnchoredTurnMetrics", () => {
   });
 });
 
-describe("getChatNaturalMaxScrollWithoutAnchorReserve", () => {
-  // M4 (ticket 16 spacer alignment): fade header h-10=40 / sm:h-12=48,
-  // footer h-3=12 / sm:h-4=16. The previous h-16/h-20/h-10 values were
-  // unsanctioned drift (decision log #30).
-  // CHAT_LIST_ANCHOR_OFFSET=16. Old bound (targetScrollToRevealEnd) under-
-  // clamps the true no-reserve max by header+footer-anchorOffset = 36 / 48.
-  const ANCHOR_OFFSET = CHAT_LIST_ANCHOR_OFFSET;
-  const VIEWPORT = 700;
-  const END_INSET = 80;
-  const LAST_BOTTOM = 4500;
-
-  function oldRevealBound(lastBottom: number): number {
-    // targetScrollToRevealEnd = lastBottom - (viewport - endInset - anchorOffset)
-    return Math.max(0, lastBottom - (VIEWPORT - END_INSET - ANCHOR_OFFSET));
-  }
-
-  it("matches LegendList no-reserve max and closes the 36px under-clamp below sm", () => {
-    const header = 40; // h-10 fade header
-    const footer = 12; // h-3 footer
-    const natural = getChatNaturalMaxScrollWithoutAnchorReserve({
-      headerSize: header,
-      footerSize: footer,
-      lastBottom: LAST_BOTTOM,
-      endInset: END_INSET,
-      viewportLength: VIEWPORT,
-    });
-    expect(natural).toBe(header + footer + LAST_BOTTOM + END_INSET - VIEWPORT);
-    // 40 + 12 + 4500 + 80 - 700 = 3932
-    expect(natural).toBe(3932);
-    const oldBound = oldRevealBound(LAST_BOTTOM);
-    // 4500 - (700 - 80 - 16) = 4500 - 604 = 3896
-    expect(oldBound).toBe(3896);
-    expect(natural - oldBound).toBe(header + footer - ANCHOR_OFFSET);
-    expect(natural - oldBound).toBe(36);
-  });
-
-  it("matches LegendList no-reserve max and closes the 48px under-clamp at sm+", () => {
-    const header = 48; // sm:h-12 fade header
-    const footer = 16; // sm:h-4 footer
-    const natural = getChatNaturalMaxScrollWithoutAnchorReserve({
-      headerSize: header,
-      footerSize: footer,
-      lastBottom: LAST_BOTTOM,
-      endInset: END_INSET,
-      viewportLength: VIEWPORT,
-    });
-    expect(natural).toBe(header + footer + LAST_BOTTOM + END_INSET - VIEWPORT);
-    // 48 + 16 + 4500 + 80 - 700 = 3944
-    expect(natural).toBe(3944);
-    const oldBound = oldRevealBound(LAST_BOTTOM);
-    expect(natural - oldBound).toBe(header + footer - ANCHOR_OFFSET);
-    expect(natural - oldBound).toBe(48);
-  });
-
-  it("floors at 0 when content is shorter than the viewport", () => {
-    expect(
-      getChatNaturalMaxScrollWithoutAnchorReserve({
-        headerSize: 40,
-        footerSize: 40,
-        lastBottom: 200,
-        endInset: 80,
-        viewportLength: 700,
-      }),
-    ).toBe(0);
-  });
-});
-
 describe("chatTimelineRealContentOverflowsViewport", () => {
   it("returns false for empty or unmeasured content", () => {
     expect(
@@ -419,16 +351,16 @@ describe("resolveChatListAnchoredEndSpace", () => {
 });
 
 describe("resolveChatTimelineIsAtEnd", () => {
-  it("prefers isNearEnd over isAtEnd", () => {
+  it("uses only the strict live-edge signal", () => {
     expect(
       resolveChatTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolveChatTimelineIsAtEnd({ isNearEnd: false, isAtEnd: true }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("falls back to isAtEnd when isNearEnd is absent", () => {
+  it("reads isAtEnd when proximity metadata is absent", () => {
     expect(resolveChatTimelineIsAtEnd({ isAtEnd: true })).toBe(true);
     expect(resolveChatTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
   });

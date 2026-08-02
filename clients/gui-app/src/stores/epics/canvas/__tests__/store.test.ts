@@ -2568,6 +2568,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
       anchorMessageId: null,
       anchorIndex: null,
       offset: 0,
+      replyReserveMessageId: null,
     });
   });
 });

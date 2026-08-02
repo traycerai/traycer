@@ -42,7 +42,10 @@ export function StopChildrenDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        <ul className="m-0 flex max-h-[min(40vh,16rem)] list-none flex-col gap-0.5 overflow-y-auto px-6 py-2 chat-scrollbar-native-thin">
+        <ul
+          data-native-scrollbar="true"
+          className="m-0 flex max-h-[min(40vh,16rem)] list-none flex-col gap-0.5 overflow-y-auto px-6 py-2"
+        >
           {props.agents.map((agent) => (
             <li
               key={agent.id}
