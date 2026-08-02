@@ -48,6 +48,12 @@ const streamVersionMock = vi.hoisted(() => ({
   version: null as { readonly major: number; readonly minor: number } | null,
 }));
 
+const activeHostMock = vi.hoisted(() => ({ hostId: null as string | null }));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => activeHostMock.hostId,
+}));
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
   useStreamMethodSupport: () => null,
@@ -94,6 +100,12 @@ vi.mock("@/lib/epic-selectors", () => ({
     _epicId: string,
     artifactId: string | null,
   ) => (artifactId === "chat-1" ? liveArtifactTitleMock.title : null),
+  useRegisteredEpicLiveArtifactTitles: (
+    refs: readonly { readonly artifactId: string | null }[],
+  ) =>
+    refs.map((ref) =>
+      ref.artifactId === "chat-1" ? liveArtifactTitleMock.title : null,
+    ),
 }));
 
 vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
@@ -466,6 +478,7 @@ afterEach(() => {
   canvasMock.resolveTargetTabForEpic.mockReturnValue("tab-2");
   __setResourcesStreamClientFactoryForTests(null);
   streamVersionMock.version = null;
+  activeHostMock.hostId = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
 });
@@ -495,6 +508,309 @@ describe("ResourceMonitorPopover", () => {
         .getByRole("menuitemradio", { name: "Tab order" })
         .getAttribute("aria-checked"),
     ).toBe("true");
+  });
+
+  it("filters tasks and owners with case-insensitive free text", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({}),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-closed",
+              },
+              rootPids: [200],
+              activeProcessName: "bun",
+              processes: [
+                resourceProcess({
+                  pid: 200,
+                  rootPid: 200,
+                  name: "bun",
+                  command: "bun run build",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+    fireEvent.change(search, { target: { value: "Resource Alpha" } });
+
+    expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.queryByText("Background Task")).toBeNull();
+
+    fireEvent.change(search, { target: { value: "BACKGROUND" } });
+
+    expect(screen.getByText("Background Task")).not.toBeNull();
+    expect(screen.getByText("Background Terminal")).not.toBeNull();
+    expect(screen.queryByText("Resource Task")).toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+
+    resourcesKillMock.mutate.mockClear();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [200],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear resource search" }),
+    );
+    expect(document.activeElement).toBe(search);
+    expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  it("reveals matching nested processes and reports an empty search", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+
+    fireEvent.change(search, { target: { value: "DEV-SERVER" } });
+    expect(screen.getByText("node dev-server.js")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Process tree expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    fireEvent.change(search, { target: { value: "103" } });
+    expect(screen.getByText("make")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Sub-processes of node dev-server.js expanded by search",
+        })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    fireEvent.change(search, { target: { value: "not-a-resource" } });
+    expect(
+      screen.getByText("No resources match “not-a-resource”."),
+    ).not.toBeNull();
+    expect(screen.queryByText("Resource Task")).toBeNull();
+  });
+
+  it("reveals an owner structural root when only that process matches", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "/bin/zsh" } },
+    );
+
+    expect(screen.getByText("/bin/zsh")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Process tree expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("matches tokens across a process ancestor and its descendant", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "zsh dev-server" } },
+    );
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.getByText("node dev-server.js")).not.toBeNull();
+  });
+
+  it("does not retain an owner when tokens only match separate processes", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node dev-server.js",
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "make",
+                  command: "make",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "dev-server make" } },
+    );
+
+    expect(
+      screen.getByText("No resources match “dev-server make”."),
+    ).not.toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+  });
+
+  it("preserves root and descendant matches across separate roots", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              rootPids: [100, 200],
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "shared-shell",
+                  command: "/bin/shared-shell",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node unrelated.js",
+                }),
+                resourceProcess({
+                  pid: 200,
+                  rootPid: 200,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 201,
+                  parentPid: 200,
+                  rootPid: 200,
+                  name: "worker",
+                  command: "shared worker",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "shared" } },
+    );
+
+    expect(screen.getByText("/bin/shared-shell")).not.toBeNull();
+    expect(screen.getByText("shared worker")).not.toBeNull();
+  });
+
+  it("matches across the host header and process metadata", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app() }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Host traycer-host" } },
+    );
+
+    expect(screen.getByText("Traycer Host")).not.toBeNull();
+  });
+
+  it("reveals matching descendants beneath a matching process", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              activeProcessName: "python",
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node parent.js",
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 101,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node child.js",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "node" } },
+    );
+
+    expect(screen.getByText("node parent.js")).not.toBeNull();
+    expect(screen.getByText("node child.js")).not.toBeNull();
   });
 
   it("uses the live chat title when the persisted owner name is untitled", async () => {
@@ -527,8 +843,164 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
 
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "Generated" },
+      },
+    );
+
     expect(await screen.findByText("Generated chat title")).not.toBeNull();
     expect(screen.queryByText("Untitled chat")).toBeNull();
+  });
+
+  it("clears selected targets when a search hides them", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "not-a-resource" },
+      },
+    );
+
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("prunes a selected owner when a live snapshot stops matching", () => {
+    const stub = installStubFactory();
+    const processes = [
+      resourceProcess({
+        pid: 100,
+        rootPid: 100,
+        name: "zsh",
+        command: "/bin/zsh",
+      }),
+    ];
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "unique-match", processes })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "unique-match" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "renamed", processes })],
+        }),
+      );
+    });
+
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
+
+    act(() => {
+      stub.emit().onUpdate(
+        projection({
+          owners: [owner({ activeProcessName: "unique-match", processes })],
+        }),
+      );
+    });
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Kill 0 selected" }),
+    ).not.toBeNull();
+  });
+
+  it("prunes a selected process root when search stops rendering it", () => {
+    const stub = installStubFactory();
+    const processes = [
+      resourceProcess({
+        pid: 100,
+        parentPid: 1,
+        rootPid: 100,
+        name: "needle-root",
+        command: "needle-root",
+      }),
+      resourceProcess({
+        pid: 101,
+        parentPid: 100,
+        rootPid: 100,
+        name: "needle-child",
+        command: "needle-child",
+      }),
+    ];
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: null, processes })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "needle" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select needle-root" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    act(() => {
+      stub.emit().onUpdate(
+        projection({
+          owners: [
+            owner({
+              activeProcessName: null,
+              processes: [
+                { ...processes[0], name: "plain-root", command: "plain-root" },
+                processes[1],
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    expect(screen.queryByText("plain-root")).toBeNull();
+    expect(screen.getByText("needle-child")).not.toBeNull();
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
   });
 
   it("uses the persisted Agent title when the live title is empty", async () => {
@@ -833,6 +1305,48 @@ describe("ResourceMonitorPopover", () => {
       screen.getByRole("button", { name: "Expand sub-processes of worker" }),
     );
     expect(screen.getByText("child")).not.toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "Other child" },
+      },
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Other processes expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("keeps a rendered Other root selectable when only its child matches", () => {
+    const stub = installStubFactory();
+    activeHostMock.hostId = "host-1";
+    renderPopover();
+
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(
+          projection({ app: app(), hostTree: hostTree({}), other: other({}) }),
+        );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "child" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [500],
+    });
   });
 
   it("shows compact basename labels for Other roots until expanded", () => {
@@ -1653,6 +2167,12 @@ describe("ResourceMonitorPopover", () => {
                 cpu: { percentCPUUsage: 2 },
                 memory: { workingSetSize: 300 * 1024 },
               },
+              {
+                pid: 12,
+                type: "GPU",
+                cpu: { percentCPUUsage: 1 },
+                memory: { workingSetSize: 200 * 1024 },
+              },
             ],
           }),
         },
@@ -1697,6 +2217,24 @@ describe("ResourceMonitorPopover", () => {
         .compareDocumentPosition(screen.getByText("Renderer")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "TRAYCER MAIN" },
+      },
+    );
+    expect(screen.getByText("Main")).not.toBeNull();
+    expect(screen.queryByText("Renderer")).toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "traycer other" },
+      },
+    );
+    expect(screen.getByText("Other")).not.toBeNull();
+    expect(screen.queryByText("Main")).toBeNull();
   });
 
   it("pins an expanded owner row beneath its sticky section header", () => {

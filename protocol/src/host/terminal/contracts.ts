@@ -18,6 +18,7 @@ import {
   listTerminalsResponseSchema,
   listTerminalsResponseSchemaV20,
   listTerminalsResponseSchemaV21,
+  listTerminalsResponseSchemaV22,
   renameTerminalRequestSchema,
   renameTerminalResponseSchema,
   type TerminalScope,
@@ -29,6 +30,7 @@ import {
   terminalSubscribeV12,
   terminalSubscribeV13,
   terminalSubscribeV14,
+  terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/subscribe";
 
 // Terminal sessions live entirely in the host's memory; these contracts
@@ -160,6 +162,15 @@ export const terminalListV21 = defineRpcContract({
   responseSchema: listTerminalsResponseSchemaV21,
 });
 
+// Additive live current-directory metadata on each response session; request
+// is unchanged from `@2.0`/`@2.1`.
+export const terminalListV22 = defineRpcContract({
+  method: "terminal.list",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: listTerminalsRequestSchemaV20,
+  responseSchema: listTerminalsResponseSchemaV22,
+});
+
 export const terminalListUpgradeV10ToV20 = defineUpgradePath<
   typeof terminalListV10,
   typeof terminalListV20
@@ -189,6 +200,26 @@ export const terminalListUpgradeV20ToV21 = defineUpgradePath<
   upgradeResponse: (response) => ({
     sessions: response.sessions,
     homeCwd: null,
+  }),
+});
+
+// A v2.1 host cannot observe live directory changes. Use its launch `cwd` as
+// `currentCwd`, which is the same fallback a current host starts with before
+// seeing a cwd OSC sequence. The frozen v2.1 schema allowed an empty `cwd`, so
+// v2.2 accepts that compatibility value and clients treat it as unavailable.
+export const terminalListUpgradeV21ToV22 = defineUpgradePath<
+  typeof terminalListV21,
+  typeof terminalListV22
+>({
+  from: terminalListV21.schemaVersion,
+  to: terminalListV22.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    sessions: response.sessions.map((session) => ({
+      ...session,
+      currentCwd: session.cwd,
+    })),
+    homeCwd: response.homeCwd,
   }),
 });
 
@@ -228,6 +259,53 @@ export const terminalListDowngradeV21ToV10 = defineDowngradePath<
   },
 });
 
+// Major 2's latest bridge to v1.0. Project `currentCwd` away before applying
+// the frozen scope-to-epic downgrade; old peers continue seeing launch `cwd`.
+export const terminalListDowngradeV22ToV10 = defineDowngradePath<
+  typeof terminalListV22,
+  typeof terminalListV10
+>({
+  from: terminalListV22.schemaVersion,
+  to: terminalListV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const epicId = downgradeTerminalScopeForV10(request.scope);
+    if (!epicId.ok) return epicId;
+    return { ok: true, value: { epicId: epicId.value } };
+  },
+  downgradeResponse: (response) => {
+    const downgraded = response.sessions.map((session) => {
+      return downgradeTerminalSessionInfoForV10({
+        sessionId: session.sessionId,
+        scope: session.scope,
+        sessionKind: session.sessionKind,
+        cwd: session.cwd,
+        shellCommand: session.shellCommand,
+        shellArgs: session.shellArgs,
+        cols: session.cols,
+        rows: session.rows,
+        status: session.status,
+        exitCode: session.exitCode,
+        exitReason: session.exitReason,
+        createdAt: session.createdAt,
+        title: session.title,
+        activeProcessName: session.activeProcessName,
+      });
+    });
+    const failure = downgraded.find(
+      (result): result is { ok: false; error: RpcErrorDetails } => !result.ok,
+    );
+    if (failure !== undefined) return failure;
+    return {
+      ok: true,
+      value: {
+        sessions: downgraded.flatMap((result) =>
+          result.ok ? [result.value] : [],
+        ),
+      },
+    };
+  },
+});
+
 export const terminalRenameV10 = defineRpcContract({
   method: "terminal.rename",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -241,4 +319,5 @@ export {
   terminalSubscribeV12,
   terminalSubscribeV13,
   terminalSubscribeV14,
+  terminalSubscribeV15,
 };

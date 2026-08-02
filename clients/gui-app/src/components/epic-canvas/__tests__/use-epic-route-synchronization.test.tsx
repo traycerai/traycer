@@ -38,6 +38,10 @@ import {
   resetPaneActivationFocusIntentsForTests,
   usePaneActivationOwnership,
 } from "@/components/epic-canvas/pane-activation";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 
 type CanvasStoreSlice = Pick<
   EpicCanvasStore,
@@ -1175,6 +1179,121 @@ describe("useEpicRouteSynchronization", () => {
       expect(document.activeElement).toBe(renameInputEl);
     } finally {
       paneEl.remove();
+    }
+  });
+
+  it("ticket 21 slice 4: prefers the hosted record over the real selected physical wrapper (design-review F4)", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-hosted",
+      [specTile("chat-hosted", "tile-hosted", "Hosted chat")],
+      "tile-hosted",
+    );
+
+    // Physical pane AND the real selected-tab wrapper `TabGroupView` keeps
+    // mounted around `TileSurfaceSlot`'s bare geometry anchor for a hosted
+    // chat - both carry the SAME instanceId a naive physical-only query would
+    // match first. Its presence must not shadow the hosted fallback.
+    const paneEl = document.createElement("div");
+    paneEl.setAttribute("data-group-id", "pane-hosted");
+    paneEl.setAttribute("data-active", "true");
+    paneEl.tabIndex = -1;
+    document.body.appendChild(paneEl);
+
+    const selectedWrapperEl = document.createElement("div");
+    selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-hosted");
+    selectedWrapperEl.setAttribute("data-selected", "true");
+    selectedWrapperEl.tabIndex = -1;
+    document.body.appendChild(selectedWrapperEl);
+
+    const hostedRecord = document.createElement("div");
+    hostedRecord.setAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE, "tile-hosted");
+    hostedRecord.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, "pane-hosted");
+    hostedRecord.tabIndex = -1;
+    document.body.appendChild(hostedRecord);
+
+    // Park focus elsewhere so focusNestedRouteTarget will pull it onto the
+    // resolved element (rather than no-opping because focus is already inside).
+    const outside = document.createElement("button");
+    outside.type = "button";
+    document.body.appendChild(outside);
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    try {
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-hosted",
+            focusTileInstanceId: "tile-hosted",
+          },
+        },
+      );
+
+      await flushFocusRestore();
+      // Direct signal: focus landed on the hosted record, NOT the real
+      // selected physical wrapper that is also present and would otherwise
+      // be found first by the physical query.
+      expect(document.activeElement).toBe(hostedRecord);
+      expect(document.activeElement).not.toBe(selectedWrapperEl);
+    } finally {
+      outside.remove();
+      hostedRecord.remove();
+      selectedWrapperEl.remove();
+      paneEl.remove();
+    }
+  });
+
+  it("ticket 21 slice 4: falls back to the physical selected wrapper when no hosted record exists (switch-off parity)", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-unhosted",
+      [specTile("chat-unhosted", "tile-unhosted", "Unhosted chat")],
+      "tile-unhosted",
+    );
+
+    // No hosted record anywhere - mirrors the switch-off / non-chat-tile
+    // shape, where `findHostedTileElement` always misses and the ORIGINAL
+    // physical lookup must still resolve exactly as it did before F4.
+    const selectedWrapperEl = document.createElement("div");
+    selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-unhosted");
+    selectedWrapperEl.setAttribute("data-selected", "true");
+    selectedWrapperEl.tabIndex = -1;
+    document.body.appendChild(selectedWrapperEl);
+
+    const outside = document.createElement("button");
+    outside.type = "button";
+    document.body.appendChild(outside);
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    try {
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-unhosted",
+            focusTileInstanceId: "tile-unhosted",
+          },
+        },
+      );
+
+      await flushFocusRestore();
+      expect(document.activeElement).toBe(selectedWrapperEl);
+    } finally {
+      outside.remove();
+      selectedWrapperEl.remove();
     }
   });
 });

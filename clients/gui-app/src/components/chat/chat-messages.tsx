@@ -9,8 +9,10 @@ import {
 } from "@/components/chat/chat-timeline";
 import {
   anchorMoverShouldYieldToReader,
+  applyChatAnchorDriftRepair,
   buildMessageIdToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
+  chatAnchorScrollCaptureShouldCancel,
   chatTimelineAnchorShouldAnimateInitialIssue,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
@@ -20,6 +22,7 @@ import {
   resolveChatAnchorTargetWithSetupCard,
   selectActiveUserMessageId,
   viewportActiveUserMessageId,
+  type ChatAnchorScrollCapturePhysicalSnapshot,
   type ChatTimelineNavigationLocation,
   type ChatViewportAnchorListState,
 } from "@/components/chat/chat-messages-scroll-helpers";
@@ -43,7 +46,9 @@ import {
   saveChatTabState,
   type ChatTabScrollMode,
   type SavedChatTabScrollState,
+  type SaveChatTabStateInput,
 } from "@/stores/chats/chat-tab-state-cache";
+import { registerChatTabViewportCapture } from "@/stores/chats/chat-tab-viewport-handoff";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
 import { CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR } from "@/components/chat/chat-turn-minimap-logic";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -88,6 +93,7 @@ import {
 } from "@/stores/chats/subagent-open-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
+import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -339,11 +345,23 @@ function ownsBoundaryKeys(target: EventTarget | null): boolean {
   return target.closest(CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR) !== null;
 }
 
+/**
+ * A hosted chat's own DOM lives in `StableTileSurfaceHost`'s plane, not
+ * inside its canvas pane's `[data-group-id]` subtree - the physical
+ * ancestry lookup misses for it (and for any target inside it), so a miss
+ * falls back to the hosted resolver, which walks the SAME node up to its
+ * hosted-record ancestor's stamped pane id instead.
+ */
 function canvasPaneIdOf(node: Node | null): string | null {
   const element = node instanceof Element ? node : node?.parentElement;
-  return (
-    element?.closest("[data-group-id]")?.getAttribute("data-group-id") ?? null
-  );
+  if (element === undefined || element === null) return null;
+  const physicalPaneId = element
+    .closest("[data-group-id]")
+    ?.getAttribute("data-group-id");
+  if (physicalPaneId !== undefined && physicalPaneId !== null) {
+    return physicalPaneId;
+  }
+  return resolveHostedTileOwnership(element)?.paneId ?? null;
 }
 
 /**
@@ -966,6 +984,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // comparing against both prevents either geometry change from looking like
   // user intent.
   const expectedAnchorScrollTopRef = useRef<number | null>(null);
+  // Ticket 19 (decision #31, capture-provenance classifier): the physical
+  // DOM snapshot the capture-phase scroll listener compares each new event
+  // against (browser-clamp signature) - refreshed on every captured event
+  // regardless of mode/ownership, and reseeded at `beginAnchoringNewTurn` so
+  // the FIRST captured event of a session always has a same-session
+  // baseline. See `chatAnchorScrollCaptureShouldCancel`'s doc comment.
+  const anchoringPhysicalSnapshotRef =
+    useRef<ChatAnchorScrollCapturePhysicalSnapshot | null>(null);
+  // Ticket 19: the ONE generation-scoped in-flight ref the design/decision
+  // #31 machinery cap allows - non-null (holding the owning generation)
+  // only while the anchor engine's `scrollToIndex` issue/reissue is inside
+  // ticket 18's settle lifecycle (`positionAnchor` below). Armed
+  // immediately before each issue, cleared symmetrically in
+  // begin/retarget/cancel/valid/invalid - see each site's own comment.
+  const activeAnchorImperativeMotionGenerationRef = useRef<number | null>(null);
+  // Ticket 22: coalesces item-size/viewport-layout triggers into ONE pending
+  // two-rAF geometry-repair pass at a time - `scheduleChatAnchorGeometryRepair`'s
+  // own doc comment covers why.
+  const pendingGeometryRepairCancelRef = useRef<(() => void) | null>(null);
   const pendingAnchorScrollRestoreRef = useRef<{
     readonly offset: number;
     readonly userScrollGeneration: number;
@@ -1194,6 +1231,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       settledTimelineAnchorRef.current = null;
       activeTimelineAnchorIndexRef.current = null;
       pendingAnchorScrollRestoreRef.current = null;
+      // Ticket 19: a cancel (real gesture or superseding navigation) ends
+      // whatever anchor motion window was in flight for the OLD generation -
+      // symmetric with the arm sites in `positionAnchor` below.
+      activeAnchorImperativeMotionGenerationRef.current = null;
+      anchoringPhysicalSnapshotRef.current = null;
       // A real gesture (or a fresh navigation, which calls this first) wins
       // immediately over a still-in-flight programmatic-scroll operation,
       // regardless of what that operation was in the middle of doing.
@@ -1378,6 +1420,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
         anchorScrollRestoreFrameRef.current = null;
       }
+      // Ticket 19: fresh session, fresh motion/physical bookkeeping - a
+      // stale active-motion generation from a superseded session must not
+      // exempt this one, and the physical snapshot needs a same-session
+      // baseline for the capture listener's clamp check (design's "seeded
+      // on entry to an anchoring generation"). Reading the scroll node here
+      // (not deferring to the first captured event) means a session with no
+      // natural scroll before its own positioning still has a baseline.
+      activeAnchorImperativeMotionGenerationRef.current = null;
+      const scrollNodeAtBegin = chatTimelineRef.current?.getScrollableNode();
+      anchoringPhysicalSnapshotRef.current = scrollNodeAtBegin
+        ? {
+            scrollTop: scrollNodeAtBegin.scrollTop,
+            maxScrollTop: Math.max(
+              0,
+              scrollNodeAtBegin.scrollHeight - scrollNodeAtBegin.clientHeight,
+            ),
+          }
+        : null;
       suppressFollowRestoreRef.current = false;
       anchorAnimatedRef.current = animated;
       cancelPillShow();
@@ -1442,6 +1502,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
       anchorScrollRestoreFrameRef.current = null;
     }
+    // Ticket 19: the OLD target's settle window (if any) is being
+    // superseded the same way `positionedTimelineAnchorRef` above is - the
+    // new target's own positioning re-arms this fresh, same generation.
+    activeAnchorImperativeMotionGenerationRef.current = null;
     timelineAnchorMessageIdRef.current = messageId;
     setTimelineAnchorMessageId(messageId);
   }, []);
@@ -1534,6 +1598,75 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       detach();
     };
   }, [hasContent]);
+
+  // Ticket 19 (decision #31): the capture-provenance classifier's ONE
+  // native listener - installed on the STABLE transcript wrapper (unlike
+  // the wheel/touch listeners above, it never needs to track scroll-node
+  // replacement across an empty/repopulate cycle; it simply filters each
+  // captured event to whichever scroll node is current right now). Capture
+  // phase (`{ capture: true }`) is load-bearing - it is what lets this
+  // listener observe the raw DOM state before LegendList's own non-capture
+  // target listener consumes the event; see
+  // `chatAnchorScrollCaptureShouldCancel`'s doc comment (chat-messages-
+  // scroll-helpers.ts) for the full library-ordering proof this depends on,
+  // and the dedicated library-contract pins that gate a future
+  // `@legendapp/list` upgrade.
+  useLayoutEffect(() => {
+    const container = transcriptContainerRef.current;
+    if (!container) return;
+    const handleCapturedScroll = (event: Event): void => {
+      const list = chatTimelineRef.current;
+      if (!list) return;
+      const scrollNode = list.getScrollableNode();
+      // Any nested scrollable region (a code block, a horizontally
+      // overflowing table) also dispatches `scroll` events this ancestor
+      // capture listener observes - `scroll` never bubbles, but capturing
+      // phase runs regardless, for EVERY descendant's own scroll, not just
+      // the transcript's. Only the transcript's own scroll node is this
+      // classifier's concern.
+      if (event.target !== scrollNode) return;
+      const domScrollTop = scrollNode.scrollTop;
+      const currentMaxScrollTop = Math.max(
+        0,
+        scrollNode.scrollHeight - scrollNode.clientHeight,
+      );
+      const generationOwned =
+        liveFollowUserScrollGenerationRef.current ===
+        anchorUserScrollGenerationRef.current;
+      const shouldCancel = chatAnchorScrollCaptureShouldCancel({
+        isAnchoringSessionOwned:
+          timelineScrollModeRef.current === "anchoring-new-turn" &&
+          generationOwned,
+        activeAnchorMotionOwnsGeneration:
+          activeAnchorImperativeMotionGenerationRef.current ===
+          anchorUserScrollGenerationRef.current,
+        domScrollTop,
+        listStateScroll: list.getState().scroll,
+        previousSnapshot: anchoringPhysicalSnapshotRef.current,
+        currentMaxScrollTop,
+      });
+      // Design step 2: refresh regardless of outcome, so the NEXT captured
+      // event - in any mode - always compares against the last real
+      // physical position, not a stale one from several mode transitions
+      // ago. Refreshed AFTER classifying this event (which needs the OLD
+      // snapshot as its "previous" input), BEFORE acting on the result.
+      anchoringPhysicalSnapshotRef.current = {
+        scrollTop: domScrollTop,
+        maxScrollTop: currentMaxScrollTop,
+      };
+      if (shouldCancel) {
+        cancelTimelineLiveFollowForUserNavigationRef.current(false);
+      }
+    };
+    container.addEventListener("scroll", handleCapturedScroll, {
+      capture: true,
+    });
+    return () => {
+      container.removeEventListener("scroll", handleCapturedScroll, {
+        capture: true,
+      });
+    };
+  }, []);
 
   // --- Anchor engine --------------------------------------------------------
 
@@ -1668,6 +1801,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             }
           };
 
+          // Ticket 19: arm immediately before issuing the command - the
+          // ONE generation-scoped in-flight ref the machinery cap allows
+          // (decision #31d). Every guard above this point has already
+          // confirmed `generationAtReady` is still current, so arming to it
+          // here (not `anchorUserScrollGenerationRef.current` - same value,
+          // but this documents which one this closure owns) is safe.
+          activeAnchorImperativeMotionGenerationRef.current = generationAtReady;
           let pendingAnchorScrollPromise = list.scrollToIndex({
             index: currentAnchorIndex,
             animated: shouldAnimateInitialIssue,
@@ -1708,6 +1848,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               // offset) self-corrects both an estimate-drift undershoot and
               // a still-resolving `anchoredEndSpace` reserve clamp.
               reissue: () => {
+                // Ticket 19: retained across the re-issue - still the same
+                // generation, still the same anchor-issue closure (design's
+                // "retain across settle re-issues"). Re-set (not just left
+                // alone) so a reissue is defensively self-arming too.
+                activeAnchorImperativeMotionGenerationRef.current =
+                  generationAtReady;
                 pendingAnchorScrollPromise = list.scrollToIndex({
                   index: anchorSettleTargetIndex(),
                   animated: false,
@@ -1716,6 +1862,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 });
               },
               onSettledValid: () => {
+                // Ticket 19: the motion window this session owned is over -
+                // symmetric with the arm sites above.
+                if (
+                  activeAnchorImperativeMotionGenerationRef.current ===
+                  generationAtReady
+                ) {
+                  activeAnchorImperativeMotionGenerationRef.current = null;
+                }
                 expectedAnchorScrollTopRef.current = expectedAnchorScrollTop(
                   list,
                   anchorSettleTargetIndex(),
@@ -1732,6 +1886,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 measureSettledOverflow();
               },
               onSettledInvalid: () => {
+                // Ticket 19: same symmetric clear as onSettledValid - a
+                // corrective operation that gives up must not leave the
+                // capture classifier believing motion is still in flight.
+                if (
+                  activeAnchorImperativeMotionGenerationRef.current ===
+                  generationAtReady
+                ) {
+                  activeAnchorImperativeMotionGenerationRef.current = null;
+                }
                 // Ticket 18 safety cap: a corrective operation that cannot
                 // safely land must never claim settled. Log only the
                 // genuine non-convergence case, not the (expected, correct)
@@ -2036,30 +2199,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // callback above already guards against: a content-above change
           // can update LegendList's internal tracked position ahead of (or
           // independent of) the real DOM value actually moving.
-          const currentScrollTop = list.getScrollableNode().scrollTop;
-          const currentExpectedScrollTop =
-            metrics.anchorTop +
-            listTopOffsetAdjustmentRef.current -
-            anchorOffsetRef.current;
-          if (
-            anchorMoverShouldYieldToReader(
-              currentScrollTop,
-              expectedAnchorScrollTopRef.current,
-              currentExpectedScrollTop,
-            )
-          ) {
-            // A scroll-only upward departure leaves mode ownership intact,
-            // but the corrective mover must not pull the reader back.
-            return;
-          }
-          expectedAnchorScrollTopRef.current = currentExpectedScrollTop;
-          const anchorPositionDrift =
-            currentExpectedScrollTop - currentScrollTop;
-          if (Math.abs(anchorPositionDrift) > 1) {
-            void list.scrollToOffset({
-              offset: currentScrollTop + anchorPositionDrift,
-              animated: false,
-            });
+          //
+          // Ticket 22: this repair is shared with the geometry-only
+          // scheduler below (`scheduleChatAnchorGeometryRepair`) - same
+          // computation, same generation/departure guards, invoked here
+          // unchanged for a `messages` change and there for a coalesced
+          // item-size/viewport-length change under the SAME `messages`.
+          const repairOutcome = applyChatAnchorDriftRepair({
+            list,
+            anchorTop: metrics.anchorTop,
+            listTopOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            anchorOffset: anchorOffsetRef.current,
+            expectedAnchorScrollTopRef,
+          });
+          if (repairOutcome !== "settled") {
+            // A scroll-only upward departure ("yielded") leaves mode
+            // ownership intact, but the corrective mover must not pull the
+            // reader back; a "corrected" pass already issued this frame's
+            // scroll write.
             return;
           }
           // Deliberate live-E2E merge-blocker fix: revealing the minimum delta
@@ -2208,6 +2365,131 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     endInsetRef.current = endInset;
   }, [endInset]);
 
+  // Ticket 20: the coherent-snapshot capture used by BOTH this component's
+  // own unmount-cleanup save below AND the pre-structural-mutation viewport
+  // handoff (`chat-tab-viewport-handoff.ts`) a canvas-store action creator
+  // flushes just before a drag/split-wrap/dissolve/tear-off commits a move
+  // that retains this SAME instanceId under a NEW React parent. Without the
+  // proactive flush, React would mount the replacement fiber's
+  // `restoreChatTabState` render-time state initializer BEFORE this
+  // component's own unmount cleanup ever runs - render happens before ANY
+  // commit-phase effect, including a removed fiber's layout-effect cleanup
+  // (painted-chat lifecycle audit finding 1: a disposable probe recorded
+  // `initialize:stale` then `cleanup:fresh`). One function backs both call
+  // sites so the coherent-snapshot invariant below can never drift into two
+  // independently maintained copies.
+  const captureLiveChatTabScrollSnapshot = useCallback((): Omit<
+    SaveChatTabStateInput,
+    "identity"
+  > => {
+    // `anchoring-new-turn` never persists as its own mode (see
+    // `chat-tab-state-cache.ts`): a remount mid-anchor has no live
+    // anchor/settle sequence left to resume, so it collapses to
+    // `free-scrolling` at wherever it had settled - same as any other
+    // unpinned reading position.
+    const wasAnchoring = timelineScrollModeRef.current === "anchoring-new-turn";
+    const mode: ChatTabScrollMode =
+      timelineScrollModeRef.current === "following-end"
+        ? "following-end"
+        : "free-scrolling";
+    const list = chatTimelineRef.current;
+    // Ticket 15 review (live pass S5 round 3, confirmed regression):
+    // `scrolledActiveUserMessageIdRef` is an rAF-throttled mirror
+    // (`scheduleActiveViewportUpdate`) of "which row is at the reading
+    // line" - it can lag a scroll that happened in the same tick as this
+    // capture (rAF never runs for a backgrounded/closing tab, but the race
+    // exists in a visible renderer too: scroll then close/move before the
+    // pending frame). The offset captured below reads the CURRENT live
+    // `scroll` unconditionally - pairing that with a STALE anchor row
+    // produces an internally-inconsistent {anchorMessageId, anchorIndex,
+    // offset} triple (a huge/negative offset relative to the wrong row),
+    // which restore then clamps to nonsense. Recompute the anchor row
+    // SYNCHRONOUSLY from the SAME live list snapshot the offset capture
+    // below reads, so both halves of the pair are drawn from one
+    // coherent, never-mixed-time snapshot - restoring the invariant the
+    // pre-LegendList `chat-scroll-state-cache.ts` `saveChatScrollState`
+    // documented ("captures any reading position the last animation-frame
+    // update had not yet committed"). The rAF mirror is only a fallback
+    // for when the list itself is unmeasurable (never mounted a real
+    // LegendList instance, or genuinely reports nothing yet).
+    //
+    // `list.getState().scroll` is ITSELF a candidate for the same class
+    // of lag (its own doc comment two blocks below: "LegendList's tracked
+    // scroll can lag the DOM while an animated navigation is still
+    // settling") - overridden here with `getScrollableNode().scrollTop`
+    // (the RAW, always-current DOM value, same source the offset capture
+    // below uses) so the anchor computation cannot reintroduce a mismatch
+    // through LegendList's own internal state lagging instead of React's.
+    const liveActiveUserMessageId =
+      list === null
+        ? null
+        : viewportActiveUserMessageId(
+            {
+              ...list.getState(),
+              scroll: list.getScrollableNode().scrollTop,
+              topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            },
+            messagesRef.current,
+          );
+    const anchorMessageId =
+      mode === "free-scrolling"
+        ? (liveActiveUserMessageId ?? scrolledActiveUserMessageIdRef.current)
+        : null;
+    const anchorIndex =
+      anchorMessageId === null
+        ? undefined
+        : messageIndexByIdRef.current.get(anchorMessageId);
+    // F3: while still anchoring, `anchoredEndSpace` reserves trailing blank
+    // space below the anchor for a still-streaming reply - the live
+    // `scroll` may only be reachable because of that reserve. Clamp the
+    // captured offset to LegendList's true no-reserve max scroll (header +
+    // footer + last-row bottom + endInset - viewport) so the saved position
+    // stays valid once restored without the reserve. Do NOT use
+    // `targetScrollToRevealEnd` here - that is the reveal-pass target and
+    // under-clamps by header+footer-anchorOffset.
+    let naturalMaxScroll: number | null = null;
+    if (wasAnchoring && list !== null) {
+      const listState = list.getState();
+      const lastBottom = getChatRowBottom(listState, listState.data.length - 1);
+      if (lastBottom !== null) {
+        naturalMaxScroll = getChatNaturalMaxScrollWithoutAnchorReserve({
+          headerSize: listTopOffsetAdjustmentRef.current,
+          footerSize: listFooterSizeRef.current,
+          lastBottom,
+          endInset: endInsetRef.current,
+          viewportLength: listState.scrollLength,
+        });
+      }
+    }
+    // Narrow measurement source so capture can fold in the live header pad
+    // (list.getState() does not expose headerSize; metrics keep it current).
+    const measurementSource =
+      list === null
+        ? null
+        : {
+            getState: () => ({
+              positionAtIndex: (index: number) =>
+                list.getState().positionAtIndex(index),
+              // LegendList's tracked scroll can lag the DOM while an
+              // animated navigation is still settling. Persist the pixels
+              // the reader can actually see right now; row positions still
+              // come from the library's measured state.
+              scroll: list.getScrollableNode().scrollTop,
+              topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            }),
+          };
+    return {
+      mode,
+      anchorMessageId,
+      anchorIndex: anchorIndex ?? null,
+      offset: captureChatFreeScrollingOffset(
+        measurementSource,
+        anchorIndex,
+        naturalMaxScroll,
+      ),
+    };
+  }, []);
+
   // Persist the reading position on unmount (chat tiles fully remount per tab
   // switch - decision #17 - so this is the sole persistence path; the
   // display:none keep-alive `useScrollRestoration` machinery other tile kinds
@@ -2232,120 +2514,30 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(
     () => () => {
       const isLive = isEpicCanvasTileInstanceLive(instanceId);
-      // `anchoring-new-turn` never persists as its own mode (see
-      // `chat-tab-state-cache.ts`): a remount mid-anchor has no live
-      // anchor/settle sequence left to resume, so it collapses to
-      // `free-scrolling` at wherever it had settled - same as any other
-      // unpinned reading position.
-      const wasAnchoring =
-        timelineScrollModeRef.current === "anchoring-new-turn";
-      const mode: ChatTabScrollMode =
-        timelineScrollModeRef.current === "following-end"
-          ? "following-end"
-          : "free-scrolling";
-      const list = chatTimelineRef.current;
-      // Ticket 15 review (live pass S5 round 3, confirmed regression):
-      // `scrolledActiveUserMessageIdRef` is an rAF-throttled mirror
-      // (`scheduleActiveViewportUpdate`) of "which row is at the reading
-      // line" - it can lag a scroll that happened in the same tick as this
-      // unmount (rAF never runs for a backgrounded/closing tab, but the
-      // race exists in a visible renderer too: scroll then close before the
-      // pending frame). The offset captured below reads the CURRENT live
-      // `scroll` unconditionally - pairing that with a STALE anchor row
-      // produces an internally-inconsistent {anchorMessageId, anchorIndex,
-      // offset} triple (a huge/negative offset relative to the wrong row),
-      // which restore then clamps to nonsense. Recompute the anchor row
-      // SYNCHRONOUSLY from the SAME live list snapshot the offset capture
-      // below reads, so both halves of the pair are drawn from one
-      // coherent, never-mixed-time snapshot - restoring the invariant the
-      // pre-LegendList `chat-scroll-state-cache.ts` `saveChatScrollState`
-      // documented ("captures any reading position the last animation-frame
-      // update had not yet committed"). The rAF mirror is only a fallback
-      // for when the list itself is unmeasurable (never mounted a real
-      // LegendList instance, or genuinely reports nothing yet).
-      //
-      // `list.getState().scroll` is ITSELF a candidate for the same class
-      // of lag (its own doc comment two blocks below: "LegendList's tracked
-      // scroll can lag the DOM while an animated navigation is still
-      // settling") - overridden here with `getScrollableNode().scrollTop`
-      // (the RAW, always-current DOM value, same source the offset capture
-      // below uses) so the anchor computation cannot reintroduce a mismatch
-      // through LegendList's own internal state lagging instead of React's.
-      const liveActiveUserMessageId =
-        list === null
-          ? null
-          : viewportActiveUserMessageId(
-              {
-                ...list.getState(),
-                scroll: list.getScrollableNode().scrollTop,
-                topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
-              },
-              messagesRef.current,
-            );
-      const anchorMessageId =
-        mode === "free-scrolling"
-          ? (liveActiveUserMessageId ?? scrolledActiveUserMessageIdRef.current)
-          : null;
-      const anchorIndex =
-        anchorMessageId === null
-          ? undefined
-          : messageIndexByIdRef.current.get(anchorMessageId);
-      // F3: while still anchoring, `anchoredEndSpace` reserves trailing blank
-      // space below the anchor for a still-streaming reply - the live
-      // `scroll` may only be reachable because of that reserve. Clamp the
-      // captured offset to LegendList's true no-reserve max scroll (header +
-      // footer + last-row bottom + endInset - viewport) so the saved position
-      // stays valid once restored without the reserve. Do NOT use
-      // `targetScrollToRevealEnd` here - that is the reveal-pass target and
-      // under-clamps by header+footer-anchorOffset.
-      let naturalMaxScroll: number | null = null;
-      if (wasAnchoring && list !== null) {
-        const listState = list.getState();
-        const lastBottom = getChatRowBottom(
-          listState,
-          listState.data.length - 1,
-        );
-        if (lastBottom !== null) {
-          naturalMaxScroll = getChatNaturalMaxScrollWithoutAnchorReserve({
-            headerSize: listTopOffsetAdjustmentRef.current,
-            footerSize: listFooterSizeRef.current,
-            lastBottom,
-            endInset: endInsetRef.current,
-            viewportLength: listState.scrollLength,
-          });
-        }
-      }
-      // Narrow measurement source so capture can fold in the live header pad
-      // (list.getState() does not expose headerSize; metrics keep it current).
-      const measurementSource =
-        list === null
-          ? null
-          : {
-              getState: () => ({
-                positionAtIndex: (index: number) =>
-                  list.getState().positionAtIndex(index),
-                // LegendList's tracked scroll can lag the DOM while an
-                // animated navigation is still settling. Persist the pixels
-                // the reader can actually see at unmount; row positions still
-                // come from the library's measured state.
-                scroll: list.getScrollableNode().scrollTop,
-                topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
-              }),
-            };
       const commit = isLive ? saveChatTabState : commitChatTabStateToDurable;
-      commit({
-        identity,
-        mode,
-        anchorMessageId,
-        anchorIndex: anchorIndex ?? null,
-        offset: captureChatFreeScrollingOffset(
-          measurementSource,
-          anchorIndex,
-          naturalMaxScroll,
-        ),
-      });
+      commit({ identity, ...captureLiveChatTabScrollSnapshot() });
     },
-    [identity, instanceId],
+    [identity, instanceId, captureLiveChatTabScrollSnapshot],
+  );
+
+  // Ticket 20: register the SAME capture for the canvas store's pre-
+  // structural-mutation viewport handoff (`chat-tab-viewport-handoff.ts`) - a
+  // drag/split-wrap/dissolve/tear-off action creator flushes this
+  // synchronously just BEFORE it commits a move that retains `instanceId`
+  // under a new React parent, so the replacement mount's `restoreChatTabState`
+  // initializer reads the fresh position instead of whatever was already
+  // cached. Registered live-only (only a currently-mounted tile has any DOM
+  // viewport worth capturing) - a background/never-mounted-yet tab is simply
+  // absent from the registry, same shape as the close-sweep promotion
+  // (`promoteChatTabPersistenceToDurable`) this pattern reuses. Always
+  // `saveChatTabState` (never the durable-only commit): this component is by
+  // construction live for the whole window it stays registered.
+  useLayoutEffect(
+    () =>
+      registerChatTabViewportCapture(instanceId, () => {
+        saveChatTabState({ identity, ...captureLiveChatTabScrollSnapshot() });
+      }),
+    [identity, instanceId, captureLiveChatTabScrollSnapshot],
   );
 
   const onListMetricsChange = useCallback(
@@ -2377,6 +2569,77 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [],
   );
+  // Ticket 22 (painted-chat lifecycle audit, finding 3): the two-rAF reveal
+  // pass's anchor-drift repair only re-runs on a `messages` change - a
+  // divider drag/pane split-join/header resize/disclosure toggle can rewrap
+  // rows under the SAME `messages` array, and nothing schedules a repair for
+  // that today. Reuses `applyChatAnchorDriftRepair` (the same computation the
+  // reveal pass calls) behind an independent two-rAF coalescing window, so
+  // several item-size/viewport-layout notifications inside one resize/toggle
+  // collapse into a single repair pass instead of one per notification.
+  //
+  // Guarded exactly like the reveal pass's own anchoring-new-turn branch:
+  // mode, generation ownership, "no anchor navigation currently mid-flight",
+  // then the shared repair's own departure (`anchorMoverShouldYieldToReader`)
+  // check - a departed/cancelled session gets no correction (base rule:
+  // never move the reader against their intent). Re-checked fresh INSIDE the
+  // deferred frame (not just at schedule time), same convention as
+  // `onTimelineAnchorSizeChanged` above - either can change between the
+  // triggering call and the frame actually running.
+  const scheduleChatAnchorGeometryRepair = useCallback((): void => {
+    if (timelineScrollModeRef.current !== "anchoring-new-turn") return;
+    if (pendingGeometryRepairCancelRef.current !== null) return;
+    pendingGeometryRepairCancelRef.current = scheduleChatTimelineDoubleRaf(
+      () => {
+        pendingGeometryRepairCancelRef.current = null;
+        if (timelineScrollModeRef.current !== "anchoring-new-turn") return;
+        if (
+          liveFollowUserScrollGenerationRef.current !==
+          anchorUserScrollGenerationRef.current
+        ) {
+          return;
+        }
+        if (pendingTimelineAnchorRef.current !== null) return;
+        if (
+          positionedTimelineAnchorRef.current !== null &&
+          settledTimelineAnchorRef.current !==
+            positionedTimelineAnchorRef.current
+        ) {
+          return;
+        }
+        const list = chatTimelineRef.current;
+        if (!list) return;
+        const metrics = getActiveTimelineTurnMetrics(list);
+        if (!metrics) return;
+        applyChatAnchorDriftRepair({
+          list,
+          anchorTop: metrics.anchorTop,
+          listTopOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+          anchorOffset: anchorOffsetRef.current,
+          expectedAnchorScrollTopRef,
+        });
+      },
+    );
+  }, [getActiveTimelineTurnMetrics]);
+
+  useEffect(() => {
+    return () => {
+      // Review round 1 (finding 1, CONFIRMED HIGH): cancelling without
+      // clearing the sentinel leaves it permanently non-null after a
+      // StrictMode setup->cleanup->setup replay (the deferred callback that
+      // would have cleared it never runs, since `cancel()` cancels the rAFs
+      // it was scheduled in) - every later trigger then exits at the
+      // `!== null` guard above for the rest of the mount's lifetime. Read
+      // once and clear before invoking, so a schedule call made from the
+      // replayed setup (or any later mount) is never blocked by a dead
+      // cancel function from a cleanup that already ran.
+      const cancel = pendingGeometryRepairCancelRef.current;
+      if (cancel === null) return;
+      pendingGeometryRepairCancelRef.current = null;
+      cancel();
+    };
+  }, []);
+
   const onTimelineItemSizeChanged = useCallback((): void => {
     minimapInViewRefreshRef.current();
     // Ticket 17 (review round 2, finding 2 residual, CONFIRMED HIGH): a row's
@@ -2388,7 +2651,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // whose geometry may have shifted underneath it; unknown -> case (b), the
     // same safe default as an un-observed snapshot.
     viewportLastVisibleSnapshotRef.current = null;
-  }, []);
+    // Ticket 22: the same real, no-scroll size change can also move an
+    // anchoring-new-turn session's already-settled anchor.
+    scheduleChatAnchorGeometryRepair();
+  }, [scheduleChatAnchorGeometryRepair]);
+
+  // Ticket 22: viewport-length changes (divider drag/pane resize) - unlike
+  // item-size changes, LegendList never reports these as a scroll, a data
+  // change, or an item resize; nothing else in this file observes them.
+  const onTimelineViewportLayoutChanged = useCallback((): void => {
+    scheduleChatAnchorGeometryRepair();
+  }, [scheduleChatAnchorGeometryRepair]);
 
   // Quote-to-composer: track selections inside the transcript wrapper below and
   // surface the floating quote button. The hook attaches no listeners while the
@@ -2605,8 +2878,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [scrollToTimelineLocation],
   );
 
+  // Ticket 20 (no-visible-traversal requirement): `animated` is an explicit
+  // caller intent, not a hardcoded constant - minimap/deep-link navigation
+  // (this function's other two callers below) are real (if programmatic)
+  // user-triggered jumps, animated by design (decision #21's "manual-
+  // navigation cancellation" framing already treats them as navigations the
+  // reader should perceive happening). Find does NOT go through this
+  // function at all - `use-chat-find-controller.ts`'s own
+  // `scrollToMessageForFind` independently builds its location with
+  // `animated: false` already, unchanged by this ticket. The late-hydration
+  // catch-up effect below is different from either: it is a RESTORE landing
+  // where the transcript simply grew to finally contain a position already
+  // decided at mount, not a fresh navigation the reader initiated - it must
+  // reposition in a single frame like any other mount-time restore, never
+  // visibly scroll/animate to get there.
   const navigateToMessage = useCallback(
-    (messageId: string, highlight: boolean): void => {
+    (messageId: string, highlight: boolean, animated: boolean): void => {
       // Decision #21: minimap/find/deep-link navigation all perform
       // manual-navigation cancellation first. Not a real gesture - a plain
       // release, no freeze: the navigation's own scroll (right below, via
@@ -2617,7 +2904,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const location = chatTimelineLocationForMessage(
         messageId,
         messageIndexByIdRef.current,
-        true,
+        animated,
       );
       if (location === null) return;
       if (highlight) {
@@ -2674,12 +2961,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // through (minimap/find/deep-link), rather than hand-driving
     // `scrollToIndex`'s own `viewOffset` outside its one established
     // caller (`chatTimelineLocationForMessage`'s fixed navigation
-    // padding).
-    navigateToMessage(anchorId, false);
+    // padding). Non-animated (ticket 20): this is a restore finally
+    // resolving, not a fresh navigation - the reader must never see it
+    // visibly scroll to land.
+    navigateToMessage(anchorId, false, false);
   }, [messages, navigateToMessage]);
 
   const onMinimapItemSelect = useCallback(
-    (messageId: string): void => navigateToMessage(messageId, false),
+    (messageId: string): void => navigateToMessage(messageId, false, true),
     [navigateToMessage],
   );
 
@@ -2720,6 +3009,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       instanceId,
       messages,
       messagesRef,
+      backgroundToolBlockIds,
+      backgroundToolBlockIdsRef,
       messageIndexByIdRef,
       getScroller,
       getViewportAnchorListState,
@@ -2924,7 +3215,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // Cross-tile jumps use the same programmatic-navigation choke point as
     // every in-tile navigation: suppression, settle validation, and bounded
     // re-issue are all armed before the scroll. The highlight is visual only.
-    navigateToMessage(request.messageId, true);
+    // Animated (ticket 20 does not change minimap/deep-link semantics - find
+    // is unrelated to this call site, see navigateToMessage's own comment):
+    // a cross-tile jump is a real navigation the reader triggered elsewhere.
+    navigateToMessage(request.messageId, true, true);
     scrollRequestRef.current = null;
   }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
 
@@ -3049,6 +3343,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               navigationHighlightedMessageId={navigationHighlightedMessageId}
               onItemSizeChanged={onTimelineItemSizeChanged}
               onListMetricsChange={onListMetricsChange}
+              onLayout={onTimelineViewportLayoutChanged}
               data-testid="chat-messages-scroll"
               data-scroll-mode={scrollMode}
             />

@@ -6,6 +6,8 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type FocusEvent,
+  type PointerEvent,
   type ReactNode,
 } from "react";
 import { useDroppable } from "@dnd-kit/core";
@@ -13,6 +15,7 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import {
   flattenStripItemRefs,
+  tabRefKey,
   type SplitSide,
   type SplitSideName,
   type SplitStripItem,
@@ -56,8 +59,20 @@ import {
   type TopLevelSurfaceActivator,
   useTopLevelSurfaceActivator,
 } from "./top-level-surface-activation-context";
+import {
+  advanceTopLevelSurfaceRecency,
+  retainedTopLevelSurfaceKeys,
+} from "@/stores/tabs/top-level-surface-retention";
+import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
+import { STABLE_TILE_SURFACE_HOST_ENABLED } from "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch";
+import { renderHostedChatSurfaceBody } from "@/components/epic-canvas/surface-host/hosted-chat-surface-body";
+import {
+  activateHostedTopLevelSurface,
+  refIsFocused,
+  refsMatch,
+} from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 
-export const MAX_RETAINED_TOP_LEVEL_SURFACES = 5;
+export { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
 
 type SurfacePlacement =
   | { readonly kind: "hidden" }
@@ -142,6 +157,13 @@ export function TopLevelTabHost() {
           activateSurface={activateSurface}
         />
       ))}
+      {STABLE_TILE_SURFACE_HOST_ENABLED ? (
+        <HostedTileSurfaceHostMount
+          tabsByRefKey={tabsByRefKey}
+          activeItem={activeItem}
+          activateSurface={activateSurface}
+        />
+      ) : null}
       {renderedActiveItem?.kind === "tab" ? (
         <TopLevelEdgeSplitTargets targetRef={renderedActiveItem.ref} />
       ) : null}
@@ -157,6 +179,82 @@ export function TopLevelTabHost() {
         </>
       ) : null}
     </div>
+  );
+}
+
+function HostedTileSurfaceHostMount(props: {
+  readonly tabsByRefKey: ReadonlyMap<string, HeaderTab>;
+  readonly activeItem: StripItem | null;
+  readonly activateSurface: TopLevelSurfaceActivator | null;
+}): ReactNode {
+  const { activateSurface, activeItem, tabsByRefKey } = props;
+  const pendingTabRef = useRef<HeaderTab | null>(null);
+  const activatePendingTab = useCallback(() => {
+    const tab = pendingTabRef.current;
+    if (tab === null) return;
+    activateSurface?.(tab);
+  }, [activateSurface]);
+  const activation = usePaneActivationOwnership({
+    active: false,
+    activate: activatePendingTab,
+  });
+  const {
+    claimFocus: claimActivationFocus,
+    claimPointerDown: claimActivationPointerDown,
+  } = activation;
+
+  const claimFocus = useCallback(
+    (event: FocusEvent<HTMLDivElement>): void => {
+      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+        tabsByRefKey,
+        activeItem,
+        activate:
+          activateSurface === null
+            ? null
+            : (tab) => {
+                pendingTabRef.current = tab;
+                claimActivationFocus({
+                  defaultPrevented: false,
+                  scope: event.target,
+                  target: event.target,
+                });
+              },
+      });
+    },
+    [activeItem, activateSurface, claimActivationFocus, tabsByRefKey],
+  );
+  const claimPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>): void => {
+      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+        tabsByRefKey,
+        activeItem,
+        activate:
+          activateSurface === null
+            ? null
+            : (tab) => {
+                pendingTabRef.current = tab;
+                claimActivationPointerDown({
+                  defaultPrevented: false,
+                  scope: event.target,
+                  target: event.target,
+                });
+              },
+      });
+    },
+    [activeItem, activateSurface, claimActivationPointerDown, tabsByRefKey],
+  );
+
+  return (
+    <PaneActivationFocusIntentContext.Provider value={activation.focusIntent}>
+      <div
+        className="contents"
+        onFocusCapture={claimFocus}
+        onPointerDownCapture={claimPointerDown}
+        onPointerCancelCapture={activation.onPointerCancelCapture}
+      >
+        <StableTileSurfaceHost renderRecordBody={renderHostedChatSurfaceBody} />
+      </div>
+    </PaneActivationFocusIntentContext.Provider>
   );
 }
 
@@ -232,23 +330,15 @@ function useMountedSurfaceKeys(
 
   if (activeSignature !== seenActiveSignature) {
     setSeenActiveSignature(activeSignature);
-    setRecency((previous) => [
-      ...activeRefKeys,
-      ...previous.filter((key) => !activeRefKeys.includes(key)),
-    ]);
+    setRecency((previous) =>
+      advanceTopLevelSurfaceRecency(activeRefKeys, previous),
+    );
   }
 
-  return useMemo(() => {
-    const available = new Set(availableRefKeys);
-    const ordered = [
-      ...activeRefKeys,
-      ...recency.filter(
-        (key) => available.has(key) && !activeRefKeys.includes(key),
-      ),
-    ];
-    const retained = new Set(ordered.slice(0, MAX_RETAINED_TOP_LEVEL_SURFACES));
-    return availableRefKeys.filter((key) => retained.has(key));
-  }, [activeRefKeys, availableRefKeys, recency]);
+  return useMemo(
+    () => retainedTopLevelSurfaceKeys(availableRefKeys, activeRefKeys, recency),
+    [activeRefKeys, availableRefKeys, recency],
+  );
 }
 
 function FillableSplitSlots(props: {
@@ -505,25 +595,6 @@ function splitSidePlacement(
     left: leftWidth,
     width: `${(1 - item.leftRatio) * 100}%`,
   };
-}
-
-function refIsFocused(activeItem: StripItem | null, tab: HeaderTab): boolean {
-  if (activeItem === null) return false;
-  if (activeItem.kind === "tab") return refsMatch(activeItem.ref, tab);
-  const focused =
-    activeItem.focusedSide === "left" ? activeItem.left : activeItem.right;
-  return refsMatch(focused, tab);
-}
-
-function refsMatch(ref: TabRef | SplitSide, tab: HeaderTab): boolean {
-  const candidate = ref.kind === "tab" ? ref.ref : ref;
-  return (
-    candidate.kind === tab.kind && "id" in candidate && candidate.id === tab.id
-  );
-}
-
-function tabRefKey(ref: TabRef | HeaderTab): string {
-  return `${ref.kind}:${ref.id}`;
 }
 
 function surfaceClassName(placement: SurfacePlacement): string {
