@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 export interface DraftSelection {
@@ -95,8 +96,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasDraftMap(
   value: unknown,
-): value is { readonly drafts: Partial<Record<string, DraftState>> } {
+): value is { readonly drafts: Record<string, unknown> } {
   return isRecord(value) && isRecord(value.drafts);
+}
+
+function isDraftSelection(value: unknown): value is DraftSelection {
+  return (
+    isRecord(value) &&
+    typeof value.from === "number" &&
+    Number.isFinite(value.from) &&
+    typeof value.to === "number" &&
+    Number.isFinite(value.to)
+  );
 }
 
 export const useComposerDraftStore = create<ComposerDraftStore>()(
@@ -172,10 +183,15 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         }
         const drafts: Partial<Record<string, DraftState>> = {};
         for (const [taskId, value] of Object.entries(persistedState.drafts)) {
-          if (value === undefined) continue;
+          if (!isRecord(value)) continue;
+          if (!isJsonContent(value.content, 0)) continue;
+          if (value.selection !== null && !isDraftSelection(value.selection)) {
+            continue;
+          }
           drafts[taskId] = {
-            ...value,
-            resetEpoch: value.resetEpoch + 1,
+            content: value.content,
+            selection: value.selection,
+            resetEpoch: normalizedLegacyResetEpoch(value) + 1,
             revision: normalizedLegacyRevision(value),
           };
         }
@@ -184,6 +200,13 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
     },
   ),
 );
+
+function normalizedLegacyResetEpoch(rawDraft: Record<string, unknown>): number {
+  const resetEpoch = rawDraft.resetEpoch;
+  return typeof resetEpoch === "number" && Number.isFinite(resetEpoch)
+    ? resetEpoch
+    : 0;
+}
 
 /**
  * Storage written before `revision` existed lacks the field despite the

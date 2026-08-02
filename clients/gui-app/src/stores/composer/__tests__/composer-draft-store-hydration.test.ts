@@ -79,6 +79,36 @@ describe("composer draft store hydration", () => {
     await useComposerDraftStore.persist.rehydrate();
     expect(useComposerDraftStore.getState().drafts).toEqual({});
   });
+
+  it("drops malformed entries and safely hydrates a legacy draft missing resetEpoch", async () => {
+    const legacyDraft = {
+      content: MENTION_DRAFT.content,
+      selection: null,
+      revision: 3,
+    };
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {
+            nullEntry: null,
+            malformedEntry: { content: null, selection: null },
+            legacy: legacyDraft,
+          },
+        },
+      }),
+    );
+
+    await useComposerDraftStore.persist.rehydrate();
+
+    expect(useComposerDraftStore.getState().drafts).toEqual({
+      legacy: {
+        ...legacyDraft,
+        resetEpoch: 1,
+      },
+    });
+  });
 });
 
 /**
