@@ -307,6 +307,11 @@ export function NotificationsSessionProvider(
   const resetHostReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().reset();
+    // A local activity view belongs solely to the departed host. Cloud
+    // activity is a per-user union and remains valid across host switches.
+    if (useAgentActivityStore.getState().servedBy === "local") {
+      useAgentActivityStore.getState().reset();
+    }
     resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
   }, [queryClient, resetCloudRelaySession]);

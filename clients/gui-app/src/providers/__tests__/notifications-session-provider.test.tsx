@@ -40,7 +40,10 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { NotificationNavigate } from "@/lib/notifications";
-import { HOST_STREAM_REOPEN_MAX_BACKOFF_MS } from "@/lib/host/stream-reopen";
+import {
+  HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
+  HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
+} from "@/lib/host/stream-reopen";
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 
 interface HostState {
@@ -221,6 +224,7 @@ import { selectNotificationIndicatorState } from "@/stores/notifications/notific
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
   __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
 
@@ -737,7 +741,7 @@ describe("<NotificationsSessionProvider />", () => {
       });
       expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
       act(() => {
-        vi.advanceTimersByTime(5_000);
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       });
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
@@ -1120,6 +1124,15 @@ describe("<NotificationsSessionProvider />", () => {
       },
       summary: { unreadCount: 1, attentionCount: 0 },
     });
+    __setAgentActivityStateForTests(
+      {
+        "epic-alpha": {
+          working: ["agent-before-host-switch"],
+          turn: ["agent-before-host-switch"],
+        },
+      },
+      "local",
+    );
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-user-switch",
       target: {
@@ -1323,6 +1336,8 @@ describe("<NotificationsSessionProvider />", () => {
       expect(useNotificationsStore.getState().entries).toHaveLength(1);
       expect(useHostNotificationsStore.getState().byId).toEqual({});
       expect(useHostNotificationsStore.getState().summary).toBeNull();
+      expect(useAgentActivityStore.getState().servedBy).toBeNull();
+      expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
       expect(
         Object.keys(useAppLocalNotificationsStore.getState().byId),
       ).not.toHaveLength(0);
