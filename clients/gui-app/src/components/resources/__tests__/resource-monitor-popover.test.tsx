@@ -873,6 +873,70 @@ describe("ResourceMonitorPopover", () => {
     expect(killZero.hasAttribute("disabled")).toBe(true);
   });
 
+  it("prunes a selected process root when search stops rendering it", () => {
+    const stub = installStubFactory();
+    const processes = [
+      resourceProcess({
+        pid: 100,
+        parentPid: 1,
+        rootPid: 100,
+        name: "needle-root",
+        command: "needle-root",
+      }),
+      resourceProcess({
+        pid: 101,
+        parentPid: 100,
+        rootPid: 100,
+        name: "needle-child",
+        command: "needle-child",
+      }),
+    ];
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: null, processes })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "needle" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select needle-root" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    act(() => {
+      stub.emit().onUpdate(
+        projection({
+          owners: [
+            owner({
+              activeProcessName: null,
+              processes: [
+                { ...processes[0], name: "plain-root", command: "plain-root" },
+                processes[1],
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    expect(screen.queryByText("plain-root")).toBeNull();
+    expect(screen.getByText("needle-child")).not.toBeNull();
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
+  });
+
   it("uses the persisted Agent title when the live title is empty", async () => {
     liveArtifactTitleMock.title = "";
     canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {

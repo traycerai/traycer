@@ -2432,21 +2432,37 @@ function searchVisibleProcessKeys(
   const processByPid = new Map(
     processes.map((process) => [process.pid, process]),
   );
+  const structuralRootPids = new Set(
+    processes
+      .filter(
+        (process) =>
+          process.parentPid === null || !processByPid.has(process.parentPid),
+      )
+      .map((process) => process.pid),
+  );
+  const matchingProcessPids = new Set(
+    processes
+      .filter((process) =>
+        matchesResourceSearch(searchQuery, [
+          ...ancestorTerms,
+          ...processSearchTerms(process),
+        ]),
+      )
+      .map((process) => process.pid),
+  );
   const visibleKeys = new Set<string>();
   for (const process of processes) {
-    if (
-      !matchesResourceSearch(searchQuery, [
-        ...ancestorTerms,
-        ...processSearchTerms(process),
-      ])
-    ) {
-      continue;
-    }
+    if (!matchingProcessPids.has(process.pid)) continue;
     let current: ResourceProcessSnapshotWire | undefined = process;
     const visitedPids = new Set<number>();
     while (current !== undefined && !visitedPids.has(current.pid)) {
       visitedPids.add(current.pid);
-      visibleKeys.add(processRowKey(current));
+      if (
+        !structuralRootPids.has(current.pid) ||
+        matchingProcessPids.has(current.pid)
+      ) {
+        visibleKeys.add(processRowKey(current));
+      }
       current =
         current.parentPid === null
           ? undefined
