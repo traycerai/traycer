@@ -159,10 +159,35 @@ describe("prompt-stash-repository refresh", () => {
   it("rejects a blocked open and re-arms the cached connection promise", async () => {
     const realFactory = new FakeIDBFactory();
     let blockOnce = true;
+
+    type RequestHandler = (this: IDBRequest, ev: Event) => unknown;
+
+    interface BlockedOpenRequest {
+      readonly result: IDBDatabase | undefined;
+      readonly error: null;
+      onerror: RequestHandler | null;
+      onsuccess: RequestHandler | null;
+      onupgradeneeded: RequestHandler | null;
+      onblocked: RequestHandler | null;
+    }
+
+    function toOpenRequest(request: BlockedOpenRequest): IDBOpenDBRequest {
+      return request as IDBOpenDBRequest;
+    }
+
     function blockedRequest(): IDBOpenDBRequest {
-      const request = realFactory.open(`${DB_NAME}:blocked-request`);
-      queueMicrotask(() => request.dispatchEvent(new Event("blocked")));
-      return request;
+      const request: BlockedOpenRequest = {
+        result: undefined,
+        error: null,
+        onerror: null,
+        onsuccess: null,
+        onupgradeneeded: null,
+        onblocked: null,
+      };
+      queueMicrotask(() => {
+        request.onblocked?.call(toOpenRequest(request), new Event("blocked"));
+      });
+      return toOpenRequest(request);
     }
     const testFactory: IDBFactory = {
       open(name: string, version: number | undefined): IDBOpenDBRequest {
