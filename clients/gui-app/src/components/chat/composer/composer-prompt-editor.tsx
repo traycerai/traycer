@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import type {
@@ -255,6 +256,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     onEditorReady,
     ref,
   } = props;
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
   // Tiptap's `useEditor` extension chain is built once (`buildComposerExtensions`
   // is memoized with empty editor deps). The plugin closure inside calls
@@ -383,8 +385,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     if (editor === null) return;
     if (!isActive) return;
     if (editor.isFocused) return;
+    if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     editor.commands.focus();
-  }, [editor, isActive]);
+  }, [editor, isActive, paneActivationFocusIntent]);
 
   useEffect(() => {
     if (editor === null) return;

@@ -26,6 +26,10 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
+  // This branch's `EpicSessionProvider` folds the host binding's owner
+  // identity into its rebuild decision; a null binding is the legitimate
+  // "directory not bound yet" state and keeps the identity key null.
+  useHostBinding: () => null,
 }));
 
 // The epic session and the comm-graph fan-in both build durable transports.

@@ -307,6 +307,7 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicArchiveChats: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicCreateChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicCreateChatForHostClient: () => ({
     mutate: vi.fn(),

@@ -9,6 +9,8 @@ import type {
   IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationForegroundDisplay,
+  NotificationForegroundAppLocal,
   IRunnerHost,
   ISecureStorage,
   ITokenStore,
@@ -55,6 +57,15 @@ import {
 } from "../../auth/auth-validation";
 import type { AuthIdentityValidationResult } from "../../auth/auth-validation-types";
 import type { HostDirectoryEntry } from "../host-directory";
+import {
+  fetchRegisteredHostsViaHttp,
+  type HostListFetchResult,
+} from "../remote-fetcher";
+import {
+  updateHostVersionPolicyViaHttp,
+  type UpdateHostVersionPolicyFetchResult,
+  type UpdateHostVersionPolicyInput,
+} from "../host-version-policy-fetcher";
 
 export interface MockRunnerHostOptions {
   readonly signInUrl: string;
@@ -105,6 +116,10 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
 export class MockRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  // Fixed test-only value: no test constructs a real remote transport against
+  // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
+  // instead), so this never needs to vary per test the way `authnBaseUrl` does.
+  readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
@@ -113,6 +128,7 @@ export class MockRunnerHost implements IRunnerHost {
     readonly payload: unknown;
     readonly replaceKey: string | null;
     readonly deliveryKey: string | null;
+    readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
   readonly tokenStoreEntries: Map<string, StoredCredentials> = new Map();
@@ -132,6 +148,9 @@ export class MockRunnerHost implements IRunnerHost {
   >();
   private readonly notificationClickHandlers = new Set<
     (payload: unknown) => void
+  >();
+  private readonly notificationForegroundDisplayHandlers = new Set<
+    (display: NotificationForegroundDisplay) => void
   >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
@@ -209,14 +228,19 @@ export class MockRunnerHost implements IRunnerHost {
     return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
   }
 
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    return fetchRegisteredHostsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
   listUserSessions(
     bearerToken: string,
     signal: AbortSignal,
   ): Promise<ListUserSessionsFetchResult> {
-    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
-    // helper directly (browser/dev parity with the auth validators above).
-    // Owning the request in-process, it can hand the caller's signal straight
-    // to `fetch` and abort the real request.
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above. Owning the
+    // request in-process, it can hand the caller's signal straight to `fetch`
+    // and abort the real request.
     return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken, signal);
   }
 
@@ -301,6 +325,20 @@ export class MockRunnerHost implements IRunnerHost {
       return null;
     }
     return this.retainedStepUpCredential.accessToken;
+  }
+
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return updateHostVersionPolicyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      hostId,
+      input,
+    );
   }
 
   async openExternalLink(url: string): Promise<void> {
@@ -495,6 +533,7 @@ export class MockRunnerHost implements IRunnerHost {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      foregroundAppLocal: NotificationForegroundAppLocal | null,
     ): Promise<void> => {
       this.notificationsSent.push({
         title,
@@ -502,6 +541,7 @@ export class MockRunnerHost implements IRunnerHost {
         payload,
         replaceKey,
         deliveryKey,
+        foregroundAppLocal,
       });
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
@@ -512,7 +552,25 @@ export class MockRunnerHost implements IRunnerHost {
         },
       };
     },
+    onForegroundDisplay: (
+      handler: (display: NotificationForegroundDisplay) => void,
+    ): Disposable => {
+      this.notificationForegroundDisplayHandlers.add(handler);
+      return {
+        dispose: () => {
+          this.notificationForegroundDisplayHandlers.delete(handler);
+        },
+      };
+    },
   };
+
+  emitForegroundNotificationDisplay(
+    display: NotificationForegroundDisplay,
+  ): void {
+    for (const handler of this.notificationForegroundDisplayHandlers) {
+      handler(display);
+    }
+  }
 
   onLocalHostChange(
     handler: (snapshot: LocalHostSnapshot | null) => void,

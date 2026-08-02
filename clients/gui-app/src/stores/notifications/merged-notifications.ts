@@ -1490,7 +1490,16 @@ function navigationPayloadFromKnown(
     case "workspace_operation_failed":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "epic":
-      return { kind: "epic", epicId: known.epicId };
+      // TUI agent-stopped rows use the persisted `epic` payload shape, but
+      // their actionable entity is the terminal agent itself. The canvas
+      // addresses that record through the same chat-shaped route used for
+      // `terminal-agent` tiles, so retain `tuiAgentId` instead of degrading
+      // the click to the owning epic.
+      return {
+        kind: "chat",
+        epicId: known.epicId,
+        chatId: known.tuiAgentId,
+      };
     case "approval":
       return {
         kind: "approval",

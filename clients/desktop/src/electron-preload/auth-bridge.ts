@@ -5,14 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type {
-  CredentialsMigrationOutcome,
-  StoredAuthTokens,
-  StoredCredentials,
-  StoredCredentialsIdentity,
-  TokenRotateResult,
-  TokenStoreChange,
-} from "../ipc-contracts/auth-types";
-import type {
+  HostListFetchResult,
   ListUserSessionsFetchResult,
   MintHostCredentialFetchResult,
   MintHostCredentialRequest,
@@ -20,7 +13,17 @@ import type {
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
 } from "../ipc-contracts/host-types";
+import type {
+  CredentialsMigrationOutcome,
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
+} from "../ipc-contracts/auth-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -69,6 +72,7 @@ export interface AuthBridgeSurface {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
   revokeUserSession(
     bearerToken: string,
@@ -87,6 +91,11 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     code: string,
   ): Promise<RetainedStepUpVerifyFetchResult>;
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
@@ -98,6 +107,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.validateAuthTokenIdentity,
         token,
       ) as Promise<AuthIdentityValidationResult>,
+
+    listRegisteredHosts: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listRegisteredHosts,
+        bearerToken,
+      ) as Promise<HostListFetchResult>,
 
     listUserSessions: (bearerToken) =>
       ipcRenderer.invoke(
@@ -138,6 +153,14 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         code,
       ) as Promise<RetainedStepUpVerifyFetchResult>,
+
+    updateHostVersionPolicy: (bearerToken, hostId, input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateHostVersionPolicy,
+        bearerToken,
+        hostId,
+        input,
+      ) as Promise<UpdateHostVersionPolicyFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to

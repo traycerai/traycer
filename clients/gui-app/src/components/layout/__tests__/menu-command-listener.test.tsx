@@ -48,6 +48,7 @@ import { tabItemId } from "@/stores/tabs/layout";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { DesktopMenuCommandPayload } from "@/lib/windows/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 interface CapturedNavigate {
@@ -150,45 +151,9 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
   };
   const hostPickerRequestOpen: Mock<() => void> = vi.fn();
   return Object.assign(
-    {
-      signInUrl: "https://auth.example.invalid/sign-in",
-      authnBaseUrl: "https://auth.example.invalid",
-      hasLocalHost: true,
-      validateAuthTokenIdentity: () =>
-        Promise.resolve({ kind: "rejected" as const }),
-      listUserSessions: () =>
-        Promise.resolve({ kind: "network-error" as const }),
-      revokeUserSession: () =>
-        Promise.resolve({ kind: "network-error" as const }),
-      revokeAllSessions: () =>
-        Promise.resolve({ kind: "network-error" as const }),
-      mintHostCredential: () =>
-        Promise.resolve({ kind: "network-error" as const }),
-      requestStepUpChallenge: () =>
-        Promise.resolve({ kind: "network-error" as const }),
-      verifyStepUpChallenge: () =>
-        Promise.resolve({ kind: "network-error" as const }),
-      openExternalLink: () => Promise.resolve(),
-      getRegisteredUrlSchemes: () => Promise.resolve([]),
-      requestMicrophoneAccess: () => Promise.resolve("granted" as const),
-      openMicrophoneSettings: () => Promise.resolve(),
-      beginAuthAttempt: () => undefined,
-      onAuthCallback: () => ({ dispose: () => undefined }),
-      deviceFlow: { start: () => Promise.resolve(null) },
-      secureStorage: {
-        get: () => Promise.resolve(null),
-        set: () => Promise.resolve(),
-        delete: () => Promise.resolve(),
-      },
-      notifications: {
-        show: () => Promise.resolve(),
-        onClick: () => ({ dispose: () => undefined }),
-      },
-      tray: {
-        setEpics: () => Promise.resolve(),
-        setIndicator: () => Promise.resolve(),
-        onEpicSelected: () => ({ dispose: () => undefined }),
-      },
+    // Shared `IRunnerHost` stub base so this test never re-declares the whole
+    // surface; only the facets it drives are overridden.
+    createFakeRunnerHost({
       hostPicker: {
         get isOpen() {
           return false;
@@ -197,36 +162,10 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
         requestClose: vi.fn(),
         onChange: () => ({ dispose: () => undefined }),
       },
-      workspaceFolders: {
-        pickFolders: () => Promise.resolve([]),
-      },
-      fileDrops: {
-        resolveDroppedFilePaths: () => Promise.resolve([]),
-        copyDroppedFilePaths: (paths) => Promise.resolve(paths),
-        readNativeClipboardFilePaths: () => Promise.resolve([]),
-      },
-      tokenStore: {
-        get: () => Promise.resolve(null),
-        signIn: () => Promise.resolve(),
-        rotate: () =>
-          Promise.resolve({ outcome: "deleted" as const, pair: null }),
-        delete: () => Promise.resolve(),
-        subscribe: () => ({ dispose: () => undefined }),
-        migrateLegacyCredentials: () =>
-          Promise.resolve("identity-unknown" as const),
-      },
-      onLocalHostChange: () => ({ dispose: () => undefined }),
-      onSystemResumed: () => ({ dispose: () => undefined }),
       requestHostRespawn: vi.fn(() =>
         Promise.resolve({ kind: "restarted" as const }),
       ),
-      service: null,
-      traycerCli: null,
-      migration: null,
-      hostManagement: null,
-      hostTray: null,
-      zoom: null,
-    } satisfies IRunnerHost,
+    }),
     {
       menu,
       windows,

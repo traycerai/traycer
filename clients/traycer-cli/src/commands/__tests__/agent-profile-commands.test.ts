@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
+import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { agentCreateDowngradeV30ToV20 } from "@traycer/protocol/host/agent/contracts";
 import { createAgentRequestSchemaV30 } from "@traycer/protocol/host/agent/shared";
 import { buildProgram } from "../../index";
@@ -82,7 +83,6 @@ function createOpts(profile: string | null) {
     surface: "gui",
     harness: "codex",
     model: null,
-    agentMode: null,
     reasoningEffort: null,
     fast: false,
     permissionMode: null,
@@ -114,6 +114,14 @@ function expectAgentCommand(name: string): Command {
 
 function optionFlags(command: Command): readonly (string | undefined)[] {
   return command.options.map((option) => option.long);
+}
+
+function optionDescription(command: Command, longFlag: string): string {
+  const option = command.options.find((entry) => entry.long === longFlag);
+  if (option === undefined) {
+    throw new Error(`expected ${command.name()} to register ${longFlag}`);
+  }
+  return option.description;
 }
 
 // `mandatory` is commander's flag for `.requiredOption(...)` - the option must
@@ -339,6 +347,9 @@ describe("agent configure", () => {
       reasoningEffort: "high",
       fastMode: false,
       permissionMode: "supervised",
+      // `agent.configure@3.0` is released and its baseline requires this on the
+      // response, so the CLI still has to decode it - see the schema comment in
+      // `protocol/src/host/agent/profiles.ts`.
       agentMode: "regular",
     },
     warnings: ["Fast mode is not available for 'gpt-5.6-codex'."],
@@ -491,7 +502,8 @@ describe("version skew", () => {
       surface: "gui",
       harnessId: "codex",
       model: null,
-      agentMode: null,
+      // v3.0 is released, so its request still requires the field.
+      agentMode: "regular",
       reasoningEffort: null,
       fastMode: null,
       permissionMode: "full_access",
@@ -538,7 +550,7 @@ describe("command registration", () => {
     expect(optionFlags(expectAgentCommand("create"))).toContain(
       "--permission-mode",
     );
-    expect(optionFlags(expectAgentCommand("list-profiles"))).toContain(
+    expect(optionFlags(expectAgentCommand("list-profiles"))).not.toContain(
       "--epic-id",
     );
     expect(
@@ -566,5 +578,16 @@ describe("command registration", () => {
     expect(requiredOptionFlags(expectAgentCommand("create"))).not.toContain(
       "--profile",
     );
+  });
+
+  it("requires full access in create and configure help unless the guide explicitly overrides it", () => {
+    for (const commandName of ["create", "configure"]) {
+      const description = optionDescription(
+        expectAgentCommand(commandName),
+        "--permission-mode",
+      );
+      expect(description).toContain(A2A_PERMISSION_MODE_INSTRUCTION);
+      expect(description).toContain("Omit this flag");
+    }
   });
 });

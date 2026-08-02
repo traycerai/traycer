@@ -17,6 +17,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming
         durationMs={null}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -32,6 +33,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming
         durationMs={null}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -50,6 +52,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming={false}
         durationMs={12000}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -65,6 +68,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming={false}
         durationMs={null}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -78,6 +82,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -93,6 +98,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming
         durationMs={null}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -111,6 +117,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -129,6 +136,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -158,6 +166,7 @@ describe("<ReasoningSegment />", () => {
           markdown="Detailed chain of thought"
           isStreaming={false}
           durationMs={3000}
+          bodyBoundedByParent={false}
         />
       </div>,
     );
@@ -185,6 +194,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
+        bodyBoundedByParent={false}
       />,
     );
 
@@ -204,6 +214,7 @@ describe("<ReasoningSegment />", () => {
         markdown="Considering the options"
         isStreaming={false}
         durationMs={3_661_000}
+        bodyBoundedByParent={false}
       />,
     );
 

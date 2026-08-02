@@ -10,4 +10,5 @@ export const epicMutationKeys = {
   updateChatRunSettings: () => ["epic.updateChatRunSettings"] as const,
   updateChatProfile: () => ["epic.updateChatProfile"] as const,
   setChatArchived: () => ["epic.setChatArchived"] as const,
+  archiveChats: () => ["epic.archiveChats"] as const,
 };

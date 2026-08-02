@@ -83,6 +83,7 @@ function StepUpChallengeDialogActive(props: {
   const busy = requestChallenge.isPending || verifyChallenge.isPending;
   const requestChallengeMutateAsync = requestChallenge.mutateAsync;
   const mountedRef = useRef(true);
+  const autoSentRef = useRef(false);
   const { title, description } = dialogCopy(props.request);
 
   useEffect(() => {
@@ -92,6 +93,18 @@ function StepUpChallengeDialogActive(props: {
   }, []);
 
   useEffect(() => {
+    // Guard the REQUEST, not just its state updates. StrictMode runs this
+    // effect setup -> cleanup -> setup on mount, and `active` only suppresses
+    // the second pass's `setChallengeSent`/`setError` - the mutation itself
+    // would already have gone out twice, i.e. two verification emails for one
+    // prompt. A ref rather than state because it must be read synchronously by
+    // the second setup, before any re-render. The parent keys this component
+    // on `request.id`, so a genuinely new prompt gets a fresh instance and a
+    // fresh ref; explicit re-sends go through `handleResend`.
+    if (autoSentRef.current) {
+      return undefined;
+    }
+    autoSentRef.current = true;
     let active = true;
     void requestChallengeMutateAsync()
       .then(() => {

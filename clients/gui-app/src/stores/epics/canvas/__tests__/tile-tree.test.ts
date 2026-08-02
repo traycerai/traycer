@@ -4,15 +4,21 @@ import {
   collectPanes,
   findPaneById,
   findPanePath,
+  getNodeAtPath,
   getTreeDepth,
   insertPaneAtEdge,
   normalizeSizes,
+  paneRemovalDissolveHandoffTargets,
   pruneSizes,
   removePaneFromTree,
   replaceNodeAtPath,
   replacePane,
+  resolveActivePaneTab,
 } from "@/stores/epics/canvas/tile-tree";
-import type { SizesByGroupId } from "@/stores/epics/canvas/tile-tree";
+import type {
+  SizesByGroupId,
+  TileLayoutNode,
+} from "@/stores/epics/canvas/tile-tree";
 import {
   MAX_TREE_DEPTH,
   MIN_SPLIT_SIZE,
@@ -147,6 +153,31 @@ describe("findPaneById", () => {
     const tree = group("g", "horizontal", [pane("a", []), leaf]);
     expect(findPaneById(tree, "b")).toBe(leaf);
     expect(findPaneById(tree, "missing")).toBeNull();
+  });
+});
+
+describe("resolveActivePaneTab", () => {
+  it("returns null for an empty pane regardless of activeTabId", () => {
+    expect(resolveActivePaneTab(null, [])).toBeNull();
+    expect(resolveActivePaneTab("t-a", [])).toBeNull();
+  });
+
+  it("returns activeTabId when it names a live tab", () => {
+    expect(resolveActivePaneTab("t-b", ["t-a", "t-b", "t-c"])).toBe("t-b");
+  });
+
+  it("falls back to the first tab when activeTabId is null", () => {
+    expect(resolveActivePaneTab(null, ["t-a", "t-b"])).toBe("t-a");
+  });
+
+  it("falls back to the first tab when activeTabId names a tab no longer in the pane", () => {
+    expect(resolveActivePaneTab("stale", ["t-a", "t-b"])).toBe("t-a");
+  });
+
+  it("returns the sole tab for a single-tab pane, matching or not matching activeTabId", () => {
+    expect(resolveActivePaneTab("t-a", ["t-a"])).toBe("t-a");
+    expect(resolveActivePaneTab("stale", ["t-a"])).toBe("t-a");
+    expect(resolveActivePaneTab(null, ["t-a"])).toBe("t-a");
   });
 });
 
@@ -441,6 +472,199 @@ describe("insertPaneAtEdge - rejections", () => {
     expect(merged === null ? 0 : getTreeDepth(merged.root)).toBe(
       MAX_TREE_DEPTH,
     );
+  });
+});
+
+/**
+ * Ticket 20: read-only dissolve predictor used by close/move/tear-off action
+ * creators to know which surviving panes' painted chats remount when a pane
+ * removal dissolves its 2-child parent. Must mirror `removePaneFromTree`'s
+ * single-survivor branch exactly - a multi-pane promoted survivor remounts
+ * EVERY descendant pane, not just the direct sibling.
+ */
+describe("paneRemovalDissolveHandoffTargets", () => {
+  it("returns the survivor's active tab when the parent group has exactly 2 children", () => {
+    const tree = group("g", "horizontal", [
+      pane("a", ["t-a"]),
+      pane("b", ["t-b"]),
+    ]);
+    expect(paneRemovalDissolveHandoffTargets(tree, "a")).toEqual(["t-b"]);
+    expect(paneRemovalDissolveHandoffTargets(tree, "b")).toEqual(["t-a"]);
+  });
+
+  it("returns [] when the parent group has more than 2 children (no dissolve)", () => {
+    const tree = group("g", "horizontal", [
+      pane("a", ["t-a"]),
+      pane("b", ["t-b"]),
+      pane("c", ["t-c"]),
+    ]);
+    expect(paneRemovalDissolveHandoffTargets(tree, "a")).toEqual([]);
+    expect(paneRemovalDissolveHandoffTargets(tree, "b")).toEqual([]);
+  });
+
+  it("returns [] when removing the bare-pane root (no parent group to dissolve)", () => {
+    expect(
+      paneRemovalDissolveHandoffTargets(pane("root", ["t-root"]), "root"),
+    ).toEqual([]);
+  });
+
+  it("returns [] for a null root or an absent pane id", () => {
+    expect(paneRemovalDissolveHandoffTargets(null, "a")).toEqual([]);
+    expect(
+      paneRemovalDissolveHandoffTargets(
+        group("g", "horizontal", [pane("a", ["t-a"]), pane("b", ["t-b"])]),
+        "missing",
+      ),
+    ).toEqual([]);
+  });
+
+  it(
+    "returns EVERY active tab in a multi-pane promoted survivor subtree " +
+      "(the mounts=3/unmounts=2 dissolve the audit probe found)",
+    () => {
+      // Removing `gone` dissolves the root 2-child group and promotes the
+      // nested survivor group; both of ITS panes remount under a new ancestor.
+      const tree = group("g-root", "horizontal", [
+        pane("gone", ["t-gone"]),
+        group("g-survivor", "vertical", [
+          pane("keep-1", ["t-keep-1"]),
+          pane("keep-2", ["t-keep-2"]),
+        ]),
+      ]);
+      expect(paneRemovalDissolveHandoffTargets(tree, "gone")).toEqual([
+        "t-keep-1",
+        "t-keep-2",
+      ]);
+    },
+  );
+
+  it("filters out panes whose activeTabId is null (empty survivor panes)", () => {
+    const tree = group("g", "horizontal", [
+      pane("a", ["t-a"]),
+      pane("empty", []),
+    ]);
+    expect(paneRemovalDissolveHandoffTargets(tree, "a")).toEqual([]);
+  });
+
+  it("captures the same fallback tab rendering paints when a survivor activeTabId is null or stale", () => {
+    const nullActive = group("g-null", "horizontal", [
+      pane("gone-null", ["t-gone"]),
+      { ...pane("keep-null", ["t-painted", "t-other"]), activeTabId: null },
+    ]);
+    const staleActive = group("g-stale", "horizontal", [
+      pane("gone-stale", ["t-gone"]),
+      {
+        ...pane("keep-stale", ["t-painted", "t-other"]),
+        activeTabId: "t-missing",
+      },
+    ]);
+
+    expect
+      .soft(paneRemovalDissolveHandoffTargets(nullActive, "gone-null"))
+      .toEqual(["t-painted"]);
+    expect
+      .soft(paneRemovalDissolveHandoffTargets(staleActive, "gone-stale"))
+      .toEqual(["t-painted"]);
+  });
+
+  /**
+   * Review round 1, finding 4: the original version of this test only
+   * checked `result.root?.kind` (pane vs group) - it would stay green even
+   * if the helper flushed the WRONG pane's tabs, or missed panes nested
+   * under a multi-pane survivor, as long as the root's shape matched.
+   * Compares the EXACT set of active-tab ids `paneRemovalDissolveHandoffTargets`
+   * predicts against `removePaneFromTree`'s REAL post-removal tree - walking
+   * to wherever the survivor actually landed (found independently via
+   * `findPanePath`/`getNodeAtPath`, not by re-deriving the helper's own
+   * `parentPath` logic) and collecting every pane grafted in there.
+   */
+  function exactSurvivorActiveTabIds(
+    root: TileLayoutNode,
+    sizesByGroupId: SizesByGroupId,
+    removedPaneId: string,
+  ): ReadonlyArray<string> {
+    const path = findPanePath(root, removedPaneId);
+    expect(path).not.toBeNull();
+    if (path === null) return [];
+    const parentPath = path.slice(0, -1);
+    const result = removePaneFromTree({ root, sizesByGroupId }, removedPaneId);
+    expect(result?.root).not.toBeNull();
+    if (result?.root === null || result?.root === undefined) return [];
+    const survivorNode = getNodeAtPath(result.root, parentPath);
+    return collectPanes(survivorNode)
+      .map((survivorPane) => survivorPane.activeTabId)
+      .filter((activeTabId): activeTabId is string => activeTabId !== null);
+  }
+
+  it("agrees with removePaneFromTree's dissolve decision on the same trees", () => {
+    const twoChild = group("g", "horizontal", [
+      pane("a", ["t-a"]),
+      pane("b", ["t-b"]),
+    ]);
+    const threeChild = group("g", "horizontal", [
+      pane("a", ["t-a"]),
+      pane("b", ["t-b"]),
+      pane("c", ["t-c"]),
+    ]);
+    // 2-child, remove index 0: dissolve happens → handoff non-empty; tree
+    // root becomes the survivor.
+    expect(paneRemovalDissolveHandoffTargets(twoChild, "a")).toEqual(
+      exactSurvivorActiveTabIds(twoChild, { g: [0.5, 0.5] }, "a"),
+    );
+    const dissolved = removePaneFromTree(
+      { root: twoChild, sizesByGroupId: { g: [0.5, 0.5] } },
+      "a",
+    );
+    expect(dissolved?.root?.kind).toBe("pane");
+    // 2-child, remove index 1 (reversed): the OTHER child is now the
+    // survivor - catches an off-by-one/reversed-index bug the index-0-only
+    // case above cannot.
+    expect(paneRemovalDissolveHandoffTargets(twoChild, "b")).toEqual(
+      exactSurvivorActiveTabIds(twoChild, { g: [0.5, 0.5] }, "b"),
+    );
+    // >2-child: no dissolve → handoff empty; parent group survives shrunk.
+    expect(paneRemovalDissolveHandoffTargets(threeChild, "a")).toEqual([]);
+    const shrunk = removePaneFromTree(
+      { root: threeChild, sizesByGroupId: { g: [0.3, 0.3, 0.4] } },
+      "a",
+    );
+    expect(shrunk?.root?.kind).toBe("group");
+  });
+
+  it("agrees with removePaneFromTree on a multi-pane nested survivor (mounts=3/unmounts=2)", () => {
+    const tree = group("g-root", "horizontal", [
+      pane("gone", ["t-gone"]),
+      group("g-survivor", "vertical", [
+        pane("keep-1", ["t-keep-1"]),
+        pane("keep-2", ["t-keep-2"]),
+      ]),
+    ]);
+    const sizesByGroupId: SizesByGroupId = {
+      "g-root": [0.5, 0.5],
+      "g-survivor": [0.5, 0.5],
+    };
+    expect(paneRemovalDissolveHandoffTargets(tree, "gone")).toEqual(
+      exactSurvivorActiveTabIds(tree, sizesByGroupId, "gone"),
+    );
+  });
+
+  it("agrees with removePaneFromTree when the dissolving group is nested (not the tree root)", () => {
+    // Removing "a" dissolves "inner" (2 -> 1 child), promoting "b" into
+    // inner's slot - but "inner" itself is a child of "outer", so the
+    // helper must locate the RIGHT parent path, not assume it is the root.
+    const tree = group("outer", "horizontal", [
+      pane("x", ["t-x"]),
+      group("inner", "vertical", [pane("a", ["t-a"]), pane("b", ["t-b"])]),
+    ]);
+    const sizesByGroupId: SizesByGroupId = {
+      outer: [0.5, 0.5],
+      inner: [0.5, 0.5],
+    };
+    expect(paneRemovalDissolveHandoffTargets(tree, "a")).toEqual(
+      exactSurvivorActiveTabIds(tree, sizesByGroupId, "a"),
+    );
+    // Sanity: this really is a nested (non-root) dissolve, not a no-op.
+    expect(paneRemovalDissolveHandoffTargets(tree, "a")).toEqual(["t-b"]);
   });
 });
 

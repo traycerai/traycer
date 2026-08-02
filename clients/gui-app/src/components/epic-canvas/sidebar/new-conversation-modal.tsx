@@ -170,6 +170,7 @@ interface NewConversationModalActionProps {
   readonly triggerLabel: string;
   readonly triggerTestId: string;
   readonly actionRevealClassName: string;
+  readonly onBeforeOpen: (() => void) | undefined;
 }
 
 /**
@@ -182,16 +183,18 @@ interface NewConversationModalActionProps {
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
 ) {
+  const { disabled, epicId, onBeforeOpen, parentId, tabId } = props;
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const handleOpen = useCallback((): void => {
-    if (props.disabled) return;
+    if (disabled) return;
+    onBeforeOpen?.();
     openModal({
-      epicId: props.epicId,
-      tabId: props.tabId,
+      epicId,
+      tabId,
       placement: ACTIVE_TILE_PLACEMENT,
-      parentId: props.parentId,
+      parentId,
     });
-  }, [openModal, props.disabled, props.epicId, props.parentId, props.tabId]);
+  }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
   // Activation while aria-disabled stays blocked via `handleOpen`'s early
   // return; see `disabled-presentation.ts` for why native `disabled` can't
   // carry the tooltip.
@@ -729,7 +732,6 @@ export function NewConversationModalBody(props: {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
-      agentMode: toolbar.agentMode,
     });
     if (settings.model.length === 0) return;
     // Global, single-selection billing context captured at create time; it
@@ -756,7 +758,10 @@ export function NewConversationModalBody(props: {
       );
       return;
     }
-    const content = buildSubmittedChatJSONContent(editor.getJSON());
+    const content = buildSubmittedChatJSONContent(
+      editor.getJSON(),
+      pickerStore.getState().knownSlashCommands,
+    );
     const chatId = uuidv4();
     const messageId = uuidv4();
     const clientActionId = uuidv4();
@@ -841,6 +846,7 @@ export function NewConversationModalBody(props: {
     canSubmit,
     cleanupAfterSubmit,
     createChat,
+    pickerStore,
     draftWorkspaceFolderCount,
     epicId,
     hostClient,
@@ -874,7 +880,6 @@ export function NewConversationModalBody(props: {
           harnessId: launch.harnessId,
           model: launch.model,
           reasoningEffort: launch.reasoningEffort,
-          agentMode: launch.agentMode,
           forkSourceHarnessSessionId: null,
           sourceTuiAgentId: null,
           sourceProfileId: null,
@@ -1091,7 +1096,9 @@ function useLatestConversationSettingsSeed(): {
           defaults.defaultServiceTier.trim().length === 0
             ? null
             : defaults.defaultServiceTier,
-        agentMode: agent.agentMode,
+        // Epic Mode was removed: seed the one remaining mode rather than
+        // carrying a legacy value off the source agent.
+        agentMode: "regular",
         profileId: agent.profileId,
         // TUI agents carry no billing context; seed Personal (the store
         // default). The composer lets the user switch before sending.

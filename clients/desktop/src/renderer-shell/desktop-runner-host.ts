@@ -20,6 +20,8 @@ import type {
   HostRestartRequestResult,
   InstallVersionOk,
   MutationOutcome,
+  NotificationForegroundAppLocal,
+  NotificationForegroundDisplay,
   ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
@@ -78,6 +80,7 @@ export type {
 };
 
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
   ListUserSessionsFetchResult,
   MintHostCredentialFetchResult,
@@ -87,6 +90,10 @@ import type {
   RetainedStepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -125,6 +132,7 @@ import type { ZoomPercent } from "../ipc-contracts/zoom-types";
  */
 export interface DesktopPreloadBridge {
   readonly authnBaseUrl: string;
+  readonly relayBaseUrl: string;
   // Runtime redirect_uri from main (dev loopback). Empty string when the build
   // uses the compile-time custom-scheme redirect (staging/prod).
   readonly authRedirectUri: string;
@@ -133,6 +141,12 @@ export interface DesktopPreloadBridge {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
@@ -174,8 +188,12 @@ export interface DesktopPreloadBridge {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      foregroundAppLocal: NotificationForegroundAppLocal | null,
     ): Promise<void>;
     onClick(handler: (payload: unknown) => void): { dispose: () => void };
+    onForegroundDisplay(
+      handler: (display: NotificationForegroundDisplay) => void,
+    ): { dispose: () => void };
   };
   onLocalHostChange(handler: (snapshot: LocalHostSnapshot | null) => void): {
     dispose: () => void;
@@ -538,6 +556,7 @@ export interface DesktopRunnerHostOptions {
 export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly relayBaseUrl: string;
   readonly hasLocalHost: boolean = true;
 
   readonly secureStorage: ISecureStorage;
@@ -574,6 +593,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.bridge = options.bridge;
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.bridge.authnBaseUrl;
+    this.relayBaseUrl = options.bridge.relayBaseUrl;
     this.windows = options.bridge.windows;
     this.menu = options.bridge.menu;
     this.appUpdates = options.bridge.appUpdates;
@@ -624,16 +644,26 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
-      show: (title, body, payload, replaceKey, deliveryKey) =>
+      show: (
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+        foregroundAppLocal,
+      ) =>
         this.bridge.notifications.show(
           title,
           body,
           payload,
           replaceKey,
           deliveryKey,
+          foregroundAppLocal,
         ),
       onClick: (handler) =>
         toDisposable(this.bridge.notifications.onClick(handler)),
+      onForegroundDisplay: (handler) =>
+        toDisposable(this.bridge.notifications.onForegroundDisplay(handler)),
     };
 
     this.tray = {
@@ -749,6 +779,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.validateAuthTokenIdentity(token);
   }
 
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {
+    return this.bridge.listRegisteredHosts(bearerToken);
+  }
+
   listUserSessions(
     bearerToken: string,
     signal: AbortSignal,
@@ -795,6 +829,14 @@ export class DesktopRunnerHost implements IRunnerHost {
     code: string,
   ): Promise<RetainedStepUpVerifyFetchResult> {
     return this.bridge.verifyStepUpChallenge(bearerToken, code);
+  }
+
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    return this.bridge.updateHostVersionPolicy(bearerToken, hostId, input);
   }
 
   beginAuthAttempt(): void {

@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
   createRef,
   useEffect,
+  useState,
   type ReactElement,
   type ReactNode,
   type RefObject,
@@ -13,7 +14,9 @@ import type {
   ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
+import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
+import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -24,6 +27,19 @@ import {
 const MESSAGE_ROW_SELECTOR = "[data-message-id]";
 const LARGE_MESSAGE_COUNT = 400;
 
+/**
+ * Review round 1, finding 2: counts ROW-BOUNDARY renders - i.e. how many
+ * times `ChatTimelineRow` re-entered this child boundary - NOT executions of
+ * the real memoized `ChatMessageImpl` body. This wrapper is intentionally
+ * un-memoized, so it always re-runs (and increments the counter) whenever
+ * its parent `ChatTimelineRow` re-renders; the wrapped `actual.ChatMessage`
+ * (still the real `memo(ChatMessageImpl)`) could in principle still bail
+ * internally even when this wrapper re-runs. That's the right granularity
+ * for pinning the context-propagation/external-store fanout bug (a
+ * `ChatTimelineRow`-level defect), but it does NOT prove anything about
+ * `ChatMessageImpl`'s own render cost - see the `getMessageActions`-based
+ * assertions elsewhere in this file for independent row-boundary evidence.
+ */
 const renderCounts = new Map<string, number>();
 
 vi.mock("@/components/chat/chat-message", async (importOriginal) => {
@@ -51,6 +67,25 @@ const VIEWPORT_WIDTH_PX = 800;
 
 function mountedMessageRows(container: HTMLElement): NodeListOf<Element> {
   return container.querySelectorAll(MESSAGE_ROW_SELECTOR);
+}
+
+/** Ticket 23 panel-resize tests: a distinct-position rect, overriding the
+ *  shared `installLegendListViewportMetrics()` shim's uniform (0,0)-origin
+ *  stub on a specific element so visible vs. off-screen rows are
+ *  distinguishable (see `chat-timeline-panel-resize-snapshot.test.ts` for
+ *  the same rationale on the pure module). */
+function rectOf(top: number, height: number): DOMRect {
+  return {
+    top,
+    bottom: top + height,
+    left: 0,
+    right: VIEWPORT_WIDTH_PX,
+    width: VIEWPORT_WIDTH_PX,
+    height,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  };
 }
 
 function rowIds(container: HTMLElement): ReadonlyArray<string> {
@@ -86,6 +121,9 @@ interface RenderTimelineOptions {
   readonly topFadeEnabled?: boolean;
   readonly followEnabled?: boolean;
   readonly onItemSizeChanged?: () => void;
+  /** Ticket 22: forwarded to LegendList for viewport-length changes. */
+  readonly onLayout?: () => void;
+  readonly navigationHighlightedMessageId?: string | null;
 }
 
 function renderTimeline(options: RenderTimelineOptions) {
@@ -96,7 +134,10 @@ function renderTimeline(options: RenderTimelineOptions) {
   const backgroundToolBlockIds =
     options.backgroundToolBlockIds ?? new Set<string>();
 
-  const jsx = (messages: ReadonlyArray<ChatMessageModel>): ReactNode => (
+  const jsx = (
+    messages: ReadonlyArray<ChatMessageModel>,
+    navigationHighlightedMessageId: string | null | undefined,
+  ): ReactNode => (
     <div
       style={{
         height: VIEWPORT_HEIGHT_PX,
@@ -115,18 +156,52 @@ function renderTimeline(options: RenderTimelineOptions) {
         topFadeEnabled={options.topFadeEnabled}
         followEnabled={options.followEnabled}
         onItemSizeChanged={options.onItemSizeChanged}
+        onLayout={options.onLayout}
+        navigationHighlightedMessageId={navigationHighlightedMessageId}
       />
     </div>
   );
 
-  const result = render(jsx(options.messages));
+  const result = render(
+    jsx(options.messages, options.navigationHighlightedMessageId),
+  );
   return {
     ...result,
     listRef,
-    rerenderMessages: (messages: ReadonlyArray<ChatMessageModel>) => {
-      result.rerender(jsx(messages));
+    rerenderMessages: (
+      messages: ReadonlyArray<ChatMessageModel>,
+      navigationHighlightedMessageId: string | null | undefined,
+    ) => {
+      result.rerender(jsx(messages, navigationHighlightedMessageId));
     },
   };
+}
+
+/** Render counts (from the `ChatMessage` probe above) for every id in
+ *  `messages`, snapshotted as a plain map so two snapshots can be diffed by
+ *  value without aliasing the live `renderCounts` map. */
+function snapshotRenderCounts(
+  messages: ReadonlyArray<ChatMessageModel>,
+): Map<string, number> {
+  return new Map(messages.map((m) => [m.id, renderCounts.get(m.id) ?? 0]));
+}
+
+/** Message ids whose render count changed between two snapshots. */
+function renderedSince(
+  messages: ReadonlyArray<ChatMessageModel>,
+  before: Map<string, number>,
+): ReadonlyArray<string> {
+  return messages
+    .map((m) => m.id)
+    .filter((id) => (renderCounts.get(id) ?? 0) !== (before.get(id) ?? 0));
+}
+
+async function flushFrame(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 describe("ChatTimeline", () => {
@@ -223,7 +298,7 @@ describe("ChatTimeline", () => {
       },
     ];
 
-    rerenderMessages(nextMessages);
+    rerenderMessages(nextMessages, undefined);
 
     await act(async () => {
       await new Promise<void>((resolve) => {
@@ -382,6 +457,26 @@ describe("ChatTimeline", () => {
     expect(onItemSizeChanged).toHaveBeenCalled();
   });
 
+  // Ticket 22: ChatTimeline forwards `onLayout` to LegendList so a
+  // viewport-length change (divider/pane resize) can schedule geometry
+  // repair under the same messages array. Lower-level than the
+  // chat-messages integration pins - just the prop wiring + library
+  // callback. Initial mount layout is enough; no controllable
+  // ResizeObserver needed here.
+  it("onLayout fires when LegendList reports a layout change", async () => {
+    const messages: ChatMessageModel[] = [
+      makeMessage(0, "user"),
+      makeMessage(1, "assistant"),
+    ];
+    const onLayout = vi.fn();
+    renderTimeline({ messages, onLayout });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(onLayout).toHaveBeenCalled();
+    });
+  });
+
   // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both` reserves the
   // scrollbar's track width on both edges so the centered column never
   // shifts when the bar appears/disappears - replaces the old one-sided
@@ -424,5 +519,681 @@ describe("ChatTimeline", () => {
       "h-10 sm:h-12",
       "h-3 sm:h-4",
     ]);
+  });
+
+  // Ticket 24 (painted-chat lifecycle audit, finding 5): the shared row
+  // context previously carried `navigationHighlightedMessageId` directly, so
+  // React's context propagation re-rendered EVERY mounted row - bypassing
+  // each row's own `memo` bailout entirely (see the render-count probe's own
+  // doc comment above for exactly what "renders" measures here: row-
+  // boundary commits, not `ChatMessageImpl` body executions specifically).
+  // Pin: moving the highlight renders only the old and new highlighted
+  // rows; clearing it renders only the previously highlighted row.
+  it("isolates navigation-highlight changes to only the affected rows", async () => {
+    const messageCount = 8;
+    const messages = makeMessages(messageCount);
+
+    const { container, rerenderMessages } = renderTimeline({
+      messages,
+      navigationHighlightedMessageId: null,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(messageCount);
+    });
+
+    const baseline = snapshotRenderCounts(messages);
+
+    // Move the highlight onto message-3: only that row should render.
+    rerenderMessages(messages, "message-3");
+    await flushFrame();
+    expect(renderedSince(messages, baseline)).toEqual(["message-3"]);
+
+    const afterFirstMove = snapshotRenderCounts(messages);
+
+    // Move the highlight from message-3 to message-5: exactly the old and
+    // new highlighted rows should render - not the other 6 mounted rows.
+    rerenderMessages(messages, "message-5");
+    await flushFrame();
+    expect(new Set(renderedSince(messages, afterFirstMove))).toEqual(
+      new Set(["message-3", "message-5"]),
+    );
+
+    const afterSecondMove = snapshotRenderCounts(messages);
+
+    // Clear the highlight: only the previously highlighted row should render.
+    rerenderMessages(messages, null);
+    await flushFrame();
+    expect(renderedSince(messages, afterSecondMove)).toEqual(["message-5"]);
+  });
+
+  const NAVIGATION_HIGHLIGHT_RING_CLASS =
+    "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse";
+
+  function highlightedRowIds(container: HTMLElement): ReadonlyArray<string> {
+    return Array.from(
+      container.querySelectorAll('[data-navigation-highlighted="true"]'),
+    ).map((row) => row.getAttribute("data-message-id") ?? "");
+  }
+
+  function rowHasHighlightRing(row: Element | null): boolean {
+    if (row === null) return false;
+    const className = row.getAttribute("class") ?? "";
+    return NAVIGATION_HIGHLIGHT_RING_CLASS.split(" ").every((token) =>
+      className.includes(token),
+    );
+  }
+
+  /**
+   * Review round 1, finding 1: owns messages/highlight as REAL React state
+   * (mirroring how chat-messages.tsx drives `ChatTimeline`) and exposes the
+   * raw setters, so timing-sensitive tests can trigger updates WITHOUT going
+   * through Testing Library's `rerender` - `rerender`'s internal `act()`
+   * (confirmed empirically, including with `IS_REACT_ACT_ENVIRONMENT`
+   * disabled and with `flushSync`) fully settles BOTH `useLayoutEffect` AND
+   * `useEffect` synchronously in this React version, which hides the exact
+   * regression finding 1 covers. Calling the exposed setters directly, with
+   * the act-environment flag OFF (see `withActEnvironmentDisabled`), lets a
+   * PLAIN state update go through React's ordinary (non-test) scheduling,
+   * where a passive effect's flush is a real, separately-scheduled task
+   * instead of something `act()` eagerly drains for you.
+   */
+  function HighlightTimingHarness({
+    initialMessages,
+    initialHighlight,
+    onExposeSetters,
+  }: {
+    readonly initialMessages: ReadonlyArray<ChatMessageModel>;
+    readonly initialHighlight: string | null;
+    readonly onExposeSetters: (setters: {
+      readonly setMessages: (messages: ReadonlyArray<ChatMessageModel>) => void;
+      readonly setHighlight: (id: string | null) => void;
+    }) => void;
+  }): ReactElement {
+    const [messages, setMessages] = useState(initialMessages);
+    const [highlight, setHighlight] = useState(initialHighlight);
+    const [listRef] = useState(() => createRef<LegendListRef | null>());
+
+    useEffect(() => {
+      onExposeSetters({ setMessages, setHighlight });
+      // Setter identities from useState never change - registering once is
+      // enough, and re-running on every render would re-expose (harmlessly)
+      // identical functions anyway.
+    }, [onExposeSetters]);
+
+    return (
+      <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
+        <ChatTimeline
+          messages={messages}
+          taskTitle="Test transcript"
+          backgroundToolBlockIds={new Set<string>()}
+          getMessageActions={() => null}
+          nextStepActions={null}
+          listRef={listRef}
+          className="h-full"
+          navigationHighlightedMessageId={highlight}
+        />
+      </div>
+    );
+  }
+
+  interface HighlightTimingSetters {
+    readonly setMessages: (messages: ReadonlyArray<ChatMessageModel>) => void;
+    readonly setHighlight: (id: string | null) => void;
+  }
+
+  /** Runs `fn` with React's act-environment detection OFF, so a plain state
+   *  update inside `fn` is scheduled the way it would be in production, not
+   *  the eagerly-flushed way `act()` schedules it for test determinism. */
+  async function withActEnvironmentDisabled(
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    const globalWithActFlag = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    };
+    const previous = globalWithActFlag.IS_REACT_ACT_ENVIRONMENT;
+    globalWithActFlag.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      await fn();
+    } finally {
+      globalWithActFlag.IS_REACT_ACT_ENVIRONMENT = previous;
+    }
+  }
+
+  /** One real macrotask tick - empirically the exact window where a
+   *  `useLayoutEffect`-published store settles (verified against a toy
+   *  two-component external-store harness) but a `useEffect`-published one
+   *  has not yet, when act-environment is off. */
+  async function tickOneMacrotask(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  // Finding 1's "row mounting in the stale window" sub-case was investigated
+  // specifically for a row that mounts because `messages` GROWS (a new
+  // message arrives) in the same update as a highlight change. Empirically
+  // (verified with fine-grained per-tick polling, both against this fix and
+  // against a reverted `useEffect` mutation), LegendList's OWN settling work
+  // for a newly-added data item takes at least one macrotask regardless of
+  // which effect type publishes the highlight - by the time the new row's
+  // component renders for the first time, the store has already settled
+  // either way, so that specific construction cannot discriminate the two
+  // implementations in this component. The setter-direction pin below
+  // exercises the same underlying mechanism (a real, non-`rerender`-routed
+  // update publishing a NEW highlight id) on already-mounted rows, which the
+  // clear-direction pin right after it confirms DOES discriminate.
+  it("(finding 1) setting a highlight via a real update settles within one macrotask - no stale un-highlighted paint", async () => {
+    const messages = makeMessages(3);
+    let setters: HighlightTimingSetters | null = null;
+
+    const { container } = render(
+      <HighlightTimingHarness
+        initialMessages={messages}
+        initialHighlight={null}
+        onExposeSetters={(s) => {
+          setters = s;
+        }}
+      />,
+    );
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(3);
+    });
+    expect(highlightedRowIds(container)).toEqual([]);
+
+    await withActEnvironmentDisabled(async () => {
+      // Mirrors the external-jump activation shape: a plain setState call,
+      // not a Testing-Library `rerender`.
+      setters?.setHighlight("message-1");
+      await tickOneMacrotask();
+    });
+
+    expect(highlightedRowIds(container)).toEqual(["message-1"]);
+    const highlightedRow = container.querySelector(
+      '[data-message-id="message-1"]',
+    );
+    expect(rowHasHighlightRing(highlightedRow)).toBe(true);
+  });
+
+  it("(finding 1) clearing the highlight via a real update settles within one macrotask - no stale painted ring", async () => {
+    const messages = makeMessages(3);
+    let setters: HighlightTimingSetters | null = null;
+
+    const { container } = render(
+      <HighlightTimingHarness
+        initialMessages={messages}
+        initialHighlight="message-1"
+        onExposeSetters={(s) => {
+          setters = s;
+        }}
+      />,
+    );
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(3);
+    });
+    expect(highlightedRowIds(container)).toEqual(["message-1"]);
+
+    await withActEnvironmentDisabled(async () => {
+      // Mirrors the 3s-timeout / real-gesture clear shape: a plain setState
+      // call, not a Testing-Library `rerender`.
+      setters?.setHighlight(null);
+      await tickOneMacrotask();
+    });
+
+    expect(highlightedRowIds(container)).toEqual([]);
+    const previouslyHighlighted = container.querySelector(
+      '[data-message-id="message-1"]',
+    );
+    expect(rowHasHighlightRing(previouslyHighlighted)).toBe(false);
+  });
+
+  it("sets data-navigation-highlighted and the ring className only on the highlighted row", async () => {
+    const messageCount = 6;
+    const messages = makeMessages(messageCount);
+
+    const { container, rerenderMessages } = renderTimeline({
+      messages,
+      navigationHighlightedMessageId: null,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(messageCount);
+    });
+
+    // No highlight: attribute absent on every mounted row, ring classes absent.
+    expect(highlightedRowIds(container)).toEqual([]);
+    for (const id of messages.map((m) => m.id)) {
+      const row = container.querySelector(`[data-message-id="${id}"]`);
+      expect(row).not.toBeNull();
+      expect(row?.getAttribute("data-navigation-highlighted")).toBeNull();
+      expect(rowHasHighlightRing(row)).toBe(false);
+    }
+
+    rerenderMessages(messages, "message-2");
+    await flushFrame();
+
+    expect(highlightedRowIds(container)).toEqual(["message-2"]);
+    const highlighted = container.querySelector(
+      '[data-message-id="message-2"]',
+    );
+    expect(highlighted?.getAttribute("data-navigation-highlighted")).toBe(
+      "true",
+    );
+    expect(rowHasHighlightRing(highlighted)).toBe(true);
+
+    for (const id of messages
+      .map((m) => m.id)
+      .filter((id) => id !== "message-2")) {
+      const row = container.querySelector(`[data-message-id="${id}"]`);
+      expect(row?.getAttribute("data-navigation-highlighted")).toBeNull();
+      expect(rowHasHighlightRing(row)).toBe(false);
+    }
+
+    // Move highlight: previous loses attribute + ring; new gains both.
+    rerenderMessages(messages, "message-4");
+    await flushFrame();
+
+    expect(highlightedRowIds(container)).toEqual(["message-4"]);
+    expect(
+      container
+        .querySelector('[data-message-id="message-2"]')
+        ?.getAttribute("data-navigation-highlighted"),
+    ).toBeNull();
+    expect(
+      rowHasHighlightRing(
+        container.querySelector('[data-message-id="message-2"]'),
+      ),
+    ).toBe(false);
+    expect(
+      container
+        .querySelector('[data-message-id="message-4"]')
+        ?.getAttribute("data-navigation-highlighted"),
+    ).toBe("true");
+    expect(
+      rowHasHighlightRing(
+        container.querySelector('[data-message-id="message-4"]'),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not throw or highlight any row when navigationHighlightedMessageId is a stale/missing id", async () => {
+    const messageCount = 5;
+    const messages = makeMessages(messageCount);
+
+    const { container, rerenderMessages } = renderTimeline({
+      messages,
+      navigationHighlightedMessageId: null,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(messageCount);
+    });
+
+    expect(() => {
+      rerenderMessages(messages, "message-not-in-list");
+    }).not.toThrow();
+    await flushFrame();
+
+    expect(highlightedRowIds(container)).toEqual([]);
+    for (const id of messages.map((m) => m.id)) {
+      const row = container.querySelector(`[data-message-id="${id}"]`);
+      expect(row?.getAttribute("data-navigation-highlighted")).toBeNull();
+      expect(rowHasHighlightRing(row)).toBe(false);
+    }
+
+    // Still healthy after a real highlight: stale id must clear any prior ring.
+    rerenderMessages(messages, "message-1");
+    await flushFrame();
+    expect(highlightedRowIds(container)).toEqual(["message-1"]);
+
+    expect(() => {
+      rerenderMessages(messages, "message-removed-earlier");
+    }).not.toThrow();
+    await flushFrame();
+    expect(highlightedRowIds(container)).toEqual([]);
+  });
+
+  it("scopes navigation-highlight state per ChatTimeline mount, not module-wide", async () => {
+    const messagesA = makeMessages(4);
+    const messagesB = makeMessages(4).map((m, index) => ({
+      ...m,
+      // Distinct ids so the two lists do not collide in the shared render probe.
+      id: `b-message-${index}`,
+      content: `B user message ${index}`,
+    }));
+
+    const timelineA = renderTimeline({
+      messages: messagesA,
+      navigationHighlightedMessageId: null,
+      "data-testid": "timeline-a",
+    });
+    const timelineB = renderTimeline({
+      messages: messagesB,
+      navigationHighlightedMessageId: null,
+      "data-testid": "timeline-b",
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(timelineA.container).length).toBe(4);
+      expect(mountedMessageRows(timelineB.container).length).toBe(4);
+    });
+
+    // Highlight only A: B must stay completely unhighlighted and not throw.
+    expect(() => {
+      timelineA.rerenderMessages(messagesA, "message-1");
+    }).not.toThrow();
+    await flushFrame();
+
+    expect(highlightedRowIds(timelineA.container)).toEqual(["message-1"]);
+    expect(highlightedRowIds(timelineB.container)).toEqual([]);
+    expect(
+      rowHasHighlightRing(
+        timelineB.container.querySelector('[data-message-id="b-message-1"]'),
+      ),
+    ).toBe(false);
+
+    // Highlight only B to a different row: A keeps its own highlight.
+    expect(() => {
+      timelineB.rerenderMessages(messagesB, "b-message-2");
+    }).not.toThrow();
+    await flushFrame();
+
+    expect(highlightedRowIds(timelineA.container)).toEqual(["message-1"]);
+    expect(highlightedRowIds(timelineB.container)).toEqual(["b-message-2"]);
+
+    // Clear A: B's highlight is untouched.
+    timelineA.rerenderMessages(messagesA, null);
+    await flushFrame();
+    expect(highlightedRowIds(timelineA.container)).toEqual([]);
+    expect(highlightedRowIds(timelineB.container)).toEqual(["b-message-2"]);
+  });
+
+  it("rapid sequential highlight moves still re-render only the previous and next rows each step", async () => {
+    const messageCount = 8;
+    const messages = makeMessages(messageCount);
+    const sequence = [
+      "message-0",
+      "message-2",
+      "message-5",
+      "message-7",
+      "message-1",
+    ] as const;
+
+    const { container, rerenderMessages } = renderTimeline({
+      messages,
+      navigationHighlightedMessageId: null,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(messageCount);
+    });
+
+    let previousHighlight: string | null = null;
+    for (const nextId of sequence) {
+      const before = snapshotRenderCounts(messages);
+      rerenderMessages(messages, nextId);
+      await flushFrame();
+
+      const expected =
+        previousHighlight === null ? [nextId] : [previousHighlight, nextId];
+      expect(new Set(renderedSince(messages, before))).toEqual(
+        new Set(expected),
+      );
+      expect(highlightedRowIds(container)).toEqual([nextId]);
+      previousHighlight = nextId;
+    }
+  });
+
+  it("does not re-invoke getMessageActions for unrelated rows when only the highlight changes", async () => {
+    const messageCount = 6;
+    const messages = makeMessages(messageCount);
+    const getMessageActions = vi.fn(
+      (_message: ChatMessageModel): ChatMessageActions | null => null,
+    );
+
+    const { container, rerenderMessages } = renderTimeline({
+      messages,
+      getMessageActions,
+      navigationHighlightedMessageId: null,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(messageCount);
+    });
+
+    function callCountByMessageId(): Map<string, number> {
+      const counts = new Map<string, number>();
+      for (const call of getMessageActions.mock.calls) {
+        const id = call[0].id;
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+      return counts;
+    }
+
+    // Mount settled: every row has been rendered at least once through the
+    // shared-context path (getMessageActions is invoked from ChatTimelineRow
+    // during render). Snapshot those counts before the highlight-only prop
+    // change so we can prove unrelated rows do not re-enter that path.
+    const baselineCalls = callCountByMessageId();
+    for (const message of messages) {
+      expect(baselineCalls.get(message.id) ?? 0).toBeGreaterThan(0);
+    }
+    getMessageActions.mockClear();
+
+    // Same messages array reference; only the highlight prop changes. The
+    // ChatTimelineRowCtx object must stay identity-stable (store is
+    // useState-stable), so non-highlighted rows must not re-render and
+    // therefore must not re-invoke getMessageActions.
+    rerenderMessages(messages, "message-3");
+    await flushFrame();
+
+    const afterFirstMove = callCountByMessageId();
+    expect(afterFirstMove.get("message-3") ?? 0).toBeGreaterThan(0);
+    for (const message of messages) {
+      if (message.id === "message-3") continue;
+      expect(afterFirstMove.get(message.id) ?? 0).toBe(0);
+    }
+
+    getMessageActions.mockClear();
+    rerenderMessages(messages, "message-0");
+    await flushFrame();
+
+    const afterSecondMove = callCountByMessageId();
+    // Old + new highlighted rows re-render; everyone else stays quiet.
+    expect(afterSecondMove.get("message-3") ?? 0).toBeGreaterThan(0);
+    expect(afterSecondMove.get("message-0") ?? 0).toBeGreaterThan(0);
+    for (const message of messages) {
+      if (message.id === "message-3" || message.id === "message-0") continue;
+      expect(afterSecondMove.get(message.id) ?? 0).toBe(0);
+    }
+  });
+
+  it("unmounts cleanly while a navigation highlight is active", async () => {
+    const messages = makeMessages(4);
+    const { container, unmount, rerenderMessages } = renderTimeline({
+      messages,
+      navigationHighlightedMessageId: null,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(4);
+    });
+
+    rerenderMessages(messages, "message-2");
+    await flushFrame();
+    expect(highlightedRowIds(container)).toEqual(["message-2"]);
+
+    // Defensive: unmount with an active store subscription must not throw,
+    // and post-unmount work must remain safe (no listener fire crash).
+    expect(() => {
+      unmount();
+    }).not.toThrow();
+
+    expect(mountedMessageRows(container).length).toBe(0);
+    expect(() => {
+      // After unmount the store is unreachable from React; this only asserts
+      // the unmount itself left the test environment intact for subsequent
+      // mounts (covered by later tests / afterEach cleanup).
+      renderTimeline({
+        messages,
+        navigationHighlightedMessageId: "message-0",
+      });
+    }).not.toThrow();
+  });
+
+  describe("panel-resize freeze (ticket 23 D20 port)", () => {
+    const PANEL_RESIZING_CLASS = "traycer-panel-resizing";
+
+    afterEach(() => {
+      // Defensive: a test that throws before its own stop() must not leak
+      // the class/markers into a later test.
+      document.documentElement.classList.remove(PANEL_RESIZING_CLASS);
+    });
+
+    it("every row carries the marker-scoped freeze selector targeting only unmarked rows", async () => {
+      const messages = [makeMessage(0, "user")];
+      const { container } = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(container).length).toBe(1);
+      });
+
+      const row = container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      expect(row?.className).toContain(
+        "[.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
+      );
+    });
+
+    it("marks exactly the geometrically visible rows at drag start and clears every marker at drag end", async () => {
+      const messages = [
+        makeMessage(0, "user"),
+        makeMessage(1, "assistant"),
+        makeMessage(2, "user"),
+      ];
+      const { container, listRef } = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(container).length).toBe(messages.length);
+      });
+
+      const scrollNode = listRef.current?.getScrollableNode();
+      if (!scrollNode) throw new Error("scroll node not mounted");
+      // Viewport 0..300; row 0 fully inside, row 1 straddles the bottom
+      // edge (counts as visible), row 2 fully below.
+      scrollNode.getBoundingClientRect = () => rectOf(0, 300);
+      const row0 = container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      const row1 = container.querySelector<HTMLElement>(
+        '[data-message-id="message-1"]',
+      );
+      const row2 = container.querySelector<HTMLElement>(
+        '[data-message-id="message-2"]',
+      );
+      if (!row0 || !row1 || !row2) throw new Error("rows not found");
+      row0.getBoundingClientRect = () => rectOf(0, 100);
+      row1.getBoundingClientRect = () => rectOf(250, 100);
+      row2.getBoundingClientRect = () => rectOf(1000, 100);
+
+      const stop = beginPanelResizeInteraction(1, () => undefined);
+
+      expect(
+        document.documentElement.classList.contains(PANEL_RESIZING_CLASS),
+      ).toBe(true);
+      expect(row0.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        "true",
+      );
+      expect(row1.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(
+        "true",
+      );
+      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+
+      stop();
+
+      expect(
+        document.documentElement.classList.contains(PANEL_RESIZING_CLASS),
+      ).toBe(false);
+      expect(row0.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+      expect(row1.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+      expect(row2.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+    });
+
+    it("clears this timeline's own markers on unmount, even mid-drag", async () => {
+      const messages = [makeMessage(0, "user"), makeMessage(1, "assistant")];
+      const { container, listRef, unmount } = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(container).length).toBe(messages.length);
+      });
+
+      const scrollNode = listRef.current?.getScrollableNode();
+      if (!scrollNode) throw new Error("scroll node not mounted");
+      scrollNode.getBoundingClientRect = () => rectOf(0, 300);
+      const row = container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      if (!row) throw new Error("row not found");
+      row.getBoundingClientRect = () => rectOf(0, 100);
+
+      const stop = beginPanelResizeInteraction(1, () => undefined);
+      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe("true");
+
+      expect(() => {
+        unmount();
+      }).not.toThrow();
+
+      expect(row.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
+
+      // The now-unregistered participant must not be invoked (and must not
+      // throw) when the drag ends afterward.
+      expect(() => {
+        stop();
+      }).not.toThrow();
+    });
+
+    it("registers a fresh timeline as a NEW participant across remounts (no stale registration)", async () => {
+      const messages = [makeMessage(0, "user")];
+      const first = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(first.container).length).toBe(1);
+      });
+      first.unmount();
+
+      const second = renderTimeline({ messages });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(mountedMessageRows(second.container).length).toBe(1);
+      });
+
+      const scrollNode = second.listRef.current?.getScrollableNode();
+      if (!scrollNode) throw new Error("scroll node not mounted");
+      scrollNode.getBoundingClientRect = () => rectOf(0, 300);
+      const row = second.container.querySelector<HTMLElement>(
+        '[data-message-id="message-0"]',
+      );
+      if (!row) throw new Error("row not found");
+      row.getBoundingClientRect = () => rectOf(0, 100);
+
+      const stop = beginPanelResizeInteraction(1, () => undefined);
+      // Only ONE capture ran for the currently-mounted timeline - the first
+      // (unmounted) instance's participant was unregistered, not left
+      // dangling to double-mark or throw against detached DOM.
+      expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe("true");
+      stop();
+    });
   });
 });

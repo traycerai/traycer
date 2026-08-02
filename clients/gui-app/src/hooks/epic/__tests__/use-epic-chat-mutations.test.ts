@@ -29,8 +29,20 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
-const { forceReleaseChatSession } = vi.hoisted(() => ({
+const {
+  archiveChatMutateAsync,
+  epicSessionHostClient,
+  forceReleaseChatSession,
+} = vi.hoisted(() => ({
+  archiveChatMutateAsync: vi.fn(),
+  epicSessionHostClient: { request: vi.fn() },
   forceReleaseChatSession: vi.fn(),
+}));
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({ request: vi.fn() }),
+}));
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => epicSessionHostClient,
 }));
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
@@ -45,6 +57,7 @@ import type {
 } from "@/hooks/epic/use-epic-chat-mutations";
 
 interface CapturedMutationArgs {
+  readonly client: unknown;
   readonly method: string;
   readonly options: unknown;
   readonly mapVariables: ((variables: never) => unknown) | undefined;
@@ -54,12 +67,16 @@ const capturedMutations: Partial<Record<string, CapturedMutationArgs>> = {};
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: (args: CapturedMutationArgs) => {
     capturedMutations[args.method] = args;
-    return { mutate: vi.fn(), isPending: false };
+    return {
+      mutate: vi.fn(),
+      mutateAsync: archiveChatMutateAsync,
+      isPending: false,
+    };
   },
 }));
 
 import { toast } from "sonner";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -67,13 +84,17 @@ import {
 } from "@tanstack/react-query";
 import {
   useEpicArchiveChat,
+  useEpicArchiveChats,
   useEpicCreateChat,
   useEpicRenameChat,
   useEpicDeleteChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
-import type { SetChatArchivedResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  SetChatArchivedRequest,
+  SetChatArchivedResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -195,6 +216,7 @@ describe("useEpicArchiveChat", () => {
     renderHook(() => useEpicArchiveChat());
 
     const mutation = getCapturedMutation("epic.setChatArchived");
+    expect(mutation.client).toBe(epicSessionHostClient);
     expect(mutation.method).toBe("epic.setChatArchived");
     // mapVariables is identity - chats and terminal-agents share one RPC keyed
     // by record id; there is no separate TUI method.
@@ -262,5 +284,87 @@ describe("useEpicArchiveChat", () => {
     expect(toast.error).toHaveBeenCalledWith(
       "This needs a newer Traycer host. Update the host to continue.",
     );
+  });
+});
+
+describe("useEpicArchiveChats", () => {
+  it("tracks the aggregate archive batch with a Query mutation", async () => {
+    let resolveArchive: (value: SetChatArchivedResponse) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const pendingArchive = new Promise<SetChatArchivedResponse>((resolve) => {
+      resolveArchive = resolve;
+    });
+    archiveChatMutateAsync.mockReturnValue(pendingArchive);
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chatIds: ["chat-1", "chat-2"],
+        archived: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+    });
+    expect(archiveChatMutateAsync).toHaveBeenCalledTimes(2);
+    expect(archiveChatMutateAsync).toHaveBeenNthCalledWith(1, {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      archived: true,
+    });
+    expect(archiveChatMutateAsync).toHaveBeenNthCalledWith(2, {
+      epicId: "epic-1",
+      chatId: "chat-2",
+      archived: true,
+    });
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+      expect(result.current.data?.map((entry) => entry.status)).toEqual([
+        "fulfilled",
+        "fulfilled",
+      ]);
+    });
+  });
+
+  it("keeps mixed outcomes ordered and reports one batch failure", async () => {
+    archiveChatMutateAsync.mockImplementation(
+      (input: SetChatArchivedRequest) =>
+        input.chatId === "chat-1"
+          ? Promise.resolve({ updated: true })
+          : Promise.reject(makeError("RPC_ERROR")),
+    );
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+    const childOptions = getCapturedMutation("epic.setChatArchived")
+      .options as { readonly onError: unknown };
+    expect(childOptions.onError).toBeUndefined();
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chatIds: ["chat-1", "chat-2"],
+        archived: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.data?.map((entry) => entry.status)).toEqual([
+        "fulfilled",
+        "rejected",
+      ]);
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't archive some selected agents.",
+    );
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 });

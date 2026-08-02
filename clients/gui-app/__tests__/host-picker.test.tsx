@@ -67,7 +67,7 @@ function buildHost(initialLocal: LocalHostSnapshot | null): MockRunnerHost {
 function staticFetcher(
   entries: readonly HostDirectoryEntry[],
 ): RemoteHostFetcher {
-  return () => Promise.resolve(entries);
+  return () => Promise.resolve({ kind: "hosts", entries });
 }
 
 describe("<HostPicker /> directory-change reactivity", () => {
@@ -208,6 +208,56 @@ describe("<HostPicker /> directory-change reactivity", () => {
           `host-picker-option-${mockRemoteHostEntry.hostId}`,
         ),
       ).not.toBeNull();
+    },
+    HOST_PICKER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders the local host only once when it is also returned by the registry",
+    async () => {
+      const host = buildHost(localSnapshot);
+      const registeredLocalHostEntry: HostDirectoryEntry = {
+        hostId: localSnapshot.hostId,
+        label: "Registry copy",
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: localSnapshot.version,
+        status: "available",
+      };
+      render(
+        <TraycerApp
+          runnerHost={host}
+          registry={hostRpcRegistry}
+          remoteFetcher={staticFetcher([registeredLocalHostEntry])}
+        />,
+      );
+
+      const signInButton = await screen.findByRole("button", {
+        name: "Sign in",
+      });
+      fireEvent.click(signInButton);
+      await waitFor(() => {
+        expect(host.deviceFlow.lastSession).not.toBeNull();
+      });
+      act(() => {
+        host.deviceFlow.emitResult({
+          kind: "authorized",
+          token: "test-token",
+          refreshToken: "test-token-refresh",
+        });
+      });
+
+      act(() => {
+        host.hostPicker.requestOpen();
+      });
+
+      await screen.findByTestId("host-picker");
+      const options = await screen.findAllByTestId(
+        `host-picker-option-${localSnapshot.hostId}`,
+      );
+      expect(options).toHaveLength(1);
+      expect(options[0].textContent).toContain(localSnapshot.displayName);
+      expect(options[0].textContent).toContain("Local");
     },
     HOST_PICKER_TEST_TIMEOUT_MS,
   );

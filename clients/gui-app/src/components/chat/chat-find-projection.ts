@@ -17,7 +17,7 @@ import {
 } from "@/components/chat/segments/subagent-display";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
-import { composerClipboardPlainText } from "@/lib/composer/composer-clipboard";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { segmentStepLabel } from "@/lib/chat/todo-status-tones";
 import {
@@ -84,9 +84,21 @@ const CHAT_FIND_PREVIEW_MAX_LENGTH = 180;
 export function buildChatFindRows(
   messages: ReadonlyArray<ChatMessageModel>,
   tileInstanceId: string,
+  /**
+   * The renderer's live promotion set, threaded in verbatim. Find must group
+   * runs exactly as the renderer does: a unit id and owning chain are both
+   * derived from the group a segment lands in, so a projection that grouped
+   * differently would emit ids no element carries and chains that open the
+   * wrong disclosure - matches counted but impossible to paint or navigate to.
+   */
+  promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatFindRow> {
   return messages.map((message) => {
-    const units = chatFindUnitsForMessage(message, tileInstanceId);
+    const units = chatFindUnitsForMessage(
+      message,
+      tileInstanceId,
+      promotedToolBlockIds,
+    );
     return {
       messageId: message.id,
       units,
@@ -136,14 +148,13 @@ export function chatFindA2AReceivedBodyUnitId(messageId: string): string {
 function chatFindUnitsForMessage(
   message: ChatMessageModel,
   tileInstanceId: string,
+  promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
-    // Find indexes the full transcript inline regardless of background
-    // promotion, so no tool blocks are treated as promoted here.
     return buildChatActivityTimeline(message.segments, {
       turnState,
-      promotedToolBlockIds: new Set<string>(),
+      promotedToolBlockIds,
     }).flatMap((item) => timelineItemSearchUnits(item, tileInstanceId));
   }
 
@@ -173,10 +184,13 @@ function chatFindUnitsForMessage(
   // `text` segments mirror that content, so also projecting them would
   // double-count every match with a phantom unit that has no anchor to paint.
   // Project the content unit alone so the count matches what actually renders.
+  // The DISPLAY projection, not the clipboard one: find has to index the text
+  // the DOM actually paints, or a `$`-written chip is unfindable by what it
+  // reads as and findable by a `/name` the highlighter cannot locate.
   const contentText =
     message.structuredContent === null
       ? message.content
-      : composerClipboardPlainText(message.structuredContent);
+      : composerDisplayPlainText(message.structuredContent);
   return compactUnits([
     chatFindUnit({
       unitId: chatFindMessageContentUnitId(message.id),
@@ -226,6 +240,9 @@ function activityGroupSearchUnits(
       text: group.label,
       owningChain: [],
     }),
+    // Unconditional. A reveal force-opens the group, and every child renders
+    // headed - with its own anchor - in both the live window and the expanded
+    // body, so each of these units has somewhere to paint.
     ...group.segments.flatMap((segment) =>
       activityGroupChildSearchUnits(
         segment,
@@ -432,6 +449,8 @@ function activityGroupChildHeaderSearchText(
       return approvalHeaderSearchText(segment);
     case "subagent":
       return [];
+    case "reasoning":
+      return reasoningSegmentSearchText(segment);
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;

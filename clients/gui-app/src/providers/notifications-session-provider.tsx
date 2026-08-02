@@ -10,14 +10,18 @@ import {
   NotificationsStreamClient,
   type NotificationsStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/notifications-stream-client";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
-  openNotificationsAwarenessStream,
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import {
+  openAgentActivityStream,
+  useAgentActivityStore,
+} from "@/stores/agent-activity-store";
 import {
   openHostNotificationsStream,
   type HostNotificationsFeedFrame,
@@ -37,7 +41,7 @@ import {
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService, useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
@@ -85,13 +89,23 @@ export interface NotificationsSessionProviderProps {
  * expiry. On sign-out - and on transitions between two distinct signed-in
  * users - the local notifications replica is reset so the incoming user
  * does not see the previous user's entries.
+ *
+ * Per the G8 decision, notifications always come from the **local host** -
+ * never whichever host happens to be active in a composer/tab elsewhere in
+ * the app. The stream is therefore bound to `useReactiveLocalHostEntry()` (a
+ * transient, non-rebinding client via `useHostStreamClientFor`), not
+ * `useReactiveActiveHostId()` / the app-wide `useWsStreamClient()`. The cloud
+ * feed rides the same local client: it is reached THROUGH a host, so binding
+ * it anywhere else would reintroduce the active-host coupling G8 removed.
  */
 export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
-  const wsStreamClient = useWsStreamClient();
+  const localHostEntry = useReactiveLocalHostEntry();
+  const streamAuth = useStreamAuthRevalidator();
+  const localStreamClient = useHostStreamClientFor(localHostEntry, streamAuth);
+  const localHostId = localHostEntry?.hostId ?? null;
   const queryClient = useQueryClient();
-  const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
   const hostClient = useHostClient();
   const showNotification = useNotificationShow();
@@ -102,6 +116,7 @@ export function NotificationsSessionProvider(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const notificationFeedMode = useNotificationFeedMode();
   const disposerRef = useRef<(() => void) | null>(null);
+  const activityDisposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const cloudDisposerRef = useRef<(() => void) | null>(null);
   // The stream client all notification streams were opened against. Stream
@@ -110,8 +125,10 @@ export function NotificationsSessionProvider(
   // replacement), the old client's sessions are already dead, so the streams
   // must be torn down and reopened against the new client.
   const openedStreamClientRef =
-    useRef<WsStreamClient<HostStreamRpcRegistry> | null>(null);
-  const previousHostIdRef = useRef<string | null>(activeHostId);
+    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
+  const previousStreamClientRef =
+    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(localStreamClient);
+  const previousLocalHostIdRef = useRef<string | null>(localHostId);
   // Start unset so an initially cloud-capable session also clears the legacy
   // local sources before opening its first relay stream.
   const previousFeedModeRef = useRef<
@@ -180,7 +197,7 @@ export function NotificationsSessionProvider(
   );
   const onPresenceChanged = useCallback(
     (frame: HostNotificationPresenceFrame, hostId: string): void => {
-      if (activeHostId !== hostId) return;
+      if (localHostId !== hostId) return;
       const nextEntity = entityFromFocusedPresence(frame);
       const previousEntity = activeEntityRef.current;
       if (
@@ -193,11 +210,11 @@ export function NotificationsSessionProvider(
       activeEntityRef.current = nextEntity;
       if (nextEntity !== null) consumeEntity(nextEntity);
     },
-    [activeHostId, consumeEntity],
+    [localHostId, consumeEntity],
   );
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
-      if (activeHostId !== hostId) return;
+      if (localHostId !== hostId) return;
       if (
         frame.kind === "snapshot" ||
         frame.kind === "cleared" ||
@@ -247,7 +264,7 @@ export function NotificationsSessionProvider(
       if (!isTerminalSeverity) return;
       consumeEntity(entity);
     },
-    [activeHostId, consumeEntity, hostClient, queryClient],
+    [localHostId, consumeEntity, hostClient, queryClient],
   );
   const onHostStreamOpened = useCallback((): void => {
     activeEntityRef.current = null;
@@ -258,6 +275,11 @@ export function NotificationsSessionProvider(
     if (disposerRef.current !== null) {
       const disposer = disposerRef.current;
       disposerRef.current = null;
+      disposer();
+    }
+    if (activityDisposerRef.current !== null) {
+      const disposer = activityDisposerRef.current;
+      activityDisposerRef.current = null;
       disposer();
     }
     if (hostDisposerRef.current !== null) {
@@ -287,6 +309,7 @@ export function NotificationsSessionProvider(
   const resetIdentityReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useNotificationsStore.getState().reset();
+    useAgentActivityStore.getState().reset();
     useHostNotificationsStore.getState().reset();
     resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
@@ -297,6 +320,11 @@ export function NotificationsSessionProvider(
   const resetHostReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().reset();
+    // A local activity view belongs solely to the departed host. Cloud
+    // activity is a per-user union and remains valid across host switches.
+    if (useAgentActivityStore.getState().servedBy === "local") {
+      useAgentActivityStore.getState().reset();
+    }
     resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
   }, [queryClient, resetCloudRelaySession]);
@@ -315,6 +343,7 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().setConnectionStatus("connecting");
     useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    useAgentActivityStore.setState({ connectionStatus: "reconnecting" });
   }, []);
 
   // StrictMode mounts, cleans up, then re-mounts effects. Returning Zustand's
@@ -389,7 +418,7 @@ export function NotificationsSessionProvider(
   const openForCurrentUser = useCallback((): void => {
     if (
       getNotificationsStreamFactoryOverride() === null &&
-      wsStreamClient === null
+      localStreamClient === null
     ) {
       return;
     }
@@ -407,9 +436,9 @@ export function NotificationsSessionProvider(
       useAuthStore.getState().setSubscriptionStatus("FREE");
       void authService.revalidateCurrentContext();
     };
-    if (activeHostId === null) return;
-    const streamHostId = activeHostId;
-    openedStreamClientRef.current = wsStreamClient;
+    if (localHostId === null) return;
+    const streamHostId = localHostId;
+    openedStreamClientRef.current = localStreamClient;
     const createNotificationsStream = (
       callbacks: NotificationsStreamCallbacks,
     ) => {
@@ -417,27 +446,31 @@ export function NotificationsSessionProvider(
       if (override !== null) {
         return override(callbacks);
       }
-      if (wsStreamClient === null) {
+      if (localStreamClient === null) {
         throw new Error(
-          "NotificationsSessionProvider: WsStreamClient missing at open time.",
+          "NotificationsSessionProvider: local host stream client missing at open time.",
         );
       }
       return new NotificationsStreamClient({
-        wsStreamClient,
+        wsStreamClient: localStreamClient,
         callbacks,
       });
     };
-    if (notificationFeedMode === "cloud") {
-      // Cloud owns notification rows, but global agent-activity presence still
-      // arrives through the per-user notifications room's awareness channel.
-      // The awareness-only reader deliberately ignores legacy Yjs rows.
-      if (wsStreamClient === null) return;
-      disposerRef.current = openNotificationsAwarenessStream(
-        createNotificationsStream,
+    // Host-selected activity planes (#906) replaced the notifications-room
+    // awareness reader that used to carry agent-activity presence, and moved it
+    // out of the cloud-only branch. Ours contributed only the local-host pin, so
+    // this takes that structure with `localStreamClient`: agent activity is
+    // read from the LOCAL host's stream, never a remote one.
+    if (localStreamClient !== null) {
+      activityDisposerRef.current = openAgentActivityStream(
+        localStreamClient,
         onAuthError,
       );
+    }
+    if (notificationFeedMode === "cloud") {
+      if (localStreamClient === null) return;
       cloudDisposerRef.current = openCloudNotificationsStream(
-        wsStreamClient,
+        localStreamClient,
         onAuthError,
         onEntitlementDenied,
         (entries) => {
@@ -461,10 +494,10 @@ export function NotificationsSessionProvider(
     if (
       hostDisposerRef.current === null &&
       getNotificationsStreamFactoryOverride() === null &&
-      wsStreamClient !== null
+      localStreamClient !== null
     ) {
       hostDisposerRef.current = openHostNotificationsStream(
-        wsStreamClient,
+        localStreamClient,
         onAuthError,
         {
           windowId,
@@ -487,9 +520,9 @@ export function NotificationsSessionProvider(
       );
     }
   }, [
-    wsStreamClient,
+    localStreamClient,
     authService,
-    activeHostId,
+    localHostId,
     windowId,
     showNotification,
     onFeedFrame,
@@ -519,35 +552,62 @@ export function NotificationsSessionProvider(
   // outgoing user's collaboration/host rows visible to the incoming one.
   useAuthIdentityTransition(status, userId, onAuthTransition);
 
-  // Open / reopen the stream on signed-in + active-host transitions.
-  // `activeHostId` flips to `null` when the desktop host restarts or the
-  // IPC channel drops - we teardown so the next reconnect lands on a fresh
-  // client, but this is a disconnect, not an identity/host change: host rows
-  // and cursors are preserved and only the summary degrades to unknown until
-  // a replacement snapshot lands. A genuine host switch resets only the host
-  // replica so the re-landed snapshot isn't merged into a stale local doc.
+  // Open / reopen the stream on signed-in + local-host-client transitions.
+  // `localStreamClient` flips to `null` when there is no local host (browser/
+  // mobile shells) or the local host's IPC channel drops - we teardown so the
+  // next reconnect lands on a fresh client. It becomes a NEW object when the
+  // local host respawns at a fresh endpoint under the SAME `hostId`
+  // (`useHostStreamClientFor` rebuilds the transport on an endpoint move) -
+  // that reference change, not a `hostId` comparison, is what drives
+  // teardown/reopen here, so a respawn is followed even though "the local
+  // host" identity never changed. Switching the app-wide ACTIVE host leaves
+  // `localStreamClient` untouched, so this effect intentionally does not
+  // re-run for that transition (per the G8 decision). A disconnect preserves
+  // host rows and cursors - only the summary degrades to unknown until a
+  // replacement snapshot lands; a genuine local-host identity change is what
+  // resets the host replica.
   useEffect(() => {
     const isSignedIn = status === "signed-in";
+    const priorStreamClient = previousStreamClientRef.current;
+    previousStreamClientRef.current = localStreamClient;
 
     if (!isSignedIn) {
       // `useAuthIdentityTransition`'s onTransition already tore down on the
       // signedOut path; no-op here.
       return;
     }
-    if (activeHostId === null) {
+    // Keyed on the HOST, not the client: `useHostStreamClientFor` returns a
+    // client exactly when it is given an entry, so in production these two are
+    // the same condition - but the test stream-factory override supplies a
+    // stream with no client at all, and gating on the client would make that
+    // path unreachable. Client identity still matters below, for the respawn
+    // case where both sides are non-null.
+    if (localHostId === null) {
       tearDown();
       resetCloudRelayOwnership();
       markHostReplicaDisconnected();
       return;
     }
-    // Only updated on a non-null host so it survives an intervening
-    // disconnect: A -> null -> A must not look like a switch (the reconnect
-    // snapshot alone refreshes the preserved rows), but A -> null -> B must
-    // still reset the host replica before B's stream opens, or B's snapshot
-    // would land on top of A's stale rows for one render.
-    const priorHostId = previousHostIdRef.current;
-    previousHostIdRef.current = activeHostId;
-    if (priorHostId !== null && priorHostId !== activeHostId) {
+    // Two independent ways the replica goes stale, and each needs its own ref
+    // because neither sees the other's case:
+    //
+    //  - CLIENT SWAP (both sides non-null): the local host respawned at a
+    //    fresh endpoint, so it is a NEW host process with new notification
+    //    state - the old rows must not survive into it.
+    //  - HOST SWITCH ACROSS A DISCONNECT (A -> null -> B): the disconnect
+    //    already nulled `previousStreamClientRef`, so the client comparison
+    //    above sees nothing. `previousLocalHostIdRef` is updated only on a
+    //    non-null host, so it still spans the gap. A -> null -> A stays a
+    //    reconnect (rows and cursors are preserved, the re-landed snapshot
+    //    refreshes them); A -> null -> B resets before B's stream opens, or
+    //    B's snapshot would land on A's stale rows for one render.
+    const priorLocalHostId = previousLocalHostIdRef.current;
+    previousLocalHostIdRef.current = localHostId;
+    const clientSwapped =
+      priorStreamClient !== null && priorStreamClient !== localStreamClient;
+    const hostSwitchedAcrossDisconnect =
+      priorLocalHostId !== null && priorLocalHostId !== localHostId;
+    if (clientSwapped || hostSwitchedAcrossDisconnect) {
       tearDown();
       resetHostReplica();
     }
@@ -571,27 +631,29 @@ export function NotificationsSessionProvider(
     // closes the old client's sessions, so both notification streams must
     // rebind to the new client. The identity did not change, so the replica
     // is kept - the re-landed snapshot merges into the same doc.
+    // Evaluated twice on purpose, not hoisted: the second read must see the
+    // effect of the `tearDown()` immediately below it.
+    const openStreams = [
+      disposerRef,
+      activityDisposerRef,
+      hostDisposerRef,
+      cloudDisposerRef,
+    ];
     if (
-      (disposerRef.current !== null ||
-        hostDisposerRef.current !== null ||
-        cloudDisposerRef.current !== null) &&
-      openedStreamClientRef.current !== wsStreamClient
+      anyStreamOpen(openStreams) &&
+      openedStreamClientRef.current !== localStreamClient
     ) {
       tearDown();
       resetCloudRelayOwnership();
     }
-    if (
-      disposerRef.current === null &&
-      hostDisposerRef.current === null &&
-      cloudDisposerRef.current === null
-    ) {
+    if (!anyStreamOpen(openStreams)) {
       openForCurrentUser();
     }
   }, [
-    activeHostId,
+    localHostId,
     status,
     userId,
-    wsStreamClient,
+    localStreamClient,
     tearDown,
     resetHostReplica,
     resetCloudRelayOwnership,
@@ -613,6 +675,21 @@ export function NotificationsSessionProvider(
   }, [tearDown]);
 
   return <>{props.children}</>;
+}
+
+/**
+ * True when this provider still holds any of its streams open.
+ *
+ * Extracted because the reopen effect tests the same set twice - once as "any
+ * open" and once as "none open" - and the activity disposer (host-selected
+ * activity planes) made each of those a four-term boolean, pushing the effect
+ * past the complexity ceiling. Structurally typed over `{ current }` so it
+ * takes ref objects without this module depending on React's ref types.
+ */
+function anyStreamOpen(
+  refs: readonly { readonly current: (() => void) | null }[],
+): boolean {
+  return refs.some((ref) => ref.current !== null);
 }
 
 function entityFromFocusedPresence(

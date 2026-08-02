@@ -14,7 +14,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IHostStreamClient } from "./host-stream-client";
 
 export const WORKTREE_DELETE_BATCH_STREAM_METHOD = "worktree.deleteBatchByPath";
 
@@ -72,7 +72,7 @@ export interface WorktreeDeleteBatchStreamCallbacks {
 }
 
 export interface WorktreeDeleteBatchStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   /** Client-minted UUID; identifies this command for single-flight reuse. */
   readonly commandId: string;
   readonly source: WorktreeDeletionSource;
@@ -112,7 +112,7 @@ export interface WorktreeDeleteBatchStreamClientOptions {
 export class WorktreeDeleteBatchStreamClient {
   private session: IStreamSession;
   private readonly callbacks: WorktreeDeleteBatchStreamCallbacks;
-  private readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  private readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   private readonly commandId: string;
   private mode: "start" | "observe";
   /**

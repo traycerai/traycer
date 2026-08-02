@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -6,13 +6,17 @@ import type {
   GuiHarnessId,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  __getOpenEpicRegistryForTests,
+  EpicSessionContext,
+} from "@/lib/registries/epic-session-registry";
 import {
   useEpicChatHarnessId,
   useEpicAgentRoleClaims,
   useEpicAgentRoleClaimsByAgentId,
   useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
+  useRegisteredEpicLiveArtifactTitles,
 } from "@/lib/epic-selectors";
 
 const featureSettings = vi.hoisted(() => ({ enabled: true }));
@@ -33,11 +37,96 @@ const handles: OpenEpicStoreHandle[] = [];
 
 afterEach(() => {
   cleanup();
+  __getOpenEpicRegistryForTests().disposeAll();
   featureSettings.enabled = true;
   for (const handle of handles) {
     handle.dispose();
   }
   handles.length = 0;
+});
+
+describe("useRegisteredEpicLiveArtifactTitles", () => {
+  it("subscribes when a registered handle initially has no title", () => {
+    const registry = __getOpenEpicRegistryForTests();
+    const { result } = renderHook(() =>
+      useRegisteredEpicLiveArtifactTitles([
+        { epicId: "epic-late-handle", artifactId: "chat-1" },
+      ]),
+    );
+    expect(result.current).toEqual([null]);
+
+    const handle = createOpenEpicStore({
+      epicId: "epic-late-handle",
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
+    handle.store.setState({
+      chats: {
+        allIds: ["chat-1"],
+        byId: { "chat-1": { ...chat("chat-1", null), title: "" } },
+      },
+    });
+    act(() => {
+      registry.acquire("epic-late-handle", () => handle);
+    });
+    expect(result.current).toEqual([null]);
+
+    act(() => {
+      handle.store.setState({
+        chats: {
+          allIds: ["chat-1"],
+          byId: {
+            "chat-1": { ...chat("chat-1", null), title: "Generated title" },
+          },
+        },
+      });
+    });
+
+    expect(result.current).toEqual(["Generated title"]);
+  });
+
+  it("subscribes to a late handle when the refs identity is stable", () => {
+    const registry = __getOpenEpicRegistryForTests();
+    const { result } = renderHook(() => {
+      const refs = useMemo(
+        () => [{ epicId: "epic-stable-refs", artifactId: "chat-1" }],
+        [],
+      );
+      return useRegisteredEpicLiveArtifactTitles(refs);
+    });
+    expect(result.current).toEqual([null]);
+
+    const handle = createOpenEpicStore({
+      epicId: "epic-stable-refs",
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
+    handle.store.setState({
+      chats: {
+        allIds: ["chat-1"],
+        byId: { "chat-1": { ...chat("chat-1", null), title: "" } },
+      },
+    });
+    act(() => {
+      registry.acquire("epic-stable-refs", () => handle);
+    });
+    expect(result.current).toEqual([null]);
+
+    act(() => {
+      handle.store.setState({
+        chats: {
+          allIds: ["chat-1"],
+          byId: {
+            "chat-1": { ...chat("chat-1", null), title: "Stable refs title" },
+          },
+        },
+      });
+    });
+
+    expect(result.current).toEqual(["Stable refs title"]);
+  });
 });
 
 describe("useMaybeEpicTuiAgentHarnessId", () => {

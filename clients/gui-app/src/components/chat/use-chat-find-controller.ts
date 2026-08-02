@@ -44,6 +44,16 @@ interface ChatFindControllerArgs {
   readonly messages: ReadonlyArray<ChatMessageModel>;
   /** Latest transcript, read lazily by the adapter's getRows supplier. */
   readonly messagesRef: RefObject<ReadonlyArray<ChatMessageModel>>;
+  /**
+   * Live background-tool promotion set. Drives the notify-rows-changed
+   * lifecycle alongside `messages`: promotion changes which runs group
+   * together, so it changes unit ids and owning chains even when no message
+   * did, and a projection that missed it would be stale in exactly the way
+   * that produces unpaintable matches.
+   */
+  readonly backgroundToolBlockIds: ReadonlySet<string>;
+  /** Latest promotion set, read lazily by the adapter's getRows supplier. */
+  readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
   readonly messageIndexByIdRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   /** LegendList's own measured positions (no DOM rect probing - jsdom
@@ -82,6 +92,8 @@ export function useChatFindController(
     instanceId,
     messages,
     messagesRef,
+    backgroundToolBlockIds,
+    backgroundToolBlockIdsRef,
     messageIndexByIdRef,
     getScroller,
     getViewportAnchorListState,
@@ -427,14 +439,19 @@ export function useChatFindController(
 
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
-  }, [messages]);
+  }, [backgroundToolBlockIds, messages]);
 
   useLayoutEffect(() => {
     if (tileFindContext === null) return undefined;
 
     const adapter = createChatFindAdapter({
       tileInstanceId: instanceId,
-      getRows: () => buildChatFindRows(messagesRef.current, instanceId),
+      getRows: () =>
+        buildChatFindRows(
+          messagesRef.current,
+          instanceId,
+          backgroundToolBlockIdsRef.current,
+        ),
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,
@@ -453,6 +470,7 @@ export function useChatFindController(
       adapter.dispose();
     };
   }, [
+    backgroundToolBlockIdsRef,
     clearFindReveal,
     getMountedMessageRoot,
     instanceId,

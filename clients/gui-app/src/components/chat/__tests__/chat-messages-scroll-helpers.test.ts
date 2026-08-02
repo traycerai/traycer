@@ -3,6 +3,8 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 import {
   buildMessageIdToIndex,
+  chatAnchorScrollCaptureIsExactBrowserClamp,
+  chatAnchorScrollCaptureShouldCancel,
   chatTimelineAnchorShouldAnimateInitialIssue,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
@@ -16,6 +18,7 @@ import {
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   selectActiveUserMessageId,
   viewportActiveUserMessageId,
+  type ChatAnchorScrollCapturePhysicalSnapshot,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import { makeMessageAt } from "./chat-message-fixtures";
 
@@ -1588,6 +1591,250 @@ describe("resolveChatAnchorTargetWithSetupCard (ticket 13 / decision #28)", () =
     expect(resolveChatAnchorTargetWithSetupCard(messages, retargeted)).toBe(
       retargeted,
     );
+  });
+});
+
+describe("chatAnchorScrollCaptureIsExactBrowserClamp (Ticket 19, decision #31 binding condition b)", () => {
+  function snapshot(
+    scrollTop: number,
+    maxScrollTop: number,
+  ): ChatAnchorScrollCapturePhysicalSnapshot {
+    return { scrollTop, maxScrollTop };
+  }
+
+  it("(exact clamp) recognizes an ordinary downward clamp to a newly-smaller maximum", () => {
+    expect(
+      chatAnchorScrollCaptureIsExactBrowserClamp(
+        snapshot(1_200, 1_200),
+        snapshot(1_000, 1_000),
+      ),
+    ).toBe(true);
+  });
+
+  it("(fractional clamp) the 1px equality tolerance absorbs sub-pixel scrollTop/max values", () => {
+    expect(
+      chatAnchorScrollCaptureIsExactBrowserClamp(
+        snapshot(1_200.7, 1_200.25),
+        snapshot(1_000.6, 1_000.3),
+      ),
+    ).toBe(true);
+  });
+
+  it("(no prior-over-max evidence) does not guess a clamp merely from landing near a maximum", () => {
+    // previous.scrollTop (900) was never above the NEW maximum (1000) - the
+    // reader could simply have scrolled there normally. Table row: "Position
+    // at maximum without prior-over-max evidence" -> cancel, not a clamp.
+    expect(
+      chatAnchorScrollCaptureIsExactBrowserClamp(
+        snapshot(900, 1_200),
+        snapshot(1_000, 1_000),
+      ),
+    ).toBe(false);
+  });
+
+  it("(maximum did not shrink) a same-position report with an unchanged or grown maximum is not a clamp", () => {
+    expect(
+      chatAnchorScrollCaptureIsExactBrowserClamp(
+        snapshot(1_200, 1_000),
+        snapshot(1_000, 1_000),
+      ),
+    ).toBe(false);
+  });
+
+  it("(current top not at the new maximum) a large drop that overshoots past the new max is not a clamp", () => {
+    // Same shrink, but current.scrollTop lands well short of the new max -
+    // a real clamp always lands (near) exactly at the new maximum.
+    expect(
+      chatAnchorScrollCaptureIsExactBrowserClamp(
+        snapshot(1_200, 1_200),
+        snapshot(500, 1_000),
+      ),
+    ).toBe(false);
+  });
+
+  it("is exclusive at the exact 1px boundary of 'previous over new max'", () => {
+    // previous.scrollTop must EXCEED currentMax + 1px, not merely equal it.
+    expect(
+      chatAnchorScrollCaptureIsExactBrowserClamp(
+        snapshot(1_001, 1_200), // exactly currentMax(1000) + 1, not > it
+        snapshot(1_000, 1_000),
+      ),
+    ).toBe(false);
+    expect(
+      chatAnchorScrollCaptureIsExactBrowserClamp(
+        snapshot(1_001.01, 1_200),
+        snapshot(1_000, 1_000),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("chatAnchorScrollCaptureShouldCancel (Ticket 19, decision #31)", () => {
+  const OWNED_NO_MOTION = {
+    isAnchoringSessionOwned: true,
+    activeAnchorMotionOwnsGeneration: false,
+  };
+
+  it("(truth table: mismatch while owned) cancels an unexplained departure while anchoring + generation owned", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 900,
+        listStateScroll: 100,
+        previousSnapshot: null,
+        currentMaxScrollTop: 5_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("(truth table: following/free mode) stays silent whenever the session is not anchoring-owned", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        isAnchoringSessionOwned: false,
+        activeAnchorMotionOwnsGeneration: false,
+        domScrollTop: 900,
+        listStateScroll: 100,
+        previousSnapshot: null,
+        currentMaxScrollTop: 5_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: generation unowned) stays silent - `isAnchoringSessionOwned` already folds in the generation-ownership gate", () => {
+    // The caller computes `isAnchoringSessionOwned` as `mode ===
+    // "anchoring-new-turn" && generationOwned` - a mode-matched but
+    // generation-stale report reaches this classifier as `false` here.
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        isAnchoringSessionOwned: false,
+        activeAnchorMotionOwnsGeneration: false,
+        domScrollTop: 5_000,
+        listStateScroll: 0,
+        previousSnapshot: null,
+        currentMaxScrollTop: 6_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: active anchor imperative motion) defers silently regardless of how far DOM/list state diverge", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        isAnchoringSessionOwned: true,
+        activeAnchorMotionOwnsGeneration: true,
+        domScrollTop: 50,
+        listStateScroll: 4_000,
+        previousSnapshot: null,
+        currentMaxScrollTop: 5_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: stale active-motion generation does not exempt) a caller-computed `false` for an older generation's motion is evaluated normally, not exempted", () => {
+    // Design: "activeAnchorImperativeMotionGenerationRef must be compared
+    // with the CURRENT generation - a stale completion from an older anchor
+    // cannot exempt a newer session." The comparison itself is the caller's
+    // job (chat-messages.tsx); this classifier only ever sees the resulting
+    // boolean. A stale generation must therefore resolve to `false` here,
+    // which - unlike the true case above - does NOT defer, and the mismatch
+    // is classified as a real departure.
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        isAnchoringSessionOwned: true,
+        activeAnchorMotionOwnsGeneration: false,
+        domScrollTop: 50,
+        listStateScroll: 4_000,
+        previousSnapshot: null,
+        currentMaxScrollTop: 5_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("(truth table: DOM/list equal within 1px) a sub-pixel difference is read as a library/app-owned correction, not a departure", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 500.4,
+        listStateScroll: 500.0,
+        previousSnapshot: null,
+        currentMaxScrollTop: 5_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: exact downward clamp) a browser clamp to a newly-smaller maximum stays silent even though DOM/list state diverge", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 1_000,
+        listStateScroll: 1_200, // library state never told about the clamp
+        previousSnapshot: { scrollTop: 1_200, maxScrollTop: 1_200 },
+        currentMaxScrollTop: 1_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: position at maximum without prior-over-max evidence) cancels rather than guessing a clamp", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 1_000,
+        listStateScroll: 400,
+        previousSnapshot: { scrollTop: 900, maxScrollTop: 1_200 },
+        currentMaxScrollTop: 1_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("(truth table: large library-owned correction) exact state equality stays silent no matter how large the jump", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 4_800,
+        listStateScroll: 4_800, // MVCP/non-animated scrollToOffset pre-wrote this
+        previousSnapshot: { scrollTop: 50, maxScrollTop: 5_000 },
+        currentMaxScrollTop: 5_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("(truth table: small real mismatch above 1px) cancels with no anchor-distance threshold - a 2px unexplained move is as real as a 2000px one", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 502,
+        listStateScroll: 500,
+        previousSnapshot: { scrollTop: 500, maxScrollTop: 5_000 },
+        currentMaxScrollTop: 5_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("(no previous snapshot) an owned mismatch with nothing to compare against for a clamp still cancels - unsure biases toward cancel, not silence", () => {
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 990,
+        listStateScroll: 0,
+        previousSnapshot: null,
+        currentMaxScrollTop: 990,
+      }),
+    ).toBe(true);
+  });
+
+  it("(same-window max shrink ambiguity, review finding 3) a user move ending exactly at a shrunk maximum is indistinguishable from a clamp - documented, not a bug", () => {
+    // The design-review's own accepted ambiguity table: "User thumb ends at
+    // the new max in the same delivery window as a max shrink" -> silent.
+    // This pin exists to make that acceptance explicit and mutation-visible,
+    // not to assert a distinguishing capability that does not exist.
+    expect(
+      chatAnchorScrollCaptureShouldCancel({
+        ...OWNED_NO_MOTION,
+        domScrollTop: 1_000,
+        listStateScroll: 1_200,
+        previousSnapshot: { scrollTop: 1_200, maxScrollTop: 1_200 },
+        currentMaxScrollTop: 1_000,
+      }),
+    ).toBe(false);
   });
 });
 

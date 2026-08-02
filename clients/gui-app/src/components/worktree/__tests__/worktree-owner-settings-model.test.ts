@@ -90,7 +90,6 @@ function baseInput(
     tuiHarnessId: null,
     tuiModel: null,
     tuiReasoningEffort: null,
-    tuiAgentMode: null,
     tuiProfileId: null,
     harnesses: [claudeHarnessEntry()],
     profiles: [],
@@ -127,7 +126,6 @@ describe("deriveOwnerSettingsHeader", () => {
         label: "Work account",
       },
       permissionMode: "supervised",
-      agentMode: null,
     });
   });
 
@@ -286,11 +284,10 @@ describe("deriveOwnerSettingsHeader", () => {
       fastMode: false,
       profileAccentDot: null,
       permissionMode: null,
-      agentMode: null,
     });
   });
 
-  it("resolves managed-profile TUI identity: badge, model, effort, and agent mode", () => {
+  it("resolves managed-profile TUI identity: badge, model, and effort", () => {
     const profileId = "profile-1";
     const view = deriveOwnerSettingsHeader(
       baseInput({
@@ -299,7 +296,6 @@ describe("deriveOwnerSettingsHeader", () => {
         tuiHarnessId: "claude",
         tuiModel: "sonnet-4.5",
         tuiReasoningEffort: "high",
-        tuiAgentMode: "epic",
         tuiProfileId: profileId,
         profiles: [
           providerProfile("ambient", "ambient", "Terminal account"),
@@ -320,7 +316,6 @@ describe("deriveOwnerSettingsHeader", () => {
         label: "Work account",
       },
       permissionMode: null,
-      agentMode: "epic",
     });
   });
 
@@ -334,7 +329,6 @@ describe("deriveOwnerSettingsHeader", () => {
         tuiHarnessId: "claude",
         tuiModel: "sonnet-4.5",
         tuiReasoningEffort: "medium",
-        tuiAgentMode: "regular",
         tuiProfileId: null,
         profiles: [
           providerProfile("ambient", "ambient", "Terminal account"),
@@ -345,7 +339,6 @@ describe("deriveOwnerSettingsHeader", () => {
 
     expect(view?.profileAccentDot).toBeNull();
     expect(view?.reasoningLabel).toBe("Medium");
-    expect(view?.agentMode).toBe("regular");
     expect(view?.fastMode).toBe(false);
   });
 
@@ -357,7 +350,6 @@ describe("deriveOwnerSettingsHeader", () => {
         tuiHarnessId: "claude",
         tuiModel: "sonnet-4.5",
         tuiReasoningEffort: "high",
-        tuiAgentMode: "regular",
         tuiProfileId: "deleted-profile",
         profiles: [
           providerProfile("ambient", "ambient", "Terminal account"),
@@ -369,7 +361,6 @@ describe("deriveOwnerSettingsHeader", () => {
     expect(view?.profileAccentDot).toBeNull();
     expect(view?.modelLabel).toBe("Claude Sonnet 4.5");
     expect(view?.reasoningLabel).toBe("High");
-    expect(view?.agentMode).toBe("regular");
   });
 
   it("never enables fast mode for TUI agents (no serviceTier on the record)", () => {
@@ -380,7 +371,6 @@ describe("deriveOwnerSettingsHeader", () => {
         tuiHarnessId: "claude",
         tuiModel: "sonnet-4.5",
         tuiReasoningEffort: "high",
-        tuiAgentMode: "regular",
         tuiProfileId: "profile-1",
         profiles: [
           providerProfile("ambient", "ambient", "Terminal account"),

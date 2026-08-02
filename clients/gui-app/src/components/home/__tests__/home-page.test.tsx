@@ -175,6 +175,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
       actions.submit({
         draftId,
         editor: editorHandleForPrompt("Plan the GUI migration"),
+        slashCatalog: null,
         toolbar: {
           selection: {
             harnessId: "codex",
@@ -184,7 +185,6 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           reasoning: "high",
           serviceTier: "",
           permission: "supervised",
-          agentMode: "regular",
         },
       });
     };

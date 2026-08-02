@@ -292,9 +292,12 @@ function createBaseRunnerHost(): IRunnerHost {
   return {
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
+    relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
+    listRegisteredHosts: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
     revokeUserSession: () =>
       Promise.resolve({ kind: "network-error" as const }),
@@ -305,6 +308,8 @@ function createBaseRunnerHost(): IRunnerHost {
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
@@ -320,6 +325,7 @@ function createBaseRunnerHost(): IRunnerHost {
     },
     notifications: {
       show: () => Promise.resolve(),
+      onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
     },
     tray: {

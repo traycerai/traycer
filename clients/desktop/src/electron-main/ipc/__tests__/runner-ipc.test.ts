@@ -625,6 +625,10 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.authTokenStoreRotate,
         RunnerHostInvoke.authTokenStoreDelete,
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        // Remote Host Support: host-registry read (§7) and version-policy
+        // write (§13, T16) run in main for the renderer-origin CORS reason.
+        RunnerHostInvoke.listRegisteredHosts,
+        RunnerHostInvoke.updateHostVersionPolicy,
         RunnerHostInvoke.listUserSessions,
         RunnerHostInvoke.revokeUserSession,
         RunnerHostInvoke.revokeAllSessions,
@@ -3044,6 +3048,73 @@ describe("RunnerIpcBridge", () => {
       },
       { channel: RunnerHostEvent.zoomChange, payload: 100 },
     ]);
+    bridge.dispose();
+  });
+
+  it("relays a background renderer notification to the focused renderer only", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const focusedWindow = buildWindow();
+    const backgroundWindow = buildWindow();
+    registry.add("window-focused", 101, focusedWindow);
+    registry.add("window-background", 202, backgroundWindow);
+    focusedWindow.setFocused(true);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    const display = {
+      title: "Traycer",
+      body: "Background agent failed",
+      payload: null,
+      replaceKey: "app-local:host.error:failure-1",
+      deliveryKey: "user-1:host.error:failure-1:40",
+      foregroundAppLocal: {
+        userId: "user-1",
+        entry: { id: "host.error:failure-1", updatedAt: 40 },
+      },
+    };
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      true,
+    );
+
+    expect(focusedWindow.sentMessages).toEqual([
+      {
+        channel: RunnerHostEvent.notificationForegroundDisplay,
+        payload: display,
+      },
+    ]);
+    expect(backgroundWindow.sentMessages).toEqual([]);
+
+    expect(bridge.deliverForegroundNotificationDisplay(101, display)).toBe(
+      true,
+    );
+    expect(focusedWindow.sentMessages).toHaveLength(1);
+
+    focusedWindow.setFocused(false);
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      false,
+    );
+
+    const destroyedFocusedWindow = buildWindowWithDestroyed(true);
+    destroyedFocusedWindow.setFocused(true);
+    registry.add("window-destroyed", 303, destroyedFocusedWindow);
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      false,
+    );
+    expect(destroyedFocusedWindow.sentMessages).toEqual([]);
     bridge.dispose();
   });
 

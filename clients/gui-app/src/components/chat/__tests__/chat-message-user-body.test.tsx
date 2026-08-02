@@ -231,6 +231,22 @@ const STRUCTURED_IMAGE_USER_CONTENT: JsonContent = {
   ],
 };
 
+const STRUCTURED_SKILL_TRIGGER_USER_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "slashCommand",
+          attrs: { commandName: "traycer-implement", trigger: "$" },
+        },
+        { type: "text", text: " Implement the runtime ticket." },
+      ],
+    },
+  ],
+};
+
 describe("<UserMessageBody /> agent messages", () => {
   afterEach(() => {
     cleanup();
@@ -355,6 +371,7 @@ describe("<UserMessageBody /> agent messages", () => {
       />,
     );
 
+    // No `trigger` on the node, so the chip falls back to the canonical `/`.
     expect(screen.getByText("/plan")).not.toBeNull();
     expect(screen.getByText("Image#1")).not.toBeNull();
     expect(screen.getByText("Image#2")).not.toBeNull();
@@ -369,6 +386,24 @@ describe("<UserMessageBody /> agent messages", () => {
       .closest("[data-user-message-display]");
     expect(display?.className).toContain("max-w-[min(100%,48rem)]");
     expect(display?.className).not.toContain("max-w-[85%]");
+  });
+
+  // The sent message is the only place the user sees the chip after submitting,
+  // so it reads back as what was written - matching the live composer's node
+  // view. The node still serializes to `/name` for the host either way.
+  it("renders a $-triggered chip as $name in a sent message", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...plainUserMessage("fallback text"),
+          structuredContent: STRUCTURED_SKILL_TRIGGER_USER_CONTENT,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("$traycer-implement")).not.toBeNull();
+    expect(screen.queryByText("/traycer-implement")).toBeNull();
   });
 
   it("keeps image reference labels coherent when a user message enters edit mode", async () => {

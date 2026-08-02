@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -92,7 +92,7 @@ const subscriptions: SharedStreamSubscriptionRegistry<PrSubscribeDetailServerFra
   new Map();
 
 function subscriptionKeyFor(
-  client: WsStreamClient<HostStreamRpcRegistry>,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
   args: ActiveDetailSubscriptionArgs,
 ): string {
   return [
@@ -244,7 +244,7 @@ export function usePrDetailSubscription(args: {
 }
 
 function createSharedSubscription(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   queryClient: QueryClient,
   args: ActiveDetailSubscriptionArgs,
 ): SharedDetailSubscription {

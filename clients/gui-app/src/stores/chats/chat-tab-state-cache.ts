@@ -132,7 +132,7 @@ export function restoreChatTabState(
   };
 }
 
-interface SaveChatTabStateInput {
+export interface SaveChatTabStateInput {
   readonly identity: ChatTabPersistenceIdentity;
   readonly mode: ChatTabScrollMode;
   readonly anchorMessageId: string | null;

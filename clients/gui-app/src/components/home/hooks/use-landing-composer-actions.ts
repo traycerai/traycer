@@ -59,6 +59,7 @@ import {
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
   stringValue,
+  type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 import {
@@ -85,7 +86,6 @@ import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-inten
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type {
   PermissionMode,
-  AgentMode,
   HarnessModelSelection,
   ReasoningLevel,
   ServiceTier,
@@ -103,18 +103,23 @@ export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
   readonly draftId: string | null;
   readonly editor: ComposerPromptEditorHandle | null;
+  /**
+   * The composer's loaded command catalog, or null when it has not loaded.
+   * Submit-time chip conversion resolves a written `/command` / `$skill`
+   * against it - see `buildSubmittedChatJSONContent`. Read at submit time by
+   * the caller, which owns the picker store.
+   */
+  readonly slashCatalog: SlashCommandCatalog | null;
   readonly toolbar: {
     readonly selection: HarnessModelSelection;
     readonly reasoning: ReasoningLevel;
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
-    readonly agentMode: AgentMode;
   };
 }
 
 export interface TerminalAgentLaunch {
   readonly harnessId: TuiHarnessId;
-  readonly agentMode: AgentMode;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly terminalAgentArgs: string | null;
@@ -278,7 +283,10 @@ export function useLandingComposerActions(): LandingComposerActions {
         return;
       }
 
-      const submittedContent = buildSubmittedChatJSONContent(resolvedContent);
+      const submittedContent = buildSubmittedChatJSONContent(
+        resolvedContent,
+        args.slashCatalog,
+      );
       const profile = useAuthStore.getState().profile;
 
       const settings = buildChatRunSettings({
@@ -286,7 +294,6 @@ export function useLandingComposerActions(): LandingComposerActions {
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
-        agentMode: toolbar.agentMode,
       });
       if (settings.model.length === 0) {
         draftRuntimeRegistry.complete(attempt);
@@ -617,7 +624,6 @@ export function useLandingComposerActions(): LandingComposerActions {
     ) => {
       const {
         harnessId,
-        agentMode,
         model,
         reasoningEffort,
         terminalAgentArgs,
@@ -704,7 +710,6 @@ export function useLandingComposerActions(): LandingComposerActions {
               harnessId,
               model,
               reasoningEffort,
-              agentMode,
               forkSourceHarnessSessionId: null,
               sourceTuiAgentId: null,
               sourceProfileId: null,

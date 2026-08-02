@@ -19,6 +19,7 @@ describe("<TerminalConnectionOverlay />", () => {
       <TerminalConnectionOverlay
         state="lost"
         onReconnect={() => undefined}
+        onClose={() => undefined}
         testId="terminal-connection-overlay"
       />,
     );
@@ -42,6 +43,7 @@ describe("<TerminalConnectionOverlay />", () => {
       <TerminalConnectionOverlay
         state="lost"
         onReconnect={() => undefined}
+        onClose={() => undefined}
         testId="terminal-connection-overlay"
       />,
     );

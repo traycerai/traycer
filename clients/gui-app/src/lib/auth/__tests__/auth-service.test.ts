@@ -1117,6 +1117,7 @@ describe("AuthService", () => {
   it("UI-only signs out (file kept, no session-expired) when startup stays offline", async () => {
     // Transient refresh-network does not destroy the file and does not claim
     // a dead credential (H1 / §5).
+    vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
       { token: "offline-token", refreshToken: "offline-token-refresh" },
@@ -1131,15 +1132,93 @@ describe("AuthService", () => {
       return Promise.reject(new Error("offline"));
     });
 
-    await service.start();
+    const start = service.start();
+    await vi.runAllTimersAsync();
+    await start;
 
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("offline-token", "offline-token-refresh"),
     );
-    // refresh-network is not a terminal authn reject.
     expect(service.getLastError()).toBeNull();
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${VALIDATION_URL}`,
+      `POST ${REFRESH_URL}`,
+    ]);
+  });
+
+  it("keeps stored credentials when startup user lookup fails closed and refresh is transient", async () => {
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      {
+        token: "fail-closed-token",
+        refreshToken: "fail-closed-token-refresh",
+      },
+      { ...DEFAULT_IDENTITY },
+    );
+    restoreFetch();
+    const calls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return status(503);
+      }
+      return status(500);
+    });
+
+    const start = service.start();
+    await vi.runAllTimersAsync();
+    await start;
+
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("fail-closed-token", "fail-closed-token-refresh"),
+    );
+    expect(service.getLastError()).toBeNull();
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${VALIDATION_URL}`,
+      `POST ${REFRESH_URL}`,
+    ]);
+  });
+
+  it("surfaces session-expired (file kept) when startup user lookup and refresh are genuinely rejected", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "rejected-token", refreshToken: "rejected-token-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    restoreFetch();
+    const calls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return status(401);
+      }
+      return status(500);
+    });
+
+    await service.start();
+
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    // `refresh-rejected` is terminal for the SESSION (session-expired copy),
+    // but only an explicit sign-out destroys the credentials file - so the
+    // pair survives for a later re-auth (H1 / §5).
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("rejected-token", "rejected-token-refresh"),
+    );
+    expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
     expect(collapseConsecutiveCalls(calls)).toEqual([
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
@@ -1694,6 +1773,48 @@ describe("AuthService", () => {
       expect(outcome?.kind).toBe("network-error");
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("still-valid");
+    });
+
+    it("preserves signed-in state when user lookup fails closed and refresh is transient", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "fail-closed-token");
+
+      vi.useFakeTimers();
+      restoreFetch();
+      const calls: string[] = [];
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        calls.push(`${init?.method ?? "GET"} ${url}`);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer fail-closed-token"
+        ) {
+          return status(401);
+        }
+        if (
+          url === REFRESH_URL &&
+          init?.headers?.Authorization === "Bearer fail-closed-token"
+        ) {
+          return status(503);
+        }
+        return status(500);
+      });
+
+      const pending = service.revalidateCurrentContext();
+      await vi.runAllTimersAsync();
+      const outcome = await pending;
+
+      expect(outcome?.kind).toBe("network-error");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe(
+        "fail-closed-token",
+      );
+      expect(service.getLastError()).toBeNull();
+      expect(collapseConsecutiveCalls(calls)).toEqual([
+        `GET ${VALIDATION_URL}`,
+        `POST ${REFRESH_URL}`,
+      ]);
     });
 
     it("coalesces concurrent refresh revalidations so a spent sibling refresh token does not sign out", async () => {

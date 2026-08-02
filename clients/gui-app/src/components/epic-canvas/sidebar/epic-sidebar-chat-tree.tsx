@@ -586,8 +586,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // Two independent narrowings, kept separate on purpose. `originRootIds` is
   // the origin filter's result and feeds the "no matches" empty state and
   // forced expansion; `rootIds` additionally drops archived roots and is what
-  // actually renders. Collapsing them would make an all-archived tree claim
-  // "No agents use this interface", which is false.
+  // actually renders. Collapsing them would make an all-archived tree show the
+  // Interface-filter empty state instead of the archived one, blaming a filter
+  // that is not hiding anything.
   const originRootIds = useMemo(
     () => applyVisibleFilter(allRootIds, originVisibleIds),
     [allRootIds, originVisibleIds],
@@ -749,8 +750,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         // Names the INTERFACE as the thing with no matches. "No agents match"
         // would imply the Task has none at all, when the filter is only hiding
         // the other interface.
-        title="No agents use this interface."
-        description={null}
+        title="No matches for the current filters."
+        description="The Interface filter is hiding the other agents."
         testId="epic-chat-sidebar-filter-empty"
       />
     );
@@ -1273,7 +1274,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
   // Resolved once per row and used by both archive affordances, so the hover
   // button and the menu entry can never disagree about whether this row is
   // busy. Same lattice the leading status icon renders from.
-  const statusKind = useChatRowOwnStatusKind({
+  const status = useChatRowOwnStatusKind({
     epicId: props.epicId,
     nodeId: props.nodeId,
     artifactType: props.artifactType,
@@ -1285,7 +1286,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
         canMutate: props.canMutate,
         isArchived: props.archive.isArchived,
         archivePending: props.archive.pending,
-        statusKind,
+        status,
         selectionMode: props.selectionMode,
         isRenaming: props.isRenaming,
         hasChildren: props.hasChildren,
@@ -2409,6 +2410,25 @@ function chatOwnStatusKind(
 }
 
 /**
+ * A row's resolved status: the folded lattice kind the icon renders from, PLUS
+ * the raw running tier it was folded out of.
+ *
+ * Both are carried because `chatOwnStatusKind` is lossy in a way that matters
+ * here. Its attention arms (`failure` / `interview` / `approval`) return BEFORE
+ * it ever tests `running`, so a chat that is genuinely mid-turn while blocked on
+ * a tool approval folds to `"approval"` and its turn becomes invisible to any
+ * consumer reading `kind` alone. That is correct for the ICON - one glyph, and
+ * "needs you" outranks "working" - but it is wrong for an availability gate:
+ * a pending approval is raised from INSIDE a running turn, so it is the single
+ * most likely moment for a human to be looking at the row and reaching for
+ * Archive.
+ */
+interface ChatRowStatus {
+  readonly kind: ChatOwnStatusKind;
+  readonly running: IndicatorRunningKind;
+}
+
+/**
  * The row's archive menu state, or `null` on a host that lacks
  * `epic.setChatArchived` - in which case the entry is absent from both menus
  * rather than present-but-disabled.
@@ -2416,6 +2436,8 @@ function chatOwnStatusKind(
 interface ChatRowArchiveEntry {
   readonly isArchived: boolean;
   readonly disabled: boolean;
+  /** Populated only for the busy arm; `null` whenever `disabled` is false. */
+  readonly disabledTooltip: string | null;
 }
 
 /**
@@ -2441,15 +2463,62 @@ interface ChatRowArchiveDecision {
 }
 
 /**
- * Both archive affordances for a row, decided together so the menu entry and
- * the hover button can never disagree. Only called for rows whose host
- * supports the method.
+ * Copy for a refused archive, matched to the tier so the row explains the
+ * ACTUAL reason - "working" and "has background items running" are different
+ * things to wait on, and a single generic string would misdescribe one of them.
  *
- * They are deliberately gated differently. The MENU entry is the complete,
- * keyboard-reachable surface: present on every row, merely disabled while the
- * row is busy. The hover BUTTON is a pointer shortcut that TAKES OVER the
- * trailing status slot, so it may only appear when that slot is showing the
- * idle time and nothing else.
+ * This tooltip is the ONLY message these rows get. The entry is soft-disabled,
+ * which prevents `onSelect`, so the host's own refusal - and the toast that
+ * rewrites it into user-facing copy - never fire from here. Advice that is
+ * wrong in this string is wrong with nothing behind it to correct it.
+ *
+ * So the background arm must not say "stop it". Every stop affordance routes
+ * into `ChatSession.stopActiveTurn()`, which early-returns when no turn is
+ * running, so an agent held only by a detached subagent, a workflow or a
+ * scheduled wake cannot be stopped into an archivable state - the user would
+ * press Stop, see nothing change, and be told the same thing again. It names
+ * the per-item controls in the chat instead, which is the affordance that
+ * actually clears them.
+ *
+ * The host's `archiveBlockedMessage` splits on exactly this distinction and
+ * keeps its two arms disjoint under test; this is the same split one surface
+ * earlier, where the user actually is.
+ */
+function archiveBlockedReason(
+  // Excludes the idle tier rather than trusting the caller's `running !== false`
+  // guard. Without it a future caller could pass an idle row and silently get
+  // the background-items copy, which describes a state that is not blocked at
+  // all - a wrong explanation, not a missing one.
+  running: Exclude<IndicatorRunningKind, false>,
+): string {
+  if (running === "turn") {
+    // Hedged, because this tier is NOT "a turn is running". `chatActivityIndicator`
+    // deliberately maps a detached subagent or workflow fleet outliving its turn
+    // into `"turn"` - it is the agent working, so it earns the busy spinner
+    // rather than the muted background glyph - while `resolvedTurnStatus`
+    // reports no active turn for that same state, precisely so a Stop-turn
+    // affordance does not surface. Promising a stop here would contradict that
+    // and send the user after an action the host early-returns from.
+    return "Can't archive while this agent is working. Stopping it ends a turn, but not a detached subagent or workflow. Wait for it to go idle, or stop it, then archive.";
+  }
+  return "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.";
+}
+
+/**
+ * Both archive affordances for a row, decided together. Only called for rows
+ * whose host supports the method.
+ *
+ * They are deliberately gated differently, and the MENU entry is the surface
+ * that must always work: present on every row, and merely SOFT-disabled while
+ * the row is busy (`aria-disabled`, not Radix's `disabled`) so it stays in the
+ * arrow-key order and can still announce its reason - see `softDisabledProps`
+ * in `sidebar-row-menu-items`. The hover BUTTON is a pointer shortcut that
+ * TAKES OVER the trailing status slot, so it may only appear when that slot is
+ * showing the idle time and nothing else.
+ *
+ * The two therefore DO diverge, by design rather than by accident: on a busy
+ * row - archived or not - the button is hidden while the entry remains. That
+ * is why the entry, not the button, carries the explanation.
  *
  * That last condition is stricter than "my own status is idle", which is why
  * `hasChildren`/`expanded` are inputs. A COLLAPSED PARENT's leading slot renders
@@ -2461,28 +2530,56 @@ interface ChatRowArchiveDecision {
  * tell which way the rollup resolved without duplicating its subscription, so
  * every collapsed parent is excluded; the menu entry stays the archive path for
  * those rows.
+ *
+ * Busy is read off `status.running`, NOT off the folded `status.kind`. Folding
+ * loses exactly the case this gate exists for - see {@link ChatRowStatus} - so
+ * gating on `kind === "working" | "background"` left Archive ENABLED on any
+ * running chat that also had a pending approval or interview, which is most of
+ * them at the moment a human is looking. The host refuses such an archive
+ * anyway; matching it here is what keeps the affordance honest instead of
+ * offering an action that will only come back as a toast.
+ *
+ * That "the host refuses it anyway" backstop holds only for an agent on the
+ * host this RPC goes to. `AgentActivityTracker` is host-LOCAL, while this
+ * predicate unions every host's awareness entry, so for a row running on
+ * another host the UI gate is the only one that fires on busy-ness. The host
+ * refuses those outright (`TARGET_NOT_LOCAL`) rather than guessing, so the
+ * failure mode is an explanatory toast, not a bad archive - but the row is
+ * still offered, which is a known gap.
+ *
+ * UNARCHIVING is never gated on busy - the host allows it, and an archived row
+ * can be working (an inbound message auto-unarchives and wakes it, so the flag
+ * and the run legitimately overlap). Only `archivePending` disables that
+ * direction, to stop a double-submit.
  */
 function chatRowArchiveState(args: {
   readonly canMutate: boolean;
   readonly isArchived: boolean;
   readonly archivePending: boolean;
-  readonly statusKind: ChatOwnStatusKind;
+  readonly status: ChatRowStatus;
   readonly selectionMode: boolean;
   readonly isRenaming: boolean;
   readonly hasChildren: boolean;
   readonly expanded: boolean;
 }): ChatRowArchiveDecision {
-  const isBusy =
-    args.statusKind === "working" || args.statusKind === "background";
+  // The tier that BLOCKS, or `false` for none. Carrying the narrowed value
+  // rather than a separate boolean is what lets `archiveBlockedReason` refuse
+  // the idle tier by type: a bare `blocksArchive` flag proves nothing to the
+  // compiler about `status.running` at the call below.
+  const blockingRun: IndicatorRunningKind = args.isArchived
+    ? false
+    : args.status.running;
   const slotMayShowRollup = args.hasChildren && !args.expanded;
   return {
     entry: {
       isArchived: args.isArchived,
-      disabled: isBusy || args.archivePending,
+      disabled: blockingRun !== false || args.archivePending,
+      disabledTooltip:
+        blockingRun === false ? null : archiveBlockedReason(blockingRun),
     },
     showButton:
       args.canMutate &&
-      args.statusKind === "idle" &&
+      args.status.kind === "idle" &&
       !slotMayShowRollup &&
       !args.selectionMode &&
       !args.isRenaming,
@@ -2522,6 +2619,9 @@ function archiveMenuEntries(
         <Archive className="size-3.5" />
       ),
       disabled: !props.canMutate || archiveEntry.disabled,
+      // Only the busy arm explains itself. `!canMutate` greys out every entry
+      // in the menu at once, so a per-entry tooltip there would be noise.
+      disabledTooltip: props.canMutate ? archiveEntry.disabledTooltip : null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-archive-item-${props.nodeId}`,
@@ -2542,6 +2642,7 @@ function chatRowMenuEntries(
       label: "New child agent",
       icon: <Plus className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-new-child-${props.nodeId}`,
@@ -2555,6 +2656,7 @@ function chatRowMenuEntries(
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-rename-${props.nodeId}`,
@@ -2570,6 +2672,7 @@ function chatRowMenuEntries(
       label: "Delete",
       icon: <Trash2 className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "destructive",
       testIds: {
         dropdown: `epic-sidebar-delete-${props.nodeId}`,
@@ -2601,7 +2704,7 @@ function useChatRowOwnStatusKind(args: {
   readonly epicId: string;
   readonly nodeId: string;
   readonly artifactType: EpicNodeKind;
-}): ChatOwnStatusKind {
+}): ChatRowStatus {
   const { epicId, nodeId, artifactType } = args;
   const indicatorState = useSurfaceNotificationIndicatorState({
     epicId,
@@ -2631,19 +2734,23 @@ function useChatRowOwnStatusKind(args: {
       : (sessionHandle.store.getState().access?.role ?? null),
   );
   if (sessionHandle === null || !isChat) {
-    return chatOwnStatusKind(
-      indicatorState,
-      awarenessTier ?? false,
-      isChat && isViewer,
-    );
+    const running = awarenessTier ?? false;
+    return {
+      kind: chatOwnStatusKind(indicatorState, running, isChat && isViewer),
+      running,
+    };
   }
-  return chatOwnStatusKind(
-    indicatorState,
-    sessionActivity ?? awarenessTier ?? false,
-    // Stay neutral while the access snapshot is unknown so an owner never sees
-    // a read-only row flash before it arrives.
-    sessionRole !== null && sessionRole !== "owner",
-  );
+  const running = sessionActivity ?? awarenessTier ?? false;
+  return {
+    kind: chatOwnStatusKind(
+      indicatorState,
+      running,
+      // Stay neutral while the access snapshot is unknown so an owner never
+      // sees a read-only row flash before it arrives.
+      sessionRole !== null && sessionRole !== "owner",
+    ),
+    running,
+  };
 }
 
 /**

@@ -3,7 +3,10 @@ import { useEffect, useMemo, useReducer, useRef } from "react";
 import { TerminalStreamClient } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import { useHostClient } from "@/lib/host";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { authenticatedHostStreamKey } from "@/hooks/host/use-host-stream-client-for";
+import {
+  authenticatedHostStreamKey,
+  authenticatedOwnerIdentityKey,
+} from "@/hooks/host/use-host-stream-client-for";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -15,7 +18,7 @@ import {
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalSessionRegistry } from "@/stores/terminals/terminal-session-registry";
 import type {
-  ListTerminalsResponseV21,
+  ListTerminalsResponseV22,
   TerminalSessionKind,
   TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -23,6 +26,16 @@ import type {
 const registry = new TerminalSessionRegistry();
 
 const handleHostIds = new WeakMap<TerminalSessionStoreHandle, string | null>();
+// Owner-identity discriminator (R-1), tracked separately from `handleHostIds`
+// (which `agent-activity.ts` filters by hostId and must stay hostId-only).
+// `TerminalSessionRegistry.acquire` has no scope-key concept of its own - it
+// only ever rebuilds on an explicit `forceRelease` - so this is what lets a
+// same-host remote public-key rotation force one instead of leaving the
+// warm session pinned to a `TerminalStreamClient` built against the stale key.
+const handleOwnerIdentityKeys = new WeakMap<
+  TerminalSessionStoreHandle,
+  string | null
+>();
 
 let streamClientFactoryOverride: TerminalStreamClientFactory | null = null;
 
@@ -98,6 +111,15 @@ export function useTerminalSessionHandle(
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedHostStreamKey(globalClient, hostEntry);
+  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
+  // remote host's public key (dialability, not identity). `args.hostId` is
+  // stable for a terminal tab's whole lifetime by design (bound for life -
+  // see CLAUDE.md), so the hostId-only check below can never see a same-host
+  // remote public-key rotation; this closes that gap.
+  const ownerIdentityKey =
+    streamClientFactoryOverride !== null
+      ? "test-stream-client-factory"
+      : authenticatedOwnerIdentityKey(globalClient, hostEntry);
 
   const [handle, setHandle] = useReducer(
     (
@@ -133,8 +155,11 @@ export function useTerminalSessionHandle(
       return;
     }
     // Null until there is an authenticated request context and a dialable host
-    // endpoint (or "test-..." when the factory is overridden).
-    if (transportKey === null) {
+    // endpoint (or "test-..." when the factory is overridden). `ownerIdentityKey`
+    // is null under that same gate (both derive from the same `globalClient` +
+    // `hostEntry`), so this never masks a ready session behind a not-yet-known
+    // identity.
+    if (transportKey === null || ownerIdentityKey === null) {
       setHandle(null);
       return;
     }
@@ -142,7 +167,12 @@ export function useTerminalSessionHandle(
     const existing = registry.get(args.instanceId);
     if (existing !== null) {
       const existingHostId = handleHostIds.get(existing) ?? null;
-      if (existingHostId !== args.hostId) {
+      const existingOwnerIdentityKey =
+        handleOwnerIdentityKeys.get(existing) ?? null;
+      if (
+        existingHostId !== args.hostId ||
+        existingOwnerIdentityKey !== ownerIdentityKey
+      ) {
         registry.forceRelease(args.instanceId);
       }
     }
@@ -193,13 +223,16 @@ export function useTerminalSessionHandle(
       });
     });
     handleHostIds.set(next, args.hostId);
+    handleOwnerIdentityKeys.set(next, ownerIdentityKey);
     setHandle(next);
 
     return () => {
       registry.release(args.instanceId);
     };
     // `openTransport` is referentially stable and reads its deps live;
-    // `transportKey` already encodes user + host + endpoint identity.
+    // `transportKey` already encodes user + host + endpoint identity;
+    // `ownerIdentityKey` additionally discriminates a remote host's
+    // public-key rotation (R-1).
   }, [
     args.hostId,
     args.enabled,
@@ -208,6 +241,7 @@ export function useTerminalSessionHandle(
     args.instanceId,
     args.kind,
     transportKey,
+    ownerIdentityKey,
     openTransport,
   ]);
 
@@ -217,14 +251,23 @@ export function useTerminalSessionHandle(
     let previousStatus = initialState.status;
     let previousTitle = initialState.title;
     let previousActiveProcessName = initialState.activeProcessName;
+    let previousCurrentCwd = initialState.currentCwd;
+    let previousCurrentCwdReported = initialState.currentCwdReported;
     return handle.store.subscribe((state) => {
       const statusChanged = state.status !== previousStatus;
+      const currentCwdChanged =
+        state.currentCwdReported &&
+        (!previousCurrentCwdReported ||
+          state.currentCwd !== previousCurrentCwd);
       const metadataChanged =
         state.title !== previousTitle ||
-        state.activeProcessName !== previousActiveProcessName;
+        state.activeProcessName !== previousActiveProcessName ||
+        currentCwdChanged;
       previousStatus = state.status;
       previousTitle = state.title;
       previousActiveProcessName = state.activeProcessName;
+      previousCurrentCwd = state.currentCwd;
+      previousCurrentCwdReported = state.currentCwdReported;
       if (metadataChanged) {
         // Patch the cached `terminal.list` rows in place - NEVER invalidate
         // here. The stream is the authoritative source for these fields
@@ -235,17 +278,21 @@ export function useTerminalSessionHandle(
         // looped forever, bouncing the PTY stream and leaving reattached
         // terminals blank. (An explicitly justified `setQueriesData`:
         // stream-pushed state IS the response state.)
-        queryClient.setQueriesData<ListTerminalsResponseV21>(
+        queryClient.setQueriesData<ListTerminalsResponseV22>(
           { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
           (data) => {
             if (data === undefined) return undefined;
             const target = data.sessions.find(
               (session) => session.sessionId === args.sessionId,
             );
+            if (target === undefined) return data;
+            const currentCwd = currentCwdChanged
+              ? (state.currentCwd ?? "")
+              : target.currentCwd;
             if (
-              target === undefined ||
-              (target.title === state.title &&
-                (target.activeProcessName ?? null) === state.activeProcessName)
+              target.title === state.title &&
+              (target.activeProcessName ?? null) === state.activeProcessName &&
+              target.currentCwd === currentCwd
             ) {
               return data;
             }
@@ -259,6 +306,7 @@ export function useTerminalSessionHandle(
                       ...session,
                       title: state.title,
                       activeProcessName: state.activeProcessName,
+                      currentCwd,
                     }
                   : session,
               ),
@@ -268,7 +316,9 @@ export function useTerminalSessionHandle(
       }
       if (
         statusChanged &&
-        (state.status === "exited" || state.status === "lost")
+        (state.status === "exited" ||
+          state.status === "lost" ||
+          state.status === "reaped")
       ) {
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.scope(args.hostId),

@@ -21,6 +21,7 @@ export const RunnerHostInvoke = {
   deviceFlowStart: "runnerHost:auth:deviceFlowStart",
   deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
   deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
+  refreshAuthToken: "runnerHost:auth:refreshToken",
   // Credentials-file token store (tech plan §3). `get`/`signIn`/`rotate`/`delete`
   // route the renderer's `ITokenStore` through the main-process `FileTokenStore`,
   // which owns the single machine-local credentials file + its lock/WAL. `rotate`
@@ -30,6 +31,10 @@ export const RunnerHostInvoke = {
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
+  // main for the same CORS reason as the token validators — authn-v3's CORS
+  // allow-list is the web dashboard origin, not the app renderer.
+  listRegisteredHosts: "runnerHost:hosts:list",
   // Devices & Sessions account-security surface. These authn-v3 calls run in
   // main for the same renderer-origin CORS reason as token validation.
   listUserSessions: "runnerHost:auth:sessions:list",
@@ -44,6 +49,10 @@ export const RunnerHostInvoke = {
   // them; main holds the single registry every window claims against.
   requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
   verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
+  // Remote Host Support (§13, T16): `PATCH /api/v3/hosts/:hostId` — "Update
+  // now" / auto-policy toggle / "Apply now — ends N sessions". Same CORS
+  // reason as `listRegisteredHosts`.
+  updateHostVersionPolicy: "runnerHost:hosts:updateVersionPolicy",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -256,6 +265,8 @@ export const RunnerHostEvent = {
   // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
   systemResumed: "runnerHost:event:systemResumed",
   notificationClick: "runnerHost:event:notificationClick",
+  notificationForegroundDisplay:
+    "runnerHost:event:notificationForegroundDisplay",
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   hostPickerChange: "runnerHost:event:hostPickerChange",
   quitRequested: "runnerHost:event:quitRequested",

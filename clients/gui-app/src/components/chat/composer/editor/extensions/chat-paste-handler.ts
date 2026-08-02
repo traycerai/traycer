@@ -18,6 +18,7 @@ import {
   parseLeadingSlashCommand,
   slashCommandParagraph,
   stringValue,
+  type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
@@ -713,7 +714,7 @@ function composerContentSlice(
 function leadingSlashCommandSlice(
   state: EditorState,
   text: string,
-  knownCommands: ReadonlyMap<string, string> | null,
+  knownCommands: SlashCommandCatalog | null,
 ): Slice | null {
   // Without a loaded catalog we cannot tell a real command from arbitrary text,
   // so leave the paste as plain text rather than risk a chip for a non-command.
@@ -721,13 +722,14 @@ function leadingSlashCommandSlice(
   if (!isLeadingSlashTarget(state)) return null;
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return null;
-  // Match case-insensitively but build the chip from the catalog's canonical
-  // name, so a pasted `/Plan` lands the same chip the popover would for `plan`.
-  const canonicalName = knownCommands.get(parsed.name.toLowerCase());
-  if (canonicalName === undefined) return null;
+  // Match case-insensitively but build the chip from the resolved option, so a
+  // pasted `/Plan` lands the same chip the popover would for `plan`.
+  const command = knownCommands.get(parsed.name.toLowerCase());
+  if (command === undefined) return null;
   const paragraph = slashCommandParagraph(
-    canonicalName,
+    command,
     text.slice(parsed.end),
+    parsed.trigger,
   );
   try {
     const node = state.schema.nodeFromJSON(paragraph);
@@ -751,7 +753,7 @@ function isLeadingSlashTarget(state: EditorState): boolean {
 function existingLeadingSlashCommandPaste(
   state: EditorState,
   text: string,
-  knownCommands: ReadonlyMap<string, string> | null,
+  knownCommands: SlashCommandCatalog | null,
 ): { readonly pos: number; readonly text: string } | null {
   if (knownCommands === null) return null;
   // This path inserts after the existing chip without replacing the selection,

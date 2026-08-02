@@ -3,6 +3,7 @@ import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import {
   buildChatFindRows,
+  chatFindActivityGroupChildHeaderUnitId,
   chatFindMessageContentUnitId,
   chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
@@ -10,7 +11,10 @@ import {
   markdownToChatSearchText,
   type ChatFindRow,
 } from "@/components/chat/chat-find";
-import { derivePromotedSubagentRenderId } from "@/components/chat/chat-collapsible-key";
+import {
+  deriveActivityGroupRenderId,
+  derivePromotedSubagentRenderId,
+} from "@/components/chat/chat-collapsible-key";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ApprovalSegment,
@@ -79,7 +83,11 @@ describe("chat find projection", () => {
       ],
     };
 
-    const rows = buildChatFindRows([user, assistant], TILE_INSTANCE_ID);
+    const rows = buildChatFindRows(
+      [user, assistant],
+      TILE_INSTANCE_ID,
+      new Set(),
+    );
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
 
     expect(joined).toContain("/fix search bar alignment");
@@ -88,6 +96,40 @@ describe("chat find projection", () => {
     expect(joined).not.toContain("Hidden button prompt");
     expect(joined).not.toContain("Show more");
     expect(joined).not.toContain("Copy reply");
+  });
+
+  // Find indexes what the DOM paints. `UserMessageBody` renders a chip through
+  // `slashCommandLabelFromAttrs`, so a `$`-written skill reads as `$name` on
+  // screen even though it still serializes to `/name` for the provider and the
+  // clipboard. Indexing the serialized form instead would make the visible text
+  // unsearchable AND count a match the highlighter has no node to paint.
+  it("indexes a $-triggered chip by the label it renders, not its canonical form", () => {
+    const user: ChatMessageModel = {
+      ...makeMessage(1, "user"),
+      content: "",
+      structuredContent: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "slashCommand",
+                attrs: { commandName: "traycer-implement", trigger: "$" },
+              },
+              { type: "text", text: " the runtime ticket" },
+            ],
+          },
+        ],
+      },
+    };
+
+    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set())
+      .map((row) => rowSearchText(row))
+      .join("\n");
+
+    expect(joined).toContain("$traycer-implement the runtime ticket");
+    expect(joined).not.toContain("/traycer-implement");
   });
 
   it("indexes collapsed activity group summaries and child headers only", () => {
@@ -133,7 +175,7 @@ describe("chat find projection", () => {
       segments,
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
 
     expect(rowSearchText(row)).toContain("Read 1 file, edited 1 file");
     expect(rowSearchText(row)).toContain("src/components/search-bar.tsx");
@@ -155,7 +197,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
 
     expect(rowSearchText(row)).toContain("Thought for 2s");
     expect(rowSearchText(row)).not.toContain("private chain of thought");
@@ -175,12 +217,137 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
 
     expect(rowSearchText(row)).toContain("Thinking");
     expect(rowSearchText(row)).not.toContain(
       "streaming private chain-of-thought",
     );
+  });
+
+  // A completed block with no usable duration - persisted history with no
+  // `startedAt`, or a same-millisecond completion - used to sum to 0 and let
+  // the summary fall through to the generic "Ran activity". Since a lone
+  // reasoning block is now a group, and the group summary is what find indexes
+  // for it, that erased the word "Thought" from the index entirely: searching
+  // for the thinking you can plainly see would return nothing.
+  it("indexes a duration-less reasoning group as thought, not as generic activity", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      segments: [
+        {
+          id: "reasoning-no-duration",
+          kind: "reasoning",
+          markdown: "sole block body",
+          isStreaming: false,
+          durationMs: null,
+        },
+      ],
+    };
+
+    const text = rowSearchText(
+      buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0],
+    );
+
+    expect(text).toContain("Thought");
+    expect(text).not.toContain("Ran activity");
+  });
+
+  // A unit id and an owning chain are both derived from the group a segment
+  // lands in, and the group id comes from the run's FIRST segment - so a tool
+  // promoted out of the run shifts every id behind it. The renderer promotes
+  // from the host's live set; if the projection ran on an empty one it would
+  // emit `activity:tool-1` ids for rows the DOM renders under `activity:
+  // reasoning-1`, counting matches that can never be painted or navigated to.
+  it("groups exactly as the renderer does when a tool is promoted by the live set", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(7, "assistant"),
+      segments: [
+        {
+          id: "tool-live-promoted",
+          kind: "tool",
+          toolName: "run_command",
+          inputSummary: "bun test",
+          inputDetail: null,
+          taskTodoItems: null,
+          error: null,
+          agentMessageSend: null,
+          isStreaming: false,
+          endState: null,
+          stopped: false,
+          progress: null,
+          backgroundOutput: null,
+          // No durable marker - promotion is visible ONLY through the live set.
+          backgroundTask: false,
+          durationMs: null,
+          startedAt: 0,
+          parentId: null,
+        },
+        {
+          id: "reasoning-after-tool",
+          kind: "reasoning",
+          markdown: "body",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+      ],
+    };
+
+    const promoted = new Set(["tool-live-promoted"]);
+    const unitIds = buildChatFindRows(
+      [assistant],
+      TILE_INSTANCE_ID,
+      promoted,
+    )[0].units.map((unit) => unit.unitId);
+
+    // The run starts at the reasoning block, because the tool stands alone.
+    const groupId = deriveActivityGroupRenderId("reasoning-after-tool");
+    expect(unitIds).toContain(
+      chatFindActivityGroupChildHeaderUnitId(groupId, "reasoning-after-tool"),
+    );
+    // The id the empty-set projection would have produced must NOT appear.
+    expect(unitIds).not.toContain(
+      chatFindActivityGroupChildHeaderUnitId(
+        deriveActivityGroupRenderId("tool-live-promoted"),
+        "reasoning-after-tool",
+      ),
+    );
+  });
+
+  // Every child is indexed unconditionally: a reveal force-opens the group, and
+  // every child renders headed - with its own anchor - in both the live window
+  // and the expanded body.
+  it("indexes the reasoning child alongside the group summary", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      segments: [
+        {
+          id: "reasoning-with-sibling",
+          kind: "reasoning",
+          markdown: "body",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+        {
+          id: "command-sibling",
+          kind: "command",
+          command: "echo hi",
+          cwd: null,
+          exitCode: 0,
+          isStreaming: false,
+          endState: null,
+          progress: null,
+          startedAt: 0,
+          parentId: null,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+
+    // Once in the group summary ("Thought for 2s, ran 1 command"), once as the
+    // child's own header.
+    expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(2);
   });
 
   it("indexes the always-visible subagent header (name + type) and dedupes progress", () => {
@@ -209,7 +376,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const headerUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentHeaderUnitId(renderId),
@@ -267,7 +434,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -309,7 +476,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
     const headerUnit = row.units.find(
       (unit) =>
         unit.unitId ===
@@ -354,7 +521,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
 
     expect(rowSearchText(row)).toContain("1 of 3 Done");
     // Completed item renders its plain text, never its active form.
@@ -406,7 +573,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
 
     expect(rowSearchText(row)).toContain("Refactor the search index");
     // The status badge LABEL is indexed, not the raw enum value.
@@ -449,7 +616,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const joined = buildChatFindRows([grouped], TILE_INSTANCE_ID)
+    const joined = buildChatFindRows([grouped], TILE_INSTANCE_ID, new Set())
       .map((row) => rowSearchText(row))
       .join("\n");
 
@@ -483,7 +650,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
     const noticeUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("notice-top"),
     );
@@ -538,7 +705,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -576,7 +743,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([user], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set())[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -608,7 +775,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([user], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set())[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -631,7 +798,7 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("assistant-text-0"),
@@ -658,7 +825,11 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID)[0];
+    const row = buildChatFindRows(
+      [synthesized],
+      TILE_INSTANCE_ID,
+      new Set(),
+    )[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("forked-1"),

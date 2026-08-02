@@ -4,7 +4,11 @@ import {
   type MentionFlowStep,
   type MentionMenuEntry,
 } from "@/lib/composer/mentions";
-import type { MentionPreview, SlashCommand } from "@/lib/composer/types";
+import type {
+  MentionPreview,
+  SlashCommand,
+  SlashCommandTrigger,
+} from "@/lib/composer/types";
 
 export type ComposerPickerKind = "mention" | "slash";
 
@@ -22,13 +26,11 @@ export type ComposerPickerKind = "mention" | "slash";
 export type ComposerSlashScope = "all" | "skills";
 
 /**
- * Character that opened a slash picker. Purely what the user pressed - it does
- * not narrow the catalog. The menu echoes it so a row picked with `$` does not
- * read as `/name`, and the chip keeps it for the same reason; translating a
- * skill into the form a provider expects is the harness layer's job (Codex
- * takes `$name`, everything else `/name`).
+ * Character that opened a slash picker. One name for what the picker records on
+ * a chip and what the raw-text converters parse off a prompt, so the two paths
+ * cannot drift apart - see {@link SlashCommandTrigger}.
  */
-export type ComposerSlashTrigger = "/" | "$";
+export type ComposerSlashTrigger = SlashCommandTrigger;
 
 export interface ComposerPickerRange {
   readonly from: number;
@@ -146,13 +148,18 @@ export interface ComposerPickerState {
   readonly clientRect: ComposerPickerClientRect | null;
   /**
    * Known slash commands for this composer's harness as a map of lowercased
-   * name → canonical name, or null until the command catalog has loaded.
-   * Populated eagerly by `useComposerPickerItems` so the paste handler can
-   * validate a pasted `/command` against real commands (and reuse the catalog's
-   * canonical casing) without the popover ever opening. This is catalog data,
-   * not transient popover state, so it survives open/close/reset.
+   * name → the catalog option, or null until the command catalog has loaded.
+   * Populated eagerly by `useComposerPickerItems` so the raw-text converters can
+   * validate a written `/command` or `$skill` against real commands without the
+   * popover ever opening. This is catalog data, not transient popover state, so
+   * it survives open/close/reset.
+   *
+   * The whole option, not just the canonical name: a chip built from raw text
+   * has to carry the same `kind`/`path`/`harnessId` the picker would attach, or
+   * the host cannot tell a skill from a native command and the editor's leading
+   * guard deletes it away from the prompt start. See `slashCommandNodeAttrs`.
    */
-  readonly knownSlashCommands: ReadonlyMap<string, string> | null;
+  readonly knownSlashCommands: ReadonlyMap<string, SlashCommand> | null;
   /**
    * Which suggestion session currently owns this store.
    *
@@ -209,7 +216,7 @@ export interface ComposerPickerActions {
   readonly moveActive: (direction: 1 | -1) => void;
   readonly commitActiveItem: () => boolean;
   readonly setKnownSlashCommands: (
-    commands: ReadonlyMap<string, string> | null,
+    commands: ReadonlyMap<string, SlashCommand> | null,
   ) => void;
   /** Unconditional close, for callers that are not a suggestion session. */
   readonly close: () => void;

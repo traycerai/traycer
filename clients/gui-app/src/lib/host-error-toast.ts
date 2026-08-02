@@ -101,6 +101,25 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
   }
+  // Archive refusals. The host sends these as `RPC_ERROR` with a machine
+  // prefix rather than a dedicated wire code, so - like the last-owner case
+  // above - the prefix is what we branch on. Without a branch these fall to
+  // the bare fallback ("Couldn't archive agent."), which tells the user
+  // nothing and is indistinguishable from a permissions or missing-record
+  // failure. The copy is rewritten here rather than passed through: the raw
+  // host text is written for an agent reading a tool result.
+  if (error.message.startsWith("AGENT_BUSY:")) {
+    // The host emits two arms and marks the one stop cannot clear with this
+    // exact phrase (`archiveBlockedMessage` in `agent-archive.ts`, which pins
+    // the disjointness in its own test). The other arm stays hedged for the
+    // same reason the host's does: "stop it" is only sometimes the remedy.
+    return error.message.includes("still running in the background")
+      ? "This agent has background items still running. Archiving won't stop them — wait for them to finish, or stop them from its chat."
+      : "This agent is still working. Stopping it ends a turn, but not a running subagent or a scheduled wake. Wait for it to go idle, or stop it, then archive.";
+  }
+  if (error.message.startsWith("TARGET_NOT_LOCAL:")) {
+    return "This agent runs on another host. Archive it from that host instead.";
+  }
   // An optional method the active host predates (declared `degrade:
   // unsupported`). This is a version gap, not a failed operation, so the copy
   // points at the fix rather than restating the operation name.

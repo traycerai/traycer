@@ -17,7 +17,7 @@ paths = [
   '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
 ]
 regexes = [
-  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|s4b-reachability-key|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup|t18-pin-c-exhaust)$''',
+  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|s4b-reachability-key|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup|t18-pin-c-exhaust|t19-hydration-nav-key|t22-pin3-no-double-correction|t22-below-anchor-no-repair|t22-unmount-mid-repair|t22-shrink-above-anchor)$''',
 ]
 
 [[allowlists]]
@@ -40,6 +40,17 @@ paths = [
 ]
 regexes = [
   '''^RWSEfvU5EZoZYQTQUOVHeQFv3poThl1VM7FZLkNQr0Zu0FyL2x\+u2O2l$''',
+]
+
+[[allowlists]]
+description = "Chat transcript scroll-state cache keys in the gui-app chat tests - kebab-case UI state bucket names (e.g. a per-test anchor key) that the generic-api-key rule matches only because the field is literally named `scrollStateKey`. These are UI state keys, never credentials. Path-scoped to the one test file; `fetch-depth: 0` means the PR scan sees them on in-flight branches before they merge, so this cannot wait for the introducing branch to land."
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+]
+regexes = [
+  '''scrollStateKey: "[A-Za-z0-9_-]+"''',
 ]
 
 [[allowlists]]
