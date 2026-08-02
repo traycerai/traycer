@@ -75,13 +75,18 @@ function ComposerAreaImpl({
         className="relative rounded-lg bg-muted/30 ring-1 ring-border ring-inset focus-within:ring-ring/30"
       >
         {overlay}
+        <div
+          data-composer-utility-overlay=""
+          className="absolute right-3 top-0 z-40 -translate-y-1/2 empty:hidden"
+        >
+          {utilityRail}
+        </div>
         <div data-composer-editor-frame="" className="px-4 pt-4">
           <div
             data-composer-attachment-rail=""
             className="flex min-w-0 items-start gap-2 pb-2 empty:hidden"
           >
             {attachmentsStrip}
-            {utilityRail}
           </div>
           {editor}
         </div>
@@ -100,7 +105,7 @@ interface ComposerShellProps {
   readonly onDragEnter: DragEventHandler<HTMLElement>;
   readonly onDragLeave: DragEventHandler<HTMLElement>;
   readonly dragOverlayVariant: FileTransferDragOverlayVariant | null;
-  /** In-flow utility chrome rendered before the editor. */
+  /** Compact composer chrome anchored outside document flow. */
   readonly utilityRail: ReactNode;
   /** Slot rendered just above the editor (e.g. image-attachment chips). */
   readonly attachmentsStrip: ReactNode;

@@ -59,26 +59,13 @@
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
 
-/* Attachment previews share one compact row with composer utilities. The
-   trailing padding lets the final chip emerge fully when scrolled to the end,
-   while overflowing chips fade before the fixed stash control. */
+/* Attachment previews stay on one compact, independently scrollable row. */
 [data-composer-attachment-strip] {
   scrollbar-width: none;
 }
 
 [data-composer-attachment-strip]::-webkit-scrollbar {
   display: none;
-}
-
-[data-composer-attachment-rail]:has([data-composer-utility-rail])
-  [data-composer-attachment-strip] {
-  -webkit-mask-image: linear-gradient(
-    to right,
-    black 0%,
-    black 90%,
-    transparent 100%
-  );
-  mask-image: linear-gradient(to right, black 0%, black 90%, transparent 100%);
 }
 
 @media (prefers-reduced-motion: reduce) {

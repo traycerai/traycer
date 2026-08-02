@@ -97,10 +97,7 @@ function PromptStashTriggerButton(props: {
 }) {
   const { open, saving, rowCount, pulseEpoch } = props;
   return (
-    <div
-      data-composer-utility-rail=""
-      className="relative z-10 ml-auto shrink-0"
-    >
+    <div data-composer-utility-rail="" className="relative shrink-0">
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -109,7 +106,7 @@ function PromptStashTriggerButton(props: {
           aria-label={promptStashTriggerLabel(rowCount)}
           disabled={rowCount === 0}
           className={cn(
-            "gap-1.5 text-muted-foreground hover:text-foreground",
+            "rounded-full bg-background/95 px-2.5 text-muted-foreground shadow-sm backdrop-blur-sm hover:text-foreground",
             open && "text-foreground",
           )}
           onPointerDown={(event) => event.preventDefault()}

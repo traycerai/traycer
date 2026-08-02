@@ -29,7 +29,7 @@ export function AttachmentStrip(props: AttachmentStripProps) {
       data-composer-attachment-strip=""
       className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
     >
-      <div className="flex w-max gap-2 pr-8">
+      <div className="flex w-max gap-2">
         {atoms.map((atom) => (
           <ImageAttachmentChip
             key={atom.id}

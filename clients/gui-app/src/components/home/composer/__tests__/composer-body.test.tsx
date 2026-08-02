@@ -37,6 +37,7 @@ vi.mock("@/components/home/composer/composer-shell", () => ({
     readonly utilityRail: ReactNode;
     readonly attachmentsStrip: ReactNode;
     readonly editor: ReactNode;
+    readonly toolbar: ReactNode;
   }) => (
     <div
       role="region"
@@ -48,11 +49,10 @@ vi.mock("@/components/home/composer/composer-shell", () => ({
       onDragEnter={props.onDragEnter}
       onDragLeave={props.onDragLeave}
     >
-      <div data-testid="composer-attachment-rail">
-        {props.attachmentsStrip}
-        {props.utilityRail}
-      </div>
+      <div data-testid="composer-utility-overlay">{props.utilityRail}</div>
+      <div data-testid="composer-attachment-rail">{props.attachmentsStrip}</div>
       {props.editor}
+      {props.toolbar}
     </div>
   ),
 }));
@@ -238,14 +238,20 @@ describe("ComposerBody topBanner placement", () => {
   });
 });
 
-describe("ComposerBody utility rail visibility", () => {
-  it("shows prompt utilities in chat mode", () => {
+describe("ComposerBody overlay utility visibility", () => {
+  it("shows prompt utilities in the chat overlay", () => {
     renderComposerBody({
       composerMode: "chat",
       paste: makePaste(),
       stashControl: <div data-testid="stash-utility-rail">Stash 2</div>,
     });
-    expect(screen.getByTestId("stash-utility-rail")).not.toBeNull();
+    const stash = screen.getByTestId("stash-utility-rail");
+    expect(
+      stash.closest('[data-testid="composer-utility-overlay"]'),
+    ).not.toBeNull();
+    expect(
+      stash.closest('[data-testid="composer-attachment-rail"]'),
+    ).toBeNull();
   });
 
   it("omits prompt utilities in terminal mode", () => {

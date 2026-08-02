@@ -699,7 +699,7 @@ export function LandingComposer(props: LandingComposerProps) {
       isSubmitting={isSubmitting}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
-      header={<div className="flex justify-end">{switcher}</div>}
+      header={<div className="flex justify-start">{switcher}</div>}
       topBanner={
         rateLimitPrompt.kind === "visible" ? (
           <ProfileRateLimitSwitchBanner

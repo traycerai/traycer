@@ -169,7 +169,7 @@ describe("PromptStashControl", () => {
     });
   });
 
-  it("renders in the composer utility rail and flashes the updated count", () => {
+  it("renders as a compact rounded utility pill and flashes the count", () => {
     render(
       <PromptStashControl
         controller={makeController({
@@ -185,7 +185,6 @@ describe("PromptStashControl", () => {
     });
     const rail = trigger.closest("[data-composer-utility-rail]");
     expect(rail).not.toBeNull();
-    expect(rail?.className).toContain("ml-auto");
     expect(rail?.className).toContain("shrink-0");
     expect(rail?.className).not.toContain("pl-3");
     expect(rail?.className).not.toContain("pt-2");
@@ -196,11 +195,12 @@ describe("PromptStashControl", () => {
     expect(trigger.className).not.toContain("translate");
     expect(trigger.getAttribute("data-variant")).toBe("outline");
     expect(trigger.className).toContain("px-2");
+    expect(trigger.className).toContain("rounded-full");
     expect(trigger.getAttribute("data-size")).toBe("xs");
     expect(trigger.querySelector(".prompt-stash-count-flash")).not.toBeNull();
   });
 
-  it("shows the in-flow utility rail while the first stash is saving", () => {
+  it("shows the utility trigger while the first stash is saving", () => {
     render(
       <PromptStashControl
         controller={makeController({ rows: [], saving: true })}

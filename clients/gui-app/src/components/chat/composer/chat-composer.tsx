@@ -176,6 +176,30 @@ export interface ChatComposerSubmitInput {
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
 }
 
+function composerUtilityNeedsClearance(args: {
+  readonly rowCount: number;
+  readonly saving: boolean;
+  readonly connectedUpperSurface: boolean;
+}): boolean {
+  const triggerVisible = args.rowCount > 0 || args.saving;
+  return triggerVisible && args.connectedUpperSurface;
+}
+
+function ComposerUtilityClearanceFill(props: {
+  readonly visible: boolean;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <div
+      aria-hidden
+      data-composer-utility-clearance-fill=""
+      className="pointer-events-none absolute inset-x-3 top-0 h-3 border-x border-border bg-muted/30"
+    >
+      <div className="size-full bg-muted/30" />
+    </div>
+  );
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -487,6 +511,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
+  const utilityClearanceVisible = composerUtilityNeedsClearance({
+    rowCount: promptStash.rows.length,
+    saving: promptStash.saving,
+    connectedUpperSurface: topSpacing === "connected",
+  });
 
   return (
     <>
@@ -552,7 +581,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
             />
           ) : null}
           {topSlot}
-          <div className="flex flex-col gap-3">
+          <div
+            data-composer-utility-clearance={
+              utilityClearanceVisible ? "" : undefined
+            }
+            className={cn(
+              "relative flex flex-col gap-3",
+              utilityClearanceVisible && "pt-3",
+            )}
+          >
+            <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
             <ComposerShell
               pickerStore={pickerStore}
               onDragOver={onDragOver}

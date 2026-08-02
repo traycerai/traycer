@@ -58,32 +58,57 @@ describe("ComposerShell file-drop overlay", () => {
     ).not.toBeNull();
   });
 
-  it("places attachments and utility chrome in one row before the editor", () => {
+  it("places attachments in their own row before the editor", () => {
     renderComposerShell(
       "images",
-      <div data-composer-utility-rail="" data-testid="composer-utility-rail">
-        Stash 2
-      </div>,
+      null,
       <div data-testid="composer-attachments">Images</div>,
     );
 
-    const shell = document.querySelector("[data-composer-shell]");
-    const utility = screen.getByTestId("composer-utility-rail");
     const attachments = screen.getByTestId("composer-attachments");
     const editor = screen.getByTestId("composer-editor");
     const editorFrame = editor.closest("[data-composer-editor-frame]");
     const attachmentRail = attachments.closest(
       "[data-composer-attachment-rail]",
     );
-    expect(shell?.contains(utility)).toBe(true);
-    expect(attachmentRail).toBe(utility.parentElement);
-    expect(attachments.compareDocumentPosition(utility)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(utility.compareDocumentPosition(editor)).toBe(
+    expect(attachments.compareDocumentPosition(editor)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(attachmentRail?.parentElement).toBe(editorFrame);
     expect(attachmentRail?.nextElementSibling).toBe(editor);
+  });
+
+  it("collapses the attachment rail when there are no attachments", () => {
+    renderComposerShell("images", null, null);
+
+    const editor = screen.getByTestId("composer-editor");
+    const attachmentRail = editor.previousElementSibling;
+
+    expect(attachmentRail?.hasAttribute("data-composer-attachment-rail")).toBe(
+      true,
+    );
+    expect(attachmentRail?.className).toContain("empty:hidden");
+    expect(attachmentRail?.childElementCount).toBe(0);
+  });
+
+  it("anchors utility chrome above layout flow regardless of attachments", () => {
+    renderComposerShell(
+      "images",
+      <div data-testid="composer-utility">Stash 2</div>,
+      <div data-testid="composer-attachments">Images</div>,
+    );
+
+    const utility = screen.getByTestId("composer-utility");
+    const overlay = utility.closest("[data-composer-utility-overlay]");
+    const shell = utility.closest("[data-composer-shell]");
+    const attachmentRail = screen
+      .getByTestId("composer-attachments")
+      .closest("[data-composer-attachment-rail]");
+
+    expect(overlay?.className).toContain("absolute");
+    expect(overlay?.className).toContain("right-3");
+    expect(overlay?.className).toContain("-translate-y-1/2");
+    expect(overlay?.parentElement).toBe(shell);
+    expect(attachmentRail?.contains(utility)).toBe(false);
   });
 });
