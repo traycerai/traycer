@@ -21,6 +21,7 @@ import {
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import type { ReadyTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
 
 export function HostedChatSurfaceContextBridge(props: {
   readonly environment: ReadyTileSurfaceEnvironment;
@@ -38,19 +39,23 @@ export function HostedChatSurfaceContextBridge(props: {
           <PaneVisibilityContext.Provider
             value={environment.presentation.topLevelVisible}
           >
-            <PaneFocusProbeContext.Provider
-              value={environment.services.isPaneFocusedNow}
+            <PaneActivationFocusIntentContext.Provider
+              value={environment.paneActivation.focusIntent}
             >
-              <PanePortalContainerContext.Provider
-                value={environment.services.panePortalContainer}
+              <PaneFocusProbeContext.Provider
+                value={environment.services.isPaneFocusedNow}
               >
-                <TabBodySelectedContext.Provider
-                  value={environment.canvasActivity.tabSelected}
+                <PanePortalContainerContext.Provider
+                  value={environment.services.panePortalContainer}
                 >
-                  <HostedChatSurfaceBody environment={environment} />
-                </TabBodySelectedContext.Provider>
-              </PanePortalContainerContext.Provider>
-            </PaneFocusProbeContext.Provider>
+                  <TabBodySelectedContext.Provider
+                    value={environment.canvasActivity.tabSelected}
+                  >
+                    <HostedChatSurfaceBody environment={environment} />
+                  </TabBodySelectedContext.Provider>
+                </PanePortalContainerContext.Provider>
+              </PaneFocusProbeContext.Provider>
+            </PaneActivationFocusIntentContext.Provider>
           </PaneVisibilityContext.Provider>
         </PaneSurfaceActivityContext.Provider>
       </EpicViewTabContext.Provider>

@@ -82,6 +82,12 @@ function environment(
     },
     presentation: { topLevelVisible: true, topLevelFocused: false },
     canvasActivity: { tabSelected: true, canvasPaneActive: false },
+    paneActivation: {
+      focusIntent: {
+        mark: () => undefined,
+        shouldYieldAutoFocus: () => false,
+      },
+    },
     services: {
       // Slice 2 has no real session wiring yet - a synthetic handle is the
       // deliberate fixture seam the design calls for (real host/session
@@ -468,6 +474,12 @@ describe("tile surface environment registry", () => {
       canvasActivity: {
         tabSelected: true,
         canvasPaneActive: true,
+      },
+      paneActivation: {
+        focusIntent: {
+          mark: () => undefined,
+          shouldYieldAutoFocus: () => false,
+        },
       },
       services: {
         openEpicHandle:

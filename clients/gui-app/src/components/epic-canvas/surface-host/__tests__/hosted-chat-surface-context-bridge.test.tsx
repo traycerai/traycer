@@ -21,6 +21,10 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  usePaneActivationFocusIntent,
+  type PaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
 
 const INSTANCE_ID = "chat-bridge-1";
 const VIEW_TAB_ID = "view-tab-bridge";
@@ -43,6 +47,7 @@ interface CaptureState {
   lastViewTabId: string | null;
   lastOpenEpicHandle: OpenEpicStoreHandle | null;
   lastPanePortalContainer: HTMLElement | null;
+  lastPaneActivationFocusIntent: PaneActivationFocusIntent | null;
 }
 
 const capture = vi.hoisted((): CaptureState => ({
@@ -50,6 +55,7 @@ const capture = vi.hoisted((): CaptureState => ({
   lastViewTabId: null,
   lastOpenEpicHandle: null,
   lastPanePortalContainer: null,
+  lastPaneActivationFocusIntent: null,
 }));
 
 interface PermissionRoleState {
@@ -76,6 +82,7 @@ vi.mock("@/components/epic-canvas/renderers/tile-render", () => ({
       capture.lastViewTabId = use(EpicViewTabContext);
       capture.lastOpenEpicHandle = useOpenEpicHandle();
       capture.lastPanePortalContainer = usePanePortalContainer();
+      capture.lastPaneActivationFocusIntent = usePaneActivationFocusIntent();
       return (
         <div
           data-testid="hosted-bridge-probe"
@@ -145,6 +152,7 @@ function resetCapture(): void {
   capture.lastViewTabId = null;
   capture.lastOpenEpicHandle = null;
   capture.lastPanePortalContainer = null;
+  capture.lastPaneActivationFocusIntent = null;
   permissionRole.role = "owner";
 }
 
@@ -184,6 +192,25 @@ describe("HostedChatSurfaceContextBridge", () => {
     expect(capture.lastOpenEpicHandle).toBe(OPEN_EPIC_HANDLE);
     expect(capture.lastOpenEpicHandle).toBe(
       environment.services.openEpicHandle,
+    );
+  });
+
+  it("re-provides the exact pane activation focus intent from its environment", () => {
+    const focusIntent: PaneActivationFocusIntent = {
+      mark: vi.fn(),
+      shouldYieldAutoFocus: () => true,
+    };
+    const environment = {
+      ...buildEnvironment({
+        canvasActivity: { tabSelected: true, canvasPaneActive: true },
+      }),
+      paneActivation: { focusIntent },
+    };
+    render(<HostedChatSurfaceContextBridge environment={environment} />);
+
+    expect(capture.lastPaneActivationFocusIntent).toBe(focusIntent);
+    expect(capture.lastPaneActivationFocusIntent?.shouldYieldAutoFocus()).toBe(
+      true,
     );
   });
 

@@ -32,6 +32,10 @@ import {
   PaneSurfaceActivityContext,
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  PaneActivationFocusIntentContext,
+  type PaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
 
 const INSTANCE_ID = "chat-slot-1";
 const VIEW_TAB_ID = "tab-1";
@@ -314,6 +318,59 @@ describe("TileSurfaceSlot environment publish", () => {
       topLevelVisible: true,
       topLevelFocused: true,
     });
+    unsubscribe();
+  });
+
+  it("republishes the dedicated pane activation axis before paint when its context identity changes", async () => {
+    const firstIntent: PaneActivationFocusIntent = {
+      mark: () => undefined,
+      shouldYieldAutoFocus: () => false,
+    };
+    const secondIntent: PaneActivationFocusIntent = {
+      mark: () => undefined,
+      shouldYieldAutoFocus: () => true,
+    };
+    const notifications: number[] = [];
+    const unsubscribe = subscribeTileSurfaceEnvironment(INSTANCE_ID, () => {
+      notifications.push(notifications.length + 1);
+    });
+    const tree = (focusIntent: PaneActivationFocusIntent): ReactNode => (
+      <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
+        <PaneVisibilityContext.Provider value>
+          <PaneSurfaceActivityContext.Provider
+            value={{ visible: true, focused: true }}
+          >
+            <PaneFocusProbeContext.Provider value={() => true}>
+              <PaneActivationFocusIntentContext.Provider value={focusIntent}>
+                <TileSurfaceSlot
+                  node={CHAT_NODE}
+                  epicId={EPIC_ID}
+                  paneId={PANE_ID}
+                  viewTabId={VIEW_TAB_ID}
+                  tabSelected
+                  canvasPaneActive
+                />
+              </PaneActivationFocusIntentContext.Provider>
+            </PaneFocusProbeContext.Provider>
+          </PaneSurfaceActivityContext.Provider>
+        </PaneVisibilityContext.Provider>
+      </EpicSessionContext.Provider>
+    );
+
+    const { rerender } = render(tree(firstIntent));
+    await waitFor(() => {
+      expect(
+        getTileSurfaceEnvironment(INSTANCE_ID)?.paneActivation.focusIntent,
+      ).toBe(firstIntent);
+    });
+    const afterFirstPublish = notifications.length;
+
+    rerender(tree(secondIntent));
+
+    expect(
+      getTileSurfaceEnvironment(INSTANCE_ID)?.paneActivation.focusIntent,
+    ).toBe(secondIntent);
+    expect(notifications.length).toBeGreaterThan(afterFirstPublish);
     unsubscribe();
   });
 

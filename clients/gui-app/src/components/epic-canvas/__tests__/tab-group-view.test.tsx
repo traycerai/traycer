@@ -33,10 +33,13 @@ import {
   resetTileSurfaceMembershipForTesting,
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import {
+  getTileSurfaceEnvironment,
   publishTileSurfaceEnvironment,
   resetTileSurfaceEnvironmentRegistryForTesting,
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 const VIEW_TAB_ID = "view-tab-1";
 
@@ -908,6 +911,64 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
     ).toBe("group-1");
+  });
+
+  it("publishes the hosted control's pane activation focus intent through the real slot", async () => {
+    testState.stableTileSurfaceHostEnabled = true;
+    const tabs = [CHAT];
+    seedCanvasWithActivePane(tabs, CHAT.instanceId, "other-group");
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      openTabOrder: [VIEW_TAB_ID],
+    }));
+    const ref: TabRef = { kind: "epic", id: VIEW_TAB_ID };
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: [{ kind: "tab" as const, id: `tab:${ref.kind}:${ref.id}`, ref }],
+      activeItemId: `tab:${ref.kind}:${ref.id}`,
+      stripOrder: [ref],
+    }));
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    const openEpicHandle = {} as OpenEpicStoreHandle;
+
+    render(
+      <EpicSessionContext.Provider value={openEpicHandle}>
+        <TooltipProvider>
+          <PaneVisibilityContext.Provider value>
+            <TabGroupView
+              epicId="epic-1"
+              tabId={VIEW_TAB_ID}
+              pane={pane(tabs, CHAT.instanceId)}
+            />
+            <StableTileSurfaceHost
+              renderRecordBody={() => (
+                <button type="button" data-testid="hosted-focus-owner">
+                  Hosted action
+                </button>
+              )}
+            />
+          </PaneVisibilityContext.Provider>
+        </TooltipProvider>
+      </EpicSessionContext.Provider>,
+    );
+
+    const hostedControl = await screen.findByTestId("hosted-focus-owner");
+    expect(
+      getTileSurfaceEnvironment(
+        CHAT.instanceId,
+      )?.paneActivation.focusIntent.shouldYieldAutoFocus(),
+    ).toBe(false);
+
+    fireEvent.pointerDown(hostedControl);
+
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
+    ).toBe("group-1");
+    expect(
+      getTileSurfaceEnvironment(
+        CHAT.instanceId,
+      )?.paneActivation.focusIntent.shouldYieldAutoFocus(),
+    ).toBe(true);
   });
 
   it("does not activate this pane when a hosted pointerdown belongs to a different paneId", async () => {

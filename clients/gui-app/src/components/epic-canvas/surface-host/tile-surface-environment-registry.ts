@@ -65,6 +65,7 @@ import {
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { PaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 
 export interface TileSurfaceIdentity {
   readonly instanceId: string;
@@ -89,6 +90,10 @@ export interface TileSurfacePresentation {
 export interface TileSurfaceCanvasActivity {
   readonly tabSelected: boolean;
   readonly canvasPaneActive: boolean;
+}
+
+export interface TileSurfacePaneActivation {
+  readonly focusIntent: PaneActivationFocusIntent;
 }
 
 export interface TileSurfaceServices {
@@ -130,6 +135,7 @@ export interface ReadyTileSurfaceEnvironment {
   readonly placement: TileSurfacePlacement;
   readonly presentation: TileSurfacePresentation;
   readonly canvasActivity: TileSurfaceCanvasActivity;
+  readonly paneActivation: TileSurfacePaneActivation;
   readonly services: TileSurfaceServices;
 }
 

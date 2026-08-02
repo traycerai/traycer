@@ -33,6 +33,12 @@ export function buildSyntheticTileSurfaceEnvironment(
     },
     presentation: { topLevelVisible: true, topLevelFocused: false },
     canvasActivity: { tabSelected: true, canvasPaneActive: false },
+    paneActivation: {
+      focusIntent: {
+        mark: () => undefined,
+        shouldYieldAutoFocus: () => false,
+      },
+    },
     services: {
       openEpicHandle:
         {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
