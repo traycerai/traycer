@@ -51,4 +51,41 @@ describe("terminalSessionTitle", () => {
       }),
     ).toBe("New Terminal");
   });
+
+  it("treats an empty directory as unavailable", () => {
+    expect(
+      terminalSessionTitle({
+        title: null,
+        activeProcessName: "vim",
+        currentCwd: "",
+      }),
+    ).toBe("vim");
+    expect(
+      terminalSessionTitle({
+        title: null,
+        activeProcessName: null,
+        currentCwd: "",
+      }),
+    ).toBe("New Terminal");
+  });
+
+  it.each(["/", "C:\\", "C:/"])(
+    "preserves the root directory label for %s",
+    (currentCwd) => {
+      expect(
+        terminalSessionTitle({
+          title: null,
+          activeProcessName: "vim",
+          currentCwd,
+        }),
+      ).toBe(`${currentCwd} · vim`);
+      expect(
+        terminalSessionTitle({
+          title: null,
+          activeProcessName: null,
+          currentCwd,
+        }),
+      ).toBe(`${currentCwd} · New Terminal`);
+    },
+  );
 });
