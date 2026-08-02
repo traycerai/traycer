@@ -2221,7 +2221,7 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.change(
       screen.getByRole("searchbox", { name: "Search resources" }),
       {
-        target: { value: "traycer main" },
+        target: { value: "TRAYCER MAIN" },
       },
     );
     expect(screen.getByText("Main")).not.toBeNull();

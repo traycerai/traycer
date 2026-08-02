@@ -2172,7 +2172,7 @@ function buildTaskRows(input: {
 }
 
 function normalizeResourceSearch(searchQuery: string): string {
-  return searchQuery.trim().toLocaleLowerCase();
+  return searchQuery.trim().toLowerCase();
 }
 
 function matchesResourceSearch(
@@ -2184,7 +2184,7 @@ function matchesResourceSearch(
   const haystack = terms
     .map((term) => (term === null ? "" : String(term)))
     .join(" ")
-    .toLocaleLowerCase();
+    .toLowerCase();
   return normalized.split(/\s+/).every((token) => haystack.includes(token));
 }
 
