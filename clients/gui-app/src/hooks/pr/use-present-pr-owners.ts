@@ -5,11 +5,14 @@ import { useEpicAgentNodeIds } from "@/lib/epic-selectors";
 /**
  * The owners this epic can still resolve, dropping any whose node is gone.
  *
- * A PR's owner set is host-side state that OUTLIVES its nodes: worktree
- * bindings cascade on epic delete but not on chat delete, so a PR keeps naming
- * chats the user removed months ago. Those used to render as bare "Removed
- * chat" text wedged between pills - a row that reads as broken, for an entry
- * with no title, no tile, and nothing to click.
+ * A PR's owner set is host-side state that can OUTLIVE its nodes: it is
+ * projected from persisted worktree-binding rows, and whether a given host
+ * cascades those rows on every node delete is a host-version fact this renderer
+ * cannot assume - so a PR may keep naming chats the user removed months ago.
+ * Those used to render as bare "Removed chat" text wedged between pills - a row
+ * that reads as broken, for an entry with no title, no tile, and nothing to
+ * click. Tightening the producer does not retire this filter: the rows a host
+ * already wrote are still on disk.
  *
  * Filtered HERE rather than by having each chip render null, so everything
  * derived from the list stays true: the visible chips are real ones, `+N`
