@@ -9,7 +9,10 @@ import {
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
-import { reconcileLandingTerminalTabs } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
+import {
+  reconcileLandingTerminalTabs,
+  resolveLandingTerminalTitleCwd,
+} from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { resolveLandingTerminalAvailability } from "@/components/home/terminal-panel/landing-terminal-availability";
 import {
   resolveLandingTerminalLaunchCwd,
@@ -249,6 +252,23 @@ describe("landing terminal lifecycle", () => {
     ]);
   });
 
+  it("falls back only until the live cwd field has been reported", () => {
+    expect(
+      resolveLandingTerminalTitleCwd({
+        currentCwd: null,
+        currentCwdReported: false,
+        launchCwd: "/workspace/project",
+      }),
+    ).toBe("/workspace/project");
+    expect(
+      resolveLandingTerminalTitleCwd({
+        currentCwd: null,
+        currentCwdReported: true,
+        launchCwd: "/workspace/project",
+      }),
+    ).toBeNull();
+  });
+
   it("reconciles default titles from the latest cwd and active process", () => {
     const defaultTab = tab({
       instanceId: "default",
@@ -288,6 +308,30 @@ describe("landing terminal lifecycle", () => {
       { ...defaultTab, name: "gui · vim" },
       manualTab,
     ]);
+  });
+
+  it("does not restore a launch-directory prefix for an explicit empty cwd", () => {
+    const defaultTab = tab({
+      instanceId: "default",
+      sessionId: "default-session",
+      hostId: HOST_A,
+    });
+    const result = reconcileLandingTerminalTabs({
+      tabs: [defaultTab],
+      activeInstanceId: "default",
+      activeHostId: HOST_A,
+      sessions: [
+        liveSession({
+          sessionId: "default-session",
+          currentCwd: "",
+          activeProcessName: "vim",
+        }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    expect(result.tabs).toEqual([{ ...defaultTab, name: "vim" }]);
   });
 });
 

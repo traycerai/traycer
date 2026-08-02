@@ -28,6 +28,14 @@ export interface LandingTerminalReconciliationResult {
   readonly collapseWhenEmpty: boolean;
 }
 
+export function resolveLandingTerminalTitleCwd(input: {
+  readonly currentCwd: string | null;
+  readonly currentCwdReported: boolean;
+  readonly launchCwd: string;
+}): string | null {
+  return input.currentCwdReported ? input.currentCwd : input.launchCwd;
+}
+
 /**
  * Reconciles only the selected host. Other-host references deliberately stay
  * intact: their own bound tile bootstrap owns their reattach/dead/recreate
@@ -115,10 +123,12 @@ function defaultLandingTerminalTitle(
     CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
   launchCwd: string,
 ): string {
-  const liveCwd =
-    "currentCwd" in session && session.currentCwd.length > 0
-      ? session.currentCwd
-      : launchCwd;
+  const currentCwdReported = "currentCwd" in session;
+  const liveCwd = resolveLandingTerminalTitleCwd({
+    currentCwd: currentCwdReported ? session.currentCwd : null,
+    currentCwdReported,
+    launchCwd,
+  });
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,

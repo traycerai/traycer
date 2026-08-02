@@ -22,6 +22,7 @@ import {
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
+import { resolveLandingTerminalTitleCwd } from "./landing-terminal-reconciliation";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 
@@ -156,13 +157,21 @@ function LandingTerminalTileLive(props: {
     (state) => state.activeProcessName,
   );
   const currentCwd = useStore(handle.store, (state) => state.currentCwd);
+  const currentCwdReported = useStore(
+    handle.store,
+    (state) => state.currentCwdReported,
+  );
   const syncDefaultTitle = useLandingTerminalStore(
     (state) => state.syncDefaultTitle,
   );
   const displayTitle = terminalSessionTitle({
     title,
     activeProcessName,
-    currentCwd: currentCwd ?? tab.cwd,
+    currentCwd: resolveLandingTerminalTitleCwd({
+      currentCwd,
+      currentCwdReported,
+      launchCwd: tab.cwd,
+    }),
   });
 
   useEffect(() => {
