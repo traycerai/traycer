@@ -1701,6 +1701,44 @@ describe("ChatMessages scroll policy", () => {
       expect(scrollToSpy.mock.calls.length).toBe(scrollToCallsBefore);
     });
 
+    it("(a reserve cleanup) a deleted detached reserve cannot block reattachment at the real edge", async () => {
+      const sendId = "t17-case-a-removed-reserve";
+      const messages = makeCompletedTranscript(T17_ROW_COUNT);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t17-case-a-removed-reserve-key",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 700_000);
+      rerenderMessages(afterSend);
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      await t17SeedFreeScrollingAt(T17_CASE_A_SCROLL_TOP);
+
+      // The reader is above the deletion boundary, so the viewport remains
+      // untouched while the suffix removes the row that owned reply-reserve
+      // geometry.
+      rerenderMessages(messages.slice(0, T17_KEEP_COUNT));
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().scrollTop).toBe(T17_CASE_A_SCROLL_TOP);
+
+      setLegendListScrollContainerScrollHeightOverride(
+        T17_HEADER_PX + T17_KEEP_COUNT * T17_ITEM_PX + T17_FOOTER_PX,
+      );
+      act(() => {
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+        fireScrollToEnd();
+      });
+
+      await waitFor(() => {
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      });
+    });
+
     it("(b) free-scrolling inside the deleted region: following-end at the true end (not last-row-short)", async () => {
       const messages = makeTranscript(T17_ROW_COUNT);
       const { rerenderMessages } = renderChatMessages({

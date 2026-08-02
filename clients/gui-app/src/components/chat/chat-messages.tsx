@@ -1382,6 +1382,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     setTimelineMode("following-end");
   }, [releaseTimelineAnchorOwnership, setTimelineMode]);
 
+  const clearMissingTimelineAnchorReserve = useCallback((): void => {
+    const reserveMessageId = timelineAnchorMessageIdRef.current;
+    if (
+      reserveMessageId === null ||
+      messageIndexByIdRef.current.has(reserveMessageId)
+    ) {
+      return;
+    }
+    clearTimelineAnchorReserve();
+    if (timelineScrollModeRef.current !== "anchoring-new-turn") return;
+    anchorUserScrollGenerationRef.current += 1;
+    releaseTimelineAnchorOwnership();
+    setTimelineMode("free-scrolling");
+  }, [
+    clearTimelineAnchorReserve,
+    releaseTimelineAnchorOwnership,
+    setTimelineMode,
+  ]);
+
   // Decision #6: ANY pointerdown in the transcript - expanding a card,
   // selecting text, clicking a link - relinquishes follow/anchor ownership,
   // same as a wheel/touch/keyboard gesture (decision #5, #7).
@@ -3676,6 +3695,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         consumeLocalProvenance(outcome.action.messageId);
         break;
       case "none":
+        // A case-(a) suffix removal deliberately preserves a free-scrolling
+        // reader whose viewport is above the deleted rows. Its independent
+        // reply reserve does not survive if the reserved row itself was in
+        // that suffix: leaving the missing id mounted would block a later
+        // toward-end gesture from arming live-edge reattachment and would
+        // publish the stale id on the next viewport capture.
+        clearMissingTimelineAnchorReserve();
         // Ticket 13 (decision #28): a setup card weaving in directly above
         // the row this session is anchoring reads as a harmless non-tail
         // insertion here (the card is a system row, never a fresh
@@ -3704,6 +3730,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     isChatStreaming,
     localProvenanceMessageIds,
     consumeLocalProvenance,
+    clearMissingTimelineAnchorReserve,
     scheduleActiveViewportUpdate,
     onChatFindRenderedDataChange,
     setScrolledActiveUserMessageIdIfChanged,
