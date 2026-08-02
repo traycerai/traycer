@@ -1,0 +1,744 @@
+import { StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { EpicCanvasState } from "@/stores/epics/canvas/types";
+import {
+  collectPanes,
+  findPanePath,
+  getNodeAtPath,
+} from "@/stores/epics/canvas/tile-tree";
+import { useTabsStore } from "@/stores/tabs/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import type { TabRef } from "@/stores/tabs/types";
+import {
+  pane,
+  TEST_HOST_ID,
+} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
+import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/surface-host/tile-surface-membership";
+import {
+  publishTileSurfaceEnvironment,
+  resetTileSurfaceEnvironmentRegistryForTesting,
+} from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
+import { resetTileSurfaceGeometryCoordinatorForTesting } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
+import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
+import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
+import {
+  buildSyntheticTileSurfaceEnvironment,
+  createSyntheticTileSurfaceBodyRenderer,
+} from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
+
+function chatRef(instanceId: string) {
+  return {
+    id: instanceId,
+    instanceId,
+    type: "chat" as const,
+    name: `Chat ${instanceId}`,
+    hostId: TEST_HOST_ID,
+  };
+}
+
+function terminalRef(instanceId: string) {
+  return {
+    id: instanceId,
+    instanceId,
+    type: "terminal-agent" as const,
+    name: `Terminal ${instanceId}`,
+    hostId: TEST_HOST_ID,
+  };
+}
+
+function canvasWithChats(
+  paneId: string,
+  instanceIds: ReadonlyArray<string>,
+): EpicCanvasState {
+  return {
+    root: pane(paneId, instanceIds),
+    activePaneId: paneId,
+    tilesByInstanceId: Object.fromEntries(
+      instanceIds.map((id) => [id, chatRef(id)]),
+    ),
+    sizesByGroupId: {},
+  };
+}
+
+function seedSingleTabStrip(
+  refs: ReadonlyArray<TabRef>,
+  activeRef: TabRef,
+): void {
+  useTabsStore.setState((state) => ({
+    ...state,
+    items: refs.map((ref) => ({
+      kind: "tab" as const,
+      id: `tab:${ref.kind}:${ref.id}`,
+      ref,
+    })),
+    activeItemId: `tab:${activeRef.kind}:${activeRef.id}`,
+    stripOrder: refs,
+  }));
+}
+
+function resetAll(): void {
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+  tabCommandCoordinator.resetReconciliationForTesting();
+  resetTileSurfaceMembershipForTesting();
+  resetTileSurfaceEnvironmentRegistryForTesting();
+  resetTileSurfaceGeometryCoordinatorForTesting();
+}
+
+describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthetic body)", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("keeps the synthetic body mounted exactly once across move / edge-split / wrap-dissolve / cross-pane-move / header tear-off", () => {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChats("p1", ["chat-1", "chat-2"]) },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+    publishTileSurfaceEnvironment(
+      buildSyntheticTileSurfaceEnvironment("chat-1", {}),
+    );
+
+    const renderer = createSyntheticTileSurfaceBodyRenderer();
+    render(
+      <StableTileSurfaceHost renderRecordBody={renderer.renderRecordBody} />,
+    );
+
+    expect(
+      screen.getByTestId("synthetic-tile-surface-body-chat-1"),
+    ).not.toBeNull();
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // Same-pane reorder via the real action (design-review F3 - was a
+    // handcrafted setState).
+    act(() => {
+      useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
+        sourcePaneId: "p1",
+        tabId: "chat-1",
+        targetPaneId: "p1",
+        targetIndex: 2,
+      });
+    });
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // Real edge split: chat-1 moves into its own pane, right of p1.
+    act(() => {
+      useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
+        sourcePaneId: "p1",
+        tabId: "chat-1",
+        targetPaneId: "p1",
+        position: "right",
+      });
+    });
+    const afterSplit = useEpicCanvasStore.getState().canvasByTabId["tab-1"];
+    if (afterSplit === undefined) throw new Error("expected canvas");
+    const chat1PaneAfterSplit = collectPanes(afterSplit.root).find((p) =>
+      p.tabInstanceIds.includes("chat-1"),
+    );
+    if (chat1PaneAfterSplit === undefined) {
+      throw new Error("expected chat-1's own pane");
+    }
+    const chat1PaneId = chat1PaneAfterSplit.id;
+    const rootGroupId =
+      afterSplit.root !== null && afterSplit.root.kind === "group"
+        ? afterSplit.root.id
+        : null;
+    if (rootGroupId === null) throw new Error("expected a root group");
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // Wrap (design-review F3 - the old test's same-direction split
+    // flattened 2->3 siblings instead of wrapping): a genuinely
+    // PERPENDICULAR split ("bottom" against the root's "horizontal" group)
+    // around chat-1's OWN pane. chat-3 rides along purely as the wrap
+    // partner and is dissolved back out below; the tracked instance
+    // (chat-1) never changes pane and never remounts.
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openTileInBackgroundTab("tab-1", chatRef("chat-3"));
+    });
+    act(() => {
+      useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
+        sourcePaneId: chat1PaneId,
+        tabId: "chat-3",
+        targetPaneId: chat1PaneId,
+        position: "bottom",
+      });
+    });
+    const afterWrap = useEpicCanvasStore.getState().canvasByTabId["tab-1"];
+    if (afterWrap === undefined || afterWrap.root === null) {
+      throw new Error("expected canvas");
+    }
+    const wrapRoot = afterWrap.root;
+    const wrapPath = findPanePath(wrapRoot, chat1PaneId);
+    if (wrapPath === null || wrapPath.length === 0) {
+      throw new Error("expected chat-1's pane to be nested under a wrap group");
+    }
+    const wrapParent = getNodeAtPath(wrapRoot, wrapPath.slice(0, -1));
+    if (wrapParent.kind !== "group") throw new Error("expected a group");
+    // The wrap genuinely nests chat-1's pane under a FRESH group, distinct
+    // from the original root group - proof this is a real wrap, not a flat
+    // same-direction insertion.
+    expect(wrapParent.id).not.toBe(rootGroupId);
+    expect(wrapParent.direction).toBe("vertical");
+    expect(wrapParent.children).toHaveLength(2);
+    const chat1PaneAfterWrap = collectPanes(afterWrap.root).find(
+      (p) => p.id === chat1PaneId,
+    );
+    if (chat1PaneAfterWrap === undefined) throw new Error("expected pane");
+    expect(chat1PaneAfterWrap.tabInstanceIds).toEqual(["chat-1"]);
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // Dissolve: closing chat-3's pane (the wrap group's other child) leaves
+    // the wrap group with exactly one survivor, which the tree promotes
+    // back into the ORIGINAL group's slot - a genuine one-child-group
+    // promotion, not the old test's flat 3-to-2 sibling removal.
+    const chat3Pane = collectPanes(afterWrap.root).find((p) =>
+      p.tabInstanceIds.includes("chat-3"),
+    );
+    if (chat3Pane === undefined) throw new Error("expected chat-3's pane");
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .closeCanvasTab("tab-1", chat3Pane.id, "chat-3");
+    });
+    const afterDissolve = useEpicCanvasStore.getState().canvasByTabId["tab-1"];
+    if (afterDissolve === undefined) throw new Error("expected canvas");
+    if (afterDissolve.root === null || afterDissolve.root.kind !== "group") {
+      throw new Error("expected the outer group to survive");
+    }
+    expect(afterDissolve.root.id).toBe(rootGroupId);
+    expect(
+      afterDissolve.root.children.some(
+        (child) => child.kind === "pane" && child.id === chat1PaneId,
+      ),
+    ).toBe(true);
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // Cross-pane move via the real action: merge chat-1 back into p1.
+    act(() => {
+      useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
+        sourcePaneId: chat1PaneId,
+        tabId: "chat-1",
+        targetPaneId: "p1",
+        targetIndex: 0,
+      });
+    });
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // Header tear-off: real coordinator transaction, source/destination
+    // strips split across two stores. chat-1's own pane dissolved back
+    // into p1 above, so p1 is the sole remaining pane.
+    act(() => {
+      tabCommandCoordinator.createSourceRefAtStripIndex(0, () => {
+        const newTabId = useEpicCanvasStore
+          .getState()
+          .tearOffTabIntoNewHeaderTab({
+            sourceTabId: "tab-1",
+            sourcePaneId: "p1",
+            sourceTileTabId: "chat-1",
+            insertIndex: 0,
+          });
+        return newTabId === null ? null : { kind: "epic", id: newTabId };
+      });
+    });
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+    expect(
+      screen.getByTestId("synthetic-tile-surface-body-chat-1"),
+    ).not.toBeNull();
+  });
+
+  it("decision #17: deselecting a chat's inner tab unmounts the synthetic body; selecting it again is an INTENTIONAL fresh mount after a fresh publish", () => {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: {
+        "tab-1": {
+          root: { ...pane("p1", ["chat-1", "term-1"]), activeTabId: "chat-1" },
+          activePaneId: "p1",
+          tilesByInstanceId: {
+            "chat-1": chatRef("chat-1"),
+            "term-1": terminalRef("term-1"),
+          },
+          sizesByGroupId: {},
+        },
+      },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+    publishTileSurfaceEnvironment(
+      buildSyntheticTileSurfaceEnvironment("chat-1", {}),
+    );
+
+    const renderer = createSyntheticTileSurfaceBodyRenderer();
+    render(
+      <StableTileSurfaceHost renderRecordBody={renderer.renderRecordBody} />,
+    );
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    act(() => {
+      useEpicCanvasStore.setState((state) => {
+        const current = state.canvasByTabId["tab-1"];
+        if (current === undefined) throw new Error("expected canvas");
+        return {
+          canvasByTabId: {
+            ...state.canvasByTabId,
+            "tab-1": {
+              ...current,
+              root: {
+                ...pane("p1", ["chat-1", "term-1"]),
+                activeTabId: "term-1",
+              },
+            },
+          },
+        };
+      });
+    });
+    expect(
+      screen.queryByTestId("synthetic-tile-surface-body-chat-1"),
+    ).toBeNull();
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(1);
+
+    act(() => {
+      useEpicCanvasStore.setState((state) => {
+        const current = state.canvasByTabId["tab-1"];
+        if (current === undefined) throw new Error("expected canvas");
+        return {
+          canvasByTabId: {
+            ...state.canvasByTabId,
+            "tab-1": {
+              ...current,
+              root: {
+                ...pane("p1", ["chat-1", "term-1"]),
+                activeTabId: "chat-1",
+              },
+            },
+          },
+        };
+      });
+    });
+    // Membership re-includes chat-1, but the registry has no unregister API -
+    // it already deleted the record on loss (F2). No body without a fresh
+    // publish: this is the dormant state, not an automatic remount.
+    expect(
+      screen.queryByTestId("synthetic-tile-surface-body-chat-1"),
+    ).toBeNull();
+    expect(renderer.mountCount("chat-1")).toBe(1);
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {}),
+      );
+    });
+    expect(
+      screen.getByTestId("synthetic-tile-surface-body-chat-1"),
+    ).not.toBeNull();
+    expect(renderer.mountCount("chat-1")).toBe(2);
+    expect(renderer.unmountCount("chat-1")).toBe(1);
+  });
+});
+
+describe("StableTileSurfaceHost presentation contract (design-review F1)", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  function seedOneChat(): void {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChats("p1", ["chat-1"]) },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+  }
+
+  it("plane root carries no aria-hidden of its own", () => {
+    seedOneChat();
+    render(<StableTileSurfaceHost renderRecordBody={() => null} />);
+    const host = screen.getByTestId("stable-tile-surface-host");
+    expect(host.hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  it("a visible record is not hidden by any ancestor and stays painted", () => {
+    seedOneChat();
+    render(<StableTileSurfaceHost renderRecordBody={() => null} />);
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: true, topLevelFocused: false },
+        }),
+      );
+    });
+    const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+    // No ancestor (including the plane root) carries aria-hidden="true" -
+    // an aria-hidden ancestor overrides a descendant's own attribute, which
+    // is exactly the F1 defect: the plane used to shroud every record.
+    expect(record.closest('[aria-hidden="true"]')).toBeNull();
+    expect(record.getAttribute("aria-hidden")).toBe("false");
+    expect(record.hasAttribute("inert")).toBe(false);
+    expect(record.classList.contains("invisible")).toBe(false);
+  });
+
+  it("a top-level-hidden record is aria-hidden, inert, AND non-painted", () => {
+    seedOneChat();
+    render(<StableTileSurfaceHost renderRecordBody={() => null} />);
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: false, topLevelFocused: false },
+        }),
+      );
+    });
+    const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(record.getAttribute("aria-hidden")).toBe("true");
+    expect(record.hasAttribute("inert")).toBe(true);
+    // The F1 gap: aria-hidden/inert alone do not stop painting - only a real
+    // non-paint rule does.
+    expect(record.classList.contains("invisible")).toBe(true);
+  });
+
+  it("pins the pointer-event split, overflow clipping, and no positive record z-index", () => {
+    seedOneChat();
+    render(<StableTileSurfaceHost renderRecordBody={() => null} />);
+    const host = screen.getByTestId("stable-tile-surface-host");
+    expect(host.classList.contains("pointer-events-none")).toBe(true);
+    expect(host.classList.contains("z-0")).toBe(true);
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {}),
+      );
+    });
+    const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(record.classList.contains("pointer-events-auto")).toBe(true);
+    expect(record.classList.contains("overflow-hidden")).toBe(true);
+    expect(
+      [...record.classList].some((className) => /^z-[1-9]/.test(className)),
+    ).toBe(false);
+  });
+});
+
+describe("StableTileSurfaceHost presentation-loss blur (design-review finding 5)", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  function seedOneChat(): void {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChats("p1", ["chat-1"]) },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+  }
+
+  it("blurs a focused descendant of a record that goes top-level-hidden", () => {
+    seedOneChat();
+    render(
+      <StableTileSurfaceHost
+        renderRecordBody={() => (
+          <button type="button" data-testid="hosted-focus-target">
+            focus me
+          </button>
+        )}
+      />,
+    );
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: true, topLevelFocused: true },
+        }),
+      );
+    });
+    const target = screen.getByTestId("hosted-focus-target");
+    act(() => {
+      target.focus();
+    });
+    expect(document.activeElement).toBe(target);
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: false, topLevelFocused: false },
+        }),
+      );
+    });
+    expect(document.activeElement).not.toBe(target);
+  });
+
+  it("leaves focus alone when the newly-hidden record has no focused descendant", () => {
+    seedOneChat();
+    render(
+      <StableTileSurfaceHost
+        renderRecordBody={() => (
+          <button type="button" data-testid="hosted-focus-target">
+            focus me
+          </button>
+        )}
+      />,
+    );
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: true, topLevelFocused: true },
+        }),
+      );
+    });
+    const outside = document.createElement("input");
+    document.body.appendChild(outside);
+    act(() => {
+      outside.focus();
+    });
+    expect(document.activeElement).toBe(outside);
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: false, topLevelFocused: false },
+        }),
+      );
+    });
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+});
+
+describe("StableTileSurfaceHost hosted DOM identity", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("stamps the record with its instanceId always, and its paneId once ready", () => {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChats("p1", ["chat-1"]) },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+
+    const renderer = createSyntheticTileSurfaceBodyRenderer();
+    render(
+      <StableTileSurfaceHost renderRecordBody={renderer.renderRecordBody} />,
+    );
+
+    const dormantRecord = screen.getByTestId(
+      "stable-tile-surface-record-chat-1",
+    );
+    expect(dormantRecord.getAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE)).toBe(
+      "chat-1",
+    );
+    expect(dormantRecord.hasAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE)).toBe(
+      false,
+    );
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {}),
+      );
+    });
+
+    const readyRecord = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(readyRecord.getAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE)).toBe("p1");
+  });
+});
+
+describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("survives setup->cleanup->setup StrictMode replay and still applies the correct host-relative rect", () => {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChats("p1", ["chat-1"]) },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+
+    // Attribute/identity-keyed rect stub, installed BEFORE render: the host
+    // element does not exist yet, so it cannot be stubbed by reference the
+    // way `slot` can - `data-testid="stable-tile-surface-host"` is a static
+    // JSX attribute already present on the node by the time its callback
+    // ref fires, so matching on it works regardless of which of StrictMode's
+    // two constructed instances ends up live. Every other element falls back
+    // to the zero rect jsdom already reports by default, so there is no need
+    // to preserve or re-invoke the original implementation.
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "getBoundingClientRect",
+    );
+    Element.prototype.getBoundingClientRect = function (
+      this: Element,
+    ): DOMRect {
+      if (this === slot) {
+        return fakeDomRect({ left: 120, top: 130, width: 200, height: 100 });
+      }
+      if (this.getAttribute("data-testid") === "stable-tile-surface-host") {
+        return fakeDomRect({ left: 20, top: 30, width: 800, height: 600 });
+      }
+      return fakeDomRect({ left: 0, top: 0, width: 0, height: 0 });
+    };
+
+    try {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          services: {
+            openEpicHandle: {} as never,
+            geometryAnchorElement: slot,
+            panePortalContainer: null,
+            isPaneFocusedNow: () => false,
+          },
+        }),
+      );
+
+      const renderer = createSyntheticTileSurfaceBodyRenderer();
+      render(
+        <StrictMode>
+          <StableTileSurfaceHost renderRecordBody={renderer.renderRecordBody} />
+        </StrictMode>,
+      );
+
+      const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+      expect(record.style.transform).toBe("translate(100px, 100px)");
+      expect(record.style.width).toBe("200px");
+      expect(record.style.height).toBe("100px");
+    } finally {
+      if (originalDescriptor !== undefined) {
+        Object.defineProperty(
+          Element.prototype,
+          "getBoundingClientRect",
+          originalDescriptor,
+        );
+      } else {
+        Reflect.deleteProperty(Element.prototype, "getBoundingClientRect");
+      }
+      slot.remove();
+    }
+  });
+});
+
+function fakeDomRect(rect: {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}): DOMRect {
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+    x: rect.left,
+    y: rect.top,
+    toJSON: () => rect,
+  };
+}
+
+describe("default-on proof (slice 6)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    resetAll();
+  });
+  afterEach(() => {
+    cleanup();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    resetAll();
+  });
+
+  it("TopLevelTabHost's render output mounts the stable-tile-surface-host plane with the switch enabled", () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId("epic-a", "epic-a", "Epic A");
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: [
+        {
+          kind: "tab" as const,
+          id: "tab:epic:epic-a",
+          ref: { kind: "epic" as const, id: "epic-a" },
+        },
+      ],
+      activeItemId: "tab:epic:epic-a",
+      stripOrder: [{ kind: "epic" as const, id: "epic-a" }],
+    }));
+
+    render(<TopLevelTabHost />);
+
+    expect(screen.getByTestId("top-level-surface-epic-epic-a")).not.toBeNull();
+    expect(screen.queryByTestId("stable-tile-surface-host")).not.toBeNull();
+  });
+});

@@ -1,7 +1,14 @@
 import "../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   LandingTerminalHost,
   LandingTerminalPaneAnchor,
@@ -10,11 +17,58 @@ import {
   MAX_RETAINED_TOP_LEVEL_SURFACES,
   TopLevelTabHost,
 } from "@/components/layout/top-level-tab-host";
+import {
+  TopLevelSurfaceActivationContext,
+  type TopLevelSurfaceActivator,
+} from "@/components/layout/top-level-surface-activation-context";
+import { activateHostedTopLevelSurface } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
-import type { TabRef } from "@/stores/tabs/types";
-import { TopLevelSurfaceActivationContext } from "@/components/layout/top-level-surface-activation-context";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+  HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
+import {
+  pane,
+  TEST_HOST_ID,
+} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
+import {
+  publishTileSurfaceEnvironment,
+  resetTileSurfaceEnvironmentRegistryForTesting,
+} from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
+import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/surface-host/tile-surface-membership";
+import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
+
+const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock(
+  "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch",
+  () => ({
+    get STABLE_TILE_SURFACE_HOST_ENABLED() {
+      return stableTileSurfaceHostTestState.enabled;
+    },
+  }),
+);
+
+// The wiring test below only cares whether a real pointerdown/focus event on
+// a hosted record's DOM reaches `activateHostedTopLevelSurface` - not that
+// the real ChatTile/ChatMessages chain renders (that needs a real Epic
+// session handle the synthetic environment fixture cannot supply). Stub the
+// body the same way `stable-tile-surface-host.test.tsx` uses a synthetic
+// body renderer.
+vi.mock(
+  "@/components/epic-canvas/surface-host/hosted-chat-surface-body",
+  () => ({
+    renderHostedChatSurfaceBody: () => (
+      <div data-testid="hosted-wiring-body-stub" />
+    ),
+  }),
+);
 
 vi.mock("@/components/epic-tabs/epic-surface", async () => {
   const React = await import("react");
@@ -483,5 +537,266 @@ describe("<TopLevelTabHost />", () => {
         .getByTestId(`landing-terminal-anchor-${DRAFT_B.id}`)
         .contains(screen.getByTestId("landing-terminal-panel-body")),
     ).toBe(true);
+  });
+});
+
+describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus reaches its OWN owning top-level tab)", () => {
+  afterEach(() => cleanup());
+
+  function buildHostedRecord(
+    instanceId: string,
+    paneId: string,
+    viewTabId: string,
+  ): HTMLDivElement {
+    const record = document.createElement("div");
+    record.setAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE, instanceId);
+    record.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, paneId);
+    record.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, viewTabId);
+    return record;
+  }
+
+  it("activates the hosted record's OWN owning epic tab, not a fixed one", () => {
+    const tabA: HeaderTab = {
+      kind: "epic",
+      id: "epic-a",
+      epicId: "epic-a",
+      route: "/epic/epic-a",
+      name: "Epic A",
+      icon: null,
+      canClose: true,
+      canDuplicate: true,
+      canOpenInNewWindow: true,
+    };
+    const tabB: HeaderTab = { ...tabA, id: "epic-b", epicId: "epic-b" };
+    const tabsByRefKey = new Map([
+      [tabRefKey(tabA), tabA],
+      [tabRefKey(tabB), tabB],
+    ]);
+    const activeItem: StripItem = {
+      kind: "tab",
+      id: "tab:epic:epic-a",
+      ref: { kind: "epic", id: "epic-a" },
+    };
+    const record = buildHostedRecord("inst-chat-b", "p1", "epic-b");
+    document.body.appendChild(record);
+    const activate = vi.fn();
+
+    activateHostedTopLevelSurface(record, false, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(activate).toHaveBeenCalledWith(tabB);
+    record.remove();
+  });
+
+  it("does not re-activate the already-focused owning tab", () => {
+    const tabA: HeaderTab = {
+      kind: "epic",
+      id: "epic-a",
+      epicId: "epic-a",
+      route: "/epic/epic-a",
+      name: "Epic A",
+      icon: null,
+      canClose: true,
+      canDuplicate: true,
+      canOpenInNewWindow: true,
+    };
+    const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
+    const activeItem: StripItem = {
+      kind: "tab",
+      id: "tab:epic:epic-a",
+      ref: { kind: "epic", id: "epic-a" },
+    };
+    const record = buildHostedRecord("inst-chat-a", "p1", "epic-a");
+    document.body.appendChild(record);
+    const activate = vi.fn();
+
+    activateHostedTopLevelSurface(record, false, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+
+    expect(activate).not.toHaveBeenCalled();
+    record.remove();
+  });
+
+  it("respects defaultPrevented, a null activator, and a target outside any hosted record", () => {
+    const tabA: HeaderTab = {
+      kind: "epic",
+      id: "epic-a",
+      epicId: "epic-a",
+      route: "/epic/epic-a",
+      name: "Epic A",
+      icon: null,
+      canClose: true,
+      canDuplicate: true,
+      canOpenInNewWindow: true,
+    };
+    const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
+    const activeItem: StripItem | null = null;
+    const record = buildHostedRecord("inst-chat-a", "p1", "epic-a");
+    document.body.appendChild(record);
+    const activate = vi.fn();
+
+    activateHostedTopLevelSurface(record, true, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+    expect(activate).not.toHaveBeenCalled();
+
+    activateHostedTopLevelSurface(record, false, {
+      tabsByRefKey,
+      activeItem,
+      activate: null,
+    });
+    expect(activate).not.toHaveBeenCalled();
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    activateHostedTopLevelSurface(outside, false, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+    expect(activate).not.toHaveBeenCalled();
+
+    record.remove();
+    outside.remove();
+  });
+});
+
+/**
+ * Design-review F3: `activateHostedTopLevelSurface`'s own unit tests above
+ * prove its routing logic, but not that a real hosted pointerdown reaches it
+ * at all - that depends on the `onPointerDownCapture`/`onFocusCapture` JSX
+ * wiring on `TopLevelTabHost`'s hosted-plane wrapper (a sibling of every
+ * physical top-level surface wrapper, so it cannot inherit their own
+ * handlers). This renders the REAL `TopLevelTabHost` with the switch on and a
+ * REAL hosted record (real membership + registry, synthetic environment -
+ * the same fixture seam `stable-tile-surface-host.test.tsx` uses), then fires
+ * a genuine `pointerdown` on it to prove the wiring itself, not just the
+ * function it calls.
+ */
+describe("TopLevelTabHost hosted-plane wiring (design-review F3: real pointerdown reaches activateHostedTopLevelSurface)", () => {
+  const EPIC_A: TabRef = { kind: "epic", id: "epic-a" };
+  const EPIC_B: TabRef = { kind: "epic", id: "epic-b" };
+  const CHAT_INSTANCE_ID = "hosted-wiring-chat";
+  const PANE_ID = "p1";
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    stableTileSurfaceHostTestState.enabled = true;
+  });
+
+  afterEach(() => {
+    cleanup();
+    stableTileSurfaceHostTestState.enabled = false;
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  it("activates epic-b when a real pointerdown lands on its hosted record, while epic-a stays the physically focused surface", async () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(EPIC_A.id, EPIC_A.id, "Epic A");
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(EPIC_B.id, EPIC_B.id, "Epic B");
+    const stripItems = [EPIC_A, EPIC_B].map((ref) => ({
+      kind: "tab" as const,
+      id: `tab:${ref.kind}:${ref.id}`,
+      ref,
+    }));
+    // The MRU retention policy only retains a background surface once it has
+    // been active at least once (`advanceTopLevelSurfaceRecency` only adds
+    // active keys). Visit B first so it enters recency, matching how a real
+    // "open in background then switch away" sequence would leave B eligible
+    // for the surface-host membership while A is the focused surface.
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: stripItems,
+      activeItemId: `tab:${EPIC_B.kind}:${EPIC_B.id}`,
+      stripOrder: [EPIC_A, EPIC_B],
+    }));
+    useTabsStore.setState((state) => ({
+      ...state,
+      activeItemId: `tab:${EPIC_A.kind}:${EPIC_A.id}`,
+    }));
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [EPIC_B.id]: {
+          root: pane(PANE_ID, [CHAT_INSTANCE_ID]),
+          activePaneId: PANE_ID,
+          tilesByInstanceId: {
+            [CHAT_INSTANCE_ID]: {
+              id: CHAT_INSTANCE_ID,
+              instanceId: CHAT_INSTANCE_ID,
+              type: "chat" as const,
+              name: "Hosted wiring chat",
+              hostId: TEST_HOST_ID,
+            },
+          },
+          sizesByGroupId: {},
+        },
+      },
+    }));
+
+    const activate = vi.fn<TopLevelSurfaceActivator>();
+    render(
+      <TopLevelSurfaceActivationContext.Provider value={activate}>
+        <TopLevelTabHost />
+      </TopLevelSurfaceActivationContext.Provider>,
+    );
+
+    expect(surfaceRef(EPIC_A).dataset.focused).toBe("true");
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment(CHAT_INSTANCE_ID, {
+          placement: {
+            epicId: EPIC_B.id,
+            viewTabId: EPIC_B.id,
+            paneId: PANE_ID,
+            hostId: TEST_HOST_ID,
+          },
+        }),
+      );
+    });
+
+    const hostedRecord = await waitFor(() => {
+      const element = document.querySelector(
+        `[${HOSTED_TILE_INSTANCE_ID_ATTRIBUTE}="${CHAT_INSTANCE_ID}"]`,
+      );
+      if (element === null) throw new Error("hosted record not yet published");
+      return element;
+    });
+    expect(hostedRecord.getAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE)).toBe(
+      EPIC_B.id,
+    );
+
+    // A real pointerdown on the hosted record - not a direct function call -
+    // must reach the wrapper's onPointerDownCapture and activate epic-b.
+    fireEvent.pointerDown(hostedRecord);
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    const [activatedTab] = activate.mock.calls[0];
+    expect(activatedTab.id).toBe(EPIC_B.id);
   });
 });
