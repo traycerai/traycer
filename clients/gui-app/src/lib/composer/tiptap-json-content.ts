@@ -248,8 +248,11 @@ export function parseLeadingSlashCommand(prompt: string): {
 interface LeadingSlashScanState {
   complete: boolean;
   changed: boolean;
-  /** Text of the sibling following the node being scanned, when it is text. */
-  nextText: string | null;
+  /**
+   * Whether the sibling after the node being scanned terminates a token that
+   * ends exactly at that node's edge. See {@link closesLeadingToken}.
+   */
+  nextClosesToken: boolean;
   readonly catalog: SlashCommandCatalog | null;
 }
 
@@ -260,7 +263,7 @@ function contentWithLeadingSlashCommandNode(
   const state: LeadingSlashScanState = {
     complete: false,
     changed: false,
-    nextText: null,
+    nextClosesToken: true,
     catalog,
   };
   const nodes = nodesWithLeadingSlashCommandNode([content], state);
@@ -273,20 +276,32 @@ function nodesWithLeadingSlashCommandNode(
   state: LeadingSlashScanState,
 ): JsonContent[] {
   return nodes.flatMap((node, index) => {
-    // The sibling that would continue this node's text. Formatting splits a
-    // run - a bold `$review` beside a plain `-code` - into separate text nodes,
-    // so a token can look complete here while the prompt reads `/review-code`.
-    // `.at` so the out-of-range read is typed `| undefined`; index access
-    // here is not, and the optional chain would lint as unnecessary.
-    const next = nodes.at(index + 1);
-    state.nextText = next?.type === "text" ? (next.text ?? null) : null;
+    // Only meaningful until the scan settles, and serializing the tail for every
+    // node after that would be quadratic for nothing.
+    if (!state.complete) {
+      state.nextClosesToken = closesLeadingToken(nodes.slice(index + 1));
+    }
     return nodeWithLeadingSlashCommandNode(node, state);
   });
 }
 
-/** Whether `text` continues a command name rather than ending it. */
-function continuesCommandName(text: string | null): boolean {
-  return text !== null && /^[A-Za-z0-9:_-]/.test(text);
+/**
+ * Whether the siblings after a token that ends exactly at a node boundary leave
+ * it terminated - i.e. the prompt still reads `/name` followed by whitespace or
+ * nothing, which is what `LEADING_SLASH_COMMAND_REGEX` requires.
+ *
+ * Formatting splits a run, so the character that decides this usually lives in
+ * a LATER node: a bold `$review` can be followed by a plain `-code`, a plain
+ * `.`, or an image atom that serializes to nothing at all. Answering per node
+ * type kept getting this wrong in a new way each time, so the question is
+ * delegated to the same serializer that builds the prompt - if the remainder
+ * starts with whitespace or is empty, the token is closed. Attachments drop out
+ * for free (they serialize to `""`), a hard break contributes a newline, and a
+ * mention or another chip contributes text that correctly refuses the boundary.
+ */
+function closesLeadingToken(rest: ReadonlyArray<JsonContent>): boolean {
+  const text = plainTextFromNodes(rest);
+  return text.length === 0 || /^\s/.test(text);
 }
 
 /**
@@ -309,12 +324,12 @@ function textWithLeadingSlashCommandNode(
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return [node];
   const rest = text.slice(parsed.end);
-  // The token only LOOKS complete because this node ends. Chipping a prefix
-  // here is worse than not converting at all: the chip resolves and is sent
-  // structurally as `review` while the text still reads `/review-code`, so the
-  // WRONG skill runs - whereas leaving it as prose lets the host resolve the
-  // full concatenated name lexically.
-  if (rest.length === 0 && continuesCommandName(state.nextText)) return [node];
+  // The token only LOOKS complete because this node ends. Chipping it is worse
+  // than not converting at all: the chip is sent structurally as `review` while
+  // the text still reads `/review-code` or `/review.`, so a command the user
+  // never wrote runs - whereas leaving it as prose lets the host resolve the
+  // full concatenated text lexically, or refuse it exactly as we did.
+  if (rest.length === 0 && !state.nextClosesToken) return [node];
   const resolved = state.catalog?.get(parsed.name.toLowerCase()) ?? null;
   // `$` is meaningless without a catalog hit - see the note on
   // `buildSubmittedChatJSONContent` - so leave the prose alone.
