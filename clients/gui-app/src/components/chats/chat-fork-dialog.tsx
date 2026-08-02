@@ -5,6 +5,7 @@ import type {
   ChatForkEvent,
   ChatForkResolveChatOutcome,
 } from "@traycer/protocol/host/chat-fork/schemas";
+import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   Dialog,
   DialogContent,
@@ -17,10 +18,11 @@ import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { CloudChatDialog } from "@/components/epic-canvas/sidebar/cloud-chat-dialog";
+import { useRelativeTimestamp } from "@/lib/relative-time";
 import {
-  useChatForkCandidateHeadQuery,
   useChatForkEventQuery,
-  useChatForkReadCandidateHeadSupported,
   useChatForkResolveMutation,
 } from "@/hooks/chats/use-chat-fork-queries";
 
@@ -68,25 +70,46 @@ export function ChatForkDialog() {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg">
-        {confirmation !== null ? (
-          <ForkResolvedConfirmation
-            results={confirmation.results}
-            onRetry={() => setConfirmation(null)}
-            onDone={() => handleOpenChange(false)}
-          />
-        ) : event === null ? (
-          <ForkDialogEmptyState isLoading={eventQuery.isLoading} />
-        ) : (
-          <ForkDialogBody
-            event={event}
-            onResolved={(results) =>
-              setConfirmation({ episodeId: event.episodeId, results })
-            }
-          />
-        )}
+        <ChatForkDialogBody
+          confirmation={confirmation}
+          event={event}
+          isLoading={eventQuery.isLoading}
+          onRetry={() => setConfirmation(null)}
+          onDone={() => handleOpenChange(false)}
+          onResolved={(results) => {
+            if (event === null) return;
+            setConfirmation({ episodeId: event.episodeId, results });
+          }}
+        />
       </DialogContent>
     </Dialog>
   );
+}
+
+function ChatForkDialogBody(props: {
+  readonly confirmation: {
+    readonly episodeId: string;
+    readonly results: readonly ChatForkResolveChatOutcome[];
+  } | null;
+  readonly event: ChatForkEvent | null;
+  readonly isLoading: boolean;
+  readonly onRetry: () => void;
+  readonly onDone: () => void;
+  readonly onResolved: (results: readonly ChatForkResolveChatOutcome[]) => void;
+}) {
+  if (props.confirmation !== null) {
+    return (
+      <ForkResolvedConfirmation
+        results={props.confirmation.results}
+        onRetry={props.onRetry}
+        onDone={props.onDone}
+      />
+    );
+  }
+  if (props.event === null) {
+    return <ForkDialogEmptyState isLoading={props.isLoading} />;
+  }
+  return <ForkDialogBody event={props.event} onResolved={props.onResolved} />;
 }
 
 function ForkDialogEmptyState(props: { readonly isLoading: boolean }) {
@@ -141,28 +164,35 @@ function ForkDialogBody(props: {
       </div>
 
       <div className="flex flex-col gap-2">
-        {event.options.map((option) => (
-          <label
-            key={option.label}
-            className={cn(
-              "flex cursor-pointer flex-col gap-1 rounded-md border p-3 text-sm",
-              selectedLabel === option.label && "border-primary bg-accent/40",
-            )}
-          >
-            <span className="flex items-center gap-2 font-medium">
-              <input
-                type="radio"
-                name="chat-fork-option"
-                checked={selectedLabel === option.label}
-                onChange={() => setSelectedLabel(option.label)}
-              />
-              {option.label === "keep-cloud-lineage"
-                ? "Keep the published history"
-                : "Keep the candidate's history"}
-            </span>
-            <span className="text-muted-foreground">{option.detail}</span>
-          </label>
-        ))}
+        {event.options
+          // An option that covers no chat in this episode decides nothing -
+          // e.g. `keep-this-host-lineage` when every chat's candidate failed
+          // to compose. Offering it invites a choice with no effect, which
+          // reads as a bug ("I picked this and nothing happened") rather than
+          // the honest absence it is.
+          .filter((option) => Object.keys(option.winners).length > 0)
+          .map((option) => (
+            <label
+              key={option.label}
+              className={cn(
+                "flex cursor-pointer flex-col gap-1 rounded-md border p-3 text-sm",
+                selectedLabel === option.label && "border-primary bg-accent/40",
+              )}
+            >
+              <span className="flex items-center gap-2 font-medium">
+                <input
+                  type="radio"
+                  name="chat-fork-option"
+                  checked={selectedLabel === option.label}
+                  onChange={() => setSelectedLabel(option.label)}
+                />
+                {option.label === "keep-cloud-lineage"
+                  ? "Keep the published history"
+                  : "Keep the candidate's history"}
+              </span>
+              <span className="text-muted-foreground">{option.detail}</span>
+            </label>
+          ))}
       </div>
 
       <DialogFooter>
@@ -186,18 +216,13 @@ function ForkDialogBody(props: {
   );
 }
 
-function formatCapturedAt(capturedAtMs: number): string {
-  return new Date(capturedAtMs).toLocaleString();
-}
-
 function ChatForkChatComparison(props: { readonly chat: ChatForkChatNotice }) {
   const { chat } = props;
   return (
     <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
       <div className="font-medium">Chat {chat.chatId}</div>
       <div className="grid grid-cols-2 gap-3">
-        <ChatForkCandidateSummaryCard
-          title="Published"
+        <PublishedCandidateCard
           taskId={chat.taskId}
           chatId={chat.chatId}
           candidate={chat.incumbent}
@@ -207,128 +232,97 @@ function ChatForkChatComparison(props: { readonly chat: ChatForkChatNotice }) {
             No candidate is available for this chat.
           </div>
         ) : (
-          <ChatForkCandidateSummaryCard
-            title="Candidate"
-            taskId={chat.taskId}
-            chatId={chat.chatId}
-            candidate={chat.candidate}
-          />
+          <QuarantinedCandidateCard candidate={chat.candidate} />
         )}
       </div>
     </div>
   );
 }
 
-function ChatForkCandidateSummaryCard(props: {
-  readonly title: string;
+/**
+ * "When / how far / how much" - 07's own comparison framing, human-formatted
+ * (relative time, plain counts). This is the WHOLE comparison for the
+ * challenger side (the user ruled it needs to be identified, not inspected);
+ * the published side additionally links to a full readable view.
+ */
+function CandidateStats(props: {
+  readonly candidate: ChatForkChatNotice["incumbent"];
+}) {
+  const { candidate } = props;
+  const lastActivity = useRelativeTimestamp(candidate.capturedAt);
+  return (
+    <>
+      <div className="text-muted-foreground">
+        {candidate.throughRecordSeq} turn{candidate.throughRecordSeq === 1 ? "" : "s"}
+      </div>
+      <div className="text-muted-foreground">Last activity {lastActivity}</div>
+      <div className="text-muted-foreground">
+        {candidate.partCount} part{candidate.partCount === 1 ? "" : "s"}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The Published/incumbent side: simply the chat's current head, already
+ * reachable through the ordinary cloud-chat read surface - the same
+ * `CloudChatDialog` the sidebar's "other devices" list uses. The challenger
+ * side gets no equivalent read at all (see `QuarantinedCandidateCard`): the
+ * user ruled it only needs to be identified, not inspected.
+ */
+function PublishedCandidateCard(props: {
   readonly taskId: string;
   readonly chatId: string;
   readonly candidate: ChatForkChatNotice["incumbent"];
 }) {
-  const { candidate } = props;
-  const [inspecting, setInspecting] = useState(false);
-  const readSupported = useChatForkReadCandidateHeadSupported();
-  const candidateHeadQuery = useChatForkCandidateHeadQuery({
-    taskId: props.taskId,
-    chatId: props.chatId,
-    headSha256: candidate.headSha256,
-    enabled: inspecting,
-  });
+  const [viewing, setViewing] = useState(false);
+  // The owner arbitrating a fork is always looking at their OWN two
+  // lineages - `resolveOwnRepair` is owner-authenticated for exactly that
+  // reason - so the signed-in user IS the incumbent's owner. Read
+  // synchronously off the auth store rather than a query: by the time a
+  // fork event exists, the session is already authenticated.
+  const ownerUserId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const identity: CloudChatIdentity | null =
+    ownerUserId === null
+      ? null
+      : { taskId: props.taskId, chatId: props.chatId, ownerUserId };
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="font-medium">{props.title}</div>
-      <div className="text-muted-foreground">
-        {candidate.throughRecordSeq} turn{candidate.throughRecordSeq === 1 ? "" : "s"}
-      </div>
-      <div className="text-muted-foreground">
-        Last activity {formatCapturedAt(candidate.capturedAt)}
-      </div>
-      <div className="text-muted-foreground">
-        {candidate.partCount} part{candidate.partCount === 1 ? "" : "s"}
-      </div>
-      {/* Both candidates are equally inspectable - the link-to-inspect ruling
-          does not single out either side. Hidden entirely (not disabled)
-          when the host predates `readCandidateHead`: that RPC degrades
-          independently of get/resolve, so the dialog stays functional with
-          only the stats above. */}
-      {readSupported && !inspecting && (
+      <div className="font-medium">Published</div>
+      <CandidateStats candidate={props.candidate} />
+      {identity !== null && (
         <Button
           type="button"
           variant="link"
           className="h-auto justify-start p-0 text-xs"
-          onClick={() => setInspecting(true)}
+          onClick={() => setViewing(true)}
         >
           View
         </Button>
       )}
-      {inspecting && (
-        <ChatForkCandidateHeadPreview
-          isLoading={candidateHeadQuery.isLoading}
-          isError={candidateHeadQuery.isError}
-          outcome={candidateHeadQuery.data?.outcome ?? null}
-        />
-      )}
+      <CloudChatDialog
+        identity={identity}
+        summary={null}
+        open={viewing}
+        onOpenChange={setViewing}
+      />
     </div>
   );
 }
 
-function ChatForkCandidateHeadPreview(props: {
-  readonly isLoading: boolean;
-  readonly isError: boolean;
-  readonly outcome:
-    | { readonly status: "ok"; readonly head: string }
-    | { readonly status: "not-found" }
-    | null;
+/**
+ * The quarantined-candidate side: identified by its summary metadata alone
+ * (see `CandidateStats`) - the user ruled this side needs no inspectable
+ * content, only enough to tell it apart from the published side.
+ */
+function QuarantinedCandidateCard(props: {
+  readonly candidate: ChatForkChatNotice["incumbent"];
 }) {
-  if (props.isLoading) {
-    return (
-      <AgentSpinningDots
-        className={undefined}
-        testId={undefined}
-        variant={undefined}
-      />
-    );
-  }
-  // An RPC failure (network, 401/403 from a denied/expired session) is NOT
-  // the same state as "not-found" - conflating them told the user their
-  // candidate was gone when the real answer was "couldn't ask". `isError`
-  // arrives from the query's own error channel, never inferred from a
-  // missing `outcome`.
-  if (props.isError) {
-    return (
-      <p className="text-xs text-destructive">
-        Couldn't load this candidate. Try again.
-      </p>
-    );
-  }
-  if (props.outcome === null || props.outcome.status === "not-found") {
-    return (
-      <p className="text-xs text-muted-foreground">
-        This candidate is no longer available to inspect.
-      </p>
-    );
-  }
   return (
     <div className="flex flex-col gap-1">
-      {/*
-       * NOTE: this renders the candidate's raw head record, not a readable
-       * transcript. The settled ruling calls for inspecting the CHAT, which
-       * needs the same assembly pipeline `useCloudChatRead` uses (resolve a
-       * head -> fetch parts -> render). That pipeline take an IDENTITY and
-       * always resolves the chat's CURRENT (incumbent) head; wiring it to a
-       * specific candidate head needs a small adapter port, not new RPCs -
-       * but actually mounting the assembled result needs whatever component
-       * renders `AssembledChat` today, which this pass did not locate under
-       * time budget. Flagged to the assigning agent rather than guessed at.
-       */}
-      <p className="text-[11px] text-muted-foreground">
-        Raw record (not a readable transcript - see the implementation
-        report)
-      </p>
-      <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs">
-        {props.outcome.head}
-      </pre>
+      <div className="font-medium">Candidate</div>
+      <CandidateStats candidate={props.candidate} />
     </div>
   );
 }
@@ -338,7 +332,12 @@ function ForkResolvedConfirmation(props: {
   readonly onRetry: () => void;
   readonly onDone: () => void;
 }) {
-  const allResolved = props.results.every((r) => r.status === "resolved");
+  // `every` on an empty array is vacuously true - an episode whose chats all
+  // came back filtered out (e.g. every result was null and dropped upstream)
+  // must not render as a decision when nothing was actually recorded.
+  const allResolved =
+    props.results.length > 0 &&
+    props.results.every((r) => r.status === "resolved");
   return (
     <>
       <DialogHeader>
@@ -348,25 +347,13 @@ function ForkResolvedConfirmation(props: {
         <DialogDescription>
           {allResolved
             ? "The divergent history for each chat is preserved as a new chat rather than discarded."
-            : "The host detected this fork but hasn't finished filing it yet. Try again in a moment."}
+            : "This fork was detected but hasn't finished filing yet. Try again in a moment."}
         </DialogDescription>
       </DialogHeader>
       <ul className="flex flex-col gap-2 text-sm">
         {props.results.map((result) => (
           <li key={`${result.taskId}:${result.chatId}`}>
-            {result.status === "resolved" ? (
-              result.cloneChatId === null ? (
-                <span>Chat {result.chatId}: nothing to preserve.</span>
-              ) : (
-                <span>
-                  Chat {result.chatId} → cloned as {result.cloneChatId}
-                </span>
-              )
-            ) : result.status === "not-ready" ? (
-              <span>Chat {result.chatId}: not filed yet.</span>
-            ) : (
-              <span>Chat {result.chatId}: this changed since you chose - retry.</span>
-            )}
+            <ForkResolvedResultLine result={result} />
           </li>
         ))}
       </ul>
@@ -382,5 +369,27 @@ function ForkResolvedConfirmation(props: {
         )}
       </DialogFooter>
     </>
+  );
+}
+
+function ForkResolvedResultLine(props: {
+  readonly result: ChatForkResolveChatOutcome;
+}) {
+  const { result } = props;
+  if (result.status === "not-ready") {
+    return <span>Chat {result.chatId}: not filed yet.</span>;
+  }
+  if (result.status === "stale") {
+    return (
+      <span>Chat {result.chatId}: this changed since you chose - retry.</span>
+    );
+  }
+  if (result.cloneChatId === null) {
+    return <span>Chat {result.chatId}: nothing to preserve.</span>;
+  }
+  return (
+    <span>
+      Chat {result.chatId} → cloned as {result.cloneChatId}
+    </span>
   );
 }

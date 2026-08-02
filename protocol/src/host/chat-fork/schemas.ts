@@ -12,9 +12,7 @@ import { z } from "zod";
  * verbatim." Nothing here re-derives, summarizes, or adds interpretation the
  * host did not already compute; a renderer that needed something not present
  * (a message excerpt, say) was a signal to extend the host's payload, not to
- * grow this file into a second opinion about what a fork looks like. See the
- * chat-sync-v2 decision log, ticket 09's escalation, for why that path was
- * rejected in favor of the candidate-head read below instead.
+ * grow this file into a second opinion about what a fork looks like.
  *
  * ## Candidates are described by content, never by device
  *
@@ -24,16 +22,20 @@ import { z } from "zod";
  * place machine provenance appears, worded as a cause ("a copied or restored
  * host directory is the usual cause"), never as an identity.
  *
- * ## All three RPCs here are optional capabilities
+ * The challenger side does NOT get a raw-content read: the user ruled it only
+ * needs to be IDENTIFIED, not inspected, so this same "when / how far / how
+ * much" summary IS the whole comparison for both sides - the published side
+ * additionally has a full readable view through the ordinary cloud-chat
+ * reader, since it is simply the chat's current head.
+ *
+ * ## Both RPCs here are optional capabilities
  *
  * `get` and `resolve` are registered as a SET (`degrade: { kind:
  * "unsupported" }`, not on the released floor): a host predating this surface
  * answers `E_HOST_UNSUPPORTED` for both, and the client's contract is to
  * degrade to no fork surface at all rather than a broken dialog - the chat
  * simply halts exactly as it always did, silently to the renderer, safely to
- * the data. `readCandidateHead` degrades independently: it is a "view" link
- * inside the dialog, not the dialog's ability to function, so a host that has
- * `get`/`resolve` but predates this one read just hides the link.
+ * the data.
  */
 
 // ---- The fork event, mirrored from chat-fork-event.ts verbatim --------- //
@@ -76,6 +78,12 @@ export const chatForkChatNoticeSchema = z.object({
    * simply one side to inspect rather than two.
    */
   candidate: chatForkCandidateSummarySchema.nullable(),
+  /**
+   * This CHAT's own repair era at detection, not the episode's. An episode
+   * can bundle several chats at different eras; `resolve` fences each one
+   * against exactly this value rather than a single episode-level scalar.
+   */
+  repairEpoch: z.number().int().nonnegative(),
 });
 export type ChatForkChatNotice = z.infer<typeof chatForkChatNoticeSchema>;
 
@@ -185,45 +193,4 @@ export const chatForkResolveResponseSchema = z.object({
 });
 export type ChatForkResolveResponse = z.infer<
   typeof chatForkResolveResponseSchema
->;
-
-// ---- host.chatFork.readCandidateHead -------------------------------------- //
-
-/**
- * No `ownerUserId`, unlike the general cloud-chat reader: a fork is always
- * about the caller's OWN duplicated identity, never another viewer's chat, so
- * there is no ambiguous-identity case for this call to guard against. Owner
- * scoping happens server-side, from authentication.
- */
-export const chatForkReadCandidateHeadRequestSchema = z.object({
-  taskId: z.string().min(1),
-  chatId: z.string().min(1),
-  headSha256: sha256HexSchema,
-});
-export type ChatForkReadCandidateHeadRequest = z.infer<
-  typeof chatForkReadCandidateHeadRequestSchema
->;
-
-export const chatForkReadCandidateHeadOutcomeSchema = z.discriminatedUnion(
-  "status",
-  [
-    z.object({
-      status: z.literal("ok"),
-      /** Verbatim, exactly as quarantined. Not parsed here. */
-      head: z.string().min(1),
-      headSha256: sha256HexSchema,
-    }),
-    /** Stale dialog, or the repair already resolved. Re-fetch via `get`, don't retry. */
-    z.object({ status: z.literal("not-found") }),
-  ],
-);
-export type ChatForkReadCandidateHeadOutcome = z.infer<
-  typeof chatForkReadCandidateHeadOutcomeSchema
->;
-
-export const chatForkReadCandidateHeadResponseSchema = z.object({
-  outcome: chatForkReadCandidateHeadOutcomeSchema,
-});
-export type ChatForkReadCandidateHeadResponse = z.infer<
-  typeof chatForkReadCandidateHeadResponseSchema
 >;

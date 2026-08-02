@@ -694,7 +694,6 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: { kind: "fixed", intervalMs: 45_000 },
   },
   "host.chatFork.resolve": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "host.chatFork.readCandidateHead": { ...LATEST_SCHEDULING, poll: null },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {

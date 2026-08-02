@@ -161,7 +161,6 @@ import {
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   chatForkGetV10,
-  chatForkReadCandidateHeadV10,
   chatForkResolveV10,
 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
@@ -4552,22 +4551,6 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: chatForkResolveV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  // Degrades INDEPENDENTLY of the pair above: this is the dialog's "view
-  // candidate" link, not the dialog's ability to function. A host with
-  // `get`/`resolve` but predating this one read simply hides the link.
-  "host.chatFork.readCandidateHead": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: chatForkReadCandidateHeadV10,
-          upgradeFromPreviousVersion: null,
-        },
       },
       downgradePathsFromLatest: {},
     },

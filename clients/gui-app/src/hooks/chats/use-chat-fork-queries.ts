@@ -14,7 +14,10 @@ import { chatForkMutationKeys } from "@/lib/query-keys";
 
 /**
  * Ticket 09's fork-resolution surface: read the current host-level fork
- * event, submit an arbitration, and inspect a quarantined candidate.
+ * event and submit an arbitration. The challenger candidate is never
+ * separately fetched - it is identified by the summary metadata the event
+ * payload already carries (turn count, last activity, part count), per the
+ * user's ruling that it needs to be identified, not inspected.
  *
  * App-wide, not tab-scoped: a fork episode is a HOST fact, not tied to any
  * one open tab (`useHostClient()`, matching the indicator/dialog's own
@@ -25,12 +28,11 @@ import { chatForkMutationKeys } from "@/lib/query-keys";
  * `retry: (…) => error.code !== "E_HOST_UNSUPPORTED"` stops a doomed retry
  * loop, but it does not stop the FIRST request - an older host still gets
  * asked, still answers `E_HOST_UNSUPPORTED`, and the query still resolves
- * (to an error, not silence). The three hooks below additionally gate on the
+ * (to an error, not silence). The query below additionally gates on the
  * NEGOTIATED manifest (`useHostSupportsMethod`) so the surface never asks an
  * older host at all: `get`/`resolve` gate together (both come from the same
  * host wiring, and a dialog that can observe a fork but not resolve it is
- * worse than none), `readCandidateHead` gates independently (it is the
- * dialog's "view" link, not the dialog's ability to function).
+ * worse than none).
  */
 
 /**
@@ -58,7 +60,10 @@ export function useChatForkEventQuery(): UseQueryResult<
     method: "host.chatFork.get",
     params,
     options: {
-      enabled: client !== null && supportsGet && supportsResolve,
+      // `useHostQuery` already gates on a null `client` internally - see
+      // `AGENTS.md`'s "owns host key + null gate" - so this only needs the
+      // negotiated-manifest check.
+      enabled: supportsGet && supportsResolve,
       poll: true,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
@@ -81,58 +86,4 @@ export function useChatForkResolveMutation() {
     errorMessage: "Couldn't submit the fork decision",
     invalidateMethods: ["host.chatFork.get"],
   });
-}
-
-/**
- * One candidate's head document, fetched on demand for the dialog's
- * "view" link - never automatically. See the decision log: automatic
- * fetching was rejected in favor of a user-initiated inspect link, so a
- * fork prompt costs zero egress unless the user asks.
- */
-export function useChatForkCandidateHeadQuery(args: {
-  readonly taskId: string;
-  readonly chatId: string;
-  readonly headSha256: string;
-  readonly enabled: boolean;
-}): UseQueryResult<
-  ResponseOfMethod<HostRpcRegistry, "host.chatFork.readCandidateHead">,
-  HostRpcError
-> {
-  const client = useHostClient();
-  const hostId = useReactiveActiveHostId();
-  const supportsReadCandidateHead = useHostSupportsMethod(
-    hostId,
-    "host.chatFork.readCandidateHead",
-  );
-  const params = useMemo(
-    () => ({
-      taskId: args.taskId,
-      chatId: args.chatId,
-      headSha256: args.headSha256,
-    }),
-    [args.taskId, args.chatId, args.headSha256],
-  );
-  return useHostQuery<HostRpcRegistry, "host.chatFork.readCandidateHead">({
-    // No extra identity needed: `params` above (task/chat/head digest)
-    // already differentiates the key, and the digest makes it immutable.
-    cacheKeyIdentity: undefined,
-    client,
-    method: "host.chatFork.readCandidateHead",
-    params,
-    options: {
-      enabled: args.enabled && client !== null && supportsReadCandidateHead,
-      staleTime: Infinity,
-      retry: false,
-    },
-  });
-}
-
-/**
- * Whether the "view candidate" link should render at all - the independent
- * half of degradation. Exported so the dialog can hide the control rather
- * than rendering a button that will only ever answer `E_HOST_UNSUPPORTED`.
- */
-export function useChatForkReadCandidateHeadSupported(): boolean {
-  const hostId = useReactiveActiveHostId();
-  return useHostSupportsMethod(hostId, "host.chatFork.readCandidateHead");
 }
