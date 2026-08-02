@@ -11,6 +11,7 @@ import {
 } from "@/stores/home/landing-terminal-store";
 import {
   reconcileLandingTerminalTabs,
+  resolveLandingTerminalSyncedTitle,
   resolveLandingTerminalTitleCwd,
 } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { resolveLandingTerminalAvailability } from "@/components/home/terminal-panel/landing-terminal-availability";
@@ -267,6 +268,29 @@ describe("landing terminal lifecycle", () => {
         launchCwd: "/workspace/project",
       }),
     ).toBeNull();
+  });
+
+  it("waits for the first stream snapshot before syncing a default title", () => {
+    const streamState = {
+      title: null,
+      activeProcessName: "vim",
+      currentCwd: "/workspace/project/packages/gui",
+      currentCwdReported: true,
+      launchCwd: "/workspace/project",
+    };
+
+    expect(
+      resolveLandingTerminalSyncedTitle({
+        ...streamState,
+        snapshotLoaded: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveLandingTerminalSyncedTitle({
+        ...streamState,
+        snapshotLoaded: true,
+      }),
+    ).toBe("gui · vim");
   });
 
   it("reconciles default titles from the latest cwd and active process", () => {

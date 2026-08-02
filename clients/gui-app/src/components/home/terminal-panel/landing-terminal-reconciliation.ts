@@ -36,6 +36,22 @@ export function resolveLandingTerminalTitleCwd(input: {
   return input.currentCwdReported ? input.currentCwd : input.launchCwd;
 }
 
+export function resolveLandingTerminalSyncedTitle(input: {
+  readonly snapshotLoaded: boolean;
+  readonly title: string | null;
+  readonly activeProcessName: string | null;
+  readonly currentCwd: string | null;
+  readonly currentCwdReported: boolean;
+  readonly launchCwd: string;
+}): string | null {
+  if (!input.snapshotLoaded) return null;
+  return terminalSessionTitle({
+    title: input.title,
+    activeProcessName: input.activeProcessName,
+    currentCwd: resolveLandingTerminalTitleCwd(input),
+  });
+}
+
 /**
  * Reconciles only the selected host. Other-host references deliberately stay
  * intact: their own bound tile bootstrap owns their reattach/dead/recreate

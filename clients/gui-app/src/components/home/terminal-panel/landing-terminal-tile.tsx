@@ -17,12 +17,11 @@ import type {
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
-import { resolveLandingTerminalTitleCwd } from "./landing-terminal-reconciliation";
+import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconciliation";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 
@@ -149,6 +148,10 @@ function LandingTerminalTileLive(props: {
 }): ReactNode {
   const { handle, tab, onExited } = props;
   const status = useStore(handle.store, (state) => state.status);
+  const snapshotLoaded = useStore(
+    handle.store,
+    (state) => state.snapshotLoaded,
+  );
   const effectiveCols = useStore(handle.store, (state) => state.effectiveCols);
   const effectiveRows = useStore(handle.store, (state) => state.effectiveRows);
   const title = useStore(handle.store, (state) => state.title);
@@ -164,19 +167,19 @@ function LandingTerminalTileLive(props: {
   const syncDefaultTitle = useLandingTerminalStore(
     (state) => state.syncDefaultTitle,
   );
-  const displayTitle = terminalSessionTitle({
+  const syncedTitle = resolveLandingTerminalSyncedTitle({
+    snapshotLoaded,
     title,
     activeProcessName,
-    currentCwd: resolveLandingTerminalTitleCwd({
-      currentCwd,
-      currentCwdReported,
-      launchCwd: tab.cwd,
-    }),
+    currentCwd,
+    currentCwdReported,
+    launchCwd: tab.cwd,
   });
 
   useEffect(() => {
-    syncDefaultTitle(tab.instanceId, displayTitle);
-  }, [displayTitle, syncDefaultTitle, tab.instanceId]);
+    if (syncedTitle === null) return;
+    syncDefaultTitle(tab.instanceId, syncedTitle);
+  }, [syncedTitle, syncDefaultTitle, tab.instanceId]);
 
   useEffect(() => {
     if (status !== "exited") return;
