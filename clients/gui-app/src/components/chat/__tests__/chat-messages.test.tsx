@@ -5916,6 +5916,36 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
 
+    it("retains a validated detached reply reserve after streaming ends", async () => {
+      const messages = makeCompletedTranscript(20);
+      const anchorIndex = 1;
+      const reserveIndex = 18;
+      const instanceId = `t5-completed-valid-reserve-${Math.random().toString(36).slice(2)}`;
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(instanceId),
+        mode: "free-scrolling",
+        anchorMessageId: messages[anchorIndex].id,
+        anchorIndex,
+        offset: -300,
+        replyReserveMessageId: messages[reserveIndex].id,
+      });
+
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+        isChatStreaming: false,
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe(
+        messages[reserveIndex].id,
+      );
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+    });
+
     it("keeps the pre-restore snapshot authoritative when a bootstrap mount unmounts before convergence", () => {
       const messages = makeCompletedTranscript(20);
       const anchorIndex = 8;

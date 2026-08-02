@@ -767,9 +767,8 @@ function resolvePendingHydrationRestoreAnchorId(
 
 function resolveRestoredDetachedReplyReserveMessageId(
   restoredTabState: SavedChatTabScrollState,
-  isChatStreaming: boolean,
 ): string | null {
-  return isChatStreaming && restoredTabState.mode === "free-scrolling"
+  return restoredTabState.mode === "free-scrolling"
     ? restoredTabState.replyReserveMessageId
     : null;
 }
@@ -913,10 +912,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // free-scrolling, but the turn's reserve must still be recreated before the
   // measured row+offset convergence runs.
   const restoredDetachedReplyReserveMessageId =
-    resolveRestoredDetachedReplyReserveMessageId(
-      restoredTabState,
-      isChatStreaming,
-    );
+    resolveRestoredDetachedReplyReserveMessageId(restoredTabState);
   const initialTimelineAnchorMessageId =
     freshOpenAnchorMessageId ?? restoredNewTurnAnchorMessageId;
   // LegendList must first mount the restored row bootstrap before
