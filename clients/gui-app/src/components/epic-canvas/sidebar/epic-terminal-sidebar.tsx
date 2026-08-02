@@ -25,7 +25,10 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -569,10 +572,14 @@ function terminalRowMenuEntries(
   ];
 }
 
-function deriveTerminalLabel(session: CanonicalTerminalSessionInfo): string {
+function deriveTerminalLabel(
+  session:
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+): string {
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
+    currentCwd: "currentCwd" in session ? session.currentCwd : session.cwd,
   });
 }
 

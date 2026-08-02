@@ -35,10 +35,10 @@ import type { CommandFn } from "../runner/runner";
  * profile.
  *
  * GUI permission selection (`--permission-mode`) defaults to `full_access`.
- * Callers pass a more restrictive mode when the agent selection guide directs
- * them to do so. The choice is carried by `agent.create@3.0`; transport
- * downgrade to released v1/v2 hosts fails with upgrade guidance rather than
- * discarding it.
+ * Callers pass a more restrictive mode only when the user's agent selection
+ * guide explicitly directs them to do so. The choice is carried by
+ * `agent.create@3.0`; transport downgrade to released v1/v2 hosts fails with
+ * upgrade guidance rather than discarding it.
  */
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;

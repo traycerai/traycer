@@ -3,7 +3,10 @@ import type {
   AgentSelectionGuideResponse,
   AgentSelectionGuideResponseSource,
 } from "@traycer/protocol/host";
-import { formatAgentSelectionGuideResponse } from "../agent-selection-guide-format";
+import {
+  A2A_PERMISSION_MODE_INSTRUCTION,
+  formatAgentSelectionGuideResponse,
+} from "../agent-selection-guide-format";
 
 const GLOBAL_PATH = "/Users/me/.traycer/agent-selection-guide.md";
 const APP_DIR = "/Users/me/repos/app";
@@ -15,7 +18,7 @@ describe("formatAgentSelectionGuideResponse", () => {
       message: "No agent selection guide found.",
     };
     expect(formatAgentSelectionGuideResponse(response)).toBe(
-      "No agent selection guide found.",
+      `No agent selection guide found.\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
     );
   });
 
@@ -24,7 +27,7 @@ describe("formatAgentSelectionGuideResponse", () => {
       found([globalSource("global body", 1)]),
     );
     expect(text).toBe(
-      `Agent selection instructions from ${GLOBAL_PATH}:\n\nglobal body`,
+      `Agent selection instructions from ${GLOBAL_PATH}:\n\nglobal body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
     );
   });
 
@@ -36,7 +39,7 @@ describe("formatAgentSelectionGuideResponse", () => {
       ]),
     );
     expect(text).toBe(
-      `Agent selection instructions from ${GLOBAL_PATH}:\n\nglobal body`,
+      `Agent selection instructions from ${GLOBAL_PATH}:\n\nglobal body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
     );
     expect(text).not.toContain("app body");
   });
@@ -45,7 +48,19 @@ describe("formatAgentSelectionGuideResponse", () => {
     const text = formatAgentSelectionGuideResponse(
       found([workspaceSource(APP_DIR, "app body", 2)]),
     );
-    expect(text).toBe("No agent selection guide found.");
+    expect(text).toBe(
+      `No agent selection guide found.\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
+    );
+  });
+
+  it("forbids inferred permission-mode overrides", () => {
+    const text = formatAgentSelectionGuideResponse(
+      found([globalSource("implementation guidance only", 1)]),
+    );
+
+    expect(text).toContain("Use `full_access` unless");
+    expect(text).toContain("explicitly instructs you");
+    expect(text).toContain("never infer a more restrictive permission mode");
   });
 });
 

@@ -297,15 +297,27 @@ function PrOwnerOverflow(props: {
         // own handler and opens the PR tile as well as the chat.
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
-        // Capped by the space Radix measured between the trigger and the
-        // viewport edge, not by a row count: the same popover serves the narrow
+        // Both axes are CAPPED, never SIZED: the same popover serves the narrow
         // sidebar row and the wider detail card, and a PR on a large epic can
-        // list dozens of owners. The second term is `60vh`, not a rem: a fixed
-        // height would hold a long list to the same few rows on a display with
-        // room for twice as many, and layout surfaces here size fluidly
-        // (clients/gui-app/AGENTS.md). `overflow-hidden` is what makes the cap
-        // bite - without it the list paints straight past the popover's box.
-        className="max-h-[min(var(--radix-popover-content-available-height,100vh),60vh)] w-[min(80vw,20rem)] max-w-[var(--radix-popover-content-available-width)] gap-0 overflow-hidden p-0"
+        // list dozens of owners at several levels of nesting.
+        //
+        // Height: the space Radix measured between the trigger and the viewport
+        // edge, floored against `60vh` - not a rem, which would hold a long list
+        // to the same few rows on a display with room for twice as many.
+        //
+        // Width: `w-max` so the box tracks its widest row instead of painting a
+        // fixed column. A short list of short titles stops being a mostly-empty
+        // 20rem panel, and a deep lineage - whose indent eats the title column
+        // that IS the reason to open this list - gets the room a wide display
+        // already has. The rem survives only as the last term of a `max-w`,
+        // which is the fluid pattern (clients/gui-app/AGENTS.md), not a width.
+        // Each var carries a fallback: an unmeasured var invalidates the whole
+        // `min()`, and a dropped `max-w` would let a long title size the popover
+        // off-screen.
+        //
+        // `overflow-hidden` is what makes the height cap bite - without it the
+        // list paints straight past the popover's box.
+        className="max-h-[min(var(--radix-popover-content-available-height,100vh),60vh)] w-max max-w-[min(80vw,var(--radix-popover-content-available-width,100vw),28rem)] gap-0 overflow-hidden p-0"
       >
         <p className="shrink-0 border-b px-3 py-2 text-ui-xs text-muted-foreground">
           {`${nouns.capitalized} this PR came from`}
@@ -444,10 +456,12 @@ function PrOwnerBadge(props: {
 /**
  * How deep the popover keeps indenting before levels start sharing a column.
  *
- * The popover is capped at 20rem, so an unbounded indent would eventually leave
+ * The popover's width is capped, so an unbounded indent would eventually leave
  * a lineage's deepest rows with no room for their own title - the thing the
- * reader opened this list to read. A spawn chain this deep is already past what
- * indentation alone can disambiguate; the guide rails still stack.
+ * reader opened this list to read. Sizing to content buys those rows width up
+ * to the cap but cannot buy them more than the cap. A spawn chain this deep is
+ * already past what indentation alone can disambiguate; the guide rails still
+ * stack.
  */
 const MAX_OWNER_TREE_INDENT_DEPTH = 5;
 
