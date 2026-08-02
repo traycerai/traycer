@@ -61,7 +61,9 @@ function Harness({
         hasPastedImageBytes={null}
         ingestPastedComposerImages={null}
         stabilizeImageAttachmentCaret={stabilizeImageAttachmentCaret}
-        onSnapshot={() => undefined}
+        onDocumentChange={() => undefined}
+
+        onSelectionChange={() => undefined}
         onSubmit={() => undefined}
         onPaste={() => undefined}
         onDragOver={() => undefined}
@@ -107,7 +109,8 @@ describe("ComposerPromptEditor render isolation", () => {
           hasPastedImageBytes={null}
           ingestPastedComposerImages={null}
           stabilizeImageAttachmentCaret={false}
-          onSnapshot={() => undefined}
+          onDocumentChange={() => undefined}
+          onSelectionChange={() => undefined}
           onSubmit={() => undefined}
           onPaste={() => undefined}
           onDragOver={() => undefined}

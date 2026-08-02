@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import {
   draftRuntimeRegistry,
   type DraftSubmissionPlacement,
 } from "@/stores/home/draft-runtime-registry";
+import * as landingDraftContent from "@/stores/home/landing-draft-content";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 
 const PLACEMENT: DraftSubmissionPlacement = {
@@ -43,17 +45,128 @@ function imageContent(hash: string): JsonContent {
   };
 }
 
+/**
+ * ~2 MiB inline-image document. Large enough that accidental whole-document
+ * `JSON.stringify` on a selection-only flush shows up as O(document) work.
+ * Mirrors the Ticket 2 `multiMegabyteImageDoc` helper.
+ */
+function multiMegabyteImageDoc(): JsonContent {
+  const b64content = "B".repeat(2 * 1024 * 1024);
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "megabyte",
+              fileName: "megabyte.png",
+              hash: null,
+              b64content,
+              mimeType: "image/png",
+              size: b64content.length,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * Counts `JSON.stringify` calls that directly serialize `content` (the old
+ * `sameJsonContent` shape). Zustand persist may still stringify the store
+ * envelope - that is durability, not a content-comparison path.
+ */
+function contentComparisonStringifies(
+  spy: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  contentValue: JsonContent,
+): number {
+  return spy.mock.calls.filter((call) => call[0] === contentValue).length;
+}
+
+/**
+ * Wire the real landing-draft store as the registry source. Module load does
+ * this once; tests that reconfigure for write spies must restore afterward.
+ * Spying zustand action methods directly is unreliable: `setState` copies the
+ * spy onto the next state object and `vi.restoreAllMocks` cannot unwind it.
+ */
+function configureLandingDraftSource(): void {
+  draftRuntimeRegistry.configure({
+    read: (draftId) => {
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === draftId);
+      return draft === undefined
+        ? null
+        : { content: draft.content, selection: draft.selection };
+    },
+    write: (draftId, content, selection) => {
+      useLandingDraftStore
+        .getState()
+        .setDraftContent(draftId, content, selection);
+    },
+    writeSelection: (draftId, selection) => {
+      useLandingDraftStore.getState().setDraftSelection(draftId, selection);
+    },
+  });
+}
+
+/** Spies at the registry source boundary (stable across zustand setState). */
+function spyRegistryWrites() {
+  const setDraftContentSpy = vi.fn(
+    (
+      _draftId: string,
+      _content: JsonContent,
+      _selection: DraftSelection | null,
+    ) => {
+      // Record-only spy; the real store write runs below.
+    },
+  );
+  const setDraftSelectionSpy = vi.fn(
+    (_draftId: string, _selection: DraftSelection | null) => {
+      // Record-only spy; the real store write runs below.
+    },
+  );
+  draftRuntimeRegistry.configure({
+    read: (draftId) => {
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === draftId);
+      return draft === undefined
+        ? null
+        : { content: draft.content, selection: draft.selection };
+    },
+    write: (draftId, content, selection) => {
+      setDraftContentSpy(draftId, content, selection);
+      useLandingDraftStore
+        .getState()
+        .setDraftContent(draftId, content, selection);
+    },
+    writeSelection: (draftId, selection) => {
+      setDraftSelectionSpy(draftId, selection);
+      useLandingDraftStore.getState().setDraftSelection(draftId, selection);
+    },
+  });
+  return { setDraftContentSpy, setDraftSelectionSpy };
+}
+
 describe("DraftRuntimeRegistry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     draftRuntimeRegistry.resetForTesting();
+    configureLandingDraftSource();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   });
 
   afterEach(() => {
     draftRuntimeRegistry.resetForTesting();
+    configureLandingDraftSource();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("keeps two visible draft mirrors and their pending writes independent", () => {
@@ -171,14 +284,14 @@ describe("DraftRuntimeRegistry", () => {
     expect(draftRuntimeRegistry.liveImageRoots()).not.toContain("submit-hash");
   });
 
-  it("keeps a submission current when the editor re-emits identical content", () => {
-    // Tiptap's `setEditable` emits `update` unconditionally, and the composer
-    // flips `disabled={isSubmitting}` the moment a submission starts - so every
-    // send re-emits a snapshot whose content is byte-identical but a FRESH
-    // object from `getJSON()`. A reference-identity guard treats that as a real
-    // edit, and the create's success path then reads `content-changed` and
-    // routes the epic to a background tab instead of replacing the draft in
-    // place, leaving the sent prompt sitting in the landing composer.
+  it("keeps a submission current when only the caret moves after submit", () => {
+    // Under the event-driven contract, `setSnapshot` is only called for real
+    // document mutations (Tiptap's `docChanged`-gated `update`). The old
+    // `setEditable` phantom that re-emitted identical content through
+    // `setSnapshot` can no longer happen: production passes
+    // `setEditable(!disabled, false)` and selection moves go through
+    // `setSelection`. A caret-only path after submit must keep settlement
+    // current; a real document edit still retires the placement.
     useLandingDraftStore.getState().createDraftWithId("draft-a", null);
     const runtime = draftRuntimeRegistry.attach("draft-a");
     if (runtime === null) throw new Error("expected keyed draft runtime");
@@ -187,8 +300,7 @@ describe("DraftRuntimeRegistry", () => {
     const attempt = runtime.startSubmission(PLACEMENT);
     if (attempt === null) throw new Error("expected submission attempt");
 
-    // Same text, new object - exactly what `getJSON()` hands back.
-    runtime.setSnapshot(content("send me"), null);
+    runtime.setSelection({ from: 2, to: 2 });
 
     expect(draftRuntimeRegistry.settlement(attempt)).toEqual({
       kind: "current",
@@ -202,9 +314,10 @@ describe("DraftRuntimeRegistry", () => {
   });
 
   it("tracks a caret move without counting it as a content change", () => {
-    // `onSelectionUpdate` re-emits the same document on every caret move. That
-    // must update the stored selection (the draft restores its caret) without
-    // bumping the revision an in-flight submission is pinned to.
+    // Selection-only updates must go through `setSelection`: update the
+    // stored caret (draft restores it on reopen) without bumping the
+    // revision an in-flight submission is pinned to, and still schedule the
+    // debounced durable flush so the selection lands in the landing draft.
     useLandingDraftStore.getState().createDraftWithId("draft-a", null);
     const runtime = draftRuntimeRegistry.attach("draft-a");
     if (runtime === null) throw new Error("expected keyed draft runtime");
@@ -212,10 +325,18 @@ describe("DraftRuntimeRegistry", () => {
     runtime.setSnapshot(content("caret"), { from: 1, to: 1 });
     const revision = runtime.store.getState().contentRevision;
 
-    runtime.setSnapshot(content("caret"), { from: 3, to: 5 });
+    runtime.setSelection({ from: 3, to: 5 });
 
     expect(runtime.store.getState().selection).toEqual({ from: 3, to: 5 });
     expect(runtime.store.getState().contentRevision).toBe(revision);
+
+    vi.advanceTimersByTime(300);
+
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === "draft-a")?.selection,
+    ).toEqual({ from: 3, to: 5 });
   });
 
   it("releases a retired attempt by identity after same-id rehydration without touching the new runtime", () => {
@@ -288,5 +409,170 @@ describe("DraftRuntimeRegistry", () => {
     );
     draftRuntimeRegistry.complete(firstAttempt);
     expect(draftRuntimeRegistry.liveImageRoots()).toEqual(new Set());
+  });
+
+  it("selection-only flush after debounce never compares multi-megabyte content", () => {
+    // Ticket 2 proved the *synchronous* setSelection path stays cheap; this
+    // advances fake timers through the real 300ms debounce and proves the
+    // *deferred* write also goes through writeSelection / setDraftSelection
+    // without sameJsonContent or a direct content JSON.stringify.
+    useLandingDraftStore.getState().createDraftWithId("draft-mega", null);
+    const runtime = draftRuntimeRegistry.attach("draft-mega");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    const megaContent = multiMegabyteImageDoc();
+    runtime.setSnapshot(megaContent, { from: 1, to: 1 });
+    vi.advanceTimersByTime(300);
+
+    const durableAfterSeed = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "draft-mega");
+    expect(durableAfterSeed?.content).toBe(megaContent);
+    expect(durableAfterSeed?.selection).toEqual({ from: 1, to: 1 });
+
+    const sameJsonSpy = vi.spyOn(landingDraftContent, "sameJsonContent");
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    const sameJsonBefore = sameJsonSpy.mock.calls.length;
+    const comparisonsBefore = contentComparisonStringifies(
+      stringifySpy,
+      megaContent,
+    );
+
+    const selections = [
+      { from: 2, to: 2 },
+      { from: 3, to: 3 },
+      { from: 1, to: 4 },
+      { from: 5, to: 5 },
+    ] as const;
+    for (const selection of selections) {
+      runtime.setSelection(selection);
+    }
+
+    vi.advanceTimersByTime(300);
+
+    expect(sameJsonSpy.mock.calls.length).toBe(sameJsonBefore);
+    expect(contentComparisonStringifies(stringifySpy, megaContent)).toBe(
+      comparisonsBefore,
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === "draft-mega")?.selection,
+    ).toEqual({ from: 5, to: 5 });
+  });
+
+  it("coalesces a selection into a pending document write as one setDraftContent", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    const contentA = content("alpha body");
+    const selA = { from: 1, to: 1 };
+    const selB = { from: 4, to: 7 };
+
+    const { setDraftContentSpy, setDraftSelectionSpy } = spyRegistryWrites();
+
+    runtime.setSnapshot(contentA, selA);
+    runtime.setSelection(selB);
+    // Both still pending - nothing durable yet.
+    expect(setDraftContentSpy).not.toHaveBeenCalled();
+    expect(setDraftSelectionSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+
+    expect(setDraftContentSpy).toHaveBeenCalledTimes(1);
+    expect(setDraftContentSpy).toHaveBeenCalledWith("draft-a", contentA, selB);
+    expect(setDraftSelectionSpy).not.toHaveBeenCalled();
+
+    const durable = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "draft-a");
+    expect(durable?.content).toEqual(contentA);
+    expect(durable?.selection).toEqual(selB);
+  });
+
+  it("setSnapshot supersedes a pending selection-only write with one document write", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    const contentA = content("snapshot wins");
+    const selA = { from: 2, to: 2 };
+    const selB = { from: 9, to: 9 };
+
+    const { setDraftContentSpy, setDraftSelectionSpy } = spyRegistryWrites();
+
+    runtime.setSelection(selB);
+    runtime.setSnapshot(contentA, selA);
+
+    expect(setDraftContentSpy).not.toHaveBeenCalled();
+    expect(setDraftSelectionSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+
+    // Document write fully replaces the earlier selection-only intent - one
+    // write lands contentA + selA; no separate setDraftSelection flush.
+    expect(setDraftContentSpy).toHaveBeenCalledTimes(1);
+    expect(setDraftContentSpy).toHaveBeenCalledWith("draft-a", contentA, selA);
+    expect(setDraftSelectionSpy).not.toHaveBeenCalled();
+
+    const durable = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "draft-a");
+    expect(durable?.content).toEqual(contentA);
+    expect(durable?.selection).toEqual(selA);
+  });
+
+  it("detach flushes a selection-only pending write through setDraftSelection", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    runtime.setSnapshot(content("seed"), { from: 1, to: 1 });
+    vi.advanceTimersByTime(300);
+
+    const { setDraftContentSpy, setDraftSelectionSpy } = spyRegistryWrites();
+
+    const nextSelection = { from: 3, to: 6 };
+    runtime.setSelection(nextSelection);
+    // Synchronous detach flush - do not advance timers.
+    draftRuntimeRegistry.detach("draft-a");
+
+    expect(setDraftContentSpy).not.toHaveBeenCalled();
+    expect(setDraftSelectionSpy).toHaveBeenCalledTimes(1);
+    expect(setDraftSelectionSpy).toHaveBeenCalledWith("draft-a", nextSelection);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === "draft-a")?.selection,
+    ).toEqual(nextSelection);
+  });
+
+  it("roots and contents stay correct for a pending selection-only write", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    const seeded = imageContent("live-hash");
+    runtime.setSnapshot(seeded, { from: 1, to: 1 });
+    vi.advanceTimersByTime(300);
+
+    const rootsBefore = new Set(runtime.roots());
+    const contentsBefore = runtime.contents();
+    expect(rootsBefore).toEqual(new Set(["live-hash"]));
+    expect(contentsBefore).toEqual([seeded]);
+
+    runtime.setSelection({ from: 2, to: 2 });
+
+    // Pending selection-only has no `.content` - must not throw or invent a
+    // phantom root; store live content/attachmentRoots already cover it.
+    expect(() => runtime.roots()).not.toThrow();
+    expect(() => runtime.contents()).not.toThrow();
+    expect(runtime.roots()).toEqual(rootsBefore);
+    expect(runtime.contents()).toEqual(contentsBefore);
+    expect(draftRuntimeRegistry.liveImageRoots()).toEqual(
+      new Set(["live-hash"]),
+    );
+    expect(draftRuntimeRegistry.liveContents()).toEqual([seeded]);
   });
 });

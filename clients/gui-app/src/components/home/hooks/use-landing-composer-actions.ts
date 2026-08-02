@@ -61,7 +61,7 @@ import {
   stringValue,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
-import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
+import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 import {
   collectImageAtoms,
   containsImageAtoms,
@@ -494,14 +494,27 @@ export function useLandingComposerActions(): LandingComposerActions {
       const { editor } = args;
       if (editor === null) return;
 
-      const editorContent = normalizeComposerContent(editor.getJSON());
+      const normalized = normalizeComposerContentWithSelection(
+        editor.getJSON(),
+        null,
+      );
+      const editorContent = normalized.content;
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
       if (text.trim().length === 0 && !hasImages) return;
       const draftId = ensureSubmissionDraft(args.draftId, editorContent);
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
       if (runtime === null) return;
-      runtime.setSnapshot(editorContent, runtime.store.getState().selection);
+      // The runtime's stored content already reflects the latest edit (every
+      // keystroke flows through `onDocumentChange` synchronously, well before
+      // a later submit click) or was just seeded verbatim by
+      // `ensureSubmissionDraft` - so only a genuine legacy-shape rewrite here
+      // is a real document mutation worth recording. `normalized.changed` is
+      // a cheap structural flag, not a document comparison, so this never
+      // walks/serializes the (possibly multi-megabyte inline-image) content.
+      if (normalized.changed) {
+        runtime.setSnapshot(editorContent, runtime.store.getState().selection);
+      }
       const attempt = runtime.startSubmission(
         captureSubmissionPlacement(draftId),
       );

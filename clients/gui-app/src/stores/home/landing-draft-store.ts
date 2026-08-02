@@ -38,6 +38,7 @@ import {
   markLandingDraftsAuthoritativeNonEmpty,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
+import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 
 /**
@@ -95,6 +96,13 @@ interface LandingDraftStoreState {
     content: JsonContent,
     selection: DraftSelection | null,
   ) => void;
+  /**
+   * Persists a caret move alone, bumping `lastTouchedAt` without touching or
+   * comparing `content` - a selection-only echo must never re-serialize a
+   * (possibly multi-megabyte inline-image) document the way `setDraftContent`
+   * does.
+   */
+  setDraftSelection: (id: string, selection: DraftSelection | null) => void;
   /** Update the run settings of a specific draft. No-op when id not found. */
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
@@ -407,6 +415,17 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         }));
       },
 
+      setDraftSelection: (id, selection) => {
+        const draft = get().drafts.find((d) => d.id === id);
+        if (!draft) return;
+        if (sameDraftSelection(draft.selection, selection)) return;
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id ? { ...d, selection, lastTouchedAt: Date.now() } : d,
+          ),
+        }));
+      },
+
       setDraftSettings: (id, settings) => {
         set((state) => {
           const draft = state.drafts.find((d) => d.id === id);
@@ -525,6 +544,17 @@ draftRuntimeRegistry.configure({
       .getState()
       .setDraftContent(draftId, content, selection);
   },
+  writeSelection: (draftId, selection) => {
+    useLandingDraftStore.getState().setDraftSelection(draftId, selection);
+  },
+});
+
+// Same reasoning as the registry wiring above: `landing-image-budget.ts`
+// intentionally has no import back into this persisted source (it would
+// close a store → gc → budget → store cycle), so it reads drafts through
+// this registration instead.
+registerLandingDraftRootSource({
+  drafts: () => useLandingDraftStore.getState().drafts,
 });
 /**
  * Render-stable projection of the active draft for the landing-page shell

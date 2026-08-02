@@ -873,12 +873,14 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   };
   return {
     isReady: () => true,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,

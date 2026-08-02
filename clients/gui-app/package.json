@@ -132,6 +132,7 @@
     "eslint-plugin-react": "catalog:",
     "eslint-plugin-react-hooks": "catalog:",
     "eslint-plugin-react-refresh": "catalog:",
+    "fake-indexeddb": "catalog:",
     "jsdom": "catalog:",
     "prettier": "catalog:",
     "typescript": "catalog:",
