@@ -393,6 +393,19 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       "bytes that committed without converging",
       { kind: "installed-not-converged" as const, message: "not converged" },
     ],
+    // Codex P1: `deferred` is NOT always contention. A registry outage leaves
+    // the stage un-eligibility-checked and resolves this same arm while
+    // holding no lock at all - skipping recovery there left an installed
+    // service unregistered because a network probe failed. The lock-contention
+    // reading is safe here too: convergeReady runs its own bounded CLI-lock
+    // retry and resolves deferred itself.
+    [
+      "an apply deferred by an unreachable registry",
+      {
+        kind: "deferred" as const,
+        message: "The staged host could not be eligibility-checked.",
+      },
+    ],
   ])("recovers an absent service after %s", async (_label, outcome) => {
     const controller = fakeHostController(
       fakeStatus(true, "unavailable", false),
@@ -406,24 +419,18 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.convergeReadyCalls).toEqual([false]);
   });
 
-  // Both mean someone else already holds the host - the in-process mutation
-  // lane, or another Traycer process holding the CLI lock. `convergeReady`
-  // would meet the same contention, so repeating it seconds later helps
-  // nobody.
-  it.each([
-    [
-      "busy",
-      {
-        kind: "busy" as const,
-        continuation: "retry-with-force" as const,
-        message: "busy",
-      },
-    ],
-    ["deferred", { kind: "deferred" as const, message: "another process" }],
-  ])("does not chase a %s apply with a recovery", async (_label, outcome) => {
+  // `busy` is the one pass-through: the controller's own gate says the host
+  // has work in progress, and convergeReady consults the same gate. Note the
+  // asymmetry with `deferred` above - that arm carries a non-contention
+  // meaning (registry outage) and so must go through the status gates.
+  it("does not chase a busy apply with a recovery", async () => {
     const controller = fakeHostController(
       fakeStatus(true, "unavailable", false),
-      outcome,
+      {
+        kind: "busy",
+        continuation: "retry-with-force",
+        message: "busy",
+      },
       { kind: "ok", value: { activated: true } },
     );
 

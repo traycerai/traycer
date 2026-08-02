@@ -31,25 +31,45 @@ export function restartRequestResultFromOutcome<TOk>(
   throw new Error(outcome.message);
 }
 
-/**
- * The `hostId` from the host's durable enrollment record, or `null` when the
- * machine has never enrolled (or the file is unreadable/malformed - an
- * unusable record and an absent one mean the same thing to the caller).
- */
-async function readEnrolledHostId(path: string): Promise<string | null> {
+type EnrollmentRead =
+  | { readonly kind: "enrolled"; readonly hostId: string }
+  /** No file (ENOENT): a legacy install that predates the enrollment record. */
+  | { readonly kind: "absent" }
+  /**
+   * The record EXISTS but cannot answer - unreadable, unparseable, or missing
+   * its `hostId`. Not the same fact as absent: an existing record proves this
+   * install HAS enrollment machinery, so its content being momentarily
+   * unusable must not hand the decision to a lower-trust source.
+   */
+  | { readonly kind: "unusable" };
+
+/** The `hostId` from the host's durable enrollment record. */
+async function readEnrolledHostId(path: string): Promise<EnrollmentRead> {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
-  } catch {
-    return null;
+  } catch (error: unknown) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return { kind: "absent" };
+    }
+    return { kind: "unusable" };
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object") return null;
+    if (parsed === null || typeof parsed !== "object") {
+      return { kind: "unusable" };
+    }
     const hostId = (parsed as Record<string, unknown>).hostId;
-    return typeof hostId === "string" && hostId.length > 0 ? hostId : null;
+    return typeof hostId === "string" && hostId.length > 0
+      ? { kind: "enrolled", hostId }
+      : { kind: "unusable" };
   } catch {
-    return null;
+    return { kind: "unusable" };
   }
 }
 
@@ -95,15 +115,21 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   //    the seed was added to prevent, reached from the other direction.
   //
   // A running host's `pid.json` agrees with enrollment, so preferring
-  // enrollment costs nothing when both answer. It is read second for an
-  // install predating the enrollment record, where it is the only answer.
+  // enrollment costs nothing when both answer. The pid fallback is reserved
+  // for `absent` alone - a legacy install that predates the enrollment
+  // record. An `unusable` record answers null WITHOUT consulting pid: the
+  // record existing proves this install enrolls, so its content being
+  // unreadable right now must not hand the decision to the very source whose
+  // staleness this ordering exists to outrank. The renderer treats null as
+  // "keep the persisted value", which is the correct do-no-harm answer.
   bridge.handleInvoke(
     RunnerHostInvoke.lastKnownLocalHostId,
     async (): Promise<string | null> => {
-      const enrolled = await readEnrolledHostId(
+      const enrollment = await readEnrolledHostId(
         bridge.options.host.identityEnrollmentFile,
       );
-      if (enrolled !== null) return enrolled;
+      if (enrollment.kind === "enrolled") return enrollment.hostId;
+      if (enrollment.kind === "unusable") return null;
       const metadata = await readPidMetadata(
         bridge.options.host.pidMetadataFile,
       );

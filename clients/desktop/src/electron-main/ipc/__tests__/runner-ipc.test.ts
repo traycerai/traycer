@@ -2967,13 +2967,21 @@ describe("RunnerIpcBridge", () => {
       ).resolves.toBe("pid-only-host");
     });
 
-    it("falls back when the enrollment record is unreadable rather than absent", async () => {
+    it("answers null - never pid metadata - when the enrollment record exists but is unusable", async () => {
+      // CodeRabbit (OSS #913): an unusable record is NOT the same fact as an
+      // absent one. The file existing proves this install enrolls, so a
+      // corrupt read must not hand the decision to the stale-prone source the
+      // enrollment-first ordering exists to outrank. Null lets the renderer
+      // keep its persisted value.
       await expect(
-        seedFrom({ enrollment: "{ not json", pid: pidFile("pid-only-host") }),
-      ).resolves.toBe("pid-only-host");
+        seedFrom({
+          enrollment: "{ not json",
+          pid: pidFile("stale-after-crash"),
+        }),
+      ).resolves.toBeNull();
       await expect(
-        seedFrom({ enrollment: "{}", pid: pidFile("pid-only-host") }),
-      ).resolves.toBe("pid-only-host");
+        seedFrom({ enrollment: "{}", pid: pidFile("stale-after-crash") }),
+      ).resolves.toBeNull();
     });
 
     it("answers null when neither file identifies this machine", async () => {

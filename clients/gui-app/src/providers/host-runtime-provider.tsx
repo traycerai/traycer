@@ -39,7 +39,10 @@ import {
 } from "@/lib/host/host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { appLogger } from "@/lib/logger";
-import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
+import {
+  runnerHostQueryScopeId,
+  runnerQueryKeys,
+} from "@/lib/query-keys/runner-mutation-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
@@ -409,7 +412,9 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
  */
 function localHostIdQueryOptions(runnerHost: IRunnerHost) {
   return queryOptions({
-    queryKey: runnerQueryKeys.lastKnownLocalHostId(runnerHost),
+    queryKey: runnerQueryKeys.lastKnownLocalHostId(
+      runnerHostQueryScopeId(runnerHost),
+    ),
     queryFn: () => runnerHost.getLastKnownLocalHostId(),
     retry: false,
   });

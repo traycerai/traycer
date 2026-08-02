@@ -1560,6 +1560,116 @@ describe("HostDirectoryService", () => {
       );
     });
 
+    /**
+     * Regression (Codex P1 on OSS #913): the id is not the only holder of
+     * "this machine". The persisted SELECTION can carry the pre-re-enrollment
+     * id, and startup would restore the obsolete registry twin as a valid
+     * remote selection - stranding the app on a dead relay target with local
+     * provisioning disabled. The selection intent must migrate with the id.
+     */
+    it("migrates a remembered selection of the old local id to the re-enrolled one", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        "stale-host-id-from-a-previous-enrollment",
+      );
+      rememberHostSelection("stale-host-id-from-a-previous-enrollment");
+      const obsoleteTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: "stale-host-id-from-a-previous-enrollment",
+      };
+      const reEnrolledTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: "re-enrolled-host-id",
+      };
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
+        // The registry still lists BOTH rows until deregistration propagates -
+        // the exact window where the obsolete twin is remote-kind and dialable.
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [obsoleteTwin, reEnrolledTwin],
+          }),
+      });
+      await directory.start();
+
+      expect(directory.getSelected()?.hostId).toBe("re-enrolled-host-id");
+      // Restored as this machine: the coerced non-dialable local presentation,
+      // never the obsolete twin's relay URL.
+      expect(directory.getSelected()).toMatchObject({
+        kind: "local",
+        websocketUrl: null,
+      });
+      expect(window.localStorage.getItem(LAST_SELECTED_HOST_STORAGE_KEY)).toBe(
+        "re-enrolled-host-id",
+      );
+    });
+
+    /**
+     * The other holder: a LIVE selection. `reconcileSelection()` keeps any id
+     * it can still find, and the obsolete twin stays listed until the registry
+     * catches up - so intent migration alone cannot move an already-bound
+     * selection when the re-enrollment happens mid-session.
+     */
+    it("retargets a live selection of the old id when the host re-enrolls mid-session", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const obsoleteTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: localSnapshot.hostId,
+      };
+      const host = makeHost(localSnapshot);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [obsoleteTwin] }),
+      });
+      await directory.start();
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+      host.setLocalHost({
+        ...localSnapshot,
+        hostId: "re-enrolled-host-id",
+      });
+      await flushPromises();
+
+      expect(directory.getSelected()?.hostId).toBe("re-enrolled-host-id");
+      expect(directory.getSelected()?.kind).toBe("local");
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        "re-enrolled-host-id",
+      );
+    });
+
+    it("does not rewrite a remembered REMOTE selection on re-enrollment", async () => {
+      // The migration must be scoped to selections that meant "this machine".
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        "stale-host-id-from-a-previous-enrollment",
+      );
+      rememberHostSelection(rememberedRemoteHostEntry.hostId);
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [rememberedRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+      expect(window.localStorage.getItem(LAST_SELECTED_HOST_STORAGE_KEY)).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+    });
+
     it("leaves other machines' remote hosts untouched", async () => {
       window.localStorage.setItem(
         LAST_LOCAL_HOST_ID_STORAGE_KEY,

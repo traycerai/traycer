@@ -213,8 +213,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
       this.localEntry = toLocalEntry(snapshot);
       if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
-        this.lastKnownLocalHostId = snapshot.hostId;
-        persistLocalHostId(snapshot.hostId);
+        this.adoptLocalHostId(snapshot.hostId);
       }
       appLogger.debug("[host-directory] local host snapshot changed", {
         hostId: snapshot?.hostId ?? null,
@@ -556,10 +555,74 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (hostId === null || hostId === this.lastKnownLocalHostId) {
       return;
     }
-    this.lastKnownLocalHostId = hostId;
-    persistLocalHostId(hostId);
+    this.adoptLocalHostId(hostId);
     appLogger.debug("[host-directory] seeded local host id from shell", {
       hostId,
+    });
+  }
+
+  /**
+   * The ONE place `lastKnownLocalHostId` moves from one id to another, for
+   * both movers - the shell seed at start and a live snapshot re-enrollment.
+   *
+   * A re-enrollment does not just change which row `snapshot()` neutralises;
+   * every other holder of the OLD id is now pointing at an obsolete twin that
+   * the registry may keep listing as a remote-kind, relay-dialable row.
+   * Updating only the field left the persisted `last-selected-host` (and the
+   * in-flight restore intents already loaded from it - `start()` loads them
+   * BEFORE the seed runs) restoring that obsolete row as a valid remote
+   * selection, which `reconcileSelection()` then preserves: the app strands
+   * on a dead relay target with the local Retry path disabled - the exact
+   * lockout the id tracking exists to prevent. So the selection INTENT
+   * migrates with the id: "this machine" follows the machine.
+   *
+   * Enumerated holders, migrated here: the persisted selection, the three
+   * one-shot restore intents, and a live `explicitSelection`. Deliberately
+   * NOT migrated: tab bindings (bound to a hostId for life by design -
+   * cross-host is clone-not-migrate) and notification origin ids (ephemeral,
+   * scoped to a delivered notification).
+   *
+   * Migration only fires when the PREVIOUS id is known and matches: with no
+   * previous id there is no evidence the remembered selection meant "this
+   * machine", and rewriting it would move a genuine remote selection.
+   */
+  private adoptLocalHostId(next: string): void {
+    const previous = this.lastKnownLocalHostId;
+    this.lastKnownLocalHostId = next;
+    persistLocalHostId(next);
+    if (previous === null || previous === next) {
+      return;
+    }
+    if (this.startupRestoreHostId === previous) {
+      this.startupRestoreHostId = next;
+    }
+    if (this.restoreAfterFailedRefreshHostId === previous) {
+      this.restoreAfterFailedRefreshHostId = next;
+    }
+    if (this.unboundFollowUpRestoreHostId === previous) {
+      this.unboundFollowUpRestoreHostId = next;
+    }
+    if (
+      this.explicitSelection !== null &&
+      this.explicitSelection.hostId === previous
+    ) {
+      this.explicitSelection = { hostId: next };
+    }
+    if (loadPersistedHostSelection() === previous) {
+      persistHostSelection(next);
+    }
+    // The LIVE selection is a holder too, and intent alone cannot move it:
+    // `reconcileSelection()` keeps any selected id it can still find, and the
+    // obsolete twin usually remains listed until deregistration propagates.
+    // At seed time nothing is selected yet, so this only acts on the live
+    // re-enrollment path - where the caller just installed the new local
+    // entry, making it resolvable here.
+    if (this.selected !== null && this.selected.hostId === previous) {
+      this.setSelected(this.findById(next));
+    }
+    appLogger.debug("[host-directory] local host id re-enrolled", {
+      previous,
+      next,
     });
   }
 

@@ -25,6 +25,21 @@ const ACTIVATION_DEBT_STATES: ReadonlySet<HostActivationState> = new Set([
   "activationUnknown",
 ]);
 
+// The one predicate every recovery arm gates on, in both halves:
+// `activation: "unavailable"` describes the RUNNING runtime only, so an
+// absent service is a repair target ONLY under a host that is genuinely
+// installed - a fresh machine that has never installed one reports the same
+// activation state, and recovering there would provision and start a
+// background host before the user has signed in, bypassing the renderer's
+// `authStatus === "signed-in"` provisioning gate. Named once so a future
+// activation state or an extra condition cannot land in one arm and not the
+// others.
+function isUnavailableInstalledHost(status: HostControllerStatus): boolean {
+  return (
+    status.activation === "unavailable" && status.installedVersion !== null
+  );
+}
+
 // "Update to X" gates on `updateReady` OR activation debt (Renderer
 // surfaces cutover ticket, D4/D5): a ready update supersedes debt (its own
 // version is the label); debt alone labels the already-installed version,
@@ -105,17 +120,11 @@ export async function runLaunchHostConvergeReconcile(
   // precedence instead: applying is itself the fastest route to a running
   // host, and it re-registers on the way.
   //
-  // Gated on `installedVersion` because `activation: "unavailable"` describes
-  // the RUNNING runtime only: a fresh machine that has never installed a host
-  // reports exactly the same state. Without this, launch would provision and
-  // start a background host before the user has even signed in, bypassing the
-  // renderer's `authStatus === "signed-in"` gate. This arm repairs a service
-  // that went missing from under an INSTALLED host; it must never be the thing
-  // that performs the first install.
+  // This arm repairs a service that went missing from under an INSTALLED
+  // host; `isUnavailableInstalledHost` is what keeps it from ever being the
+  // thing that performs the first install.
   const recovery =
-    !initialStatus.updateReady &&
-    initialStatus.activation === "unavailable" &&
-    initialStatus.installedVersion !== null
+    !initialStatus.updateReady && isUnavailableInstalledHost(initialStatus)
       ? await hostController.convergeReady(false)
       : null;
   if (recovery !== null) {
@@ -148,15 +157,10 @@ export async function runLaunchHostConvergeReconcile(
     status.activation === "activationUnknown"
   ) {
     outcome = await hostController.activateInstalled(false);
-  } else if (
-    status.activation === "unavailable" &&
-    status.installedVersion !== null &&
-    recovery === null
-  ) {
-    // Same two conditions as the pre-stage pass. `installedVersion` keeps this
-    // from performing a first install before sign-in; `recovery === null` keeps
-    // it from re-running a recovery the pre-stage pass already attempted, since
-    // repeating a failure seconds later helps nobody.
+  } else if (isUnavailableInstalledHost(status) && recovery === null) {
+    // `recovery === null` keeps this from re-running a recovery the pre-stage
+    // pass already attempted, since repeating a failure seconds later helps
+    // nobody.
     outcome = await hostController.convergeReady(false);
   }
 
@@ -198,11 +202,19 @@ export async function runLaunchHostConvergeReconcile(
  * and returned, leaving the machine unreachable until the next launch or a
  * manual repair - through the one pass that exists to guarantee the opposite.
  *
- * `busy` and `deferred` pass through untouched. Both mean someone else already
- * holds the host - the in-process mutation lane, or another Traycer process
- * holding the CLI lock - and `convergeReady` would meet the same contention.
- * That is the same reason the post-stage arm refuses to repeat a recovery the
- * pre-stage pass already attempted.
+ * Only `busy` passes through untouched: it is the controller's own gate saying
+ * the host has work in progress, and `convergeReady` consults the same gate.
+ * `deferred` does NOT pass through, because it is not one fact. The same arm
+ * carries at least three: another Traycer process holding the CLI lock, a
+ * launch-trigger apply on a removed host, and - the one that broke this - a
+ * registry outage leaving the stage un-eligibility-checked
+ * (`host-controller.ts`, `coalesceIntent`'s `eligibleStage === null` return).
+ * That last one holds no lock at all; skipping recovery for it left an
+ * installed service unregistered because a NETWORK PROBE failed. The status
+ * gates below sort them out instead: a removed host is caught by the re-read,
+ * and a lock actually held is `convergeReady`'s own problem - it runs its
+ * bounded CLI-lock retry and resolves `deferred` itself rather than throwing,
+ * by which time the other process may well have finished.
  *
  * `removedByUser` is re-read rather than inherited: the apply can take
  * minutes, and a user who removed the host during it must not be handed a
@@ -212,11 +224,7 @@ async function recoverAfterFailedApply(
   hostController: IpcHostController,
   applied: MutationOutcome<ApplyStagedOk>,
 ): Promise<MutationOutcome<ApplyStagedOk | ConvergeReadyOk>> {
-  if (
-    applied.kind === "ok" ||
-    applied.kind === "busy" ||
-    applied.kind === "deferred"
-  ) {
+  if (applied.kind === "ok" || applied.kind === "busy") {
     return applied;
   }
   const status = await hostController.getStatus();
@@ -224,12 +232,9 @@ async function recoverAfterFailedApply(
     log.info("[host-controller] launch converge skipped after apply removal");
     return applied;
   }
-  // The same two conditions as both other recovery arms. A failed apply is not
-  // by itself an activation problem - without the `unavailable` check this
-  // would cycle the service on every unsuccessful update - and
-  // `installedVersion` keeps a failure on a machine that never had a host from
-  // turning into a first install before sign-in.
-  if (status.activation !== "unavailable" || status.installedVersion === null) {
+  // A failed apply is not by itself an activation problem - without this gate
+  // the arm would cycle the service on every unsuccessful update.
+  if (!isUnavailableInstalledHost(status)) {
     return applied;
   }
   log.info(
