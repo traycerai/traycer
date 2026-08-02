@@ -307,7 +307,7 @@ describe("usePromptStashStore", () => {
     peer.close();
   });
 
-  it("clears peer rows and accepts revision zero after a database reset", async () => {
+  it("reloads post-reset rows even when the reset arrives after their change", async () => {
     const initial = [entry("old", 1, "old")];
     const replacement = [entry("new", 2, "new")];
     const { usePromptStashStore } = await loadStore({
@@ -316,20 +316,24 @@ describe("usePromptStashStore", () => {
     await usePromptStashStore.getState().hydrate();
     const loadCallsBeforeReset =
       repoMocks.loadPromptStashSnapshot.mock.calls.length;
+    repoMocks.loadPromptStashSnapshot.mockResolvedValueOnce(
+      manifest(replacement, 1),
+    );
 
     const peer = new FakeBroadcastChannel(PROMPT_STASH_CHANNEL);
+    // A save into the recreated database can broadcast its low revision before
+    // the delayed reset. The old generation suppresses that change, so reset
+    // must reload rather than only clearing memory.
+    peer.postMessage({ type: "changed", revision: 1 });
     peer.postMessage({ type: "reset" });
 
     expect(usePromptStashStore.getState().rows).toEqual([]);
-    expect(repoMocks.loadPromptStashSnapshot).toHaveBeenCalledTimes(
-      loadCallsBeforeReset,
-    );
-
-    repoMocks.loadPromptStashSnapshot.mockResolvedValueOnce(
-      manifest(replacement, 0),
-    );
-    await usePromptStashStore.getState().hydrate();
-    expect(usePromptStashStore.getState().rows).toEqual(asRows(replacement));
+    await vi.waitFor(() => {
+      expect(repoMocks.loadPromptStashSnapshot).toHaveBeenCalledTimes(
+        loadCallsBeforeReset + 1,
+      );
+      expect(usePromptStashStore.getState().rows).toEqual(asRows(replacement));
+    });
     peer.close();
   });
 

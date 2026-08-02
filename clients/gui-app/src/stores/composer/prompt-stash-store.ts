@@ -107,6 +107,17 @@ void usePromptStashStore
   .catch(() => undefined);
 
 let promptStashChannel: BroadcastChannel | null = null;
+
+function reloadPromptStashFromChannel(): void {
+  issuedLoadToken += 1;
+  const loadToken = issuedLoadToken;
+  void loadPromptStashSnapshot()
+    .then(({ rows, revision }) => {
+      applyLoadIfFresher(loadToken, rows, revision);
+    })
+    .catch(() => undefined);
+}
+
 if (
   typeof window !== "undefined" &&
   typeof window.BroadcastChannel !== "undefined"
@@ -118,6 +129,10 @@ if (
       appliedRevision = -1;
       hydration = null;
       usePromptStashStore.setState({ rows: [] });
+      // Reset delivery can race a save into the newly recreated database.
+      // Reload after resetting the revision generation so a delayed reset
+      // cannot hide that already-durable post-reset mutation.
+      reloadPromptStashFromChannel();
       return;
     }
     const revision = messageRevision(event.data);
@@ -125,13 +140,7 @@ if (
     // needs a re-read; an unrecognized/older-shaped payload falls through and
     // still triggers one, which `applyLoadIfFresher` then gates on its own.
     if (revision !== null && revision <= appliedRevision) return;
-    issuedLoadToken += 1;
-    const loadToken = issuedLoadToken;
-    void loadPromptStashSnapshot()
-      .then(({ rows, revision: loadedRevision }) => {
-        applyLoadIfFresher(loadToken, rows, loadedRevision);
-      })
-      .catch(() => undefined);
+    reloadPromptStashFromChannel();
   });
 }
 
