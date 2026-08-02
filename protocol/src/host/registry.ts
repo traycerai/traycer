@@ -160,6 +160,11 @@ import {
 } from "@traycer/protocol/host/lifecycle/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
+  chatForkGetV10,
+  chatForkReadCandidateHeadV10,
+  chatForkResolveV10,
+} from "@traycer/protocol/host/chat-fork/contracts";
+import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
   hostGetRateLimitUsageV12,
@@ -4521,6 +4526,51 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: ticket 07's host-level fork event and its
+  // owner-arbitrated resolution (ticket 09). Host-global rather than
+  // `epic.*` - a fork episode can span chats across tasks - which is why it
+  // sits beside `host.notifications.*` instead. `get` and `resolve` degrade
+  // together (a host predating one predates both, and a dialog that can
+  // observe a fork but not resolve it is worse than no dialog): a client that
+  // gets `E_HOST_UNSUPPORTED` hides the fork surface entirely rather than
+  // rendering a broken prompt - the chat halts exactly as it always did,
+  // silently to the renderer, safely to the data. See `chat-fork/schemas.ts`.
+  "host.chatFork.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatForkGetV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.chatFork.resolve": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatForkResolveV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Degrades INDEPENDENTLY of the pair above: this is the dialog's "view
+  // candidate" link, not the dialog's ability to function. A host with
+  // `get`/`resolve` but predating this one read simply hides the link.
+  "host.chatFork.readCandidateHead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatForkReadCandidateHeadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "editor.openPaths": {
     1: {

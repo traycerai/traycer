@@ -683,6 +683,13 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // No polling: the fork-detected notification is what tells a client to
+  // refetch, not a cadence - a fork is rare and the event is host-pushed on
+  // change, so an interval would spend requests on an answer that is almost
+  // always unchanged.
+  "host.chatFork.get": { ...LATEST_SCHEDULING, poll: null },
+  "host.chatFork.resolve": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "host.chatFork.readCandidateHead": { ...LATEST_SCHEDULING, poll: null },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {

@@ -1,4 +1,5 @@
 export * from "./agent";
+export * from "./chat-fork";
 export * from "./comments";
 export * from "./editor";
 export * from "./epic";

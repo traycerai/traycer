@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type AppDialogKind = "open-folder" | null;
+export type AppDialogKind = "open-folder" | "chat-fork" | null;
 
 interface AppDialogStore {
   activeDialog: AppDialogKind;
