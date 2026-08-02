@@ -580,9 +580,7 @@ describe("ResourceMonitorPopover", () => {
     const search = screen.getByRole("searchbox", { name: "Search resources" });
 
     fireEvent.change(search, { target: { value: "DEV-SERVER" } });
-    expect(
-      screen.getByText("node dev-server.js (2 sub-processes)"),
-    ).not.toBeNull();
+    expect(screen.getByText("node dev-server.js")).not.toBeNull();
     expect(
       screen
         .getByRole("button", { name: "Process tree expanded by search" })
@@ -591,6 +589,13 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.change(search, { target: { value: "103" } });
     expect(screen.getByText("make")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Sub-processes of node dev-server.js expanded by search",
+        })
+        .hasAttribute("disabled"),
+    ).toBe(true);
 
     fireEvent.change(search, { target: { value: "not-a-resource" } });
     expect(
@@ -612,7 +617,7 @@ describe("ResourceMonitorPopover", () => {
       { target: { value: "/bin/zsh" } },
     );
 
-    expect(screen.getByText("/bin/zsh (3 sub-processes)")).not.toBeNull();
+    expect(screen.getByText("/bin/zsh")).not.toBeNull();
     expect(
       screen
         .getByRole("button", { name: "Process tree expanded by search" })
@@ -688,9 +693,7 @@ describe("ResourceMonitorPopover", () => {
       { target: { value: "shared" } },
     );
 
-    expect(
-      screen.getByText("/bin/shared-shell (1 sub-process)"),
-    ).not.toBeNull();
+    expect(screen.getByText("/bin/shared-shell")).not.toBeNull();
     expect(screen.getByText("shared worker")).not.toBeNull();
   });
 

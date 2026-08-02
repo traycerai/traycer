@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -84,6 +84,48 @@ describe("useRegisteredEpicLiveArtifactTitles", () => {
     });
 
     expect(result.current).toEqual(["Generated title"]);
+  });
+
+  it("subscribes to a late handle when the refs identity is stable", () => {
+    const registry = __getOpenEpicRegistryForTests();
+    const { result } = renderHook(() => {
+      const refs = useMemo(
+        () => [{ epicId: "epic-stable-refs", artifactId: "chat-1" }],
+        [],
+      );
+      return useRegisteredEpicLiveArtifactTitles(refs);
+    });
+    expect(result.current).toEqual([null]);
+
+    const handle = createOpenEpicStore({
+      epicId: "epic-stable-refs",
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
+    handle.store.setState({
+      chats: {
+        allIds: ["chat-1"],
+        byId: { "chat-1": { ...chat("chat-1", null), title: "" } },
+      },
+    });
+    act(() => {
+      registry.acquire("epic-stable-refs", () => handle);
+    });
+    expect(result.current).toEqual([null]);
+
+    act(() => {
+      handle.store.setState({
+        chats: {
+          allIds: ["chat-1"],
+          byId: {
+            "chat-1": { ...chat("chat-1", null), title: "Stable refs title" },
+          },
+        },
+      });
+    });
+
+    expect(result.current).toEqual(["Stable refs title"]);
   });
 });
 

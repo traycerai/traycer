@@ -34,10 +34,7 @@ import type {
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import { displayTitle } from "@/lib/display-title";
-import {
-  useRegisteredEpicLiveArtifactTitle,
-  useRegisteredEpicLiveArtifactTitles,
-} from "@/lib/epic-selectors";
+import { useRegisteredEpicLiveArtifactTitles } from "@/lib/epic-selectors";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
 import {
@@ -233,6 +230,7 @@ interface ProcessDisplayRow {
   readonly depth: number;
   readonly canExpand: boolean;
   readonly expanded: boolean;
+  readonly searchForcesExpanded: boolean;
   readonly hiddenCount: number;
   readonly treeCpuPercent: number;
   readonly treeRssBytes: number;
@@ -823,6 +821,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                     key={task.entry.epicId}
                     task={task}
                     searchQuery={searchQuery}
+                    liveOwnerTitleByKey={liveOwnerTitleByKey}
                     expandedOwners={expandedOwners}
                     expandedProcesses={expandedProcesses}
                     sortOption={sortOption}
@@ -1097,6 +1096,7 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
             depth: 1,
             canExpand: false,
             expanded: false,
+            searchForcesExpanded: false,
             hiddenCount: 0,
             treeCpuPercent: props.app.process.cpuPercent,
             treeRssBytes: props.app.process.rssBytes,
@@ -1200,6 +1200,7 @@ function buildEpicTitleById(
 function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
   readonly searchQuery: string;
+  readonly liveOwnerTitleByKey: ReadonlyMap<string, string | null>;
   readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
@@ -1255,7 +1256,8 @@ function TaskResourceSection(props: {
             key={key}
             row={row}
             searchQuery={taskMatchesSearch ? "" : props.searchQuery}
-            taskSearchTerms={[props.task.label, props.task.entry.epicId]}
+            taskSearchTerms={taskSearchTerms(props.task)}
+            liveArtifactTitle={props.liveOwnerTitleByKey.get(key) ?? null}
             expanded={props.expandedOwners.has(key)}
             expandedProcesses={props.expandedProcesses}
             sortOption={props.sortOption}
@@ -1658,7 +1660,8 @@ function OwnerProviderIcon(props: { readonly harnessId: string | null }) {
 function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
   readonly searchQuery: string;
-  readonly taskSearchTerms: readonly string[];
+  readonly taskSearchTerms: readonly (string | number | null)[];
+  readonly liveArtifactTitle: string | null;
   readonly expanded: boolean;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
@@ -1669,11 +1672,7 @@ function OwnerTreeRow(props: {
   readonly kill: ResourceKillApi | null;
 }) {
   const owner = props.row.snapshot.owner;
-  const liveArtifactTitle = useRegisteredEpicLiveArtifactTitle(
-    owner.epicId,
-    owner.kind === "terminal" ? null : owner.ownerId,
-  );
-  const label = resolvedOwnerLabel(props.row, liveArtifactTitle);
+  const label = resolvedOwnerLabel(props.row, props.liveArtifactTitle);
   const processRows = buildProcessRows(
     props.row.snapshot.processes,
     props.expandedProcesses,
@@ -1881,6 +1880,14 @@ function ProcessRowSelectCheckbox(props: {
   );
 }
 
+function processExpandAriaLabel(row: ProcessDisplayRow): string {
+  const label = processLabel(row.process);
+  if (row.searchForcesExpanded) {
+    return `Sub-processes of ${label} expanded by search`;
+  }
+  return `${row.expanded ? "Collapse" : "Expand"} sub-processes of ${label}`;
+}
+
 function ProcessTreeRow(props: {
   readonly processRow: ProcessDisplayRow;
   readonly stickyTop: number;
@@ -1894,6 +1901,7 @@ function ProcessTreeRow(props: {
     depth,
     canExpand,
     expanded,
+    searchForcesExpanded,
     hiddenCount,
     treeCpuPercent,
     treeRssBytes,
@@ -1972,11 +1980,12 @@ function ProcessTreeRow(props: {
       <button
         type="button"
         aria-expanded={expanded}
-        aria-label={`${expanded ? "Collapse" : "Expand"} sub-processes of ${processLabel(process)}`}
+        aria-label={processExpandAriaLabel(props.processRow)}
+        disabled={searchForcesExpanded}
         onClick={() => props.onToggleExpand(processRowKey(process))}
         className={cn(
           rowClassName,
-          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default",
         )}
         style={rowStyle}
       >
@@ -2248,7 +2257,7 @@ function buildOwnerProcessSearchProjection(input: {
   readonly label: string;
   readonly processRows: OwnerProcessRows;
   readonly searchQuery: string;
-  readonly taskTerms: readonly string[];
+  readonly taskTerms: readonly (string | number | null)[];
 }): { readonly rows: OwnerProcessRows; readonly forcesExpanded: boolean } {
   const ownerTerms = [
     ...input.taskTerms,
@@ -2533,12 +2542,24 @@ function filterProcessDisplayRowsForSearch(
       ...processSearchTerms(row.process),
     ]);
     if (!rowMatches && children.length === 0) return [];
-    if (children.length === 0) return [row];
+    if (children.length === 0) {
+      return [
+        {
+          ...row,
+          canExpand: false,
+          expanded: false,
+          searchForcesExpanded: false,
+          hiddenCount: 0,
+          children,
+        },
+      ];
+    }
     return [
       {
         ...row,
         canExpand: true,
         expanded: true,
+        searchForcesExpanded: true,
         hiddenCount: 0,
         children,
       },
@@ -3186,6 +3207,7 @@ function buildProcessRows(
       depth,
       canExpand: children.length > 0,
       expanded: children.length > 0 && expandedKeys.has(processRowKey(process)),
+      searchForcesExpanded: false,
       hiddenCount: children.reduce(
         (sum, child) => sum + 1 + child.hiddenCount,
         0,

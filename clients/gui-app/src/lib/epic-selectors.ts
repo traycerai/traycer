@@ -676,16 +676,31 @@ export function useRegisteredEpicLiveArtifactTitles(
   const registry = getOpenEpicRegistry();
   const encodedTitles = useSyncExternalStore(
     (listener) => {
-      const unsubscribers = [registry.subscribe(listener)];
-      const subscribedHandles = new Set<OpenEpicStoreHandle>();
-      for (const ref of refs) {
-        const handle = registry.peek(ref.epicId);
-        if (handle === null || subscribedHandles.has(handle)) continue;
-        subscribedHandles.add(handle);
-        unsubscribers.push(handle.store.subscribe(listener));
-      }
+      const unsubscribeByHandle = new Map<object, () => void>();
+      const reconcileHandleSubscriptions = () => {
+        const currentHandles = new Set<object>();
+        for (const ref of refs) {
+          const handle = registry.peek(ref.epicId);
+          if (handle === null || currentHandles.has(handle)) continue;
+          currentHandles.add(handle);
+          if (!unsubscribeByHandle.has(handle)) {
+            unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+          }
+        }
+        for (const [handle, unsubscribe] of unsubscribeByHandle) {
+          if (currentHandles.has(handle)) continue;
+          unsubscribe();
+          unsubscribeByHandle.delete(handle);
+        }
+      };
+      reconcileHandleSubscriptions();
+      const unsubscribeRegistry = registry.subscribe(() => {
+        reconcileHandleSubscriptions();
+        listener();
+      });
       return () => {
-        for (const unsubscribe of unsubscribers) unsubscribe();
+        unsubscribeRegistry();
+        for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
       };
     },
     () => registeredArtifactTitlesSnapshot(registry, refs),
