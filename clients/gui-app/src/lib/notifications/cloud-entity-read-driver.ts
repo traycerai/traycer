@@ -14,7 +14,7 @@ export const CLOUD_ENTITY_READ_RETRY_BASE_MS = 1_000;
 /**
  * Five minutes, which is both the host worker's
  * `NOTIFICATION_FEED_SYNC_RETRY_MAX_MS` and this app's existing
- * `NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS`. A recovered server is picked
+ * `HOST_STREAM_REOPEN_MAX_BACKOFF_MS`. A recovered server is picked
  * up within minutes; a broken one is a trickle.
  */
 export const CLOUD_ENTITY_READ_RETRY_MAX_MS = 300_000;

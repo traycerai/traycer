@@ -14,10 +14,13 @@ import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-s
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import {
-  openNotificationsAwarenessStream,
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import {
+  openAgentActivityStream,
+  useAgentActivityStore,
+} from "@/stores/agent-activity-store";
 import {
   openHostNotificationsStream,
   type HostNotificationsFeedFrame,
@@ -102,6 +105,7 @@ export function NotificationsSessionProvider(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const notificationFeedMode = useNotificationFeedMode();
   const disposerRef = useRef<(() => void) | null>(null);
+  const activityDisposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const cloudDisposerRef = useRef<(() => void) | null>(null);
   // The stream client all notification streams were opened against. Stream
@@ -260,6 +264,11 @@ export function NotificationsSessionProvider(
       disposerRef.current = null;
       disposer();
     }
+    if (activityDisposerRef.current !== null) {
+      const disposer = activityDisposerRef.current;
+      activityDisposerRef.current = null;
+      disposer();
+    }
     if (hostDisposerRef.current !== null) {
       const disposer = hostDisposerRef.current;
       hostDisposerRef.current = null;
@@ -287,6 +296,7 @@ export function NotificationsSessionProvider(
   const resetIdentityReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useNotificationsStore.getState().reset();
+    useAgentActivityStore.getState().reset();
     useHostNotificationsStore.getState().reset();
     resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
@@ -297,6 +307,11 @@ export function NotificationsSessionProvider(
   const resetHostReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().reset();
+    // A local activity view belongs solely to the departed host. Cloud
+    // activity is a per-user union and remains valid across host switches.
+    if (useAgentActivityStore.getState().servedBy === "local") {
+      useAgentActivityStore.getState().reset();
+    }
     resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
   }, [queryClient, resetCloudRelaySession]);
@@ -315,6 +330,7 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().setConnectionStatus("connecting");
     useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    useAgentActivityStore.setState({ connectionStatus: "reconnecting" });
   }, []);
 
   // StrictMode mounts, cleans up, then re-mounts effects. Returning Zustand's
@@ -427,15 +443,14 @@ export function NotificationsSessionProvider(
         callbacks,
       });
     };
-    if (notificationFeedMode === "cloud") {
-      // Cloud owns notification rows, but global agent-activity presence still
-      // arrives through the per-user notifications room's awareness channel.
-      // The awareness-only reader deliberately ignores legacy Yjs rows.
-      if (wsStreamClient === null) return;
-      disposerRef.current = openNotificationsAwarenessStream(
-        createNotificationsStream,
+    if (wsStreamClient !== null) {
+      activityDisposerRef.current = openAgentActivityStream(
+        wsStreamClient,
         onAuthError,
       );
+    }
+    if (notificationFeedMode === "cloud") {
+      if (wsStreamClient === null) return;
       cloudDisposerRef.current = openCloudNotificationsStream(
         wsStreamClient,
         onAuthError,
@@ -573,6 +588,7 @@ export function NotificationsSessionProvider(
     // is kept - the re-landed snapshot merges into the same doc.
     if (
       (disposerRef.current !== null ||
+        activityDisposerRef.current !== null ||
         hostDisposerRef.current !== null ||
         cloudDisposerRef.current !== null) &&
       openedStreamClientRef.current !== wsStreamClient
@@ -582,6 +598,7 @@ export function NotificationsSessionProvider(
     }
     if (
       disposerRef.current === null &&
+      activityDisposerRef.current === null &&
       hostDisposerRef.current === null &&
       cloudDisposerRef.current === null
     ) {

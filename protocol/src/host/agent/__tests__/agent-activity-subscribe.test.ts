@@ -7,18 +7,20 @@ import {
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 describe("agent.activity.subscribe@1.0", () => {
-  it("accepts full replacement snapshots and updates", () => {
-    for (const kind of ["snapshot", "update"] as const) {
+  it("accepts a full replacement state from either host-selected plane", () => {
+    for (const servedBy of ["local", "cloud"] as const) {
       expect(
         agentActivitySubscribeServerFrameSchema.parse({
-          kind,
+          kind: "state",
+          servedBy,
           byEpic: {
             "epic-1": { working: ["agent-1"], turn: ["agent-1"] },
           },
           hasBinaryPayload: false,
         }),
       ).toEqual({
-        kind,
+        kind: "state",
+        servedBy,
         byEpic: {
           "epic-1": { working: ["agent-1"], turn: ["agent-1"] },
         },
@@ -36,21 +38,23 @@ describe("agent.activity.subscribe@1.0", () => {
   it("rejects malformed buckets and binary activity frames", () => {
     expect(
       agentActivitySubscribeServerFrameSchema.safeParse({
-        kind: "snapshot",
+        kind: "state",
+        servedBy: "local",
         byEpic: { "epic-1": { working: "agent-1", turn: [] } },
         hasBinaryPayload: false,
       }).success,
     ).toBe(false);
     expect(
       agentActivitySubscribeServerFrameSchema.safeParse({
-        kind: "update",
+        kind: "state",
+        servedBy: "cloud",
         byEpic: {},
         hasBinaryPayload: true,
       }).success,
     ).toBe(false);
   });
 
-  it("registers the optional stream at v1.0", () => {
+  it("registers the stream at v1.0", () => {
     expect(
       agentActivitySubscribeClientFrameSchema.parse({
         kind: "ping",

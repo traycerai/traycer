@@ -22,7 +22,10 @@ import {
   subscribeHostNotificationPresence,
   type HostNotificationPresenceFrame,
 } from "@/lib/notifications/notification-presence";
-import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
 import { compareFeedIdAscending } from "@/lib/notifications/notification-lifecycle";
 
 export const HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT = 50;
@@ -486,11 +489,11 @@ export function openHostNotificationsStream(
   // so without this reopen a single bad window (e.g. the host briefly unable
   // to validate bearers) leaves notifications dead until app restart while
   // the rest of the app self-heals through per-interaction re-subscribes.
-  const reopenScheduler = createNotificationStreamReopenScheduler(() => {
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
     currentSession?.close();
     currentSession = null;
     openSession();
-  });
+  }, isReopenableNotificationsStreamClose);
 
   // Presence has two consumers with deliberately independent gates:
   //  - `onPresenceChanged` (local): drives entity read-consumption over the
