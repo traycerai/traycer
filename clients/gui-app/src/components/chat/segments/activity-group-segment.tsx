@@ -1,5 +1,5 @@
 import { Box, ChevronRight } from "lucide-react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -29,6 +29,8 @@ import {
 import { ResolvedApprovalSegment } from "./approval-segment";
 import { CommandSegment } from "./command-segment";
 import { FileChangeSegment } from "./file-change-segment";
+import { LiveActivityWindow } from "./live-activity-window";
+import { ReasoningSegment } from "./reasoning-segment";
 import { LiveElapsed } from "./segment-elapsed";
 import { SubagentSegment } from "./subagent-segment";
 import { ToolSegment } from "./tool-segment";
@@ -59,6 +61,31 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   );
   const triggerRef = useRef<HTMLButtonElement>(null);
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen, triggerRef);
+  // Computed here rather than inline in the JSX: `jsx-no-leaked-render`
+  // rewrites an inline `&&` into `? … : null`, which is right for children and
+  // wrong for a boolean prop.
+  const liveWindowShown = group.isActive && !open;
+  // The ONLY difference between the two containers is who caps the height. Both
+  // render the same rows, with the same headers, the same labels and the same
+  // collapse-on-completion - the window is a viewport onto the expanded body,
+  // not a second rendering of it.
+  //
+  // Decided by the CONTAINER, never by the group's shape. An earlier revision
+  // derived a render mode from "this group is one lone reasoning block", which
+  // flips the instant a tool call joins the run - and a reasoning child that
+  // flips loses its body in the same frame, because `ReasoningSegment` owns an
+  // `expanded` state that defaults to false. That is the very discontinuity
+  // this design exists to remove, so the flag is constant per container and
+  // cannot flip under a growing run.
+  const renderChildren = (bodyBoundedByParent: boolean): ReactNode =>
+    group.segments.map((segment) => (
+      <ActivityChildSegment
+        key={segment.id}
+        groupId={group.id}
+        segment={segment}
+        bodyBoundedByParent={bodyBoundedByParent}
+      />
+    ));
 
   return (
     <Collapsible
@@ -72,10 +99,17 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}
         className={cn(
-          "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm py-1 pr-1 text-left text-muted-foreground transition-colors",
+          "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm px-1 py-1 text-left text-muted-foreground transition-colors",
           "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         )}
       >
+        <ChevronRight
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground/50 transition-transform",
+            "group-data-[state=open]/activity:rotate-90",
+          )}
+          aria-hidden
+        />
         <Box className="size-3.5 shrink-0 transition-colors" aria-hidden />
         {group.isActive ? (
           <Shimmer
@@ -102,25 +136,26 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
             <LiveElapsed startedAt={group.activeStartedAt} />
           </span>
         ) : null}
-        <ChevronRight
-          className={cn(
-            "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
-            "group-hover/activity:translate-x-0 group-hover/activity:text-foreground group-hover/activity:opacity-100",
-            "group-focus-visible/activity:translate-x-0 group-focus-visible/activity:text-foreground group-focus-visible/activity:opacity-100",
-            "group-data-[state=open]/activity:translate-x-0 group-data-[state=open]/activity:rotate-90 group-data-[state=open]/activity:text-foreground group-data-[state=open]/activity:opacity-100",
-          )}
-          aria-hidden
-        />
       </CollapsibleTrigger>
+      {/* While the run is live and the group is collapsed, the rows show in a
+          bounded window instead of being hidden entirely - you can watch the
+          work without it growing the turn under the run indicator. Children are
+          withheld once the group is open so they never exist in both this
+          window and `CollapsibleContent` at once: a find unit rendered twice
+          would double-count.
+
+          The window caps the height, so a streaming reasoning child must not
+          also render its own `ReasoningTail` - a second `overflow-y-auto`
+          nested inside this one would fight it for the wheel. Its header,
+          label, find anchor and collapse-on-completion are untouched. */}
+      <LiveActivityWindow shown={liveWindowShown}>
+        {open ? null : renderChildren(true)}
+      </LiveActivityWindow>
+      {/* No height cap and no tail pin here, so a streaming reasoning child
+          keeps its own bounded `ReasoningTail`. */}
       <CollapsibleContent>
         <div className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3">
-          {group.segments.map((segment) => (
-            <ActivityChildSegment
-              key={segment.id}
-              groupId={group.id}
-              segment={segment}
-            />
-          ))}
+          {renderChildren(false)}
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -130,10 +165,17 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
 interface ActivityChildSegmentProps {
   readonly groupId: string;
   readonly segment: ActivityGroupDetailSegment;
+  /**
+   * True inside the live window, false inside `CollapsibleContent` - a property
+   * of the container, fixed for as long as the child is mounted in it. Only
+   * reasoning honours it, and only to drop its own inner scroller; nothing
+   * about how the row reads changes between the two.
+   */
+  readonly bodyBoundedByParent: boolean;
 }
 
 function ActivityChildSegment(props: ActivityChildSegmentProps) {
-  const { groupId, segment } = props;
+  const { groupId, segment, bodyBoundedByParent } = props;
   const headerFindUnitId = chatFindActivityGroupChildHeaderUnitId(
     groupId,
     segment.id,
@@ -201,6 +243,16 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           workflowMeta={segment.workflowMeta}
           nested={segment.children}
           variant="row"
+        />
+      );
+    case "reasoning":
+      return (
+        <ReasoningSegment
+          findUnitId={headerFindUnitId}
+          markdown={segment.markdown}
+          isStreaming={segment.isStreaming}
+          durationMs={segment.durationMs}
+          bodyBoundedByParent={bodyBoundedByParent}
         />
       );
     case "approval":
