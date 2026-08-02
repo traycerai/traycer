@@ -16,6 +16,14 @@ export const CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX = 48;
 const CHAT_ANCHOR_MOVER_DEPARTURE_EPSILON_PX = 1;
 const CHAT_SCROLL_ONLY_INTENT_EPSILON_PX = 1;
 
+export function acceptExhaustedPersistedRestoreFallback<T>(
+  restorePersistencePendingRef: { current: boolean },
+  pendingMeasuredRestoreRef: { current: T | null },
+): void {
+  restorePersistencePendingRef.current = false;
+  pendingMeasuredRestoreRef.current = null;
+}
+
 export function scrollOnlyMovementCarriesReaderIntent(input: {
   readonly previousScrollTop: number | null;
   readonly currentScrollTop: number;

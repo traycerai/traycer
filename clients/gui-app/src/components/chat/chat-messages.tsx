@@ -8,6 +8,7 @@ import {
   type ChatTimelineInitialScrollAnchor,
 } from "@/components/chat/chat-timeline";
 import {
+  acceptExhaustedPersistedRestoreFallback,
   anchorMoverShouldYieldToReader,
   applyChatAnchorDriftRepair,
   buildMessageIdToIndex,
@@ -2368,14 +2369,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, []);
 
   const captureActivePointerScrollDirection = useCallback(
-    (currentScrollTop: number | undefined): void => {
+    (
+      currentScrollTop: number | undefined,
+      libraryOwnedScrollTop: number | null,
+    ): void => {
       const previousScrollTop = activePointerLastScrollTopRef.current;
       if (previousScrollTop === null || currentScrollTop === undefined) return;
       if (
         activePointerMovedRef.current &&
         timelineAnchorMessageIdRef.current === null &&
-        currentScrollTop - previousScrollTop >
-          CHAT_TIMELINE_LIVE_EDGE_EPSILON_PX
+        scrollOnlyMovementCarriesReaderIntent({
+          previousScrollTop,
+          currentScrollTop,
+          libraryOwnedScrollTop,
+        })
       ) {
         liveEdgeReattachArmedRef.current = true;
       }
@@ -2385,12 +2392,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   const captureDetachedScrollOnlyDirection = useCallback(
-    (currentScrollTop: number | undefined): void => {
+    (
+      currentScrollTop: number | undefined,
+      libraryOwnedScrollTop: number | null,
+    ): void => {
       if (currentScrollTop === undefined) return;
       const previousScrollTop = detachedLastScrollTopRef.current;
       detachedLastScrollTopRef.current = currentScrollTop;
-      const libraryOwnedScrollTop = capturedLibraryOwnedScrollTopRef.current;
-      capturedLibraryOwnedScrollTopRef.current = null;
       if (
         scrollOnlyMovementCarriesReaderIntent({
           previousScrollTop,
@@ -2444,8 +2452,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
       const currentScrollTop =
         chatTimelineRef.current?.getScrollableNode().scrollTop;
-      captureActivePointerScrollDirection(currentScrollTop);
-      captureDetachedScrollOnlyDirection(currentScrollTop);
+      const libraryOwnedScrollTop = capturedLibraryOwnedScrollTopRef.current;
+      capturedLibraryOwnedScrollTopRef.current = null;
+      captureActivePointerScrollDirection(
+        currentScrollTop,
+        libraryOwnedScrollTop,
+      );
+      captureDetachedScrollOnlyDirection(
+        currentScrollTop,
+        libraryOwnedScrollTop,
+      );
       const previousOwnedScrollTop = lastOwnedScrollTopRef.current;
       const generationOwned =
         liveFollowUserScrollGenerationRef.current ===
@@ -3472,10 +3488,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           }
         },
         onSettledValid: () => {
-          restorePersistencePendingRef.current = false;
-          pendingMeasuredFreeRestoreRef.current = null;
+          acceptExhaustedPersistedRestoreFallback(
+            restorePersistencePendingRef,
+            pendingMeasuredFreeRestoreRef,
+          );
         },
         onSettledInvalid: () => {
+          // The bounded restore has accepted the browser-clamped position as
+          // its safe fallback. Publish that real viewport from now on rather
+          // than retaining/replaying an unreachable saved coordinate across
+          // every later remount.
+          restorePersistencePendingRef.current = false;
+          pendingMeasuredFreeRestoreRef.current = null;
           reconcileInvalidTimelineLanding();
         },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,

@@ -29,6 +29,7 @@ import {
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
 import {
+  acceptExhaustedPersistedRestoreFallback,
   anchorMoverShouldYieldToReader,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
@@ -1297,6 +1298,27 @@ describe("ChatMessages scroll policy", () => {
       fireEvent.pointerMove(scrollNode);
       await fireScrollTopAndFlush(atEnd);
       expect(scrollNode.dataset.scrollMode).toBe("following-end");
+      fireEvent.pointerUp(scrollNode);
+    });
+
+    it("an active text-selection pointer does not turn list-owned motion into scrollbar intent", async () => {
+      setLegendListScrollContainerScrollHeightOverride(2_000);
+      const scrollNode = await renderFollowingAtLiveEdge(
+        "t14-pointer-list-owned-key",
+      );
+      const atEnd = scrollNode.scrollTop;
+
+      fireEvent.pointerDown(scrollNode);
+      await fireScrollTopAndFlush(atEnd - 40);
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+      // Pointer movement can be ordinary text selection. Legend List's
+      // pre-written scroll state is the ownership proof that this later
+      // toward-tail correction is MVCP/app motion, not a thumb drag.
+      fireEvent.pointerMove(scrollNode);
+      await fireLibraryOwnedScrollTo(atEnd);
+
+      expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
       fireEvent.pointerUp(scrollNode);
     });
 
@@ -8878,6 +8900,21 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("releases both persistence gates when an unreachable saved coordinate exhausts restore retries", () => {
+      const restorePersistencePendingRef = { current: true };
+      const pendingMeasuredRestoreRef = {
+        current: { messageId: "saved-row", viewOffset: 10_000 },
+      };
+
+      acceptExhaustedPersistedRestoreFallback(
+        restorePersistencePendingRef,
+        pendingMeasuredRestoreRef,
+      );
+
+      expect(restorePersistencePendingRef.current).toBe(false);
+      expect(pendingMeasuredRestoreRef.current).toBeNull();
     });
 
     it("streaming fresh-open (no saved state) seeds following-end, not the idle anchor candidate", async () => {
