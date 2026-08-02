@@ -48,6 +48,21 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> - mutation flows", () => {
+  it("labels lifecycle management as applying to this machine", async () => {
+    const { management } = makeManagement({});
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    expect(
+      await screen.findByRole("heading", { name: "This machine" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Install, update, restart, register, deregister, and rename the Traycer host service running on this machine.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("opens a confirmation dialog before restarting the host", async () => {
     const restartHost = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),

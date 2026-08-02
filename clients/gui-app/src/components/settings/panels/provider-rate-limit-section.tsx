@@ -190,6 +190,9 @@ function ProviderRateLimitSettingsCard({
     profileId,
     fetchEligible,
   );
+  // Single source of truth for this provider's refresh action + spinner state
+  // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
+  // shared verbatim with the popover's per-provider block.
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId,

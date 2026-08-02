@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IHostStreamClient } from "./host-stream-client";
 
 export interface AgentActivityStreamCallbacks {
   readonly onState: (
@@ -24,7 +24,11 @@ export interface AgentActivityStreamCallbacks {
 }
 
 export interface AgentActivityStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  // `IHostStreamClient`, not the concrete `WsStreamClient`: this client only
+  // calls `.subscribe()`, and every sibling stream client here takes the
+  // interface so a remote host can supply its own transport. Arrived from main
+  // on the concrete type because that branch had no remote transport yet.
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly callbacks: AgentActivityStreamCallbacks;
 }
 

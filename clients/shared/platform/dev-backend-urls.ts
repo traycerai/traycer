@@ -17,6 +17,12 @@
 
 export const DEV_AUTHN_BASE_URL_ENV = "TRAYCER_DEV_AUTHN_BASE_URL";
 export const DEV_CLOUD_UI_BASE_URL_ENV = "TRAYCER_DEV_CLOUD_UI_BASE_URL";
+// Remote Host Support (ticket T14): the relay worker's local WebSocket
+// attach endpoint, only read by the desktop build (the CLI never dials the
+// relay itself). Separate from `devBackendUrlFromEnv` below because the
+// relay URL is `ws:`, not `http:`, and carries a real path (`/attach`), not
+// just an origin.
+export const DEV_RELAY_BASE_URL_ENV = "TRAYCER_DEV_RELAY_BASE_URL";
 
 const ALLOWED_DEV_BACKEND_HOSTS: ReadonlySet<string> = new Set([
   "localhost",
@@ -59,4 +65,38 @@ export function devBackendUrlFromEnv(
     throw new Error(`${envVar} must be an origin URL`);
   }
   return url.origin;
+}
+
+// Same dev-gated posture as `devBackendUrlFromEnv`, but for the relay
+// attach endpoint: `ws:` instead of `http:`, and the full URL (including
+// path) is returned instead of just the origin, since the attach endpoint
+// is never bare (`/attach`).
+export function devRelayBaseUrlFromEnv(
+  environment: string,
+  envVar: string,
+  bakedUrl: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  if (environment !== "dev") return bakedUrl;
+  const raw = env[envVar];
+  if (raw === undefined || raw.trim().length === 0) return bakedUrl;
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    throw new Error(`${envVar} must be a valid URL`);
+  }
+  if (url.protocol !== "ws:") {
+    throw new Error(`${envVar} must use ws`);
+  }
+  if (!ALLOWED_DEV_BACKEND_HOSTS.has(url.hostname)) {
+    throw new Error(`${envVar} must use a loopback host`);
+  }
+  if (url.port.length === 0) {
+    throw new Error(`${envVar} must include a port`);
+  }
+  if (url.username.length > 0 || url.password.length > 0) {
+    throw new Error(`${envVar} must not include credentials`);
+  }
+  return url.toString();
 }

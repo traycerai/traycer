@@ -625,6 +625,10 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.authTokenStoreRotate,
         RunnerHostInvoke.authTokenStoreDelete,
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        // Remote Host Support: host-registry read (§7) and version-policy
+        // write (§13, T16) run in main for the renderer-origin CORS reason.
+        RunnerHostInvoke.listRegisteredHosts,
+        RunnerHostInvoke.updateHostVersionPolicy,
         RunnerHostInvoke.listUserSessions,
         RunnerHostInvoke.revokeUserSession,
         RunnerHostInvoke.revokeAllSessions,

@@ -4,6 +4,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
@@ -77,16 +78,32 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => mockAuth,
 }));
 
+// Feed-mode capability still reads the app-wide stream binding, so this mock
+// stays pointed at `stream-runtime-context` even though the provider no longer
+// takes its CLIENT from there (see the two hooks mocked below).
 vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => streamState.client,
   useStreamMethodSupport: (method: keyof HostStreamRpcRegistry & string) =>
     streamState.useClientSupport
       ? (streamState.client?.getMethodSupport(method) ?? null)
       : streamState.cloudFeedSupport,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => hostState.id,
+// Per the G8 decision the provider binds to the LOCAL host, not the app-wide
+// active one, so these two hooks replace `useReactiveActiveHostId` +
+// `useWsStreamClient` as the harness's steering wheel. The `hostState.id` /
+// `streamState.client` pair keeps its old meaning: `id === null` means "no
+// local host", and assigning a NEW `streamState.client` object is what the
+// provider reads as a respawn that must teardown and reopen.
+vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
+  useReactiveLocalHostEntry: (): HostDirectoryEntry | null =>
+    hostState.id === null
+      ? null
+      : { ...mockLocalHostEntry, hostId: hostState.id },
+}));
+
+vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
+  useHostStreamClientFor: (target: HostDirectoryEntry | null) =>
+    target === null ? null : streamState.client,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -2463,5 +2480,93 @@ describe("<NotificationsSessionProvider />", () => {
       ],
     ]);
     trackSpy.mockRestore();
+  });
+
+  // ---------------------------------------------------------------------
+  // G8: notifications bind to the LOCAL host, not the app-wide active one.
+  // ---------------------------------------------------------------------
+
+  it("does not reopen the stream on a re-render when the local host is unchanged (proxy for an active-host switch elsewhere in the app)", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "notifications.subscribe",
+      );
+    });
+    const openedSessions = streamClient.subscribedMethods.length;
+
+    // This provider has no dependency on the app-wide active host, so a
+    // re-render triggered by an active-host switch elsewhere in the tree is
+    // indistinguishable, from here, from any other unrelated re-render: the
+    // local host entry (and therefore the resolved stream client) stays the
+    // same object, and the stream must not be torn down or reopened.
+    act(() => {
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(streamClient.subscribedMethods.length).toBe(openedSessions);
+    expect(streamClient.sessionFor("notifications.subscribe").closeCount).toBe(
+      0,
+    );
+  });
+
+  // Synchronous by design: the assertion is that NOTHING opens, and awaiting
+  // a `waitFor` for an absence would pass just as well if the stream simply
+  // had not opened yet.
+  it("mounts cleanly with no stream opened when there is no local host (browser/mobile shells)", () => {
+    const queryClient = new QueryClient();
+    // No local host at all - `useReactiveLocalHostEntry` yields null, so
+    // `useHostStreamClientFor` has nothing to build a transport against.
+    hostState.id = null;
+    streamState.client = null;
+    const streams: ControlledStream[] = [];
+    __setNotificationsStreamFactoryForTests((_callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div data-testid="child" />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+
+    expect(view.getByTestId("child")).not.toBeNull();
+    expect(streams).toHaveLength(0);
+    expect(useNotificationsStore.getState().entries).toEqual([]);
   });
 });

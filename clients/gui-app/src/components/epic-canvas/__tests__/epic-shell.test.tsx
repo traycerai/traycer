@@ -16,6 +16,8 @@ import {
 
 const hostClient = {
   getActiveHostId: () => "host-test",
+  getActiveHost: () => null,
+  getRequestContextUserId: () => null,
   onChange: () => () => undefined,
   request: vi.fn(() => Promise.resolve({ tasks: [], hasMore: false })),
 };

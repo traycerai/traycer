@@ -15,6 +15,7 @@ import type {
   ListUserSessionsResponse,
   MintHostCredentialRequest,
 } from "@traycer/protocol/auth/devices-sessions";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import type {
   MintHostCredentialFetchResult,
   RetainedStepUpVerifyFetchResult,
@@ -22,6 +23,10 @@ import type {
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -1150,6 +1155,37 @@ export class AuthService {
   }
 
   /**
+   * Fetches the signed-in user's host registry + live status via the runner
+   * host (`GET /api/v3/hosts`, run in Electron main for CORS). Mirrors
+   * {@link fetchAuthenticatedUser}: the raw bearer stays inside this service
+   * (the auth boundary), so the My Hosts query hook consumes the parsed
+   * envelope without ever touching the token.
+   *
+   *   - signed-out / no bearer → `null` (the panel renders its signed-out state).
+   *   - `unauthorized`         → `null` (a rare mid-rotation 401; the proactive
+   *                              refresh keeps the bearer fresh and the ~15s poll
+   *                              recovers on the next tick — no forced sign-out
+   *                              from a background list poll).
+   *   - `network-error`        → throws so TanStack Query surfaces a retriable
+   *                              error instead of a misleading empty list.
+   */
+  async fetchRegisteredHosts(): Promise<HostListResponse | null> {
+    if (this.currentBearer === null) {
+      return null;
+    }
+    const result = await this.runnerHost.listRegisteredHosts(
+      this.currentBearer,
+    );
+    if (result.kind === "unauthorized") {
+      return null;
+    }
+    if (result.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your hosts.");
+    }
+    return result.response;
+  }
+
+  /**
    * Fetches the signed-in user's device/session list via authn-v3. The raw
    * bearer remains inside this auth boundary; callers consume a parsed DTO from
    * TanStack Query and render signed-out as an empty state.
@@ -1314,6 +1350,29 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.verifyStepUpChallenge(this.currentBearer, code);
+  }
+
+  /**
+   * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
+   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` via the
+   * runner host (run in Electron main for CORS, mirroring
+   * {@link fetchRegisteredHosts}). Never returns `null` on signed-out —
+   * mutating while signed out is a caller bug, so this throws instead of
+   * silently no-oping (unlike the read path, which has a legitimate
+   * signed-out empty state to render).
+   */
+  async updateHostVersionPolicy(
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    if (this.currentBearer === null) {
+      throw new Error("Sign in to update this host.");
+    }
+    return this.runnerHost.updateHostVersionPolicy(
+      this.currentBearer,
+      hostId,
+      input,
+    );
   }
 
   private async revalidateCurrentContextOnce(
