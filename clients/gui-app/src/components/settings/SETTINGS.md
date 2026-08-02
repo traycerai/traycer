@@ -372,11 +372,13 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   footer, no Save button. A **Revert to default** button (disabled while the
   content already equals the provider-based default) calls
   `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
-  Default-host scope: the editor remounts (keyed on the active host id) so a host
-  swap reseeds from that device's file. Backed by `agent.selectionGuide.getGlobal`
-  (returns `{ content, generatedDefaultContent }`), `agent.selectionGuide.setGlobal`,
-  and `agent.selectionGuide.resetGlobalToDefault` through the agent selection
-  guide hooks. The global guide is the only scope: per-workspace
+  The editor has its own host selector; it reaches non-active hosts with a
+  transient `useHostClientFor` context override and remounts when that local
+  selection changes so one device's file never carries into another. Backed by
+  `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
+  `agent.selectionGuide.setGlobal`, and
+  `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
+  hooks. The global guide is the only scope: per-workspace
   `.traycer/agent-selection-guide.md` overrides were removed (older hosts may
   still send them, current clients ignore them).
 - `Keybindings` Keyboard shortcut customization.
@@ -694,7 +696,9 @@ aria-live="polite"` carrying the equivalent text for
     aggregate merge progress across every worktree it owns - deliberately
     plain muted text, not a colored badge, so it never competes with or is
     mistaken for the row's own tier pill.
-- `Host` The active host-management surface for the native-packaging flow, now
+- `Host` Cross-device **My Hosts** plus a clearly labeled **This machine**
+  section for the native-packaging flow; the local rows act only on the host
+  service running on this machine. That local surface is now
   an operational console (`settings-related-panels-core-flows` artifact): a
   self-identifying **summary card** (`host-settings-summary-card.tsx`) leads
   the page with no external "Overview" label, followed by one quiet

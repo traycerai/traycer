@@ -3,7 +3,7 @@ import type {
   IStreamSession,
   StreamCloseReason,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   type HostNotificationsCloudFeedRow,
@@ -312,7 +312,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
  * retry loop: a terminal stream close is otherwise permanent in the shared
  * transport and would leave the cloud-only surface stale until app restart. */
 export function openCloudNotificationsStream(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   onEntitlementDenied: (() => void) | null,
   onArrivals:

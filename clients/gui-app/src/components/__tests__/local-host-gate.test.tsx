@@ -104,6 +104,9 @@ const compatibleHostStatus: HostStatusResponse = {
   ready: true,
   hostVersion: "1.2.3",
   protocolVersion: { major: 1, minor: 0 },
+  busy: false,
+  busySessionCount: 0,
+  updateProgress: null,
 };
 
 let activeMessenger: MockHostMessenger<HostRpcRegistry> | null = null;
@@ -299,7 +302,9 @@ function mountGateWithRuntime(
             messengerFactory={buildMessengerFactory(hostStatus)}
             invalidator={null}
             requestId={null}
-            remoteFetcher={() => Promise.resolve([])}
+            remoteFetcher={() =>
+              Promise.resolve({ kind: "hosts", entries: [] })
+            }
             fallback={<div data-testid="runtime-fallback">runtime loading</div>}
           >
             <HostCompatibilityProvider>
@@ -1101,7 +1106,8 @@ describe("LocalHostGate structural stability across the /settings bypass boundar
     // `messengerFactory` / `remoteFetcher` change identity, which would mask
     // the very remount this test checks for.
     const messengerFactory = buildMessengerFactory(() => compatibleHostStatus);
-    const remoteFetcher = () => Promise.resolve([]);
+    const remoteFetcher = () =>
+      Promise.resolve({ kind: "hosts" as const, entries: [] });
     const queryClient = buildQueryClient();
 
     const mountLog: string[] = [];
@@ -1216,7 +1222,8 @@ describe("LocalHostGate + system tab modal guard integration", () => {
     const host = makeHost(validSnapshot);
     seedStoredToken(host);
     const messengerFactory = buildMessengerFactory(() => compatibleHostStatus);
-    const remoteFetcher = () => Promise.resolve([]);
+    const remoteFetcher = () =>
+      Promise.resolve({ kind: "hosts" as const, entries: [] });
     const queryClient = buildQueryClient();
 
     const modalProbe: { current: SystemTabModalApi | null } = { current: null };

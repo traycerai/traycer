@@ -272,6 +272,34 @@ describe("createTerminalSessionStore", () => {
     });
   });
 
+  it("marks the session 'reaped' (definitive) on a TERMINAL_NOT_FOUND fatal, not the recoverable 'lost'", () => {
+    const harness = createHarness();
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshot(""));
+
+    harness.callbacks().onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: {
+        code: "TERMINAL_NOT_FOUND",
+        reason: "TERMINAL_NOT_FOUND: gone",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().status).toBe("reaped");
+  });
+
+  it("marks the session the recoverable 'lost' for any other closed reason (plain transport drop)", () => {
+    const harness = createHarness();
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshot(""));
+
+    harness.callbacks().onConnectionStatus("closed", { kind: "caller" });
+
+    expect(harness.handle.store.getState().status).toBe("lost");
+  });
+
   it("re-flushes a remembered resize after a reconnect snapshot reports stale dimensions", () => {
     const harness = createHarness();
 
@@ -314,6 +342,112 @@ describe("createTerminalSessionStore", () => {
         rows: 91,
       }),
     );
+  });
+
+  describe("terminal action protocol (T13): replay + honest input-lost", () => {
+    it("replays an unacked write verbatim (same clientActionId) after a reconnect", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      const clientActionId = harness.handle.store
+        .getState()
+        .writeInput("echo hi\r");
+      expect(clientActionId).not.toBeNull();
+      harness.sendAction.mockClear();
+
+      // Transport blip: the actionAck never arrived before the drop.
+      harness.callbacks().onConnectionStatus("reconnecting", null);
+      harness.callbacks().onConnectionStatus("open", null);
+
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "write",
+          clientActionId,
+          data: "echo hi\r",
+        }),
+      );
+      // Still pending until the host (re-)acks it.
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).toContain(clientActionId);
+    });
+
+    it("does not replay a write once its actionAck has landed", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      const clientActionId = harness.handle.store
+        .getState()
+        .writeInput("echo hi\r");
+      if (clientActionId === null) throw new Error("expected an action id");
+      harness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        clientActionId,
+        action: "write",
+        status: "accepted",
+        reason: null,
+        code: null,
+      });
+      harness.sendAction.mockClear();
+
+      harness.callbacks().onConnectionStatus("reconnecting", null);
+      harness.callbacks().onConnectionStatus("open", null);
+
+      expect(harness.sendAction).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "write", clientActionId }),
+      );
+    });
+
+    it("drops a stale pending resize on reconnect instead of replaying it verbatim", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+
+      const resizeId = harness.handle.store.getState().requestResize(120, 40);
+      expect(resizeId).not.toBeNull();
+      harness.sendAction.mockClear();
+
+      harness.callbacks().onConnectionStatus("reconnecting", null);
+      harness.callbacks().onConnectionStatus("open", null);
+      // A fresh snapshot reports the still-stale effective size, so
+      // `flushRequestedResize` reissues its own fresh resize action.
+      emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+
+      // The OLD resize id must never be replayed verbatim...
+      expect(harness.sendAction).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resize", clientActionId: resizeId }),
+      );
+      // ...only a fresh one reflecting the current requested size.
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resize", cols: 120, rows: 40 }),
+      );
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).not.toContain(resizeId);
+    });
+
+    it("surfaces an honest 'input lost' signal when the pending-action ring evicts an unacked write", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      expect(harness.handle.store.getState().lastInputLostAt).toBeNull();
+
+      // Never ack anything - every write stays pending until the ring's
+      // MAX_PENDING_ACTIONS (64) cap forces an eviction.
+      for (let i = 0; i < 65; i += 1) {
+        harness.handle.store.getState().writeInput(`keystroke-${i}`);
+      }
+
+      expect(harness.handle.store.getState().lastInputLostAt).not.toBeNull();
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).toHaveLength(64);
+    });
   });
 
   it("stashes a resize arriving while the session is lost and flushes it after the reconnect snapshot", () => {

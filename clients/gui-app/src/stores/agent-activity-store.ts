@@ -5,7 +5,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { AgentActivityServedBy } from "@traycer/protocol/host/agent/activity";
 import {
@@ -40,7 +40,7 @@ export const useAgentActivityStore = create<AgentActivityState>()((set) => ({
 }));
 
 export function openAgentActivityStream(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
 ): () => void {
   let disposed = false;

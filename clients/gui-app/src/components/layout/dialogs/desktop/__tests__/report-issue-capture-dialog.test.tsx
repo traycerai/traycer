@@ -205,9 +205,14 @@ function createBaseRunnerHost(): IRunnerHost {
   return {
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
+    relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
+    listRegisteredHosts: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    updateHostVersionPolicy: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
     revokeUserSession: () =>
       Promise.resolve({ kind: "network-error" as const }),

@@ -59,6 +59,9 @@ function makeMessengerFactory(): (args: {
             ready: true,
             hostVersion: "1.2.3",
             protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
           }),
       },
     });
@@ -147,7 +150,7 @@ function mountSignInButton(host: MockRunnerHost): MountResult {
           messengerFactory={makeMessengerFactory()}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() => Promise.resolve([])}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback">…</div>}
         >
           <AuthSessionExpiredToastBridge />
@@ -206,7 +209,7 @@ function mountDeviceCodeProgress(host: MockRunnerHost): () => void {
           messengerFactory={makeMessengerFactory()}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() => Promise.resolve([])}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback">…</div>}
         >
           <DeviceCodeProgress

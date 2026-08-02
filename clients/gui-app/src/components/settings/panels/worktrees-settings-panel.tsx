@@ -130,6 +130,7 @@ import {
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
+import { settingsHostOptionLabel } from "./settings-host-labels";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import {
   navigateToTabIntent,
@@ -571,7 +572,7 @@ function HostSelect(props: {
       <SelectContent>
         {props.hosts.map((host) => (
           <SelectItem key={host.hostId} value={host.hostId}>
-            {hostOptionLabel(host)}
+            {settingsHostOptionLabel(host)}
           </SelectItem>
         ))}
       </SelectContent>
@@ -3685,11 +3686,6 @@ function worktreeSelectionCheckboxVisibility(args: {
 
 function branchLabel(entry: WorktreeHostEntry): string {
   return entry.branch ?? "detached HEAD";
-}
-
-function hostOptionLabel(host: HostDirectoryEntry): string {
-  const label = host.label.length > 0 ? host.label : host.hostId;
-  return host.status === "unavailable" ? `${label} (offline)` : label;
 }
 
 function invalidateWorktreeDeleteCaches(
