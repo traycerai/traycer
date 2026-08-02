@@ -1,9 +1,10 @@
 /**
- * `agent.activity.subscribe@1.0` - host-local, per-user agent activity.
+ * `agent.activity.subscribe@1.0` - per-user agent activity.
  *
- * The authenticated connection supplies the user identity. Every activity
- * frame is a complete replacement of that user's current host-local state;
- * reconnect therefore needs no replay cursor or revision.
+ * The host selects the authoritative read plane. Every `state` frame is a
+ * complete replacement and names the plane that served it, so a reconnect or
+ * a local/cloud transition needs neither a replay cursor nor renderer-side
+ * entitlement logic.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -27,16 +28,18 @@ export const agentActivityByEpicSchema = z.record(
 );
 export type AgentActivityByEpic = z.infer<typeof agentActivityByEpicSchema>;
 
-const activityProjectionFields = {
-  byEpic: agentActivityByEpicSchema,
-  hasBinaryPayload: z.literal(false),
-} as const;
+export const agentActivityServedBySchema = z.enum(["local", "cloud"]);
+export type AgentActivityServedBy = z.infer<typeof agentActivityServedBySchema>;
 
 export const agentActivitySubscribeServerFrameSchema = z.discriminatedUnion(
   "kind",
   [
-    z.object({ kind: z.literal("snapshot"), ...activityProjectionFields }),
-    z.object({ kind: z.literal("update"), ...activityProjectionFields }),
+    z.object({
+      kind: z.literal("state"),
+      servedBy: agentActivityServedBySchema,
+      byEpic: agentActivityByEpicSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
     z.object({
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
