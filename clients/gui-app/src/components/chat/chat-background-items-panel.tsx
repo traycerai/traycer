@@ -579,7 +579,7 @@ export function BackgroundItemsPanel(props: {
         <div
           data-testid="background-items-list"
           className={cn(
-            "overflow-y-auto border-t border-border/50 chat-scrollbar-native-thin",
+            "overflow-y-auto border-t border-border/50",
             props.scrollRegionMaxHeightClass,
           )}
         >

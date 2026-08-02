@@ -461,15 +461,13 @@ export const ChatTimeline = memo(function ChatTimeline({
         {...(onListMetricsChange !== undefined
           ? { onMetricsChange: onListMetricsChange }
           : {})}
+        showsVerticalScrollIndicator
+        data-native-scrollbar="true"
         className={cn(
-          // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both`
-          // reserves the scrollbar's track width on BOTH edges permanently, so
-          // the centered `max-w-3xl` column never shifts when the bar
-          // appears/disappears - the previous one-sided `mr-1` margin hack
-          // only reserved the right edge, and the fade mask's own gutter
-          // exclusion band (index.css) is sized to match this.
-          "chat-scrollbar-native-thin scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
-          topFadeEnabled && "chat-timeline-scroll-fade",
+          // The Legend List node is the sole scroll owner. Its native marker
+          // opts out of the app-wide scrollbar theme in index.css; explicit
+          // overflow keeps platform visibility and hit-testing in charge.
+          "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
           className,
         )}
         ListHeaderComponent={

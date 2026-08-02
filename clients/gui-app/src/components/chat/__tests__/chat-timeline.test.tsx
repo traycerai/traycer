@@ -477,12 +477,7 @@ describe("ChatTimeline", () => {
     });
   });
 
-  // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both` reserves the
-  // scrollbar's track width on both edges so the centered column never
-  // shifts when the bar appears/disappears - replaces the old one-sided
-  // `mr-1` margin hack (see index.css's `.chat-timeline-scroll-fade` for the
-  // matching gutter-exclusion band on the fade mask).
-  it("reserves a symmetric scrollbar gutter via scrollbar-gutter-both, not the old one-sided mr-1 margin", () => {
+  it("uses the native Legend List scroll owner without custom hiding or gutter treatment", () => {
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
     const { getByTestId } = renderTimeline({
       messages,
@@ -490,8 +485,13 @@ describe("ChatTimeline", () => {
     });
 
     const listElement = getByTestId("chat-timeline");
-    expect(listElement.className).toContain("scrollbar-gutter-both");
-    expect(listElement.className).not.toContain("mr-1");
+    expect(listElement.getAttribute("data-native-scrollbar")).toBe("true");
+    expect(listElement.className).toContain("overflow-y-auto");
+    expect(listElement.className).not.toContain("scrollbar-gutter");
+    expect(listElement.className).not.toContain("scrollbar-native-thin");
+    expect(listElement.className).not.toContain(
+      "legend-list-scrollbar-y-hidden",
+    );
   });
 
   // M4 (ticket 16 spacer alignment): header/footer 40px -> 12/16px, fade
