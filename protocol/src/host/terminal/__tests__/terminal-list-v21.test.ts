@@ -22,6 +22,7 @@ import {
   listTerminalsResponseSchema,
   listTerminalsResponseSchemaV20,
   listTerminalsResponseSchemaV21,
+  listTerminalsResponseSchemaV22,
   type CanonicalTerminalSessionInfo,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
@@ -118,7 +119,7 @@ describe("terminal.list v2.0 → v2.1 upgrade", () => {
   });
 
   it("upgrades through the host registry minor chain", () => {
-    expect(listRegistry[2]?.latestMinor).toBe(1);
+    expect(listRegistry[2]?.latestMinor).toBe(2);
     const sessions = [epicSession({})];
     const upgraded = upgradeResponseToVersion(
       listRegistry,
@@ -190,8 +191,11 @@ describe("terminal.list v2.1 → v1.0 downgrade", () => {
       listRegistry,
       2,
       1,
-      listTerminalsResponseSchemaV21.parse({
-        sessions,
+      listTerminalsResponseSchemaV22.parse({
+        sessions: sessions.map((session) => ({
+          ...session,
+          currentCwd: session.cwd,
+        })),
         homeCwd: "/Users/dev",
       }),
     );

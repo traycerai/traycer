@@ -198,6 +198,23 @@ export function findPaneById(
   return null;
 }
 
+/**
+ * The tab a pane actually shows: `activeTabId` when it names a live tab,
+ * otherwise the pane's first tab (matching `TabGroupView`'s inline fallback).
+ * Shared by the renderer and, from Ticket 21 slice 2 on, host membership -
+ * the two must agree or a chat the renderer paints can go unhosted. Returns
+ * `null` for an empty pane.
+ */
+export function resolveActivePaneTab(
+  activeTabId: string | null,
+  tabInstanceIds: ReadonlyArray<string>,
+): string | null {
+  if (activeTabId !== null && tabInstanceIds.includes(activeTabId)) {
+    return activeTabId;
+  }
+  return tabInstanceIds[0] ?? null;
+}
+
 export function getNodeAtPath(
   root: TileLayoutNode,
   path: NodePath,
@@ -362,6 +379,36 @@ export function removePaneFromTree(
     root: nextRoot,
     sizesByGroupId: pruneSizes(nextRoot, nextSizes),
   };
+}
+
+/**
+ * Ticket 20: read-only mirror of {@link removePaneFromTree}'s single-survivor
+ * dissolve branch - if removing `paneId` would leave its parent group with
+ * exactly one remaining child, that child is promoted into the parent's slot
+ * and every pane in ITS subtree gets a new React ancestor (a dissolve whose
+ * promoted subtree holds more than one pane remounts every one of them, not
+ * just the direct sibling). Returns the active-tab instanceId of every pane
+ * in the promoted subtree - the tiles a caller must flush a pre-mutation
+ * viewport handoff for - or `[]` when no dissolve would occur (the parent
+ * has other children, or `paneId` is the root).
+ */
+export function paneRemovalDissolveHandoffTargets(
+  root: TileLayoutNode | null,
+  paneId: string,
+): ReadonlyArray<string> {
+  if (root === null) return [];
+  const path = findPanePath(root, paneId);
+  if (path === null || path.length === 0) return [];
+  const parentPath = path.slice(0, -1);
+  const parentNode = getNodeAtPath(root, parentPath);
+  if (parentNode.kind !== "group" || parentNode.children.length !== 2) {
+    return [];
+  }
+  const removeIndex = path[path.length - 1];
+  const survivor = parentNode.children[removeIndex === 0 ? 1 : 0];
+  return collectPanes(survivor)
+    .map((pane) => resolveActivePaneTab(pane.activeTabId, pane.tabInstanceIds))
+    .filter((instanceId): instanceId is string => instanceId !== null);
 }
 
 export interface InsertPaneAtEdgeArgs {

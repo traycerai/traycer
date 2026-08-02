@@ -1,5 +1,6 @@
 import {
   QueryClient,
+  useMutation,
   useQueryClient,
   type UseMutationOptions,
   type UseMutationResult,
@@ -17,10 +18,14 @@ import type {
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  toHostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
@@ -272,9 +277,10 @@ export function useEpicRenameChat() {
  * both the `chats` and `tuiAgents` maps, so a separate TUI variant would be the
  * same call with the same arguments under a second name.
  *
- * Default-host scoped via `useHostClient()`, matching `useEpicRenameChat` /
- * `useEpicDeleteChat` - the sidebar's other row mutations - so all four agree
- * on which host owns a row's writes.
+ * Scoped to the surrounding Epic session's owning host. The sidebar is outside
+ * every tile-level `TabHostProvider`, so archive writes must follow the Epic
+ * stream that projected these rows instead of borrowing an individual tile's
+ * lifetime-bound host.
  *
  * No optimistic write and no cache invalidation, also matching rename: the
  * archive flag lives in the epic Y.Doc, so the host's write replicates back
@@ -290,7 +296,17 @@ export function useEpicArchiveChat(): UseMutationResult<
   HostRpcError,
   SetChatArchivedRequest
 > {
-  const client = useHostClient();
+  return useEpicArchiveChatMutation("individual");
+}
+
+function useEpicArchiveChatMutation(
+  failurePresentation: "individual" | "aggregate",
+): UseMutationResult<
+  SetChatArchivedResponse,
+  HostRpcError,
+  SetChatArchivedRequest
+> {
+  const client = useEpicSessionHostClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.setChatArchived",
@@ -302,27 +318,86 @@ export function useEpicArchiveChat(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.setChatArchived(),
-      onError: (error) => {
-        // EVERY failure mode gets the same generic toast, including
-        // `E_HOST_UNSUPPORTED`. The renderer cannot discriminate them anyway:
-        // the wire error envelope is `{ code, message }` only - there is no
-        // status field on `HostRpcError` - and the specific reason travels in
-        // the message, which must not be parsed.
-        //
-        // Archive is USER-INITIATED, so it follows the foreground convention
-        // (`toastFromHostError`) rather than the background one
-        // (`toastFromBackgroundHostError`, the only helper that swallows
-        // `E_HOST_UNSUPPORTED` - it exists for work nobody asked for, where
-        // there is no one to inform). Someone clicked this control and expects
-        // an outcome; staying silent would read as a broken button.
-        //
-        // The capability gate keeps this path cold: the affordance is hidden
-        // unless that host advertised the method, so reaching it means the host
-        // changed under a live session - an anomaly worth surfacing. A missing
-        // record likewise surfaces as an ordinary failure, which is right since
-        // the row is about to leave the tree.
-        toastFromHostError(error, "Couldn't archive agent.");
-      },
+      onError:
+        failurePresentation === "individual"
+          ? (error) => {
+              // EVERY failure mode gets the same generic toast, including
+              // `E_HOST_UNSUPPORTED`. The renderer cannot discriminate them
+              // anyway: the wire error envelope is `{ code, message }` only -
+              // there is no status field on `HostRpcError` - and the specific
+              // reason travels in the message, which must not be parsed.
+              //
+              // Archive is USER-INITIATED, so it follows the foreground
+              // convention (`toastFromHostError`) rather than the background
+              // one (`toastFromBackgroundHostError`, the only helper that
+              // swallows `E_HOST_UNSUPPORTED` - it exists for work nobody asked
+              // for, where there is no one to inform). Someone clicked this
+              // control and expects an outcome; staying silent would read as a
+              // broken button.
+              //
+              // The capability gate keeps this path cold: the affordance is
+              // hidden unless that host advertised the method, so reaching it
+              // means the host changed under a live session - an anomaly worth
+              // surfacing. A missing record likewise surfaces as an ordinary
+              // failure, which is right since the row is about to leave the
+              // tree.
+              toastFromHostError(error, "Couldn't archive agent.");
+            }
+          : undefined,
+    },
+  });
+}
+
+export interface ArchiveChatsMutationInput {
+  readonly epicId: string;
+  readonly chatIds: readonly string[];
+  readonly archived: boolean;
+}
+
+export type ArchiveChatsMutationResult =
+  readonly PromiseSettledResult<SetChatArchivedResponse>[];
+
+/**
+ * Query-owned lifecycle for a user-initiated archive batch.
+ *
+ * Each record still travels through the archive host mutation, preserving the
+ * RPC gate. This aggregate mutation owns pending state and failure
+ * presentation, and returns every outcome so the caller can reconcile
+ * successful selections without discarding failures.
+ */
+export function useEpicArchiveChats(): UseMutationResult<
+  ArchiveChatsMutationResult,
+  Error,
+  ArchiveChatsMutationInput
+> {
+  const archiveChat = useEpicArchiveChatMutation("aggregate");
+  return useMutation<
+    ArchiveChatsMutationResult,
+    Error,
+    ArchiveChatsMutationInput
+  >({
+    mutationKey: epicMutationKeys.archiveChats(),
+    mutationFn: (variables) =>
+      Promise.allSettled(
+        variables.chatIds.map((chatId) =>
+          archiveChat.mutateAsync({
+            epicId: variables.epicId,
+            chatId,
+            archived: variables.archived,
+          }),
+        ),
+      ),
+    onSuccess: (results) => {
+      const firstFailure = results.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (firstFailure === undefined) return;
+      const reason: unknown = firstFailure.reason;
+      toastFromHostError(
+        toHostRpcError(reason, "epic.setChatArchived"),
+        "Couldn't archive some selected agents.",
+      );
     },
   });
 }

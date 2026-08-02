@@ -526,9 +526,11 @@ export interface HeaderStripDropResult {
 
 /**
  * Drop of a canvas source onto the header tab strip. An existing artifact
- * tab tears off into a fresh header tab (clone semantics: new instance ids,
- * copied sidebar state); every other openable source opens in a new header
- * tab at the insertion index. Returns the new header tab for navigation.
+ * tab tears off into a fresh header tab (MOVE semantics: `tearOffTabIntoNew
+ * HeaderTab` preserves the tile's own instanceId, only the new header tab
+ * record gets a fresh id; sidebar state is copied); every other openable
+ * source opens in a new header tab at the insertion index. Returns the new
+ * header tab for navigation.
  */
 export function commitHeaderStripDrop(
   source: EpicCanvasDragSourceData,
