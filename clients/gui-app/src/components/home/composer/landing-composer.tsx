@@ -15,15 +15,16 @@ import { v4 as uuidv4 } from "uuid";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import {
+  getImageBytes,
   hasLandingImageBytes,
   putImage,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
 import {
   markLandingEditorMounted,
-  reserveLandingImageBudget,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
+import { reserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
 import {
   collectImageAtoms,
   type ComposerImageAtom,
@@ -77,10 +78,20 @@ import {
 } from "@/components/home/hooks/use-landing-composer-actions";
 import { landingComposerSettingsSeedForDraft } from "@/components/home/composer/landing-composer-settings-seed";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
-import { nextComposerMode } from "@/components/home/data/landing-options";
+import {
+  nextComposerMode,
+  type ComposerMode,
+} from "@/components/home/data/landing-options";
 import { ArrowLeftRight } from "lucide-react";
 import { useHostBinding, useHostClient } from "@/lib/host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
+import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
+import {
+  landingStashIdentity,
+  useLandingPromptStashDestination,
+  useLandingPromptStashSource,
+} from "./use-landing-prompt-stash-adapters";
 
 interface LandingComposerProps {
   readonly draftId: string | null;
@@ -92,6 +103,24 @@ interface LandingComposerProps {
   readonly pendingCreateId: string | null;
   readonly initialSettings: ChatRunSettings | null;
   readonly workspaceControls: (disabled: boolean) => ReactNode;
+}
+
+function useLandingDraftComposerMode(
+  draftId: string | null,
+): ComposerMode | null {
+  return useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return (
+      state.drafts.find((draft) => draft.id === draftId)?.composerMode ?? null
+    );
+  });
+}
+
+function promptStashIsDisabled(
+  isSubmitting: boolean,
+  attachmentPending: boolean,
+): boolean {
+  return isSubmitting || attachmentPending;
 }
 
 export function LandingComposer(props: LandingComposerProps) {
@@ -124,12 +153,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const setGlobalComposerMode = useSettingsStore(
     (state) => state.setComposerMode,
   );
-  const draftComposerMode = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return (
-      state.drafts.find((draft) => draft.id === draftId)?.composerMode ?? null
-    );
-  });
+  const draftComposerMode = useLandingDraftComposerMode(draftId);
   const setDraftComposerMode = useLandingDraftStore(
     (state) => state.setDraftComposerMode,
   );
@@ -278,9 +302,16 @@ export function LandingComposer(props: LandingComposerProps) {
   // b64 + `id`): hash + store the bytes, then flip that node's payload to the
   // hash IN PLACE. Runs under the shared pending accounting so submit stays gated
   // until it settles. Editor-gone / store-failure paths drop the node (if still
-  // present) and reclaim the bytes.
+  // present) and reclaim the bytes. `onSettled` (when the caller holds a batch
+  // budget reservation covering this image) fires exactly once, after every
+  // other branch below, regardless of which one is taken - `reingestPendingImages`
+  // passes `undefined` since it never reserves a new share (see its own comment).
   const startPendingImageIngest = useCallback(
-    (id: string, bytes: Uint8Array<ArrayBuffer>) => {
+    (
+      id: string,
+      bytes: Uint8Array<ArrayBuffer>,
+      onSettled: (() => void) | undefined,
+    ) => {
       runPendingImageJob(async (signal) => {
         try {
           const hash = await putImage(bytes);
@@ -320,6 +351,8 @@ export function LandingComposer(props: LandingComposerProps) {
             },
           );
           scheduleLandingImageReconcile();
+        } finally {
+          onSettled?.();
         }
       });
     },
@@ -338,15 +371,32 @@ export function LandingComposer(props: LandingComposerProps) {
       const acceptedBytes = decoded.filter(
         (bytes): bytes is Uint8Array<ArrayBuffer> => bytes !== null,
       );
-      const incomingBytes = acceptedBytes.reduce(
-        (sum, bytes) => sum + bytes.byteLength,
-        0,
-      );
-      // One budget reservation for the whole paste (evicts oldest inactive
-      // drafts, or blocks with its own toast if it still can't fit).
-      const budgetOk =
-        acceptedBytes.length === 0 ||
-        reserveLandingImageBudget(draftId, incomingBytes);
+      // One budget reservation for the whole paste, held until every accepted
+      // image's background ingest job below settles (success or failure) -
+      // mirroring the file-drop path in `use-landing-composer-paste.ts`. The
+      // hash isn't known yet, so each image reserves anonymously (see
+      // `landing-image-budget.ts`).
+      const reservation =
+        acceptedBytes.length === 0
+          ? null
+          : reserveLandingImageBudget(
+              draftId,
+              acceptedBytes.map((bytes) => ({
+                hash: null,
+                bytes: bytes.byteLength,
+              })),
+            );
+      const budgetOk = acceptedBytes.length === 0 || reservation !== null;
+      if (acceptedBytes.length > 0 && reservation === null) {
+        scheduleLandingImageReconcile();
+      }
+      // Released once every job started below has settled - never partially,
+      // and never if the budget rejected the whole batch (nothing was reserved).
+      let remainingJobs = budgetOk ? acceptedBytes.length : 0;
+      const releaseReservationShare = (): void => {
+        remainingJobs -= 1;
+        if (remainingJobs <= 0) reservation?.release();
+      };
       // Count ONLY undecodable images toward the generic "corrupted or too large"
       // toast. A valid image blocked solely by the aggregate budget is already
       // covered by `reserveLandingImageBudget`'s own accurate budget toast, so
@@ -360,7 +410,7 @@ export function LandingComposer(props: LandingComposerProps) {
         }
         if (!budgetOk) return { kind: "rejected" };
         const id = uuidv4();
-        startPendingImageIngest(id, bytes);
+        startPendingImageIngest(id, bytes, releaseReservationShare);
         return { kind: "accepted", id };
       });
       if (corruptedCount > 0) {
@@ -413,7 +463,7 @@ export function LandingComposer(props: LandingComposerProps) {
         corruptedCount += 1;
         continue;
       }
-      startPendingImageIngest(atom.id, bytes);
+      startPendingImageIngest(atom.id, bytes, undefined);
     }
     if (corruptedCount > 0) {
       reportableErrorToast(
@@ -431,6 +481,36 @@ export function LandingComposer(props: LandingComposerProps) {
     }
   }, [startPendingImageIngest]);
   const attachmentPending = isAttachmentIngestPending(paste);
+  const readPromptStashImage = useCallback(async (hash: string) => {
+    const bytes = await getImageBytes(hash);
+    return bytes ?? null;
+  }, []);
+  // The unbound phase is intentionally namespaced away from the eventual
+  // persisted draft id. Its runtime owns an independent revision counter, so
+  // treating both phases as one identity could let equal counter values clear
+  // content written after promotion.
+  const stashIdentity = landingStashIdentity(draftId, props.pendingCreateId);
+  const promptStashSource = useLandingPromptStashSource({
+    stashIdentity,
+    runtimeStore,
+    draftId,
+    unboundRuntime,
+    editorRef,
+  });
+  const promptStashDestination = useLandingPromptStashDestination({
+    stashIdentity,
+    draftId,
+    runtimeStore,
+    editorRef,
+  });
+  const promptStash = usePromptStash({
+    active: chatComposerActive,
+    disabled: promptStashIsDisabled(isSubmitting, attachmentPending),
+    editorRef,
+    readHashImage: readPromptStashImage,
+    source: promptStashSource,
+    destination: promptStashDestination,
+  });
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
   // and its hint can never disagree - the user is told why BEFORE pressing,
@@ -456,7 +536,7 @@ export function LandingComposer(props: LandingComposerProps) {
     isActive: chatComposerActive,
   });
 
-  const handleSnapshot = useCallback(
+  const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       if (runtime !== null) {
         runtime.setSnapshot(content, selection);
@@ -494,13 +574,29 @@ export function LandingComposer(props: LandingComposerProps) {
     [props.pendingCreateId, runtime, unboundRuntime],
   );
 
+  const handleSelectionChange = useCallback(
+    (selection: { from: number; to: number }) => {
+      if (runtime !== null) {
+        runtime.setSelection(selection);
+        return;
+      }
+      unboundRuntime.setState({ selection });
+      const existingDraftId = createdUnboundDraftIdRef.current;
+      if (existingDraftId === null) return;
+      useLandingDraftStore
+        .getState()
+        .setDraftSelection(existingDraftId, selection);
+    },
+    [runtime, unboundRuntime],
+  );
+
   const handleSubmit = useCallback(() => {
     if (!canSubmit) return;
     const toolbar = toolbarStore.getState();
     if (toolbar.selection.modelSlug.length === 0) return;
     actions.submit({
-      // `handleSnapshot` mints the unbound draft the moment the first edit
-      // becomes submittable, but `props.draftId` only catches up on the
+      // `handleDocumentChange` mints the unbound draft the moment the first
+      // edit becomes submittable, but `props.draftId` only catches up on the
       // parent's next render - so a type-then-Enter still reads `null` here.
       // Without this fallback `ensureSubmissionDraft` would mint a SECOND
       // draft and strand the one already holding the user's content.
@@ -599,6 +695,12 @@ export function LandingComposer(props: LandingComposerProps) {
           />
         ) : null
       }
+      stashControl={
+        <PromptStashControl
+          controller={promptStash}
+          pickerStore={pickerStore}
+        />
+      }
       attachmentsStrip={
         <LandingComposerAttachmentStrip
           content={runtimeState.content}
@@ -614,7 +716,8 @@ export function LandingComposer(props: LandingComposerProps) {
       onEditorReady={reingestPendingImages}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
-      onSnapshot={handleSnapshot}
+      onDocumentChange={handleDocumentChange}
+      onSelectionChange={handleSelectionChange}
     />
   );
 }

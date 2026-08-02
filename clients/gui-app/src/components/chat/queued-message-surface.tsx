@@ -49,7 +49,7 @@ import type {
   ChatActiveTurn,
   ChatQueuedItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { QueuedMessageContentPreview } from "@/components/chat/queued-message-content-preview";
+import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
 import {
   QUEUED_MESSAGE_DND_MODIFIERS,
@@ -599,7 +599,12 @@ function QueuedMessageRowContent(props: {
             ) : null}
           </QueuedMessageFloatingChrome>
         ) : null}
-        <QueuedMessageContentPreview content={props.item.message.content} />
+        <ComposerContentPreview
+          content={props.item.message.content}
+          emptyLabel="Queued message"
+          testId="queued-message-content-preview"
+          className={undefined}
+        />
       </div>
     </div>
   );

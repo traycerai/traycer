@@ -53,6 +53,7 @@ function ComposerFileDropOverlay({
 export interface ComposerAreaProps {
   readonly pickerStore: ComposerPickerStore;
   readonly overlay: ReactNode;
+  readonly utilityRail: ReactNode;
   readonly editor: ReactNode;
   readonly toolbar: ReactNode | null;
 }
@@ -60,6 +61,7 @@ export interface ComposerAreaProps {
 function ComposerAreaImpl({
   pickerStore,
   overlay,
+  utilityRail,
   editor,
   toolbar,
 }: ComposerAreaProps): ReactNode {
@@ -71,7 +73,10 @@ function ComposerAreaImpl({
         className="relative rounded-lg bg-muted/30 ring-1 ring-border ring-inset focus-within:ring-ring/30"
       >
         {overlay}
-        <div className="px-4 pt-4">{editor}</div>
+        {utilityRail}
+        <div data-composer-editor-frame="" className="px-4 pt-4">
+          {editor}
+        </div>
         {toolbar}
       </div>
     </div>
@@ -87,6 +92,8 @@ interface ComposerShellProps {
   readonly onDragEnter: DragEventHandler<HTMLElement>;
   readonly onDragLeave: DragEventHandler<HTMLElement>;
   readonly dragOverlayVariant: FileTransferDragOverlayVariant | null;
+  /** In-flow utility chrome rendered before the editor. */
+  readonly utilityRail: ReactNode;
   /** Slot rendered just above the editor (e.g. image-attachment chips). */
   readonly attachmentsStrip: ReactNode;
   /** Slot for the editor surface. */
@@ -103,6 +110,7 @@ function ComposerShellImpl(props: ComposerShellProps) {
     onDragEnter,
     onDragLeave,
     dragOverlayVariant,
+    utilityRail,
     attachmentsStrip,
     editor,
     toolbar,
@@ -133,6 +141,7 @@ function ComposerShellImpl(props: ComposerShellProps) {
         <ComposerArea
           pickerStore={pickerStore}
           overlay={overlay}
+          utilityRail={utilityRail}
           editor={editorSlot}
           toolbar={toolbar}
         />

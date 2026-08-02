@@ -821,6 +821,7 @@ describe("<ChatTile />", () => {
           content: PENDING_DRAFT_CONTENT,
           selection: null,
           resetEpoch: 0,
+          revision: 0,
         },
       },
     });

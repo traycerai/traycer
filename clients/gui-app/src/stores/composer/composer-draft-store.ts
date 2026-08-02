@@ -18,13 +18,35 @@ export interface DraftState {
    * keystroke snapshots from the editor never bump it.
    */
   readonly resetEpoch: number;
+  /**
+   * Bumped on every real content change - typed/pasted edits via
+   * `setSnapshot` AND external replacements via `replaceDraft` (queue-edit
+   * restore, failed-send handoff, `clearDraft`). The prompt-stash source
+   * adapter captures this alongside the taskId as a compare-and-swap token:
+   * a stash only clears this draft when the revision it captured still
+   * matches, so an edit made while the stash was durably saving is kept.
+   */
+  readonly revision: number;
 }
 
 interface ComposerDraftStore {
   readonly drafts: Partial<Record<string, DraftState>>;
+  /**
+   * Records a real document mutation - callers must only invoke this from the
+   * editor boundary's document-change signal (never a selection-only echo),
+   * so every call unconditionally bumps `revision` without comparing content.
+   */
   readonly setSnapshot: (
     taskId: string,
     content: JsonContent,
+    selection: DraftSelection | null,
+  ) => void;
+  /**
+   * Persists a caret move alone. Never touches `revision` - a selection-only
+   * change is not a content edit - and never compares/serializes `content`.
+   */
+  readonly setSelection: (
+    taskId: string,
     selection: DraftSelection | null,
   ) => void;
   readonly replaceDraft: (
@@ -57,6 +79,7 @@ export const EMPTY_COMPOSER_DRAFT: DraftState = {
   content: EMPTY_COMPOSER_CONTENT,
   selection: null,
   resetEpoch: 0,
+  revision: 0,
 };
 
 function ensureDraft(
@@ -73,8 +96,23 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       setSnapshot: (taskId, content, selection) => {
         set((state) => {
           const current = ensureDraft(state.drafts, taskId);
+          return {
+            drafts: {
+              ...state.drafts,
+              [taskId]: {
+                ...current,
+                content,
+                selection,
+                revision: current.revision + 1,
+              },
+            },
+          };
+        });
+      },
+      setSelection: (taskId, selection) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, taskId);
           if (
-            current.content === content &&
             current.selection?.from === selection?.from &&
             current.selection?.to === selection?.to
           ) {
@@ -83,7 +121,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           return {
             drafts: {
               ...state.drafts,
-              [taskId]: { ...current, content, selection },
+              [taskId]: { ...current, selection },
             },
           };
         });
@@ -99,6 +137,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
                 content,
                 selection,
                 resetEpoch: current.resetEpoch + 1,
+                revision: current.revision + 1,
               },
             },
           };
@@ -118,6 +157,26 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
   ),
 );
 
+/**
+ * Storage written before `revision` existed lacks the field despite the
+ * static `DraftState` type - JSON crossing the localStorage boundary is not
+ * guaranteed to match it. `current.revision + 1` on an `undefined` value
+ * produces `NaN`, which then never compares equal to itself
+ * (`NaN !== NaN` is always `true`), permanently blocking the prompt-stash CAS
+ * from ever clearing that draft again. Normalize once, here, at the one
+ * place untrusted persisted data enters the store - everywhere else
+ * (`ensureDraft`, `setSnapshot`, `replaceDraft`) only ever reads a value this
+ * function already produced or `EMPTY_COMPOSER_DRAFT.revision`, both real
+ * numbers, so `no-unnecessary-condition` correctly stays clean past this
+ * boundary.
+ */
+function normalizedLegacyRevision(rawDraft: unknown): number {
+  const revision = (rawDraft as { revision?: unknown } | null)?.revision;
+  return typeof revision === "number" && Number.isFinite(revision)
+    ? revision
+    : 0;
+}
+
 useComposerDraftStore.persist.onFinishHydration(() => {
   useComposerDraftStore.setState((current) => {
     const entries = Object.entries(current.drafts);
@@ -125,7 +184,11 @@ useComposerDraftStore.persist.onFinishHydration(() => {
     const bumped: Partial<Record<string, DraftState>> = {};
     for (const [taskId, draft] of entries) {
       if (draft === undefined) continue;
-      bumped[taskId] = { ...draft, resetEpoch: draft.resetEpoch + 1 };
+      bumped[taskId] = {
+        ...draft,
+        resetEpoch: draft.resetEpoch + 1,
+        revision: normalizedLegacyRevision(draft),
+      };
     }
     return { drafts: bumped };
   });

@@ -40,6 +40,38 @@
   }
 }
 
+@keyframes prompt-stash-count-flash {
+  0%,
+  72% {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-primary) 18%, transparent);
+  }
+  100% {
+    background-color: var(--color-muted);
+    color: inherit;
+    box-shadow: none;
+  }
+}
+
+.prompt-stash-count-flash {
+  animation: prompt-stash-count-flash 700ms ease-out both;
+}
+
+/* A visible composer utility rail owns the card's existing top inset. Keep the
+   prompt close to the rail instead of stacking the default editor padding
+   underneath it; the no-rail composer retains its original spacing. */
+[data-composer-utility-rail] + [data-composer-editor-frame] {
+  padding-top: 0.25rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-stash-count-flash {
+    animation-duration: 1ms;
+  }
+}
+
 .working-text-shimmer {
   background-image: linear-gradient(
     90deg,

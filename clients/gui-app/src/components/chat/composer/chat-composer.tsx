@@ -78,6 +78,13 @@ import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
+import {
+  useChatPromptStashDestination,
+  useChatPromptStashSource,
+} from "./use-chat-prompt-stash-adapters";
+import { PromptStashControl } from "./prompt-stash-control";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -207,6 +214,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const openEpicHandle = useOpenEpicHandle();
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
@@ -236,7 +244,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftContent,
     draftHasText,
     draftHasImages,
-    handleSnapshot,
+    handleDocumentChange,
+    handleSelectionChange,
   } = useChatComposerDraft({
     taskId,
     editorRef,
@@ -367,6 +376,35 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
+  });
+
+  const readPromptStashImage = useCallback(
+    async (hash: string) => {
+      const state = openEpicHandle.store.getState();
+      if (!state.hasAttachmentBytes(hash)) return null;
+      const bytes = await state.readAttachmentBytes(
+        hash,
+        new AbortController().signal,
+      );
+      return bytes === null ? null : new Uint8Array(bytes);
+    },
+    [openEpicHandle],
+  );
+  const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
+  // Chat writes the draft store, but restore still requires the exact ready
+  // editor generation that started the restore - a remount under the same
+  // taskId must not consume the stash into a different editor instance.
+  const promptStashDestination = useChatPromptStashDestination(
+    taskId,
+    editorRef,
+  );
+  const promptStash = usePromptStash({
+    active: focused,
+    disabled: attachmentPending,
+    editorRef,
+    readHashImage: readPromptStashImage,
+    source: promptStashSource,
+    destination: promptStashDestination,
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
@@ -522,6 +560,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
               dragOverlayVariant={dragOverlayVariant}
+              utilityRail={
+                <PromptStashControl
+                  controller={promptStash}
+                  pickerStore={pickerStore}
+                />
+              }
               attachmentsStrip={
                 <ChatComposerAttachmentsStrip
                   content={draftContent}
@@ -540,7 +584,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   hasPastedImageBytes={hasPastedImageBytes}
                   ingestPastedComposerImages={null}
                   isActive={focused}
-                  onSnapshot={handleSnapshot}
+                  onDocumentChange={handleDocumentChange}
+                  onSelectionChange={handleSelectionChange}
                   onSubmit={handleSubmitDraft}
                   steerHintActive={steerHintActive}
                   onPaste={onPaste}

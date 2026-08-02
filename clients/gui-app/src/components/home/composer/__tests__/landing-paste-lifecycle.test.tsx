@@ -146,6 +146,7 @@ vi.mock(
       instance: ComposerPromptEditorHandle,
     ): ComposerPromptEditorHandle => ({
       isReady: () => instance.isReady(),
+      hasFocus: () => false,
       focus: () => instance.focus(),
       focusAtEnd: () => instance.focusAtEnd(),
       getJSON: () => instance.getJSON(),
@@ -153,6 +154,8 @@ vi.mock(
       clear: () => instance.clear(),
       setContent: (content, selection) =>
         instance.setContent(content, selection),
+      syncContent: (content, selection) =>
+        instance.syncContent(content, selection),
       insertImageAttachments: (attrs) => instance.insertImageAttachments(attrs),
       beginPathInsertion: () => instance.beginPathInsertion(),
       removeImageAttachmentById: (id) => instance.removeImageAttachmentById(id),

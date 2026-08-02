@@ -3,10 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
-import {
-  EMPTY_LANDING_DRAFT_CONTENT,
-  sameJsonContent,
-} from "./landing-draft-content";
+import { EMPTY_LANDING_DRAFT_CONTENT } from "./landing-draft-content";
 
 const DRAFT_CONTENT_DEBOUNCE_MS = 300;
 
@@ -20,6 +17,16 @@ export interface DraftRuntimeSource {
   readonly write: (
     draftId: string,
     content: JsonContent,
+    selection: DraftSelection | null,
+  ) => void;
+  /**
+   * Durably persists a caret move alone. Kept separate from `write` so a
+   * selection-only debounced flush never reaches a content-comparing writer
+   * (`setDraftContent`'s `sameJsonContent`) - it must stay O(1), never
+   * O(document-size), even for a multi-megabyte inline-image draft.
+   */
+  readonly writeSelection: (
+    draftId: string,
     selection: DraftSelection | null,
   ) => void;
 }
@@ -65,12 +72,28 @@ export type DraftSubmissionSettlement =
   | { readonly kind: "content-changed" }
   | { readonly kind: "retired" };
 
-interface PendingDraftWrite {
-  readonly content: JsonContent;
-  readonly selection: DraftSelection | null;
-}
+/**
+ * A pending durable write is either a document mutation (content + the
+ * selection alongside it) or a pure selection move. Keeping them distinct
+ * lets `flush()` route each to the correct source capability - a selection
+ * move following a still-unflushed document write coalesces into that same
+ * document operation's selection (one `write` call lands both, and the
+ * pending content is never dropped); a selection move with nothing else
+ * pending stays a standalone selection-only operation through to
+ * `writeSelection`.
+ */
+type PendingDraftWrite =
+  | {
+      readonly kind: "document";
+      readonly content: JsonContent;
+      readonly selection: DraftSelection | null;
+    }
+  | {
+      readonly kind: "selection";
+      readonly selection: DraftSelection | null;
+    };
 
-class DraftRuntime {
+export class DraftRuntime {
   readonly store: StoreApi<DraftRuntimeState>;
   private pending: PendingDraftWrite | null = null;
   private timer: number | null = null;
@@ -106,37 +129,52 @@ class DraftRuntime {
     return this.attachmentCount > 0;
   }
 
+  /**
+   * Records a real document mutation. Callers must only invoke this from the
+   * editor boundary's document-change signal (Tiptap's own `docChanged`-gated
+   * `update` event) - never a selection-only echo - so every call
+   * unconditionally bumps `contentRevision` without comparing content.
+   * `contentRevision` answers "did the user change what was sent?", so a
+   * caret move must go through `setSelection` instead and leave it alone.
+   */
   setSnapshot(content: JsonContent, selection: DraftSelection | null): void {
     const current = this.store.getState();
-    // Compare by VALUE, and bump the revision only for a real content change.
-    // Every editor callback hands back a fresh `editor.getJSON()`, so identity
-    // is never stable: `onSelectionUpdate` re-emits the same document on each
-    // caret move, and Tiptap's `setEditable` emits `update` unconditionally -
-    // which the composer triggers on its own the moment `isSubmitting` flips.
-    // Counting those as edits retired the submission that had just started, and
-    // the create's success path then placed the epic in a background tab
-    // instead of replacing the draft, stranding the sent prompt on the landing
-    // page. `contentRevision` answers "did the user change what was sent?", so
-    // a caret move must move `selection` and leave it alone.
-    const contentChanged = !sameJsonContent(current.content, content);
-    const selectionChanged = !sameSelection(current.selection, selection);
-    if (!contentChanged && !selectionChanged) return;
-    this.pending = { content, selection };
+    this.pending = { kind: "document", content, selection };
+    this.scheduleFlush();
+    this.store.setState({
+      content,
+      selection,
+      contentRevision: current.contentRevision + 1,
+      attachmentRoots: imageHashes(content),
+    });
+  }
+
+  /**
+   * Persists a caret move alone. Never touches `contentRevision` or compares
+   * /serializes `content`. A document write already pending (not yet
+   * flushed) absorbs this selection instead of being replaced - the flush
+   * still lands the newer content, just with the latest caret alongside it.
+   * With nothing else pending, this schedules a standalone selection-only
+   * flush through `writeSelection`, never a content-comparing writer, so a
+   * (possibly multi-megabyte inline-image) document is never walked.
+   */
+  setSelection(selection: DraftSelection | null): void {
+    const current = this.store.getState();
+    if (sameSelection(current.selection, selection)) return;
+    this.pending =
+      this.pending?.kind === "document"
+        ? { ...this.pending, selection }
+        : { kind: "selection", selection };
+    this.scheduleFlush();
+    this.store.setState({ selection });
+  }
+
+  private scheduleFlush(): void {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = window.setTimeout(
       () => this.flush(),
       DRAFT_CONTENT_DEBOUNCE_MS,
     );
-    this.store.setState({
-      content,
-      selection,
-      contentRevision: contentChanged
-        ? current.contentRevision + 1
-        : current.contentRevision,
-      attachmentRoots: contentChanged
-        ? imageHashes(content)
-        : current.attachmentRoots,
-    });
   }
 
   flush(): void {
@@ -147,7 +185,11 @@ class DraftRuntime {
     if (this.pending === null) return;
     const pending = this.pending;
     this.pending = null;
-    this.source()?.write(this.draftId, pending.content, pending.selection);
+    if (pending.kind === "document") {
+      this.source()?.write(this.draftId, pending.content, pending.selection);
+    } else {
+      this.source()?.writeSelection(this.draftId, pending.selection);
+    }
   }
 
   startSubmission(
@@ -227,7 +269,9 @@ class DraftRuntime {
 
   roots(): ReadonlySet<string> {
     const roots = new Set(this.store.getState().attachmentRoots);
-    if (this.pending !== null) {
+    // A pending selection-only write carries no content of its own - the
+    // store's current `attachmentRoots` above already covers it.
+    if (this.pending?.kind === "document") {
       for (const hash of imageHashes(this.pending.content)) roots.add(hash);
     }
     if (this.attempt !== null) {
@@ -238,7 +282,7 @@ class DraftRuntime {
 
   contents(): ReadonlyArray<JsonContent> {
     const contents: JsonContent[] = [this.store.getState().content];
-    if (this.pending !== null) contents.push(this.pending.content);
+    if (this.pending?.kind === "document") contents.push(this.pending.content);
     if (this.attempt !== null) contents.push(this.attempt.content);
     return contents;
   }
