@@ -1090,6 +1090,11 @@
      `data-native-scrollbar`. Keep that element completely outside the app
      scrollbar theme so the browser/OS owns its gutter, thumb, visibility,
      hover behavior, and accessibility. */
+  [data-native-scrollbar] {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
   *:not([data-native-scrollbar]) {
     scrollbar-width: thin;
     scrollbar-color: color-mix(
