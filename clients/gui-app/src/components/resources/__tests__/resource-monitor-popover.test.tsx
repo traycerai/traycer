@@ -537,6 +537,12 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     const search = screen.getByRole("searchbox", { name: "Search resources" });
+    fireEvent.change(search, { target: { value: "Resource Alpha" } });
+
+    expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.queryByText("Background Task")).toBeNull();
+
     fireEvent.change(search, { target: { value: "BACKGROUND" } });
 
     expect(screen.getByText("Background Task")).not.toBeNull();
@@ -591,6 +597,53 @@ describe("ResourceMonitorPopover", () => {
       screen.getByText("No resources match “not-a-resource”."),
     ).not.toBeNull();
     expect(screen.queryByText("Resource Task")).toBeNull();
+  });
+
+  it("reveals matching descendants beneath a matching process", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              activeProcessName: "python",
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node parent.js",
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 101,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node child.js",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "node" } },
+    );
+
+    expect(screen.getByText("node parent.js")).not.toBeNull();
+    expect(screen.getByText("node child.js")).not.toBeNull();
   });
 
   it("uses the live chat title when the persisted owner name is untitled", async () => {

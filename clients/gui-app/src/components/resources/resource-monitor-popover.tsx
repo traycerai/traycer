@@ -1255,6 +1255,7 @@ function TaskResourceSection(props: {
             key={key}
             row={row}
             searchQuery={taskMatchesSearch ? "" : props.searchQuery}
+            taskSearchTerms={[props.task.label, props.task.entry.epicId]}
             expanded={props.expandedOwners.has(key)}
             expandedProcesses={props.expandedProcesses}
             sortOption={props.sortOption}
@@ -1296,7 +1297,9 @@ function OtherResourceSection(props: {
   ]);
   const processRows = sectionMatchesSearch
     ? allProcessRows
-    : filterOwnerProcessRowsForSearch(allProcessRows, props.searchQuery, true);
+    : filterOwnerProcessRowsForSearch(allProcessRows, props.searchQuery, true, [
+        "Other",
+      ]);
   const searchForcesExpanded =
     normalizeResourceSearch(props.searchQuery).length > 0 &&
     !sectionMatchesSearch;
@@ -1655,6 +1658,7 @@ function OwnerProviderIcon(props: { readonly harnessId: string | null }) {
 function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
   readonly searchQuery: string;
+  readonly taskSearchTerms: readonly string[];
   readonly expanded: boolean;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
@@ -1676,12 +1680,13 @@ function OwnerTreeRow(props: {
     props.row.snapshot,
     props.sortOption,
   );
-  const processSearch = buildOwnerProcessSearchProjection(
-    props.row,
+  const processSearch = buildOwnerProcessSearchProjection({
+    row: props.row,
     label,
     processRows,
-    props.searchQuery,
-  );
+    searchQuery: props.searchQuery,
+    taskTerms: props.taskSearchTerms,
+  });
   const visibleProcessRows = processSearch.rows;
   const visibleExpanded = props.expanded || processSearch.forcesExpanded;
   const visibleCpuPercent = visibleExpanded
@@ -2165,29 +2170,40 @@ function processMatchesSearch(
   process: ResourceProcessSnapshotWire,
   searchQuery: string,
 ): boolean {
-  return matchesResourceSearch(searchQuery, [
+  return matchesResourceSearch(searchQuery, processSearchTerms(process));
+}
+
+function processSearchTerms(
+  process: ResourceProcessSnapshotWire,
+): readonly (string | number | null)[] {
+  return [
     process.name,
     process.command,
     process.pid,
     process.parentPid,
     process.rootPid,
-  ]);
+  ];
 }
 
 function taskRowMatchesSearch(
   task: TaskDisplayRow,
   searchQuery: string,
 ): boolean {
-  return matchesResourceSearch(searchQuery, [task.label, task.entry.epicId]);
+  return matchesResourceSearch(searchQuery, taskSearchTerms(task));
 }
 
-function ownerMetadataMatchesSearch(
+function taskSearchTerms(
+  task: TaskDisplayRow,
+): readonly (string | number | null)[] {
+  return [task.label, task.entry.epicId];
+}
+
+function ownerMetadataSearchTerms(
   row: OwnerDisplayRow,
   label: string,
-  searchQuery: string,
-): boolean {
+): readonly (string | number | null)[] {
   const snapshot = row.snapshot;
-  return matchesResourceSearch(searchQuery, [
+  return [
     label,
     ownerKindLabel(snapshot.owner.kind),
     harnessProviderSubtitle(
@@ -2197,7 +2213,7 @@ function ownerMetadataMatchesSearch(
     ),
     snapshot.owner.ownerId,
     snapshot.owner.hostId,
-  ]);
+  ];
 }
 
 function resolvedOwnerLabel(
@@ -2212,33 +2228,43 @@ function resolvedOwnerLabel(
   );
 }
 
-function ownerRowMatchesSearch(
+function ownerHierarchyMatchesSearch(
+  task: TaskDisplayRow,
   row: OwnerDisplayRow,
   searchQuery: string,
   liveArtifactTitle: string | null,
 ): boolean {
   const label = resolvedOwnerLabel(row, liveArtifactTitle);
-  return (
-    ownerMetadataMatchesSearch(row, label, searchQuery) ||
-    row.snapshot.processes.some((process) =>
-      processMatchesSearch(process, searchQuery),
-    )
-  );
+  return matchesResourceSearch(searchQuery, [
+    ...taskSearchTerms(task),
+    ...ownerMetadataSearchTerms(row, label),
+    ...row.snapshot.processes.flatMap(processSearchTerms),
+  ]);
 }
 
-function buildOwnerProcessSearchProjection(
-  row: OwnerDisplayRow,
-  label: string,
-  processRows: OwnerProcessRows,
-  searchQuery: string,
-): { readonly rows: OwnerProcessRows; readonly forcesExpanded: boolean } {
-  const ownerMatches = ownerMetadataMatchesSearch(row, label, searchQuery);
+function buildOwnerProcessSearchProjection(input: {
+  readonly row: OwnerDisplayRow;
+  readonly label: string;
+  readonly processRows: OwnerProcessRows;
+  readonly searchQuery: string;
+  readonly taskTerms: readonly string[];
+}): { readonly rows: OwnerProcessRows; readonly forcesExpanded: boolean } {
+  const ownerTerms = [
+    ...input.taskTerms,
+    ...ownerMetadataSearchTerms(input.row, input.label),
+  ];
+  const ownerMatches = matchesResourceSearch(input.searchQuery, ownerTerms);
   return {
     rows: ownerMatches
-      ? processRows
-      : filterOwnerProcessRowsForSearch(processRows, searchQuery, false),
+      ? input.processRows
+      : filterOwnerProcessRowsForSearch(
+          input.processRows,
+          input.searchQuery,
+          false,
+          ownerTerms,
+        ),
     forcesExpanded:
-      normalizeResourceSearch(searchQuery).length > 0 && !ownerMatches,
+      normalizeResourceSearch(input.searchQuery).length > 0 && !ownerMatches,
   };
 }
 
@@ -2257,7 +2283,8 @@ function filterTaskRowsForSearch(
         snapshotOwner.kind,
         snapshotOwner.ownerId,
       );
-      return ownerRowMatchesSearch(
+      return ownerHierarchyMatchesSearch(
+        task,
         owner,
         searchQuery,
         liveOwnerTitleByKey.get(key) ?? null,
@@ -2351,11 +2378,20 @@ function buildSearchVisibleKillKeys(
         owner,
         liveOwnerTitleByKey.get(key) ?? null,
       );
+      const taskTerms = taskSearchTerms(task);
+      const ownerTerms = [
+        ...taskTerms,
+        ...ownerMetadataSearchTerms(owner, label),
+      ];
       const ownerMatches =
-        taskMatches || ownerMetadataMatchesSearch(owner, label, searchQuery);
+        taskMatches || matchesResourceSearch(searchQuery, ownerTerms);
       const processKeys = ownerMatches
         ? owner.snapshot.processes.map(processRowKey)
-        : searchVisibleProcessKeys(owner.snapshot.processes, searchQuery);
+        : searchVisibleProcessKeys(
+            owner.snapshot.processes,
+            searchQuery,
+            ownerTerms,
+          );
       for (const processKey of processKeys) visibleKeys.add(processKey);
     }
   }
@@ -2363,7 +2399,7 @@ function buildSearchVisibleKillKeys(
   const otherMatches = matchesResourceSearch(searchQuery, ["Other"]);
   const otherProcessKeys = otherMatches
     ? other.processes.map(processRowKey)
-    : searchVisibleProcessKeys(other.processes, searchQuery);
+    : searchVisibleProcessKeys(other.processes, searchQuery, ["Other"]);
   for (const processKey of otherProcessKeys) visibleKeys.add(processKey);
   return visibleKeys;
 }
@@ -2371,13 +2407,21 @@ function buildSearchVisibleKillKeys(
 function searchVisibleProcessKeys(
   processes: readonly ResourceProcessSnapshotWire[],
   searchQuery: string,
+  ancestorTerms: readonly (string | number | null)[],
 ): ReadonlySet<string> {
   const processByPid = new Map(
     processes.map((process) => [process.pid, process]),
   );
   const visibleKeys = new Set<string>();
   for (const process of processes) {
-    if (!processMatchesSearch(process, searchQuery)) continue;
+    if (
+      !matchesResourceSearch(searchQuery, [
+        ...ancestorTerms,
+        ...processSearchTerms(process),
+      ])
+    ) {
+      continue;
+    }
     let current: ResourceProcessSnapshotWire | undefined = process;
     const visitedPids = new Set<number>();
     while (current !== undefined && !visitedPids.has(current.pid)) {
@@ -2449,14 +2493,20 @@ function matchingOtherRootPids(
 function filterProcessDisplayRowsForSearch(
   rows: readonly ProcessDisplayRow[],
   searchQuery: string,
+  ancestorTerms: readonly (string | number | null)[],
 ): ProcessDisplayRow[] {
   return rows.flatMap((row): ProcessDisplayRow[] => {
-    if (processMatchesSearch(row.process, searchQuery)) return [row];
     const children = filterProcessDisplayRowsForSearch(
       row.children,
       searchQuery,
+      ancestorTerms,
     );
-    if (children.length === 0) return [];
+    const rowMatches = matchesResourceSearch(searchQuery, [
+      ...ancestorTerms,
+      ...processSearchTerms(row.process),
+    ]);
+    if (!rowMatches && children.length === 0) return [];
+    if (children.length === 0) return [row];
     return [
       {
         ...row,
@@ -2473,11 +2523,13 @@ function filterOwnerProcessRowsForSearch(
   processRows: OwnerProcessRows,
   searchQuery: string,
   includeRoots: boolean,
+  ancestorTerms: readonly (string | number | null)[],
 ): OwnerProcessRows {
   if (normalizeResourceSearch(searchQuery).length === 0) return processRows;
   const rows = filterProcessDisplayRowsForSearch(
     includeRoots ? processRows.rootRows : processRows.rows,
     searchQuery,
+    ancestorTerms,
   );
   return {
     ...processRows,
