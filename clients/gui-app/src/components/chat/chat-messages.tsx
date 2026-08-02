@@ -1437,6 +1437,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // to a newer operation.
       activeAnimatedImperativeScrollGenerationRef.current = null;
       anchorUserScrollGenerationRef.current += 1;
+      // First-metrics restoration is still pending when a reader takes over
+      // immediately after mount. Cancel every metrics-driven continuation,
+      // not just the measured free-scroll replay, so the later Legend List
+      // callback cannot recreate an anchor session or detached reserve after
+      // the gesture has established free-scroll ownership.
+      pendingRestoredNewTurnResumeRef.current = null;
+      pendingRestoredDetachedReplyReserveRef.current = null;
       pendingMeasuredFreeRestoreRef.current = null;
       if (publishesReaderPosition) {
         // Wheel/touch/keyboard intent is itself authoritative even when the
