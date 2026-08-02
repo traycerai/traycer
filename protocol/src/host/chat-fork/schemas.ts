@@ -84,6 +84,13 @@ export const chatForkChatNoticeSchema = z.object({
    * against exactly this value rather than a single episode-level scalar.
    */
   repairEpoch: z.number().int().nonnegative(),
+  /**
+   * The host-minted identity of THIS fork occurrence. Not renderer content -
+   * nothing displays it - but mirrored like every other field, because the
+   * host reads it back off its own held event when `resolve` fans out, and
+   * this schema is that event's one shape.
+   */
+  forkOccurrenceId: z.string().min(1),
 });
 export type ChatForkChatNotice = z.infer<typeof chatForkChatNoticeSchema>;
 
@@ -107,7 +114,6 @@ export const chatForkEventSchema = z.object({
   cause: chatForkCauseSchema,
   /** The same thing in a sentence - the only place machine provenance appears. */
   diagnostic: z.string(),
-  repairEpoch: z.number().int().nonnegative(),
   chats: z.array(chatForkChatNoticeSchema),
   options: z.array(chatForkDecisionOptionSchema),
 });

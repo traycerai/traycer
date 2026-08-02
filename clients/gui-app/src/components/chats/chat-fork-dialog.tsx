@@ -165,11 +165,12 @@ function ForkDialogBody(props: {
 
       <div className="flex flex-col gap-2">
         {event.options
-          // An option that covers no chat in this episode decides nothing -
-          // e.g. `keep-this-host-lineage` when every chat's candidate failed
-          // to compose. Offering it invites a choice with no effect, which
-          // reads as a bug ("I picked this and nothing happened") rather than
-          // the honest absence it is.
+          // An option that covers no chat at all decides nothing, and
+          // offering it invites a choice with no effect. Since the host now
+          // covers every chat under both options - a candidate-less chat
+          // keeps its incumbent under `keep-this-host-lineage`, disclosed in
+          // that option's own `detail` - this only ever fires for an empty
+          // episode.
           .filter((option) => Object.keys(option.winners).length > 0)
           .map((option) => (
             <label

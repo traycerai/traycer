@@ -37,7 +37,6 @@ function sampleEvent(): ChatForkEvent {
     detectedAt: 1_000,
     cause: "sibling-of-receipt",
     diagnostic: "a copied or restored host directory is the usual cause",
-    repairEpoch: 1,
     chats: [
       {
         taskId: "task-1",
@@ -57,6 +56,7 @@ function sampleEvent(): ChatForkEvent {
           partCount: 4,
         },
         repairEpoch: 1,
+        forkOccurrenceId: "occ-1",
       },
     ],
     options: [
@@ -212,6 +212,67 @@ describe("ChatForkDialog + ChatForkIndicatorBanner", () => {
     expect(typeof options.onSuccess).toBe("function");
   });
 
+  it("claims success only when EVERY chat resolved - a partial or empty result set does not", async () => {
+    // Spec 4. The confirmation screen is the only thing the owner reads after
+    // pressing Confirm, so "Decision recorded" over a set where one chat came
+    // back `not-ready` (or where nothing came back at all) is a lie that
+    // stops them retrying. `every` on an empty array is vacuously true, which
+    // is exactly how the empty case used to render as a decision.
+    const cases: {
+      readonly results: readonly { readonly status: string }[];
+      readonly title: string;
+    }[] = [
+      { results: [], title: "Still finalizing" },
+      {
+        results: [{ status: "resolved" }, { status: "not-ready" }],
+        title: "Still finalizing",
+      },
+      {
+        results: [{ status: "resolved" }, { status: "resolved" }],
+        title: "Decision recorded",
+      },
+    ];
+
+    for (const [index, expected] of cases.entries()) {
+      testState.resolveMutate.mockImplementation(
+        (
+          _params: unknown,
+          options: {
+            readonly onSuccess: (data: {
+              readonly outcome: string;
+              readonly results: readonly unknown[];
+            }) => void;
+          },
+        ) => {
+          options.onSuccess({
+            outcome: "resolved",
+            results: expected.results.map((r, i) => ({
+              taskId: "task-1",
+              chatId: `chat-${index}-${i}`,
+              cloneChatId: null,
+              repairEpoch: 2,
+              ...r,
+            })),
+          });
+        },
+      );
+      const user = userEvent.setup();
+      render(
+        <>
+          <ChatForkIndicatorBanner />
+          <ChatForkDialog />
+        </>,
+      );
+      await user.click(screen.getByRole("button", { name: "Review" }));
+      await user.click(screen.getByText("Keep the published history"));
+      await user.click(screen.getByRole("button", { name: "Confirm choice" }));
+
+      expect(screen.getByText(expected.title)).toBeTruthy();
+      cleanup();
+      useAppDialogStore.getState().closeDialog();
+    }
+  });
+
   it("renders nothing when no fork event is open", () => {
     testState.event = null;
     render(<ChatForkIndicatorBanner />);
@@ -284,6 +345,7 @@ describe("ChatForkDialog + ChatForkIndicatorBanner", () => {
           // No composable candidate - the second option's winners map is empty.
           candidate: null,
           repairEpoch: 1,
+          forkOccurrenceId: "occ-1",
         },
       ],
       options: [
