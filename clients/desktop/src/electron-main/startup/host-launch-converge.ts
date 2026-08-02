@@ -1,7 +1,13 @@
 import { log } from "../app/logger";
 import { refreshRegistryUpdateState } from "../ipc/host-management-ipc";
 import { isHostRemovedByUser } from "../host/host-removal-state";
-import type { HostControllerStatus } from "../host/host-controller-types";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ConvergeReadyOk,
+  HostControllerStatus,
+  MutationOutcome,
+} from "../host/host-controller-types";
 import type { HostActivationState } from "../host/host-state";
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 
@@ -103,12 +109,19 @@ export async function runLaunchHostConvergeReconcile(
     return;
   }
 
-  const outcome = status.updateReady
-    ? await hostController.applyStaged("launch", false)
-    : status.activation === "pendingActivation" ||
-        status.activation === "activationUnknown"
-      ? await hostController.activateInstalled(false)
-      : null;
+  let outcome: MutationOutcome<
+    ApplyStagedOk | ActivateInstalledOk | ConvergeReadyOk
+  > | null = null;
+  if (status.updateReady) {
+    outcome = await hostController.applyStaged("launch", false);
+  } else if (
+    status.activation === "pendingActivation" ||
+    status.activation === "activationUnknown"
+  ) {
+    outcome = await hostController.activateInstalled(false);
+  } else if (status.activation === "unavailable") {
+    outcome = await hostController.convergeReady(false);
+  }
 
   if (outcome === null) {
     log.info("[host-controller] launch converge has no activation debt", {

@@ -4,6 +4,7 @@ import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   ApplyStagedTrigger,
+  ConvergeReadyOk,
   HostControllerStatus,
   MutationOutcome,
 } from "../../host/host-controller-types";
@@ -105,10 +106,12 @@ function fakeHostController(
 ): IpcHostController & {
   readonly applyStagedCalls: readonly [ApplyStagedTrigger, boolean][];
   readonly activateInstalledCalls: readonly boolean[];
+  readonly convergeReadyCalls: readonly boolean[];
   readonly stageLatestCalls: number;
 } {
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
   const activateInstalledCalls: boolean[] = [];
+  const convergeReadyCalls: boolean[] = [];
   let stageLatestCalls = 0;
   return {
     get applyStagedCalls() {
@@ -116,6 +119,9 @@ function fakeHostController(
     },
     get activateInstalledCalls() {
       return activateInstalledCalls;
+    },
+    get convergeReadyCalls() {
+      return convergeReadyCalls;
     },
     get stageLatestCalls() {
       return stageLatestCalls;
@@ -136,10 +142,11 @@ function fakeHostController(
       activateInstalledCalls.push(force);
       return activateInstalledOutcome;
     },
-    convergeReady: () => {
-      throw new Error(
-        "fakeHostController.convergeReady: not used by these tests",
-      );
+    async convergeReady(
+      force: boolean,
+    ): Promise<MutationOutcome<ConvergeReadyOk>> {
+      convergeReadyCalls.push(force);
+      return { kind: "ok", value: { running: true, version: "1.4.0" } };
     },
     async stageLatest(): Promise<void> {
       stageLatestCalls += 1;
@@ -275,6 +282,24 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
     await runLaunchHostConvergeReconcile(controller, fakeMenu());
 
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  it("re-registers and starts an installed host when reinstall left its service unavailable", async () => {
+    const controller = fakeHostController(
+      fakeStatus(false, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([false]);
     expect(controller.applyStagedCalls).toEqual([]);
     expect(controller.activateInstalledCalls).toEqual([]);
   });
