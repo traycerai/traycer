@@ -408,6 +408,79 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
+  // `$frontend-design.` is prose in a single node - the regex demands
+  // whitespace or end after the name, and `.` is neither. Splitting the run must
+  // not change that answer: the serialized prompt still reads
+  // `/frontend-design.`, which the host's parser also refuses, so a structural
+  // chip here would invoke a skill the user's own text never asked for.
+  it("does not chip a leading token an adjacent node ends with punctuation", () => {
+    const doc = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "$frontend-design",
+                marks: [{ type: "bold" }],
+              },
+              { type: "text", text: "." },
+            ],
+          },
+        ],
+      },
+      CATALOG,
+    );
+
+    expect(doc.content?.[0].content).toEqual([
+      { type: "text", text: "$frontend-design", marks: [{ type: "bold" }] },
+      { type: "text", text: "." },
+    ]);
+  });
+
+  // The discriminator for the guard above: a split run whose next node DOES open
+  // with whitespace is a real command and still has to chip. Without this the
+  // boundary check could pass by refusing every cross-node token.
+  it("chips a leading token when the adjacent node opens with whitespace", () => {
+    const doc = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "$frontend-design",
+                marks: [{ type: "bold" }],
+              },
+              { type: "text", text: " polish this" },
+            ],
+          },
+        ],
+      },
+      CATALOG,
+    );
+
+    expect(doc.content?.[0].content).toEqual([
+      {
+        type: "slashCommand",
+        attrs: {
+          commandName: "frontend-design",
+          harnessId: "claude",
+          kind: "skill",
+          description: "Use frontend-design",
+          argumentHint: null,
+          path: "/repo/.agents/skills/frontend-design/SKILL.md",
+          trigger: "$",
+        },
+      },
+      { type: "text", text: " polish this" },
+    ]);
+  });
+
   it("leaves a non-leading $skill alone", () => {
     // Only the leading token is a command context, same as `/`.
     expect(submittedParagraph("please run $frontend-design", CATALOG)).toEqual([

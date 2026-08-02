@@ -248,8 +248,11 @@ export function parseLeadingSlashCommand(prompt: string): {
 interface LeadingSlashScanState {
   complete: boolean;
   changed: boolean;
-  /** Text of the sibling following the node being scanned, when it is text. */
-  nextText: string | null;
+  /**
+   * Whether the sibling after the node being scanned terminates a token that
+   * ends exactly at that node's edge. See {@link closesLeadingToken}.
+   */
+  nextClosesToken: boolean;
   readonly catalog: SlashCommandCatalog | null;
 }
 
@@ -260,7 +263,7 @@ function contentWithLeadingSlashCommandNode(
   const state: LeadingSlashScanState = {
     complete: false,
     changed: false,
-    nextText: null,
+    nextClosesToken: true,
     catalog,
   };
   const nodes = nodesWithLeadingSlashCommandNode([content], state);
@@ -273,20 +276,38 @@ function nodesWithLeadingSlashCommandNode(
   state: LeadingSlashScanState,
 ): JsonContent[] {
   return nodes.flatMap((node, index) => {
-    // The sibling that would continue this node's text. Formatting splits a
-    // run - a bold `$review` beside a plain `-code` - into separate text nodes,
-    // so a token can look complete here while the prompt reads `/review-code`.
-    // `.at` so the out-of-range read is typed `| undefined`; index access
-    // here is not, and the optional chain would lint as unnecessary.
-    const next = nodes.at(index + 1);
-    state.nextText = next?.type === "text" ? (next.text ?? null) : null;
+    // `.at` so the out-of-range read is typed `| undefined`; index access here
+    // is not, and the optional chain would lint as unnecessary.
+    state.nextClosesToken = closesLeadingToken(nodes.at(index + 1));
     return nodeWithLeadingSlashCommandNode(node, state);
   });
 }
 
-/** Whether `text` continues a command name rather than ending it. */
-function continuesCommandName(text: string | null): boolean {
-  return text !== null && /^[A-Za-z0-9:_-]/.test(text);
+/**
+ * Whether `node` - the sibling right after a token that ends exactly at a node
+ * boundary - supplies the whitespace-or-end that `LEADING_SLASH_COMMAND_REGEX`
+ * requires after a command name.
+ *
+ * Formatting splits a run, so the character deciding whether the token is a
+ * command often lives in the NEXT node: a bold `$review` can be followed by a
+ * plain `-code`, or a plain `.`. In one node the regex rejects both
+ * (`$review-code` is a different name, `$review.` has no boundary), and it has
+ * to reach the same answer when a node edge falls between them - otherwise the
+ * chip invokes `review` while the prompt still serializes as `/review-code` or
+ * `/review.`, and a command the user never wrote runs.
+ *
+ * So this asks whether the sibling OPENS a boundary, not whether it continues
+ * the name. Those differ exactly on punctuation, which continues no name yet
+ * closes no token either.
+ */
+function closesLeadingToken(node: JsonContent | undefined): boolean {
+  // Nothing follows: the token really did end.
+  if (node === undefined) return true;
+  // A hard break serializes to a newline, which is whitespace.
+  if (node.type === "hardBreak") return true;
+  // Anything else that does not open with whitespace - punctuation, more name
+  // characters, a mention chip - leaves the token unterminated.
+  return node.type === "text" && /^\s/.test(node.text ?? "");
 }
 
 /**
@@ -309,12 +330,12 @@ function textWithLeadingSlashCommandNode(
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return [node];
   const rest = text.slice(parsed.end);
-  // The token only LOOKS complete because this node ends. Chipping a prefix
-  // here is worse than not converting at all: the chip resolves and is sent
-  // structurally as `review` while the text still reads `/review-code`, so the
-  // WRONG skill runs - whereas leaving it as prose lets the host resolve the
-  // full concatenated name lexically.
-  if (rest.length === 0 && continuesCommandName(state.nextText)) return [node];
+  // The token only LOOKS complete because this node ends. Chipping it is worse
+  // than not converting at all: the chip is sent structurally as `review` while
+  // the text still reads `/review-code` or `/review.`, so a command the user
+  // never wrote runs - whereas leaving it as prose lets the host resolve the
+  // full concatenated text lexically, or refuse it exactly as we did.
+  if (rest.length === 0 && !state.nextClosesToken) return [node];
   const resolved = state.catalog?.get(parsed.name.toLowerCase()) ?? null;
   // `$` is meaningless without a catalog hit - see the note on
   // `buildSubmittedChatJSONContent` - so leave the prose alone.
