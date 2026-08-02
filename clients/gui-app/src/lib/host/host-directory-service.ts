@@ -186,6 +186,16 @@ export class HostDirectoryService implements IHostDirectoryService {
     // that still answers in that window. A shell without a local host (web,
     // mobile) answers `null` and nothing is neutralised.
     await this.seedLocalHostIdFromShell();
+    // The seed introduced an await BEFORE the subscription exists, so a
+    // provider that unmounts or swaps its runner mid-flight can call
+    // `dispose()` while nothing is registered yet. Without this recheck
+    // `start()` would resume onto a disposed service and install a local-host
+    // listener that no `dispose()` will ever remove - an orphan dispatching
+    // stale callbacks for the life of the page. The later stopped-state guard
+    // sits after the remote refresh, too far in to prevent that.
+    if (!this.isStarted()) {
+      return;
+    }
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
       this.localEntry = toLocalEntry(snapshot);
       if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
@@ -856,6 +866,15 @@ function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
  *
  * The registry's label/version are kept: they are this machine's, and they are
  * the freshest description available while the host is down.
+ *
+ * `status` is forced to `unavailable` rather than carried over from the twin's
+ * presence lease. It is the truth - this host cannot be reached - and status
+ * transitions are an event other surfaces subscribe to: the landing-terminal
+ * tombstone recovery bridge fires its pending kill on an
+ * `unavailable -> available` edge. Copying the lease's `available` would make
+ * it fire at boot against an entry with no `websocketUrl` (the mutation
+ * rejects), and then see no edge when the real host publishes - stranding the
+ * tombstone and leaving the host terminal alive.
  */
 function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
   return {
@@ -864,7 +883,7 @@ function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
     kind: "local",
     websocketUrl: null,
     version: twin.version,
-    status: twin.status,
+    status: "unavailable",
   };
 }
 

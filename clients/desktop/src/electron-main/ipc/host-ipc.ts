@@ -7,6 +7,7 @@ import type {
   HostRestartRequestResult,
   MutationOutcome,
 } from "../../ipc-contracts/host-management-types";
+import { readFile } from "node:fs/promises";
 import { readPidMetadata } from "../host/host-lifecycle";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
@@ -30,6 +31,28 @@ export function restartRequestResultFromOutcome<TOk>(
   throw new Error(outcome.message);
 }
 
+/**
+ * The `hostId` from the host's durable enrollment record, or `null` when the
+ * machine has never enrolled (or the file is unreadable/malformed - an
+ * unusable record and an absent one mean the same thing to the caller).
+ */
+async function readEnrolledHostId(path: string): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") return null;
+    const hostId = (parsed as Record<string, unknown>).hostId;
+    return typeof hostId === "string" && hostId.length > 0 ? hostId : null;
+  } catch {
+    return null;
+  }
+}
+
 export function registerHostIpc(bridge: RunnerIpcBridge): void {
   // Renderer-driven host respawn.
   //
@@ -51,17 +74,23 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  // Read on demand rather than cached at install time: the file is watched
-  // and rewritten across the host's whole lifecycle, and a renderer that asks
-  // during a restart should get the id the host most recently published, not
-  // whatever happened to be on disk when the bridge was built.
+  // Read on demand rather than cached at install time: both files change
+  // across the host's lifecycle, and a renderer asking during a restart should
+  // get today's answer, not whatever was on disk when the bridge was built.
+  //
+  // `pid.json` first (it describes the host that is actually running), then the
+  // enrollment record. The fallback is the load-bearing half: the host UNLINKS
+  // `pid.json` on graceful shutdown, which is precisely what a reinstall
+  // performs - so on the launch this seed exists for, the live file is gone and
+  // only the durable enrollment still identifies this machine.
   bridge.handleInvoke(
     RunnerHostInvoke.lastKnownLocalHostId,
     async (): Promise<string | null> => {
       const metadata = await readPidMetadata(
         bridge.options.host.pidMetadataFile,
       );
-      return metadata === null ? null : metadata.hostId;
+      if (metadata !== null) return metadata.hostId;
+      return readEnrolledHostId(bridge.options.host.identityEnrollmentFile);
     },
   );
 

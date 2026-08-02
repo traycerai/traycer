@@ -306,6 +306,12 @@ export interface IpcHostLifecycle {
    */
   readonly pidMetadataFile: string;
   /**
+   * The host's durable enrollment record. `pid.json` is unlinked on graceful
+   * shutdown, so this is the only path that still identifies this machine's
+   * host while it is stopped.
+   */
+  readonly identityEnrollmentFile: string;
+  /**
    * Whether the lifecycle has been torn down. The respawn handler reads
    * this between awaits so it doesn't drive SMAppService mutations
    * against a disposed instance during shutdown.

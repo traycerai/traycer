@@ -1279,7 +1279,11 @@ describe("HostDirectoryService", () => {
         kind: "local",
         websocketUrl: null,
         version: "1.2.2",
-        status: "available",
+        // Not the twin's presence lease: `unavailable` is the truth, and it is
+        // what leaves an `unavailable -> available` edge for status-transition
+        // subscribers (e.g. landing-terminal tombstone recovery) when the real
+        // host finally publishes.
+        status: "unavailable",
       });
       expect(entries[1]).toEqual(secondRemoteHostEntry);
     });
@@ -1429,6 +1433,46 @@ describe("HostDirectoryService", () => {
       expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
         localSnapshot.hostId,
       );
+    });
+
+    /**
+     * Regression (Codex P2 on OSS #913): seeding introduced an await BEFORE
+     * the local-host subscription is installed, so a provider unmounting or
+     * swapping its runner mid-flight can `dispose()` while nothing is
+     * registered. Resuming past that point would install a listener no
+     * `dispose()` can remove - an orphan dispatching stale callbacks for the
+     * life of the page.
+     */
+    it("abandons startup when disposed while the shell seed is in flight", async () => {
+      let releaseSeed: () => void = () => undefined;
+      const host = new MockRunnerHost({
+        signInUrl: "https://auth.traycer.invalid/sign-in",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+      });
+      const seedGate = new Promise<void>((resolve) => {
+        releaseSeed = resolve;
+      });
+      vi.spyOn(host, "getLastKnownLocalHostId").mockImplementation(async () => {
+        await seedGate;
+        return localSnapshot.hostId;
+      });
+      const onLocalHostChange = vi.spyOn(host, "onLocalHostChange");
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+      });
+
+      const startPromise = directory.start();
+      directory.dispose();
+      releaseSeed();
+      await startPromise;
+
+      expect(onLocalHostChange).not.toHaveBeenCalled();
     });
 
     it("leaves other machines' remote hosts untouched", async () => {

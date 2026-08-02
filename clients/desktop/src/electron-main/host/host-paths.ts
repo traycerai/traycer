@@ -137,6 +137,14 @@ export function userLaunchAgentPlistPath(labelId: string): string {
 export interface HostFsLayout {
   readonly rootDir: string;
   readonly pidMetadataFile: string;
+  /**
+   * The host's durable enrollment record. Unlike `pidMetadataFile` - which the
+   * host UNLINKS on graceful shutdown, so it is absent for exactly as long as
+   * the host is stopped - this survives shutdown, reinstall, and update. It is
+   * therefore the only on-disk answer to "which hostId is this machine?" while
+   * no host is running.
+   */
+  readonly identityEnrollmentFile: string;
   readonly logFile: string;
   readonly installDir: string;
   readonly installRecordFile: string;
@@ -171,6 +179,7 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
   return {
     rootDir,
     pidMetadataFile: join(rootDir, "pid.json"),
+    identityEnrollmentFile: join(rootDir, "identity", "enrollment.json"),
     logFile: join(rootDir, "host.log"),
     installDir,
     installRecordFile: join(installDir, "install.json"),
