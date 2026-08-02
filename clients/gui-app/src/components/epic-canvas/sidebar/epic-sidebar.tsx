@@ -109,6 +109,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   useEpicArtifact,
+  useEpicActiveAgentIds,
   useAncestorIds,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
@@ -128,7 +129,10 @@ import {
   resolveDisabledPresentation,
 } from "@/lib/disabled-presentation";
 import { displayTitle } from "@/lib/display-title";
-import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useEpicArchiveChats,
+  useEpicDeleteChat,
+} from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
 import {
   useEpicCreateArtifact,
@@ -153,6 +157,7 @@ import {
 } from "@/stores/epics/panel-header-menu-store";
 import { cn } from "@/lib/utils";
 import {
+  Archive,
   Download,
   FolderOpen,
   ListChecks,
@@ -178,7 +183,9 @@ import {
 import {
   Fragment,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   useCallback,
   type ComponentType,
@@ -188,6 +195,7 @@ import { SplitResizeHandle } from "@/components/epic-canvas/canvas/resize-handle
 import {
   isSidebarBulkSelectionPanelId,
   rootmostSelectedSidebarIds,
+  sidebarIdsWithinRoots,
   SidebarBulkSelectionProvider,
   useSidebarBulkSelection,
   type SidebarBulkSelectionPanelId,
@@ -1339,6 +1347,98 @@ function sidebarDeleteTargetForRecord(
   return { id: record.id, kind: "artifact" };
 }
 
+interface SelectedChatArchiveAction {
+  readonly supported: boolean;
+  readonly pending: boolean;
+  readonly selectedHasActiveAgent: boolean;
+  readonly archiveSelected: () => void;
+}
+
+function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
+  const selection = useSidebarBulkSelection();
+  const supported = useChatArchiveSupported();
+  const archiveChats = useEpicArchiveChats();
+  const activeAgentIds = useEpicActiveAgentIds();
+  const tree = useEpicTreeIndex();
+  const latestTreeRef = useRef(tree);
+  useLayoutEffect(() => {
+    latestTreeRef.current = tree;
+  }, [tree]);
+  const epicId = useOpenEpicHandle().epicId;
+  const selectedRootIds = useMemo(
+    () =>
+      rootmostSelectedSidebarIds({
+        ids: selection.selectedVisibleIds,
+        tree,
+      }),
+    [selection.selectedVisibleIds, tree],
+  );
+  const selectedHasActiveAgent =
+    sidebarIdsWithinRoots({
+      ids: [...activeAgentIds],
+      rootIds: selectedRootIds,
+      tree,
+    }).length > 0;
+  const archiveSelected = useCallback(() => {
+    if (
+      selection.panelId !== "chats" ||
+      !supported ||
+      !canMutate ||
+      archiveChats.isPending ||
+      selectedRootIds.length === 0 ||
+      selectedHasActiveAgent
+    ) {
+      return;
+    }
+    archiveChats.mutate(
+      { epicId, chatIds: selectedRootIds, archived: true },
+      {
+        onSuccess: (results) => {
+          const successfulRootIds = selectedRootIds.filter(
+            (_id, index) => results[index].status === "fulfilled",
+          );
+          // Checkboxes stay interactive while the batch is pending. Clear each
+          // successful root even if projection already removed it, plus only
+          // the descendants still beneath it in the latest committed tree.
+          // That includes collaborators' additions without clearing children
+          // they moved elsewhere while the request was in flight.
+          const latestTree = latestTreeRef.current;
+          const successfulSubtreeIds = new Set([
+            ...successfulRootIds,
+            ...sidebarIdsWithinRoots({
+              ids: Object.keys(latestTree.nodeById),
+              rootIds: successfulRootIds,
+              tree: latestTree,
+            }),
+          ]);
+          selection.clearSelectedIds([...successfulSubtreeIds]);
+          // If a collaborator moves a selected row beneath this root after
+          // the response snapshot, the later archive projection can be the
+          // event that removes the final selection. Arm that one projection
+          // path so it exits instead of leaving a zero-selected toolbar.
+          if (successfulRootIds.length > 0) {
+            selection.armSelectablePruneExit(successfulRootIds);
+          }
+        },
+      },
+    );
+  }, [
+    archiveChats,
+    canMutate,
+    epicId,
+    selectedHasActiveAgent,
+    selectedRootIds,
+    selection,
+    supported,
+  ]);
+  return {
+    supported,
+    pending: archiveChats.isPending,
+    selectedHasActiveAgent,
+    archiveSelected,
+  };
+}
+
 function describeSidebarBulkDeleteTitle(
   panelId: SidebarBulkSelectionPanelId,
   ids: readonly string[] | null,
@@ -1936,6 +2036,57 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
   );
 }
 
+function SidebarSelectedChatArchiveButton(props: {
+  readonly visible: boolean;
+  readonly selectedCount: number;
+  readonly canMutate: boolean;
+  readonly action: SelectedChatArchiveAction;
+}) {
+  if (!props.visible || !props.action.supported) return null;
+  const label =
+    props.selectedCount > 0
+      ? `Archive ${props.selectedCount} selected ${panelRowNoun("chats", props.selectedCount)}`
+      : "Archive selected agents";
+  return (
+    <TooltipWrapper
+      label={
+        props.action.selectedHasActiveAgent
+          ? "Wait for selected agents to finish"
+          : "Archive selected agents"
+      }
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={label}
+          data-testid="epic-sidebar-archive-selected-chats"
+          disabled={
+            props.selectedCount === 0 ||
+            !props.canMutate ||
+            props.action.pending ||
+            props.action.selectedHasActiveAgent
+          }
+          onClick={props.action.archiveSelected}
+        >
+          {props.action.pending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : (
+            <Archive className="size-4" />
+          )}
+        </Button>
+      </span>
+    </TooltipWrapper>
+  );
+}
 function SidebarBulkSelectionActions() {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
@@ -1945,6 +2096,7 @@ function SidebarBulkSelectionActions() {
   const meta = useEpicSnapshotMeta();
   const canMutate =
     isEditableRole(permissionRole) && connectionStatus !== "closed";
+  const chatArchive = useSelectedChatArchive(canMutate);
   const recordById = useMemo(
     () => new Map(records.map((record) => [record.id, record])),
     [records],
@@ -1976,7 +2128,7 @@ function SidebarBulkSelectionActions() {
         type="button"
         variant="ghost"
         size="xs"
-        disabled={!selection.canSelect}
+        disabled={!selection.canSelect || chatArchive.pending}
         onClick={
           selection.allVisibleSelected
             ? selection.deselectAllVisible
@@ -1997,7 +2149,7 @@ function SidebarBulkSelectionActions() {
             variant="ghost"
             size="icon-sm"
             aria-label="Cancel selection"
-            disabled={selection.deletePending}
+            disabled={selection.deletePending || chatArchive.pending}
             onClick={selection.cancelSelection}
           >
             <X className="size-3.5" />
@@ -2047,6 +2199,12 @@ function SidebarBulkSelectionActions() {
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
+      <SidebarSelectedChatArchiveButton
+        visible={selection.panelId === "chats"}
+        selectedCount={selection.selectedCount}
+        canMutate={canMutate}
+        action={chatArchive}
+      />
       <Button
         type="button"
         variant="ghost"
@@ -2058,7 +2216,10 @@ function SidebarBulkSelectionActions() {
         }
         data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
         disabled={
-          selection.selectedCount === 0 || !canMutate || selection.deletePending
+          selection.selectedCount === 0 ||
+          !canMutate ||
+          selection.deletePending ||
+          chatArchive.pending
         }
         className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={selection.requestDeleteSelected}

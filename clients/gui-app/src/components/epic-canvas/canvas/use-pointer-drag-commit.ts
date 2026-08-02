@@ -15,8 +15,46 @@
  * in `onDragFrame`, and decide what commit/restore mean for their store.
  * During a drag NO React state changes - `onDragFrame` must mutate the DOM
  * directly; the single store write happens in `onDragCommit`.
+ *
+ * Ticket 21 wave-2 live pass (row 1): once `onDragStart` succeeds, move/up/
+ * cancel/blur are handled via `window`-level listeners rather than React
+ * props on the handle. `setPointerCapture` is supposed to make the handle
+ * the sole recipient of subsequent pointer events regardless of what else
+ * is under the cursor, but a live divider drag under a stacked-plane layout
+ * (a later DOM-order sibling with its own `pointer-events:auto` content
+ * abutting the handle's seam) showed `onDragStart` succeeding (capture
+ * engaged, the `traycer-panel-resizing` class active) while every
+ * subsequent move/up event silently failed to reach the handle's own
+ * listeners for the duration of the drag - not reproducible in jsdom, since
+ * this repo's test setup stubs both `setPointerCapture` and
+ * `elementFromPoint` to inert no-ops (jsdom implements neither real pointer
+ * capture nor real hit-testing). A `window` listener is reached by the
+ * native event's normal bubble phase, independent of which element the
+ * browser ends up treating as the authoritative pointer-capture target.
+ *
+ * Fix-round 2 (same live pass): moving ownership to imperative `window`
+ * listeners means THIS hook alone is responsible for every terminal path,
+ * not just pointerup/pointercancel:
+ * - Blur must be a terminal event the hook itself owns (not just observed
+ *   via `beginPanelResizeInteraction`'s own blur cleanup, which only clears
+ *   the shared interaction id - it does not know about `dragRef` and cannot
+ *   detach this hook's listeners). Without the hook's own blur listener,
+ *   `onDragFrame` keeps firing on later moves after focus loss even though
+ *   the resize-freeze lifecycle already ended.
+ * - A component can unmount mid-drag (e.g. a structural op removes the
+ *   pane). React only runs effect cleanups on unmount, and this hook had no
+ *   effect - so nothing detached the listeners, and a later release could
+ *   commit through a dead component's closures.
+ * Every handler AND the detach function are declared inside `onPointerDown`
+ * itself (`function` declarations, not top-level consts, so they can
+ * reference each other regardless of textual order) and stored together on
+ * `dragRef.current`. This makes them exact per-drag identities - the same
+ * function references used to `addEventListener` are the ones used to
+ * `removeEventListener`, and both the unmount-cleanup effect and every
+ * window listener always act through the ONE currently-active drag record,
+ * never a stale one from an earlier or later render.
  */
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
 
@@ -57,24 +95,31 @@ export interface UsePointerDragCommitArgs {
  * `aria-orientation` describes the divider line, which runs perpendicular
  * to the drag axis. Consumers add `aria-valuenow/min/max`, `aria-label`,
  * test ids, and className.
+ *
+ * Move/up/cancel are NOT exposed here - once a drag starts, they are handled
+ * by `window`-level listeners attached imperatively (see module doc), not by
+ * React props on the handle itself.
  */
 export interface PointerDragSliderProps {
   readonly role: "slider";
   readonly tabIndex: 0;
   readonly "aria-orientation": PointerDragAxis;
   readonly onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  readonly onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  readonly onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  readonly onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
   readonly onDoubleClick: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
 }
 
 interface ActivePointerDrag {
   readonly pointerId: number;
-  readonly startCoordinate: number;
-  readonly interactionId: number;
-  readonly stopPanelResizeInteraction: () => void;
+  readonly handleElement: HTMLDivElement;
+  /**
+   * Cancels this exact drag: detaches this exact drag's window listeners,
+   * releases pointer capture, stops the panel-resize interaction, and
+   * restores via `onDragCancel` - never commits. Bound at drag-start with
+   * that render's closures, so the unmount-cleanup effect (and blur) can
+   * call it correctly regardless of how many renders happened since.
+   */
+  readonly cancel: () => void;
 }
 
 let nextPointerResizeInteractionId = 0;
@@ -111,62 +156,115 @@ export function usePointerDragCommit(
   const horizontal = axis === "horizontal";
   const dragRef = useRef<ActivePointerDrag | null>(null);
 
-  const endDrag = (
-    event: ReactPointerEvent<HTMLDivElement>,
-    commit: boolean,
-  ): void => {
-    const drag = dragRef.current;
-    if (drag === null || drag.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    const active = activePointerResizeInteractionId === drag.interactionId;
-    drag.stopPanelResizeInteraction();
-    if (commit && active) {
-      onDragCommit();
-      return;
+  // Unmount safety net (fix-round 2, F2): a drag active when this component
+  // unmounts (e.g. a structural op removes the pane mid-gesture) would
+  // otherwise leak its window listeners and let a LATER pointerup commit
+  // through a dead component. `drag.cancel` was captured at drag-start with
+  // THAT render's exact closures/listener identities, so calling it here is
+  // correct no matter how many (or how few) renders happened between
+  // drag-start and unmount - this effect's own closure is never involved.
+  useEffect(() => {
+    return () => {
+      dragRef.current?.cancel();
+    };
+  }, []);
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    if (activePointerResizeInteractionId !== null) return;
+    if (!onDragStart(event)) return;
+    event.preventDefault();
+    const handleElement = event.currentTarget;
+    const pointerId = event.pointerId;
+    const startCoordinate = horizontal ? event.clientX : event.clientY;
+    handleElement.setPointerCapture(pointerId);
+    const interactionId = nextPointerResizeInteractionId + 1;
+    nextPointerResizeInteractionId = interactionId;
+    activePointerResizeInteractionId = interactionId;
+
+    // Declared as hoisted function declarations (not consts) so they can
+    // reference each other regardless of textual order - `finish` needs
+    // `detach`, `detach` needs the four handlers, three of the handlers need
+    // `finish`. All close over `pointerId`/`startCoordinate`/`handleElement`/
+    // `interactionId` from THIS `onPointerDown` invocation, never a
+    // different render's.
+    function handleMove(moveEvent: PointerEvent): void {
+      if (dragRef.current === null || moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      onDragFrame(
+        (horizontal ? moveEvent.clientX : moveEvent.clientY) - startCoordinate,
+      );
     }
-    onDragCancel();
+    function handleUp(upEvent: PointerEvent): void {
+      if (dragRef.current === null || upEvent.pointerId !== pointerId) return;
+      finish(true);
+    }
+    function handlePointerCancelEvent(cancelEvent: PointerEvent): void {
+      if (dragRef.current === null || cancelEvent.pointerId !== pointerId) {
+        return;
+      }
+      finish(false);
+    }
+    // Blur is a terminal event this hook owns directly (fix-round 2, F1):
+    // `beginPanelResizeInteraction`'s own blur listener only clears the
+    // shared interaction id for the panel-resize CSS class - it has no
+    // knowledge of `dragRef` and cannot stop this hook from continuing to
+    // mutate geometry on a later move. Blur always cancels, never commits;
+    // it carries no pointerId to match against.
+    function handleBlur(): void {
+      finish(false);
+    }
+    function detach(): void {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handlePointerCancelEvent);
+      window.removeEventListener("blur", handleBlur);
+    }
+    function finish(commit: boolean): void {
+      if (dragRef.current === null) return;
+      dragRef.current = null;
+      detach();
+      if (handleElement.hasPointerCapture(pointerId)) {
+        handleElement.releasePointerCapture(pointerId);
+      }
+      const active = activePointerResizeInteractionId === interactionId;
+      stopPanelResizeInteraction();
+      if (commit && active) {
+        onDragCommit();
+        return;
+      }
+      onDragCancel();
+    }
+
+    // Registered before `beginPanelResizeInteraction`'s own window
+    // pointerup/pointercancel/blur listeners (below) so this hook's own
+    // commit/cancel decision - and its `stopPanelResizeInteraction()` call -
+    // always runs first; `stop()` is idempotent, so the panel-resizing
+    // class's own listener is then a harmless no-op for the same event.
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handlePointerCancelEvent);
+    window.addEventListener("blur", handleBlur);
+    const stopPanelResizeInteraction = beginPanelResizeInteraction(
+      pointerId,
+      () => {
+        clearActivePointerResizeInteraction(interactionId);
+      },
+    );
+
+    dragRef.current = {
+      pointerId,
+      handleElement,
+      cancel: () => finish(false),
+    };
   };
 
   return {
     role: "slider",
     tabIndex: 0,
     "aria-orientation": horizontal ? "vertical" : "horizontal",
-    onPointerDown: (event) => {
-      if (event.button !== 0) return;
-      if (activePointerResizeInteractionId !== null) return;
-      if (!onDragStart(event)) return;
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      const interactionId = nextPointerResizeInteractionId + 1;
-      nextPointerResizeInteractionId = interactionId;
-      activePointerResizeInteractionId = interactionId;
-      const stopPanelResizeInteraction = beginPanelResizeInteraction(
-        event.pointerId,
-        () => {
-          clearActivePointerResizeInteraction(interactionId);
-        },
-      );
-      dragRef.current = {
-        pointerId: event.pointerId,
-        startCoordinate: horizontal ? event.clientX : event.clientY,
-        interactionId,
-        stopPanelResizeInteraction,
-      };
-    },
-    onPointerMove: (event) => {
-      const drag = dragRef.current;
-      if (drag === null || drag.pointerId !== event.pointerId) return;
-      onDragFrame(
-        (horizontal ? event.clientX : event.clientY) - drag.startCoordinate,
-      );
-    },
-    onPointerUp: (event) => {
-      endDrag(event, true);
-    },
-    onPointerCancel: (event) => {
-      endDrag(event, false);
-    },
+    onPointerDown,
     onDoubleClick: onReset,
     onKeyDown: (event) => {
       const grow = horizontal ? "ArrowRight" : "ArrowDown";

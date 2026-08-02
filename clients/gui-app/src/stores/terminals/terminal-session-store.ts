@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
 import type {
   CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
   TerminalSessionExitReason,
   TerminalSessionInfo,
   TerminalSessionKind,
@@ -116,6 +117,14 @@ export interface TerminalSessionState {
   readonly lastOutputPreview: string | null;
   readonly title: string | null;
   readonly activeProcessName: string | null;
+  readonly currentCwd: string | null;
+  /**
+   * Whether a negotiated stream frame has explicitly carried `currentCwd`.
+   * This distinguishes a pre-1.5/absent field from an explicit empty value,
+   * which is normalized to `currentCwd: null` but must still clear cached
+   * `terminal.list` metadata.
+   */
+  readonly currentCwdReported: boolean;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */
   setWriter: (writer: TerminalDataWriter | null) => void;
@@ -235,6 +244,16 @@ function activeProcessNameFromSession(
   if (name === undefined || name === null) return null;
   const trimmed = name.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function currentCwdFromSession(
+  session:
+    | CanonicalTerminalSessionInfoWithCurrentCwd
+    | CanonicalTerminalSessionInfo
+    | TerminalSessionInfo,
+): string | null | undefined {
+  if (!("currentCwd" in session)) return undefined;
+  return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
 export function createTerminalSessionStore(
@@ -392,6 +411,7 @@ export function createTerminalSessionStore(
     const callbacks: TerminalStreamCallbacks = {
       onSnapshot: (frame, scrollback) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         // First host frame for this session: the scrollback is in hand even
         // if xterm hasn't registered its writer yet (it lands in pendingWrites).
         markTerminalLoad(options.sessionId, "snapshot");
@@ -452,6 +472,9 @@ export function createTerminalSessionStore(
           lastOutputPreview,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
         flushRequestedResize();
       },
@@ -506,11 +529,15 @@ export function createTerminalSessionStore(
       },
       onSessionUpdated: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         set({
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
       },
       onConnectionStatus: (
@@ -566,6 +593,8 @@ export function createTerminalSessionStore(
       lastOutputPreview: null,
       title: null,
       activeProcessName: null,
+      currentCwd: null,
+      currentCwdReported: false,
 
       setWriter: (next) => {
         writer = next;

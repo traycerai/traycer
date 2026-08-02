@@ -61,11 +61,16 @@
  * `terminal.subscribe@1.4` (bottom of this file, alongside its own frame
  * schema): scope-bearing session info for the terminal major-2 unary
  * contracts. See the explicit compatibility deviation at that schema.
+ *
+ * `terminal.subscribe@1.5`: adds live `currentCwd` to the nested session
+ * metadata. The host initializes it to launch `cwd` and updates it only when
+ * the shell emits a supported current-directory OSC sequence.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   canonicalTerminalSessionInfoSchema,
+  canonicalTerminalSessionInfoWithCurrentCwdSchema,
   terminalSessionInfoSchema,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
@@ -309,6 +314,85 @@ export const terminalSubscribeServerFrameSchemaV14 = z.discriminatedUnion(
 export type TerminalSubscribeServerFrameV14 = z.infer<
   typeof terminalSubscribeServerFrameSchemaV14
 >;
+
+// `terminal.subscribe@1.5` is the current scope-bearing shape. The only wire
+// addition is required `currentCwd` inside the three variants that carry a
+// session. V1.4 remains frozen above; the host explicitly projects session
+// info for each negotiated minor.
+export const terminalSubscribeServerFrameSchemaV15 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoWithCurrentCwdSchema,
+      scrollback: z.string(),
+      ackCreditSupported: z.boolean().optional(),
+    }),
+    z.object({
+      kind: z.literal("data"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      chunk: z.string(),
+    }),
+    z.object({
+      kind: z.literal("resized"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      cols: z.number().int().positive(),
+      rows: z.number().int().positive(),
+    }),
+    z.object({
+      kind: z.literal("exit"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      exitCode: z.number().int(),
+    }),
+    z.object({
+      kind: z.literal("actionAck"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      clientActionId: z.string(),
+      action: terminalActionSchema,
+      status: terminalActionAckStatusSchema,
+      reason: z.string().nullable(),
+      code: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("binarySnapshot"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoWithCurrentCwdSchema,
+    }),
+    z.object({
+      kind: z.literal("binaryData"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+    }),
+    z.object({
+      kind: z.literal("sessionUpdated"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoWithCurrentCwdSchema,
+    }),
+  ],
+);
+export type TerminalSubscribeServerFrameV15 = z.infer<
+  typeof terminalSubscribeServerFrameSchemaV15
+>;
+
+export const terminalSubscribeV15 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchema,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV15,
+  clientFrameSchema: terminalSubscribeClientFrameSchema,
+});
 
 export const terminalSubscribeV14 = defineStreamRpcContract({
   method: "terminal.subscribe",

@@ -1,5 +1,8 @@
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
-import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   terminalSessionKey,
   type LandingTerminalTabRef,
@@ -9,7 +12,9 @@ export interface LandingTerminalReconciliationInput {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly activeHostId: string;
-  readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
+  readonly sessions: ReadonlyArray<
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd
+  >;
   /** Tombstones captured before their kill retries begin. */
   readonly excludedSessionKeys: ReadonlySet<string>;
   readonly mintInstanceId: () => string;
@@ -21,6 +26,30 @@ export interface LandingTerminalReconciliationResult {
   readonly adoptedTabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly exitedInstanceIds: ReadonlyArray<string>;
   readonly collapseWhenEmpty: boolean;
+}
+
+export function resolveLandingTerminalTitleCwd(input: {
+  readonly currentCwd: string | null;
+  readonly currentCwdReported: boolean;
+  readonly launchCwd: string;
+}): string | null {
+  return input.currentCwdReported ? input.currentCwd : input.launchCwd;
+}
+
+export function resolveLandingTerminalSyncedTitle(input: {
+  readonly snapshotLoaded: boolean;
+  readonly title: string | null;
+  readonly activeProcessName: string | null;
+  readonly currentCwd: string | null;
+  readonly currentCwdReported: boolean;
+  readonly launchCwd: string;
+}): string | null {
+  if (!input.snapshotLoaded) return null;
+  return terminalSessionTitle({
+    title: input.title,
+    activeProcessName: input.activeProcessName,
+    currentCwd: resolveLandingTerminalTitleCwd(input),
+  });
 }
 
 /**
@@ -65,7 +94,9 @@ export function reconcileLandingTerminalTabs(
       exitedInstanceIds.push(tab.instanceId);
       return [];
     }
-    return [tab];
+    if (tab.titleSource === "manual") return [tab];
+    const name = defaultLandingTerminalTitle(session, tab.cwd);
+    return [name === tab.name ? tab : { ...tab, name }];
   });
 
   const adoptedTabs = sessions.flatMap((session) => {
@@ -80,7 +111,7 @@ export function reconcileLandingTerminalTabs(
       sessionId: session.sessionId,
       hostId: input.activeHostId,
       cwd: session.cwd,
-      name: workspaceFolderName(session.cwd),
+      name: defaultLandingTerminalTitle(session, session.cwd),
       titleSource: "default",
     };
     return [tab];
@@ -101,6 +132,24 @@ export function reconcileLandingTerminalTabs(
       (exitedInstanceIds.length > 0 ||
         survivingTabs.length !== input.tabs.length),
   };
+}
+
+function defaultLandingTerminalTitle(
+  session:
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+  launchCwd: string,
+): string {
+  const currentCwdReported = "currentCwd" in session;
+  const liveCwd = resolveLandingTerminalTitleCwd({
+    currentCwd: currentCwdReported ? session.currentCwd : null,
+    currentCwdReported,
+    launchCwd,
+  });
+  return terminalSessionTitle({
+    title: session.title,
+    activeProcessName: session.activeProcessName,
+    currentCwd: liveCwd,
+  });
 }
 
 function resolveActiveInstanceId(

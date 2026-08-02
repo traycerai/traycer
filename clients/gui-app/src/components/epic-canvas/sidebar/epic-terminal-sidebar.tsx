@@ -25,7 +25,10 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -74,7 +77,7 @@ import { cn } from "@/lib/utils";
 import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
-  useIsActiveEpicArtifact,
+  useIsActiveTile,
 } from "@/stores/epics/canvas/store";
 import {
   useEpicLeftPanelStore,
@@ -321,7 +324,7 @@ function TerminalRow(props: TerminalRowProps) {
   const { hostId, epicId, tabId, session, onOpen } = props;
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
-  const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
+  const isActive = useIsActiveTile(tabId, session.sessionId);
   const kill = useTerminalKill();
   const rename = useTerminalRename();
   const navigateNested = useEpicNestedFocusNavigation();
@@ -571,10 +574,14 @@ function terminalRowMenuEntries(
   ];
 }
 
-function deriveTerminalLabel(session: CanonicalTerminalSessionInfo): string {
+function deriveTerminalLabel(
+  session:
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+): string {
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
+    currentCwd: "currentCwd" in session ? session.currentCwd : session.cwd,
   });
 }
 
