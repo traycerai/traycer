@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Typed handlers for a `managedCommand.subscribeList@1.0` session - the
@@ -32,13 +32,13 @@ export interface ManagedCommandListStreamCallbacks {
 }
 
 export interface ManagedCommandListStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly callbacks: ManagedCommandListStreamCallbacks;
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for `managedCommand.subscribeList@1.0`.
+ * Typed wrapper over the host stream client for `managedCommand.subscribeList@1.0`.
  *
  * Opens one epic-scoped session on construction and dispatches each parsed
  * frame to its callback. There are no upstream application frames beyond the
@@ -91,7 +91,7 @@ export class ManagedCommandListStreamClient {
         return;
       }
       case "pong": {
-        // WsStreamClient handles pong internally for heartbeat bookkeeping.
+        // The stream client handles pong internally for heartbeat bookkeeping.
         return;
       }
     }

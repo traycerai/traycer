@@ -13,7 +13,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 export interface ManagedCommandOutputSnapshot {
   readonly command: ManagedCommand;
@@ -50,14 +50,14 @@ export interface ManagedCommandOutputStreamCallbacks {
 }
 
 export interface ManagedCommandOutputStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly commandId: string;
   readonly callbacks: ManagedCommandOutputStreamCallbacks;
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for
+ * Typed wrapper over the host stream client for
  * `managedCommand.subscribeOutput@1.0`. The one upstream frame is `loadOlder`,
  * which pages backwards from a position the host itself minted.
  */
@@ -131,7 +131,7 @@ export class ManagedCommandOutputStreamClient {
         return;
       }
       case "pong": {
-        // WsStreamClient handles pong internally for heartbeat bookkeeping.
+        // The stream client handles pong internally for heartbeat bookkeeping.
         return;
       }
     }
