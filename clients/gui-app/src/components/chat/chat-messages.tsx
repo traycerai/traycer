@@ -813,6 +813,12 @@ interface PendingMeasuredFreeRestore {
   readonly viewOffset: number;
 }
 
+interface ChatLiveFollowCancelIntent {
+  readonly freezeInFlightScroll: boolean;
+  readonly armLiveEdgeReattach: boolean;
+  readonly publishesReaderPosition: boolean;
+}
+
 function resolvePendingMeasuredFreeRestore(
   restored: SavedChatTabScrollState,
   pendingHydrationRestoreAnchorId: string | null,
@@ -1390,11 +1396,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // `armLiveEdgeReattach` is reader intent, never inferred from geometry:
   // only movement toward the end may authorize a later strict-edge resume.
   const cancelTimelineLiveFollowForUserNavigation = useCallback(
-    (
-      freezeInFlightScroll: boolean,
-      armLiveEdgeReattach: boolean,
-      publishesReaderPosition: boolean,
-    ): void => {
+    ({
+      freezeInFlightScroll,
+      armLiveEdgeReattach,
+      publishesReaderPosition,
+    }: ChatLiveFollowCancelIntent): void => {
       // M4 fix: a real gesture (a bare pointerdown selecting text, expanding
       // a card - produces no scroll of its own) leaving `anchoring-new-turn`
       // while its overflow pill was visible must hand visibility off to the
@@ -1466,17 +1472,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [cancelPillShow, releaseTimelineAnchorOwnership],
   );
   const cancelTimelineLiveFollowForRealUserGesture = useCallback(
-    (
-      freezeInFlightScroll: boolean,
-      armLiveEdgeReattach: boolean,
-      publishesReaderPosition: boolean,
-    ): void => {
+    (intent: ChatLiveFollowCancelIntent): void => {
       clearNavigationHighlight();
-      cancelTimelineLiveFollowForUserNavigation(
-        freezeInFlightScroll,
-        armLiveEdgeReattach,
-        publishesReaderPosition,
-      );
+      cancelTimelineLiveFollowForUserNavigation(intent);
     },
     [cancelTimelineLiveFollowForUserNavigation, clearNavigationHighlight],
   );
@@ -1495,7 +1493,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     activePointerLastScrollTopRef.current =
       chatTimelineRef.current?.getScrollableNode().scrollTop ?? null;
     activePointerMovedRef.current = false;
-    cancelTimelineLiveFollowForRealUserGesture(true, false, false);
+    cancelTimelineLiveFollowForRealUserGesture({
+      freezeInFlightScroll: true,
+      armLiveEdgeReattach: false,
+      publishesReaderPosition: false,
+    });
   }, [cancelTimelineLiveFollowForRealUserGesture]);
   const handleTranscriptPointerMove = useCallback((): void => {
     if (activePointerLastScrollTopRef.current !== null) {
@@ -1774,11 +1776,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       previousTouchClientY = currentClientY;
       const modeAtGesture = timelineScrollModeRef.current;
       const isAtLiveEdge = chatTimelineRef.current?.getState().isAtEnd ?? false;
-      cancelTimelineLiveFollowForUserNavigationRef.current(
-        true,
-        intent === "approach-live-edge",
-        true,
-      );
+      cancelTimelineLiveFollowForUserNavigationRef.current({
+        freezeInFlightScroll: true,
+        armLiveEdgeReattach: intent === "approach-live-edge",
+        publishesReaderPosition: true,
+      });
       if (
         modeAtGesture === "free-scrolling" &&
         isAtLiveEdge &&
@@ -1813,11 +1815,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         isFollowingEnd,
       );
       if (intent === "preserve-follow") return;
-      cancelTimelineLiveFollowForUserNavigationRef.current(
-        true,
-        intent === "approach-live-edge",
-        true,
-      );
+      cancelTimelineLiveFollowForUserNavigationRef.current({
+        freezeInFlightScroll: true,
+        armLiveEdgeReattach: intent === "approach-live-edge",
+        publishesReaderPosition: true,
+      });
       // A detached reader already at the strict edge cannot produce another
       // native scroll event from a clamped toward-end gesture. The gesture
       // itself supplies the missing intent, so resume synchronously. Do not
@@ -1931,7 +1933,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         maxScrollTop: currentMaxScrollTop,
       };
       if (shouldCancel) {
-        cancelTimelineLiveFollowForUserNavigationRef.current(false, true, true);
+        cancelTimelineLiveFollowForUserNavigationRef.current({
+          freezeInFlightScroll: false,
+          armLiveEdgeReattach: true,
+          publishesReaderPosition: true,
+        });
       }
     };
     container.addEventListener("scroll", handleCapturedScroll, {
@@ -2584,11 +2590,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // Decision #7: both directions feed the same manual-navigation cancel.
       // Freeze an owned native smooth-scroll at its current pixel first, then
       // apply this key's deterministic step as the replacement movement.
-      cancelTimelineLiveFollowForRealUserGesture(
-        true,
-        chatKeyboardScrollApproachesLiveEdge(scrollAction),
-        true,
-      );
+      cancelTimelineLiveFollowForRealUserGesture({
+        freezeInFlightScroll: true,
+        armLiveEdgeReattach: chatKeyboardScrollApproachesLiveEdge(scrollAction),
+        publishesReaderPosition: true,
+      });
       applyChatKeyboardScroll(scroller, scrollAction);
       const maxScrollTop = Math.max(
         0,
@@ -3374,7 +3380,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // release, no freeze: the navigation's own scroll (right below, via
       // scrollToTimelineLocationSuppressingFollowRestore) takes over
       // immediately regardless.
-      cancelTimelineLiveFollowForUserNavigation(false, false, false);
+      cancelTimelineLiveFollowForUserNavigation({
+        freezeInFlightScroll: false,
+        armLiveEdgeReattach: false,
+        publishesReaderPosition: false,
+      });
       setScrolledActiveUserMessageIdIfChanged(messageId);
       const location = chatTimelineLocationForMessage(
         messageId,
@@ -3484,7 +3494,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Find navigation is not a real gesture (like navigateToMessage) - a plain
   // release, no freeze.
   const cancelManualNavigationForFind = useCallback((): void => {
-    cancelTimelineLiveFollowForUserNavigation(false, false, false);
+    cancelTimelineLiveFollowForUserNavigation({
+      freezeInFlightScroll: false,
+      armLiveEdgeReattach: false,
+      publishesReaderPosition: false,
+    });
   }, [cancelTimelineLiveFollowForUserNavigation]);
 
   // --- Disclosure preservation (replaces ChatMeasuredItemChangeContext's old
