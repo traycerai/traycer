@@ -189,6 +189,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       <CollapsibleContent>
         <div
           data-testid="queued-message-list"
+          data-native-scrollbar="true"
           className={cn(
             "overflow-y-auto border-t border-border/50",
             props.scrollRegionMaxHeightClass,
@@ -569,6 +570,7 @@ function QueuedMessageRowContent(props: {
       <div
         className="max-h-[3lh] overflow-y-auto pr-1 text-ui-sm leading-5 wrap-break-word"
         data-testid="queued-message-content-scroll"
+        data-native-scrollbar="true"
       >
         {showFloatingChrome ? (
           <QueuedMessageFloatingChrome

@@ -197,6 +197,7 @@ export function ChatAccumulatedChangesPanel(
         </div>
         <CollapsibleContent>
           <div
+            data-native-scrollbar="true"
             className={cn(
               "overflow-y-auto border-t border-border/50 px-2 py-1.5",
               props.scrollRegionMaxHeightClass ?? "max-h-[min(40dvh,24rem)]",

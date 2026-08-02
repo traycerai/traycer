@@ -88,6 +88,7 @@ export function ActiveAgentsPanel(props: {
       <CollapsibleContent>
         <div
           data-testid="active-agents-list"
+          data-native-scrollbar="true"
           className={cn(
             "overflow-y-auto border-t border-border/50",
             props.scrollRegionMaxHeightClass,

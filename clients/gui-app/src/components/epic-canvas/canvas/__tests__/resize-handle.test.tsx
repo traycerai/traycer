@@ -105,8 +105,8 @@ describe("<SplitResizeHandle />", () => {
   it("keeps its pointer region inside an in-flow divider instead of extending over a pane scrollbar gutter", () => {
     const { handle } = renderHandle([0.5, 0.5], vi.fn());
 
-    expect(handle.className).toContain("w-1");
-    expect(handle.className).not.toContain("w-px");
+    expect(handle.classList.contains("w-1")).toBe(true);
+    expect(handle.classList.contains("w-px")).toBe(false);
     expect(handle.className).not.toContain("after:");
   });
 

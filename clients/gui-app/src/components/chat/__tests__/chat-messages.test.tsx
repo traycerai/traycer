@@ -5875,6 +5875,47 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
 
+    it("restores the validated reading anchor without waiting for a deleted reply reserve after streaming ends", async () => {
+      const messages = makeCompletedTranscript(20);
+      const targetIndex = 8;
+      const targetId = messages[targetIndex].id;
+      const instanceId = `t5-deleted-reserve-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: -12,
+        replyReserveMessageId: "deleted-reply-reserve",
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+        isChatStreaming: false,
+      });
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      getScrollNode().scrollTop = 0;
+      vi.spyOn(list, "scrollToIndex").mockResolvedValue(undefined);
+      const absoluteRestore = vi.spyOn(list, "scrollToOffset");
+
+      await settleLegendList();
+      await settleLegendList();
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      expect(absoluteRestore).toHaveBeenCalledWith({
+        offset: expectedScrollTop,
+        animated: false,
+      });
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      expect(getScrollNode().dataset.replyReserveMessageId).toBe("");
+      view.unmount();
+    });
+
     it("keeps the pre-restore snapshot authoritative when a bootstrap mount unmounts before convergence", () => {
       const messages = makeCompletedTranscript(20);
       const anchorIndex = 8;

@@ -767,8 +767,9 @@ function resolvePendingHydrationRestoreAnchorId(
 
 function resolveRestoredDetachedReplyReserveMessageId(
   restoredTabState: SavedChatTabScrollState,
+  isChatStreaming: boolean,
 ): string | null {
-  return restoredTabState.mode === "free-scrolling"
+  return isChatStreaming && restoredTabState.mode === "free-scrolling"
     ? restoredTabState.replyReserveMessageId
     : null;
 }
@@ -776,7 +777,13 @@ function resolveRestoredDetachedReplyReserveMessageId(
 function resolvePendingHydrationDetachedReplyReserveId(
   restoredTabState: SavedChatTabScrollState,
   rawSavedTabState: SavedChatTabScrollState | null,
+  isChatStreaming: boolean,
 ): string | null {
+  // Reply reserve is synthetic geometry for an active streaming turn. Once
+  // the run is no longer streaming, a missing saved reserve is a deletion,
+  // not hydration still worth waiting for; let the validated reading anchor
+  // converge without it.
+  if (!isChatStreaming) return null;
   if (rawSavedTabState?.mode !== "free-scrolling") return null;
   const rawReserveMessageId = rawSavedTabState.replyReserveMessageId;
   if (rawReserveMessageId === null) return null;
@@ -906,7 +913,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // free-scrolling, but the turn's reserve must still be recreated before the
   // measured row+offset convergence runs.
   const restoredDetachedReplyReserveMessageId =
-    resolveRestoredDetachedReplyReserveMessageId(restoredTabState);
+    resolveRestoredDetachedReplyReserveMessageId(
+      restoredTabState,
+      isChatStreaming,
+    );
   const initialTimelineAnchorMessageId =
     freshOpenAnchorMessageId ?? restoredNewTurnAnchorMessageId;
   // LegendList must first mount the restored row bootstrap before
@@ -964,6 +974,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     resolvePendingHydrationDetachedReplyReserveId(
       restoredTabState,
       rawSavedTabState,
+      isChatStreaming,
     ),
   );
   // A saved semantic session is resumed when Legend List reports its first

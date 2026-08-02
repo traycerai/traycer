@@ -174,6 +174,7 @@ function OtherRow(props: OtherRowProps) {
           onChange={(e) => onValueChange(e.target.value)}
           placeholder="Type your answer…"
           aria-label={`${OTHER_LABEL} answer`}
+          data-native-scrollbar="true"
           rows={1}
           className="field-sizing-content max-h-[3lh] min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-ui-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
           disabled={disabled}
