@@ -141,7 +141,8 @@ export async function runLaunchHostConvergeReconcile(
     ApplyStagedOk | ActivateInstalledOk | ConvergeReadyOk
   > | null = null;
   if (status.updateReady) {
-    outcome = await hostController.applyStaged("launch", false);
+    const applied = await hostController.applyStaged("launch", false);
+    outcome = await recoverAfterFailedApply(hostController, applied);
   } else if (
     status.activation === "pendingActivation" ||
     status.activation === "activationUnknown"
@@ -184,4 +185,56 @@ export async function runLaunchHostConvergeReconcile(
       maxAgeMs: null,
     });
   }
+}
+
+/**
+ * The other half of the recovery arm above: what happens when a ready stage
+ * takes apply-first precedence and then the apply does not land.
+ *
+ * `applyStaged` RESOLVES `failed` / `stage-fingerprint-mismatch` /
+ * `installed-not-converged` rather than throwing, and the pre-stage recovery
+ * deliberately stood down because a stage was ready. So a host whose service
+ * was ALSO absent had nobody left to re-register it: launch logged an outcome
+ * and returned, leaving the machine unreachable until the next launch or a
+ * manual repair - through the one pass that exists to guarantee the opposite.
+ *
+ * `busy` and `deferred` pass through untouched. Both mean someone else already
+ * holds the host - the in-process mutation lane, or another Traycer process
+ * holding the CLI lock - and `convergeReady` would meet the same contention.
+ * That is the same reason the post-stage arm refuses to repeat a recovery the
+ * pre-stage pass already attempted.
+ *
+ * `removedByUser` is re-read rather than inherited: the apply can take
+ * minutes, and a user who removed the host during it must not be handed a
+ * reinstall as a consolation prize.
+ */
+async function recoverAfterFailedApply(
+  hostController: IpcHostController,
+  applied: MutationOutcome<ApplyStagedOk>,
+): Promise<MutationOutcome<ApplyStagedOk | ConvergeReadyOk>> {
+  if (
+    applied.kind === "ok" ||
+    applied.kind === "busy" ||
+    applied.kind === "deferred"
+  ) {
+    return applied;
+  }
+  const status = await hostController.getStatus();
+  if (status.removedByUser) {
+    log.info("[host-controller] launch converge skipped after apply removal");
+    return applied;
+  }
+  // The same two conditions as both other recovery arms. A failed apply is not
+  // by itself an activation problem - without the `unavailable` check this
+  // would cycle the service on every unsuccessful update - and
+  // `installedVersion` keeps a failure on a machine that never had a host from
+  // turning into a first install before sign-in.
+  if (status.activation !== "unavailable" || status.installedVersion === null) {
+    return applied;
+  }
+  log.info(
+    "[host-controller] launch converge recovering an absent service after a failed apply",
+    { applyKind: applied.kind },
+  );
+  return hostController.convergeReady(false);
 }

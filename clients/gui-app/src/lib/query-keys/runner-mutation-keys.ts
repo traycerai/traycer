@@ -96,6 +96,12 @@ export const runnerMutationKeys = {
 export const runnerQueryKeys = {
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
+  // The shell's durable answer to "which host id belongs to THIS machine",
+  // read once while the host directory bootstraps. Scoped by runner-host
+  // instance like the traycer keys below, so a host swap cannot serve the
+  // previous shell's identity.
+  lastKnownLocalHostId: (runnerHost: object) =>
+    ["runner.host.lastKnownLocalHostId", runnerHost] as const,
   // `traycerCli: object` keys these queries to a specific runner-host
   // instance so a host swap (test setups, hot reload) invalidates the
   // cache cleanly. Identity comparison only - the object is never

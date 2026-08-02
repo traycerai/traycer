@@ -78,19 +78,36 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   // across the host's lifecycle, and a renderer asking during a restart should
   // get today's answer, not whatever was on disk when the bridge was built.
   //
-  // `pid.json` first (it describes the host that is actually running), then the
-  // enrollment record. The fallback is the load-bearing half: the host UNLINKS
-  // `pid.json` on graceful shutdown, which is precisely what a reinstall
-  // performs - so on the launch this seed exists for, the live file is gone and
-  // only the durable enrollment still identifies this machine.
+  // The ENROLLMENT record decides, and `pid.json` is only the fallback. Which
+  // is the reverse of what "the file describing the running host" suggests,
+  // and the reversal is the point:
+  //
+  //  - The launch this seed exists for is a reinstall, where the host is down.
+  //    The host unlinks `pid.json` on graceful shutdown, so the live file is
+  //    already gone and enrollment is the only thing left that identifies this
+  //    machine. Enrollment carries that case either way.
+  //  - `pid.json` does NOT survive only while the host runs. An ungraceful
+  //    stop leaves it behind, and `readPidMetadata` accepts it structurally -
+  //    no liveness or reachability check. Re-enroll while the host is down and
+  //    that stale file names the PREVIOUS id, which the renderer would then
+  //    persist, neutralize the wrong registry row with, and leave this
+  //    machine's real twin remote-kind and relay-dialable: the exact lockout
+  //    the seed was added to prevent, reached from the other direction.
+  //
+  // A running host's `pid.json` agrees with enrollment, so preferring
+  // enrollment costs nothing when both answer. It is read second for an
+  // install predating the enrollment record, where it is the only answer.
   bridge.handleInvoke(
     RunnerHostInvoke.lastKnownLocalHostId,
     async (): Promise<string | null> => {
+      const enrolled = await readEnrolledHostId(
+        bridge.options.host.identityEnrollmentFile,
+      );
+      if (enrolled !== null) return enrolled;
       const metadata = await readPidMetadata(
         bridge.options.host.pidMetadataFile,
       );
-      if (metadata !== null) return metadata.hostId;
-      return readEnrolledHostId(bridge.options.host.identityEnrollmentFile);
+      return metadata === null ? null : metadata.hostId;
     },
   );
 
