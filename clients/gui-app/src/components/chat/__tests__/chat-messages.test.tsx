@@ -5895,7 +5895,7 @@ describe("ChatMessages scroll policy", () => {
         messages,
         scrollStateKey: instanceId,
         instanceId,
-        isChatStreaming: false,
+        isChatStreaming: true,
       });
       const list = legendListRefHolder.current;
       if (list === null) throw new Error("LegendList ref did not mount");
@@ -5903,6 +5903,12 @@ describe("ChatMessages scroll policy", () => {
       vi.spyOn(list, "scrollToIndex").mockResolvedValue(undefined);
       const absoluteRestore = vi.spyOn(list, "scrollToOffset");
 
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(absoluteRestore).not.toHaveBeenCalled();
+
+      view.rerenderWith({ isChatStreaming: false });
       await settleLegendList();
       await settleLegendList();
 

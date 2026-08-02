@@ -3392,6 +3392,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [reconcileInvalidTimelineLanding],
   );
 
+  // A missing reserve remains hydration-pending while its turn streams, but
+  // that geometry cannot arrive after the run completes. Clear the pending
+  // identity in an earlier layout effect so the measured-anchor effect below
+  // can converge in the same commit as the true→false transition.
+  useLayoutEffect(() => {
+    if (isChatStreaming) return;
+    pendingHydrationDetachedReplyReserveIdRef.current = null;
+  }, [isChatStreaming]);
+
   useLayoutEffect(() => {
     const pending = pendingMeasuredFreeRestoreRef.current;
     if (pending === null) return;
@@ -3405,7 +3414,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // measured landing synchronously; correctness cannot depend on rAF, which
     // is legitimately paused for background/unfocused Electron renderers.
     restorePersistedTimelineLocation(pending.messageId, pending.viewOffset);
-  }, [restorePersistedTimelineLocation, timelineAnchorMessageId]);
+  }, [
+    isChatStreaming,
+    restorePersistedTimelineLocation,
+    timelineAnchorMessageId,
+  ]);
   const navigateToMessage = useCallback(
     (messageId: string, highlight: boolean, animated: boolean): void => {
       // Decision #21: minimap/find/deep-link navigation all perform
