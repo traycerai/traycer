@@ -1058,16 +1058,14 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     resetTileSurfaceEnvironmentRegistryForTesting();
     render(
       hostedGroupView(
-        () => (
-          <button type="button" data-testid="hosted-focus-owner">
-            Hosted action
-          </button>
-        ),
+        () => <button type="button">Hosted action</button>,
         undefined,
       ),
     );
 
-    const hostedControl = await screen.findByTestId("hosted-focus-owner");
+    const hostedControl = await screen.findByRole("button", {
+      name: "Hosted action",
+    });
     expect(
       getTileSurfaceEnvironment(
         CHAT.instanceId,
