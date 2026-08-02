@@ -300,17 +300,24 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
   ),
+  // Forwards `aria-disabled` as well as `disabled`: real Radix renders a
+  // `<div role="menuitem" aria-disabled>`, and an entry that carries a
+  // disabled-reason is soft-disabled through ARIA alone (so it stays
+  // keyboard-reachable). A mock that dropped it would report every such entry
+  // as ENABLED and quietly invert the assertions that depend on it.
   DropdownMenuItem: (props: {
     readonly children: ReactNode;
     readonly onSelect: () => void;
     readonly "data-testid": string;
     readonly disabled: boolean;
+    readonly "aria-disabled": boolean;
   }) => (
     <button
       type="button"
       role="menuitem"
       data-testid={props["data-testid"]}
       disabled={props.disabled}
+      aria-disabled={props["aria-disabled"]}
       onClick={props.onSelect}
     >
       {props.children}
@@ -3041,16 +3048,18 @@ describe("chat row archive", () => {
       screen.getByTestId("epic-sidebar-archive-item-agent-root").textContent,
     ).toContain("Archive");
 
-    // Running row: entry present but disabled.
+    // Running row: entry present but unavailable. Soft-disabled (ARIA) rather
+    // than hard-disabled, so it stays keyboard-reachable and can explain
+    // itself - see the keyboard-reachability test below.
     testState.activeAgentIds = new Set(["chat-root"]);
     testState.activityTierById = new Map([["chat-root", "turn"]]);
     view.rerender(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
     expect(
-      screen
-        .getByTestId("epic-sidebar-archive-item-chat-root")
-        .matches(":disabled"),
+      isMenuItemUnavailable(
+        screen.getByTestId("epic-sidebar-archive-item-chat-root"),
+      ),
     ).toBe(true);
 
     // Archived row offers the action "Unarchive".
@@ -3263,7 +3272,205 @@ describe("chat row archive", () => {
 
     expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
   });
+
+  // --- B11: busy rows cannot be archived, and say why ----------------------
+
+  /**
+   * The attention tones are the regression this pins. `chatOwnStatusKind` folds
+   * failure/interview/approval AHEAD of the running tier, so gating archive on
+   * the folded kind left the entry enabled on a chat that was genuinely
+   * mid-turn - and a pending approval is raised from inside a running turn, so
+   * that is the common case, not a rare interleaving.
+   */
+  it("keeps Archive disabled on a running row even under an attention tone (B11)", () => {
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    for (const attention of [
+      { pendingApproval: true },
+      { pendingInterview: true },
+      { unreadFailure: true },
+      { unreadDone: true },
+    ] as const) {
+      testState.indicatorChats = { "chat-root": indicator(attention) };
+      view.rerender(
+        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+      );
+      expect(
+        isMenuItemUnavailable(
+          screen.getByTestId("epic-sidebar-archive-item-chat-root"),
+        ),
+      ).toBe(true);
+    }
+
+    // Control: the same tones on an IDLE row leave archive available, so the
+    // assertion above is pinning "running", not "any notification at all".
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.indicatorChats = {
+      "chat-root": indicator({ pendingApproval: true }),
+    };
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      isMenuItemUnavailable(
+        screen.getByTestId("epic-sidebar-archive-item-chat-root"),
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * The tooltip's TRIGGER must sit on the wrapper rather than on the menu item,
+   * because a disabled Radix item carries `data-disabled:pointer-events-none`
+   * and so receives no hover in the one state the tooltip exists to explain.
+   * This asserts the structure that makes that true - the item is nested inside
+   * the tooltip's element, not carrying it. (The `pointer-events` rule itself is
+   * CSS, which jsdom does not evaluate; the mocked tooltip here also renders its
+   * content eagerly, as every other tooltip assertion in this file does.)
+   */
+  it("explains the refusal, per activity tier (B11)", () => {
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    const turnItem = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    expect(isMenuItemUnavailable(turnItem)).toBe(true);
+    const turnWrapper = turnItem.parentElement;
+    if (turnWrapper === null) throw new Error("expected tooltip wrapper");
+    expect(tooltipTextIn(turnWrapper)).toBe(
+      "Can't archive while this agent is working. Wait for it to finish, or stop it first.",
+    );
+
+    testState.activityTierById = new Map([["chat-root", "background"]]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    const bgWrapper = screen.getByTestId(
+      "epic-sidebar-archive-item-chat-root",
+    ).parentElement;
+    if (bgWrapper === null) throw new Error("expected tooltip wrapper");
+    expect(tooltipTextIn(bgWrapper)).toBe(
+      "Can't archive while this agent has background items running. Wait for them to finish, or stop it first.",
+    );
+
+    // While busy the entry is WRAPPED, so it no longer shares a parent with its
+    // sibling entries...
+    expect(bgWrapper).not.toBe(
+      screen.getByTestId("epic-sidebar-rename-chat-root").parentElement,
+    );
+
+    // ...and on an idle row the wrapper is gone entirely: an available action
+    // must carry no explanation. Compared against a sibling entry rather than
+    // by searching for `role="tooltip"`, because an idle row also renders the
+    // hover Archive button, whose own ("Archive <name>") tooltip would satisfy
+    // a looser query and make this pass for the wrong reason.
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    const idleItem = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    expect(isMenuItemUnavailable(idleItem)).toBe(false);
+    expect(idleItem.parentElement).toBe(
+      screen.getByTestId("epic-sidebar-rename-chat-root").parentElement,
+    );
+  });
+
+  it("still offers Unarchive on a running archived row (B11)", () => {
+    seedChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.showArchived = true;
+    // An inbound message auto-unarchives and wakes the agent, so archived+busy
+    // is a real state - and unarchiving is the direction the host allows.
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const entry = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    expect(entry.textContent).toContain("Unarchive");
+    expect(isMenuItemUnavailable(entry)).toBe(false);
+  });
+
+  it("keeps a busy row's Archive entry keyboard-reachable (B11)", () => {
+    // Radix renders a `disabled` item as non-focusable AND filters it out of
+    // typeahead. Since the hover button is hidden while the row is busy, hard
+    // -disabling here would make the action and its reason invisible to
+    // keyboard/screen-reader users: Archive would simply vanish from the menu
+    // with no signal it exists. `aria-disabled` keeps it announced and
+    // focusable while still refusing selection.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const item = screen.getByTestId("epic-sidebar-archive-item-chat-root");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    // NOT the hard-disabled form, which is what removes it from the keyboard.
+    expect(item.matches(":disabled")).toBe(false);
+  });
+
+  it("marks the tooltip wrapper as presentational (B11)", () => {
+    // The wrapper sits between `role="menu"` and `role="menuitem"`. Without
+    // `role="none"` it breaks the menu's owned-children relationship, so the
+    // item's announced position/count goes wrong - and only on busy rows.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const wrapper = screen.getByTestId(
+      "epic-sidebar-archive-item-chat-root",
+    ).parentElement;
+    if (wrapper === null) throw new Error("expected tooltip wrapper");
+    expect(wrapper.getAttribute("role")).toBe("none");
+  });
+
+  it("applies the same refusal to the CONTEXT menu entry (B11)", () => {
+    // The context menu is the one path that runs against unmocked Radix in
+    // this file (`@/components/ui/dropdown-menu` is mocked,
+    // `@/components/ui/context-menu` is not), so it is the only place a real
+    // Radix regression in the wrapper could surface.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "background"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    const item = screen.getByTestId("epic-sidebar-context-archive-chat-root");
+    expect(isMenuItemUnavailable(item)).toBe(true);
+    const wrapper = item.parentElement;
+    if (wrapper === null) throw new Error("expected tooltip wrapper");
+    expect(wrapper.getAttribute("role")).toBe("none");
+  });
 });
+
+/**
+ * "Unavailable" as the USER experiences it, across both disable mechanisms.
+ *
+ * An entry that carries an explanation is soft-disabled (`aria-disabled`) so it
+ * stays keyboard-reachable and can still surface its tooltip; a transient one
+ * is hard-disabled. Asserting `:disabled` alone would both miss the soft form
+ * and, in this file, only ever be testing the tooltip MOCK - CSS `:disabled`
+ * matches form elements, and real Radix renders
+ * `<div role="menuitem" aria-disabled="true">`, which it can never match.
+ */
+function isMenuItemUnavailable(el: HTMLElement): boolean {
+  return el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
+}
 
 function seedChatTree(): void {
   const chatRoot = treeNode("chat-root", null, "Root chat", "chat");

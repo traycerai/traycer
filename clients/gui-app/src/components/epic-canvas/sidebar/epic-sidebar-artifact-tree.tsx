@@ -1882,6 +1882,7 @@ function useArtifactRowMenuEntries(
       label: "Export as Markdown",
       icon: exportIcon,
       disabled: exportArtifacts.isPending,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-export-markdown-${props.nodeId}`,
@@ -1895,6 +1896,7 @@ function useArtifactRowMenuEntries(
       label: "Export as PDF",
       icon: exportIcon,
       disabled: exportArtifacts.isPending,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-export-pdf-${props.nodeId}`,
@@ -1909,6 +1911,7 @@ function useArtifactRowMenuEntries(
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-rename-${props.nodeId}`,
@@ -1923,6 +1926,7 @@ function useArtifactRowMenuEntries(
       label: "Delete",
       icon: <Trash2 className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "destructive",
       testIds: {
         dropdown: `epic-sidebar-delete-${props.nodeId}`,
