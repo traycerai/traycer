@@ -105,7 +105,6 @@ import type {
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
-  type CSSProperties,
   use,
   useCallback,
   useEffect,
@@ -3387,6 +3386,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         },
         onSettledInvalid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          acceptExhaustedPersistedRestoreFallback(
+            restorePersistencePendingRef,
+            pendingMeasuredFreeRestoreRef,
+          );
           // Accept - already correctly free-scrolling/suppressed wherever
           // the bounded retries landed; nothing claims to be "at this exact
           // spot" the way following-end does, so there is no mode to
@@ -4023,11 +4026,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             onPointerUp={handleTranscriptPointerRelease}
             onPointerCancel={handleTranscriptPointerRelease}
             className="relative flex-1 overflow-hidden"
-            style={
-              {
-                "--chat-bottom-overlay-inset": `${endInset}px`,
-              } as CSSProperties
-            }
           >
             <ChatTimeline
               messages={messages}
@@ -4037,7 +4035,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               nextStepActions={nextStepActions}
               listRef={chatTimelineRef}
               onScroll={handleScroll}
-              topFadeEnabled
               initialScrollAtEnd={scrollMode === "following-end"}
               initialScrollIndex={initialScrollIndexAnchor}
               anchorMessageId={timelineAnchorMessageId}

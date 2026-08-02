@@ -118,7 +118,6 @@ interface RenderTimelineOptions {
   readonly listRef?: RefObject<LegendListRef | null>;
   readonly className?: string;
   readonly "data-testid"?: string;
-  readonly topFadeEnabled?: boolean;
   readonly followEnabled?: boolean;
   readonly onItemSizeChanged?: () => void;
   /** Ticket 22: forwarded to LegendList for viewport-length changes. */
@@ -153,7 +152,6 @@ function renderTimeline(options: RenderTimelineOptions) {
         listRef={listRef}
         className={options.className ?? "h-full"}
         data-testid={options["data-testid"]}
-        topFadeEnabled={options.topFadeEnabled}
         followEnabled={options.followEnabled}
         onItemSizeChanged={options.onItemSizeChanged}
         onLayout={options.onLayout}
@@ -507,18 +505,8 @@ describe("ChatTimeline", () => {
       ).map((node) => node.getAttribute("class") ?? "");
     }
 
-    const { container } = renderTimeline({ messages, topFadeEnabled: false });
+    const { container } = renderTimeline({ messages });
     expect(spacerClasses(container)).toEqual(["h-3 sm:h-4", "h-3 sm:h-4"]);
-    cleanup();
-
-    const { container: fadeContainer } = renderTimeline({
-      messages,
-      topFadeEnabled: true,
-    });
-    expect(spacerClasses(fadeContainer)).toEqual([
-      "h-10 sm:h-12",
-      "h-3 sm:h-4",
-    ]);
   });
 
   // Ticket 24 (painted-chat lifecycle audit, finding 5): the shared row

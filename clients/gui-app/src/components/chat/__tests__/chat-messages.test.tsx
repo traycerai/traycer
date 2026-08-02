@@ -6714,36 +6714,13 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  describe("bottom fade replaces the legacy overpaint div", () => {
-    it("no longer renders the legacy bg-linear-to-t overpaint div", async () => {
+  describe("native transcript edges", () => {
+    it("does not render a custom bottom-fade overpaint", async () => {
       const messages = makeCompletedTranscript(8);
       const { container } = renderChatMessages({ messages });
       await settleLegendList();
 
       expect(container.querySelector(".bg-linear-to-t")).toBeNull();
-    });
-
-    it("writes --chat-bottom-overlay-inset on the transcript container from the measured dock inset, tracking dock resize", async () => {
-      const messages = makeCompletedTranscript(8);
-      const { rerenderWith } = renderChatMessages({
-        messages,
-        composerOverlayHeight: 64,
-      });
-      await settleLegendList();
-
-      const container = screen.getByTestId("chat-transcript-container");
-      expect(
-        container.style.getPropertyValue("--chat-bottom-overlay-inset"),
-      ).toBe("64px");
-
-      // Dock grows (e.g. the files-changed panel opening) - the var must
-      // track the new measured height, not the value at mount.
-      rerenderWith({ composerOverlayHeight: 148 });
-      await settleLegendList();
-
-      expect(
-        container.style.getPropertyValue("--chat-bottom-overlay-inset"),
-      ).toBe("148px");
     });
   });
 

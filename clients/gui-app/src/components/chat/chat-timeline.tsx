@@ -139,15 +139,12 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
-// M4 (ticket 16 spacer alignment): the 40px header/footer and 64/80px fade
-// header were unsanctioned drift (decision log #30).
+// M4 (ticket 16 spacer alignment): the old 40px header/footer were
+// unsanctioned drift (decision log #30).
 // Consumers read the live measured size via `onListMetricsChange`, so they
 // adapt automatically; nothing here is a hardcoded assumption elsewhere.
 const CHAT_TIMELINE_LIST_HEADER = (
   <div aria-hidden="true" className="h-3 sm:h-4" />
-);
-const CHAT_TIMELINE_LIST_FADE_HEADER = (
-  <div aria-hidden="true" className="h-10 sm:h-12" />
 );
 const CHAT_TIMELINE_LIST_FOOTER = (
   <div aria-hidden="true" className="h-3 sm:h-4" />
@@ -184,7 +181,6 @@ export interface ChatTimelineProps {
    *  position-based inference cannot reliably tell them apart). */
   readonly "data-scroll-mode"?: string;
   /** Top-fade chrome; the scroll-policy ticket decides when it's on. */
-  readonly topFadeEnabled?: boolean;
   /**
    * Whether the initial mount parks at the tail. `true` (the default) for a
    * fresh, never-scrolled-in chat (decision #15 - ticket 4 replaces this with
@@ -288,7 +284,6 @@ export const ChatTimeline = memo(function ChatTimeline({
   listRef,
   onScroll,
   className,
-  topFadeEnabled = false,
   initialScrollAtEnd = true,
   initialScrollIndex = null,
   anchorMessageId = null,
@@ -470,11 +465,7 @@ export const ChatTimeline = memo(function ChatTimeline({
           "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
           className,
         )}
-        ListHeaderComponent={
-          topFadeEnabled
-            ? CHAT_TIMELINE_LIST_FADE_HEADER
-            : CHAT_TIMELINE_LIST_HEADER
-        }
+        ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
         ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
         {...rest}
         // Round-2 finding 3, test-observability only: echoes the SAME
