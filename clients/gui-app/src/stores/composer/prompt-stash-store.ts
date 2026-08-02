@@ -9,6 +9,7 @@ import {
   loadPromptStashSnapshot,
   savePromptStashSnapshot,
 } from "@/lib/composer/prompt-stash-repository";
+import { PROMPT_STASH_CHANNEL } from "@/lib/composer/prompt-stash-channel";
 
 interface PromptStashState {
   readonly rows: ReadonlyArray<PromptStashRow>;
@@ -19,7 +20,6 @@ interface PromptStashState {
 }
 
 let hydration: Promise<void> | null = null;
-const PROMPT_STASH_CHANNEL = "traycer-gui-app:prompt-stash:v1";
 
 // Cross-window refresh ordering (repository "Cross-window state refresh"
 // contract): every mutation bumps `meta.revision` inside its own IndexedDB
@@ -114,6 +114,13 @@ if (
 ) {
   promptStashChannel = new window.BroadcastChannel(PROMPT_STASH_CHANNEL);
   promptStashChannel.addEventListener("message", (event: MessageEvent) => {
+    if (messageIsReset(event.data)) {
+      issuedLoadToken += 1;
+      appliedRevision = -1;
+      hydration = null;
+      usePromptStashStore.setState({ rows: [] });
+      return;
+    }
     const revision = messageRevision(event.data);
     // A message that is provably no newer than what's already applied never
     // needs a re-read; an unrecognized/older-shaped payload falls through and
@@ -127,6 +134,15 @@ if (
       })
       .catch(() => undefined);
   });
+}
+
+function messageIsReset(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "type" in data &&
+    data.type === "reset"
+  );
 }
 
 function publishPromptStashChange(revision: number): void {

@@ -307,6 +307,32 @@ describe("usePromptStashStore", () => {
     peer.close();
   });
 
+  it("clears peer rows and accepts revision zero after a database reset", async () => {
+    const initial = [entry("old", 1, "old")];
+    const replacement = [entry("new", 2, "new")];
+    const { usePromptStashStore } = await loadStore({
+      load: manifest(initial, 9),
+    });
+    await usePromptStashStore.getState().hydrate();
+    const loadCallsBeforeReset =
+      repoMocks.loadPromptStashSnapshot.mock.calls.length;
+
+    const peer = new FakeBroadcastChannel(PROMPT_STASH_CHANNEL);
+    peer.postMessage({ type: "reset" });
+
+    expect(usePromptStashStore.getState().rows).toEqual([]);
+    expect(repoMocks.loadPromptStashSnapshot).toHaveBeenCalledTimes(
+      loadCallsBeforeReset,
+    );
+
+    repoMocks.loadPromptStashSnapshot.mockResolvedValueOnce(
+      manifest(replacement, 0),
+    );
+    await usePromptStashStore.getState().hydrate();
+    expect(usePromptStashStore.getState().rows).toEqual(asRows(replacement));
+    peer.close();
+  });
+
   it("does not regress when a stale broadcast-triggered load resolves after a local save", async () => {
     const initial = [entry("a", 1, "a")];
     let resolveStaleLoad: ((value: PromptStashManifest) => void) | undefined;

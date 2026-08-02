@@ -10,12 +10,16 @@ const flushActiveDesktopPerWindowProjection = vi.fn<() => Promise<void>>(() =>
 const drainDesktopTabsPersistence = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
+const publishPromptStashReset = vi.fn<() => void>();
 vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
   flushActiveDesktopPerWindowProjection: () =>
     flushActiveDesktopPerWindowProjection(),
 }));
 vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
   drainDesktopTabsPersistence: () => drainDesktopTabsPersistence(),
+}));
+vi.mock("@/lib/composer/prompt-stash-channel", () => ({
+  publishPromptStashReset: () => publishPromptStashReset(),
 }));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
@@ -100,6 +104,7 @@ let reloadSpy: Mock<() => void>;
 beforeEach(() => {
   flushActiveDesktopPerWindowProjection.mockClear();
   drainDesktopTabsPersistence.mockClear();
+  publishPromptStashReset.mockClear();
 
   localStorageMock = createMockStorage(LOCAL_SEED);
   sessionStorageMock = createMockStorage(SESSION_SEED);
@@ -275,6 +280,32 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
+    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies peer windows only after the prompt-stash database is deleted", async () => {
+    const order: string[] = [];
+    const value = {
+      databases: vi.fn(() => Promise.resolve([])),
+      deleteDatabase: vi.fn((name: string) => {
+        const { request, fire } = fakeDeleteRequest();
+        queueMicrotask(() => {
+          order.push(`deleted:${name}`);
+          fire();
+        });
+        return request;
+      }),
+    };
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value,
+    });
+    publishPromptStashReset.mockImplementation(() => order.push("reset"));
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(order).toEqual(["deleted:traycer-gui-app:prompt-stash", "reset"]);
   });
 
   it("drops the dbs AFTER the storage sweep and BEFORE the reload", async () => {

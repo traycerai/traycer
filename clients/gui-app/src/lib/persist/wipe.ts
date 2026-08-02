@@ -25,6 +25,7 @@ import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { PROMPT_STASH_DB_NAME } from "@/lib/composer/prompt-stash-repository";
+import { publishPromptStashReset } from "@/lib/composer/prompt-stash-channel";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -117,13 +118,13 @@ async function enumeratedComposerBlobDatabaseNames(
 // ahead of time, so its deletion never depends on `databases()` support.
 // `indexedDB` itself absent (e.g. a non-browser runtime) still no-ops the
 // whole thing so the wipe reaches the reload.
-async function deleteComposerBlobDatabases(): Promise<void> {
+async function deleteComposerBlobDatabases(): Promise<boolean> {
   const factory = indexedDBFactory();
   if (factory === undefined) {
     appLogger.info("[persist] composer blob database delete unavailable", {
       reason: "no IndexedDB in this runtime",
     });
-    return;
+    return false;
   }
   const enumerated = await enumeratedComposerBlobDatabaseNames(factory);
   const names = new Set(enumerated);
@@ -135,10 +136,12 @@ async function deleteComposerBlobDatabases(): Promise<void> {
   // (stash, whose entries the localStorage sweep never touched but whose
   // db this same step is the only thing that reclaims).
   let failedCount = 0;
+  let promptStashDeleted = true;
   await Promise.all(
     Array.from(names).map((name) =>
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
         failedCount += 1;
+        if (name === PROMPT_STASH_DB_NAME) promptStashDeleted = false;
         appLogger.warn("[persist] composer blob database delete failed", {
           error: describeLogError(error),
         });
@@ -149,6 +152,7 @@ async function deleteComposerBlobDatabases(): Promise<void> {
     databaseCount: names.size,
     failedCount,
   });
+  return promptStashDeleted;
 }
 
 export async function clearAllPersistedStores(args: {
@@ -197,7 +201,8 @@ export async function clearAllPersistedStores(args: {
   //    The localStorage sweep above already removed the draft keys that point
   //    at these bytes; this reclaims the bytes themselves so nothing leaks past
   //    the wipe.
-  await deleteComposerBlobDatabases();
+  const promptStashDeleted = await deleteComposerBlobDatabases();
+  if (promptStashDeleted) publishPromptStashReset();
 
   // 4. Reload last.
   appLogger.info("[persist] local GUI state clear complete - reloading", {});
