@@ -118,6 +118,13 @@ export interface TerminalSessionState {
   readonly title: string | null;
   readonly activeProcessName: string | null;
   readonly currentCwd: string | null;
+  /**
+   * Whether a negotiated stream frame has explicitly carried `currentCwd`.
+   * This distinguishes a pre-1.5/absent field from an explicit empty value,
+   * which is normalized to `currentCwd: null` but must still clear cached
+   * `terminal.list` metadata.
+   */
+  readonly currentCwdReported: boolean;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */
   setWriter: (writer: TerminalDataWriter | null) => void;
@@ -466,6 +473,8 @@ export function createTerminalSessionStore(
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
           currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
         flushRequestedResize();
       },
@@ -527,6 +536,8 @@ export function createTerminalSessionStore(
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
           currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
       },
       onConnectionStatus: (
@@ -583,6 +594,7 @@ export function createTerminalSessionStore(
       title: null,
       activeProcessName: null,
       currentCwd: null,
+      currentCwdReported: false,
 
       setWriter: (next) => {
         writer = next;

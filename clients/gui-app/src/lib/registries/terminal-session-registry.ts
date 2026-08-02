@@ -218,9 +218,13 @@ export function useTerminalSessionHandle(
     let previousTitle = initialState.title;
     let previousActiveProcessName = initialState.activeProcessName;
     let previousCurrentCwd = initialState.currentCwd;
+    let previousCurrentCwdReported = initialState.currentCwdReported;
     return handle.store.subscribe((state) => {
       const statusChanged = state.status !== previousStatus;
-      const currentCwdChanged = state.currentCwd !== previousCurrentCwd;
+      const currentCwdChanged =
+        state.currentCwdReported &&
+        (!previousCurrentCwdReported ||
+          state.currentCwd !== previousCurrentCwd);
       const metadataChanged =
         state.title !== previousTitle ||
         state.activeProcessName !== previousActiveProcessName ||
@@ -229,6 +233,7 @@ export function useTerminalSessionHandle(
       previousTitle = state.title;
       previousActiveProcessName = state.activeProcessName;
       previousCurrentCwd = state.currentCwd;
+      previousCurrentCwdReported = state.currentCwdReported;
       if (metadataChanged) {
         // Patch the cached `terminal.list` rows in place - NEVER invalidate
         // here. The stream is the authoritative source for these fields

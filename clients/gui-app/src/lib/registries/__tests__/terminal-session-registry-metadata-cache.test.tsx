@@ -294,4 +294,35 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
       false,
     );
   });
+
+  it("clears a cached cwd when the first stream frame explicitly reports empty", async () => {
+    const harness = setup();
+    await waitFor(() => {
+      expect(harness.rendered.result.current).not.toBeNull();
+    });
+
+    act(() => {
+      harness.callbacks().onSnapshot(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessionId: SESSION_ID,
+          session: sessionInfo({ currentCwd: "" }),
+          scrollback: "",
+          ackCreditSupported: true,
+        },
+        "",
+      );
+    });
+
+    expect(
+      harness.queryClient
+        .getQueryData<ListTerminalsResponseV22>(listKey)
+        ?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("");
+    expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
+      false,
+    );
+  });
 });
