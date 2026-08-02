@@ -124,7 +124,7 @@ describe("chat find projection", () => {
       },
     };
 
-    const joined = buildChatFindRows([user], TILE_INSTANCE_ID)
+    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set())
       .map((row) => rowSearchText(row))
       .join("\n");
 
