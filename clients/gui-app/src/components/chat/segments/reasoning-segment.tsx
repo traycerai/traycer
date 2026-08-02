@@ -18,6 +18,18 @@ interface ReasoningSegmentProps {
   markdown: string;
   isStreaming: boolean;
   durationMs: number | null;
+  /**
+   * The container already caps this block's height and follows its tail, so it
+   * must not add a `ReasoningTail` of its own - a second `overflow-y-auto`
+   * nested inside the first would fight it for the wheel and give the reader
+   * two scroll positions to reconcile. Set by the live activity window.
+   *
+   * Everything else is unchanged: the header row, the "Thinking" /
+   * "Thought for Xs" label, the collapse on completion, the find anchor. The
+   * window is a viewport onto exactly the rows the expanded group shows, not a
+   * different rendering of them.
+   */
+  bodyBoundedByParent: boolean;
 }
 
 interface ReasoningContentProps {
@@ -59,7 +71,8 @@ function ReasoningContent(props: ReasoningContentProps) {
 }
 
 export function ReasoningSegment(props: ReasoningSegmentProps) {
-  const { findUnitId, markdown, isStreaming, durationMs } = props;
+  const { findUnitId, markdown, isStreaming, durationMs, bodyBoundedByParent } =
+    props;
   // `expanded` shows the full trace. Default (false) means the streaming tail
   // preview while thinking, or the collapsed "Thought for Xs" line once done. A
   // click toggles and sticks for the segment's lifetime.
@@ -98,7 +111,11 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
     [toggle],
   );
 
-  const showTail = isStreaming && !expanded;
+  // The tail preview is this block's OWN bounded scroller. Inside a container
+  // that already bounds and pins it, that scroller is not just redundant but
+  // harmful - two nested `overflow-y-auto`s fighting for one wheel - so the
+  // body renders in full and the container does the capping.
+  const showTail = isStreaming && !expanded && !bodyBoundedByParent;
   const bodyShown = isStreaming || expanded;
   const label = isStreaming ? "Thinking" : reasoningSummaryLabel(durationMs);
 
@@ -140,10 +157,17 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
         aria-expanded={expanded}
         aria-controls={bodyShown ? bodyId : undefined}
         className={cn(
-          "group/reasoning flex max-w-full items-center gap-2 overflow-hidden rounded-md py-1 pr-1 text-left text-ui-sm text-muted-foreground transition-colors",
+          "group/reasoning flex max-w-full items-center gap-2 overflow-hidden rounded-md px-1 py-1 text-left text-ui-sm text-muted-foreground transition-colors",
           "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         )}
       >
+        <ChevronRight
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground/50 transition-transform",
+            expanded && "rotate-90",
+          )}
+          aria-hidden
+        />
         <Brain className="size-3.5 shrink-0 transition-colors" aria-hidden />
         {isStreaming ? (
           <Shimmer
@@ -165,15 +189,6 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
             {label}
           </span>
         )}
-        <ChevronRight
-          className={cn(
-            "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
-            "group-hover/reasoning:translate-x-0 group-hover/reasoning:text-foreground group-hover/reasoning:opacity-100",
-            "group-focus-visible/reasoning:translate-x-0 group-focus-visible/reasoning:text-foreground group-focus-visible/reasoning:opacity-100",
-            expanded && "translate-x-0 rotate-90 text-foreground opacity-100",
-          )}
-          aria-hidden
-        />
       </button>
       {body}
     </div>
@@ -216,6 +231,7 @@ function ReasoningTail({ markdown }: { readonly markdown: string }) {
     <div
       ref={scrollRef}
       onScroll={handleScroll}
+      data-testid="reasoning-tail"
       className={cn(
         "max-h-[7.5rem] overflow-y-auto py-1 text-ui-sm leading-6 text-muted-foreground",
         "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
