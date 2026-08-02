@@ -160,6 +160,7 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 }));
 
 import { ProviderReauthBanner } from "../provider-reauth-banner";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 // TokenReauthForm reads/writes the TanStack Query cache (useQueryClient +
 // useTabRefreshProviders), so every banner render needs a QueryClient in scope.
@@ -222,6 +223,7 @@ const CLAUDE_CAP: ProviderLoginCapability = {
   oauthArgs: ["auth", "login"],
   token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
   codePaste: null,
+  terminalLogin: null,
 };
 
 // Droid has no headless login subcommand (bare `droid` is an interactive TUI
@@ -231,13 +233,38 @@ const DROID_CAP: ProviderLoginCapability = {
   oauthArgs: null,
   token: { vars: ["FACTORY_API_KEY"] },
   codePaste: null,
+  terminalLogin: null,
 };
 
 const CODE_PASTE_CLAUDE_CAP: ProviderLoginCapability = {
   oauthArgs: ["auth", "login"],
   token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
   codePaste: {},
+  terminalLogin: null,
 };
+
+// Copilot's device-code login cannot be driven headlessly, so its capability
+// carries a non-null `terminalLogin` alongside real `oauthArgs` - the banner
+// must offer the terminal button and suppress the (unusable) headless one.
+const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
+  oauthArgs: ["auth", "login"],
+  token: null,
+  codePaste: null,
+  terminalLogin: {},
+};
+
+// The unreachable case this used to model: an old host's payload cannot
+// decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge
+// (`registry.ts`) fills it to `null` on that exact hop. What DOES leave
+// `providerSupportsTerminalLogin` reading "not a terminal-login provider" for
+// a real reason is the provider's whole `loginCapability` being `null`
+// (Cursor, Traycer) - the case below.
+
+function copilotState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "copilot" };
+}
 
 function claudeState(
   loginCapability: ProviderLoginCapability | null,
@@ -261,8 +288,23 @@ function claudeState(
     envOverrides: [],
     loginCapability,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
+}
+
+function codexState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "codex" };
 }
 
 function cursorState(): ProviderCliState {
@@ -286,6 +328,15 @@ function cursorState(): ProviderCliState {
     // API-key-only provider: no OAuth session to reconnect → no banner capability.
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -310,6 +361,15 @@ function droidState(): ProviderCliState {
     envOverrides: [],
     loginCapability: DROID_CAP,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -346,6 +406,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.openExternalLink.mockClear();
     mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
+    useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
   afterEach(() => {
@@ -355,9 +416,12 @@ describe("<ProviderReauthBanner />", () => {
   it("offers the OAuth button on a local host", () => {
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -366,12 +430,143 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 
+  // Row 1 of the terminal-login contract table: the banner is one of three
+  // consumers of `providerSupportsTerminalLogin` - see
+  // `provider-signin-availability.test.ts` for the other two
+  // (`providerSignInUnavailableHint`, `resolveCreateProfileGate`).
+  it("offers 'Sign in from a terminal' instead of the headless OAuth button for a terminal-login provider", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
+  // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
+  // Traycer, or any CLI with no OAuth session to reconnect) makes the
+  // helper's optional chain yield `undefined` for `terminalLogin` -
+  // `providerSupportsTerminalLogin` must read that as "not a terminal-login
+  // provider" the same as an explicit `null`. copilotState's own capability
+  // has real `oauthArgs`, so a null capability here also exercises the "no
+  // reconnect method at all" branch rather than the headless button; assert
+  // on the absence of the terminal button, which is Row 2's actual claim.
+  it("does not offer 'Sign in from a terminal' when loginCapability is null", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(null)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+  });
+
+  // Unified gate: `terminalLogin` present but no real `oauthArgs` (the
+  // command the terminal would run) must read the same way here as it does
+  // in `providerSupportsTerminalLogin` and `resolveCreateProfileGate` - the
+  // banner falls through to the CLI stub, offering neither button.
+  it("offers neither sign-in button when terminalLogin is present but oauthArgs is empty", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState({
+          oauthArgs: [],
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+        })}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+  });
+
+  // Row 3: unlike browser OAuth (a localhost loopback that only a local host
+  // can serve), a device-code terminal login needs no loopback, so it must be
+  // offered on a REMOTE host too.
+  it("still offers 'Sign in from a terminal' on a remote host", () => {
+    mocks.hostKind = "remote";
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeDefined();
+  });
+
+  // The other half of the `showTerminalLogin` gate. Every other terminal-login
+  // case here passes a real epic + view tab; this one pins the home-composer
+  // fallback, where there is no canvas to open a terminal into. Dropping the
+  // `epicId !== null && viewTabId !== null` conjunct would draw a button that
+  // fires an RPC the host honours - a live sign-in PTY with no tile.
+  it("falls through to the paste form for a terminal-login provider outside a canvas", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
   it("offers only the token paste form (no Authenticate) for a CLI with no headless login (Droid)", () => {
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="droid"
         state={droidState()}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -391,9 +586,12 @@ describe("<ProviderReauthBanner />", () => {
   it("stores a pasted Droid key as the encrypted API-key secret, not an env override", () => {
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="droid"
         state={droidState()}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -416,9 +614,12 @@ describe("<ProviderReauthBanner />", () => {
   it("re-checks sign-in status via the manual Refresh button", () => {
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -451,9 +652,12 @@ describe("<ProviderReauthBanner />", () => {
     );
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -473,9 +677,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -490,9 +697,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -521,9 +731,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -544,9 +757,12 @@ describe("<ProviderReauthBanner />", () => {
       mockStartLoginAlwaysSucceeds();
       render(
         <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
           providerId="claude-code"
           state={claudeState(CODE_PASTE_CLAUDE_CAP)}
           reason="provider_unauthenticated"
+          profileId={null}
           profileLabel={null}
           onContinueOnAmbient={null}
         />,
@@ -582,9 +798,12 @@ describe("<ProviderReauthBanner />", () => {
       mockStartLoginAlwaysSucceeds();
       render(
         <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
           providerId="claude-code"
           state={claudeState(CODE_PASTE_CLAUDE_CAP)}
           reason="provider_unauthenticated"
+          profileId={null}
           profileLabel={null}
           onContinueOnAmbient={null}
         />,
@@ -617,9 +836,12 @@ describe("<ProviderReauthBanner />", () => {
       mockStartLoginAlwaysSucceeds();
       render(
         <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
           providerId="claude-code"
           state={claudeState(CODE_PASTE_CLAUDE_CAP)}
           reason="provider_unauthenticated"
+          profileId={null}
           profileLabel={null}
           onContinueOnAmbient={null}
         />,
@@ -657,9 +879,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -683,9 +908,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -712,9 +940,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -748,9 +979,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -789,9 +1023,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -829,9 +1066,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     const view = render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -844,9 +1084,12 @@ describe("<ProviderReauthBanner />", () => {
     });
     view.rerender(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -862,9 +1105,12 @@ describe("<ProviderReauthBanner />", () => {
     });
     view.rerender(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -886,9 +1132,12 @@ describe("<ProviderReauthBanner />", () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -904,9 +1153,12 @@ describe("<ProviderReauthBanner />", () => {
   it("saves a pasted token as an env override for the first credential var", () => {
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -953,9 +1205,12 @@ describe("<ProviderReauthBanner />", () => {
     );
     const { unmount } = render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -991,9 +1246,12 @@ describe("<ProviderReauthBanner />", () => {
     );
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1010,13 +1268,17 @@ describe("<ProviderReauthBanner />", () => {
     mocks.hostKind = "remote";
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState({
           oauthArgs: ["auth", "login"],
           token: null,
           codePaste: null,
+          terminalLogin: null,
         })}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1032,9 +1294,12 @@ describe("<ProviderReauthBanner />", () => {
     mocks.hostKind = "remote";
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1048,9 +1313,12 @@ describe("<ProviderReauthBanner />", () => {
   it("offers the paste form for an API-key-only provider (Cursor) with no OAuth", () => {
     render(
       <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
         providerId="cursor"
         state={cursorState()}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1075,9 +1343,12 @@ describe("<ProviderReauthBanner />", () => {
       const onContinueOnAmbient = vi.fn();
       render(
         <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
           providerId="claude-code"
           state={claudeState(CLAUDE_CAP)}
           reason="profile_missing"
+          profileId="removed-profile"
           profileLabel={null}
           onContinueOnAmbient={onContinueOnAmbient}
         />,
@@ -1085,7 +1356,7 @@ describe("<ProviderReauthBanner />", () => {
 
       expect(
         screen.getByText(
-          "This chat's Claude Code profile is no longer available.",
+          "This agent's Claude Code profile is no longer available.",
         ),
       ).toBeDefined();
       expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
@@ -1095,7 +1366,15 @@ describe("<ProviderReauthBanner />", () => {
       expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
 
       fireEvent.click(
-        screen.getByRole("button", { name: "Reconnect in Settings" }),
+        screen.getByRole("button", { name: "Manage in Settings" }),
+      );
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "claude",
+          focusHostId: "host-1",
+          focusProfileId: "removed-profile",
+          startSignIn: false,
+        }),
       );
       expect(mocks.openSettings).toHaveBeenCalledWith({
         section: "providers",
@@ -1107,9 +1386,12 @@ describe("<ProviderReauthBanner />", () => {
       const onContinueOnAmbient = vi.fn();
       render(
         <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
           providerId="claude-code"
           state={claudeState(CLAUDE_CAP)}
           reason="profile_unauthenticated"
+          profileId="work-profile"
           profileLabel="Work"
           onContinueOnAmbient={onContinueOnAmbient}
         />,
@@ -1120,6 +1402,50 @@ describe("<ProviderReauthBanner />", () => {
         screen.getByRole("button", { name: "Continue on Terminal account" }),
       );
       expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "claude",
+          focusHostId: "host-1",
+          focusProfileId: "work-profile",
+          startSignIn: true,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+      });
+    });
+
+    it("opens the exact signed-out Codex profile in Settings", () => {
+      render(
+        <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
+          providerId="codex"
+          state={codexState(CLAUDE_CAP)}
+          reason="profile_unauthenticated"
+          profileId="codex-work-profile"
+          profileLabel="Codex Work"
+          onContinueOnAmbient={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "codex",
+          focusHostId: "host-1",
+          focusProfileId: "codex-work-profile",
+          startSignIn: true,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+      });
     });
   });
 });

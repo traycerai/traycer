@@ -48,6 +48,15 @@ function claudeState(profileIds: readonly string[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: profileIds.map((profileId) => ({
       profileId,
       kind:
@@ -63,6 +72,7 @@ function claudeState(profileIds: readonly string[]): ProviderCliState {
       identity: null,
       usageUpdatedAt: null,
       rateLimitStatus: "unknown" as const,
+      rateLimitLimitedScopes: null,
       duplicateOfProfileId: null,
       accentColor: null,
       ambientDriftNotice: null,

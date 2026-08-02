@@ -68,6 +68,9 @@ class MockStreamSession implements IStreamSession {
   sendClientFrame(): void {
     // Not exercised here.
   }
+  requestReconnect(): void {
+    // Not exercised here.
+  }
   close(): void {
     this.closed = true;
   }
@@ -82,6 +85,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");

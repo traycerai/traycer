@@ -8,6 +8,28 @@ import type {
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { OpenFrameBearerSource } from "../auth/bearer-source";
+
+/**
+ * Immutable transport coordinates captured for one host-RPC job. The
+ * transport owns no live endpoint or bearer providers: callers capture an
+ * authority before dispatch, then every retry reuses this exact object.
+ */
+export interface HostTransportEndpoint {
+  readonly hostId: string;
+  readonly websocketUrl: string | null;
+}
+
+/**
+ * The frozen authority a unary transport attempt is allowed to observe.
+ * `bearer` can rotate in place for the same request context, but replacing the
+ * context or host must abort this signal and issue a new authority.
+ */
+export interface HostRequestAuthority {
+  readonly endpoint: HostTransportEndpoint;
+  readonly bearer: OpenFrameBearerSource;
+  readonly abortSignal: AbortSignal;
+}
 
 /**
  * App-facing host messenger abstraction.
@@ -30,6 +52,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 
   /**
@@ -46,6 +69,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 
@@ -135,6 +159,44 @@ export function classifyHostRequestFailure(error: unknown): HostRequestFailure {
 }
 
 /**
+ * Totalizes an arbitrary rejection into a `HostRpcError`. TypeScript cannot
+ * type a promise's rejection channel, so every `HostRpcError`-declared error
+ * generic (TanStack queries/mutations, hook result interfaces) is an
+ * unchecked assertion - a bare `Error` slipping through it crashes `.code` /
+ * `.fatalDetails` consumers at runtime. Passing a rejection through this
+ * function is what makes those declarations true by construction.
+ */
+export function toHostRpcError(error: unknown, method: string): HostRpcError {
+  if (error instanceof HostRpcError) return error;
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message:
+      error instanceof Error ? error.message : "Unknown host request failure",
+    requestId: "client-normalized",
+    method,
+    fatalDetails: null,
+  });
+}
+
+/**
+ * Runs `run` and re-throws any rejection normalized via `toHostRpcError`.
+ * Wrap the entire body of a queryFn/mutationFn whose error type is declared
+ * as `HostRpcError`, so bugs and bare throws anywhere inside (response
+ * mapping, pagination guards, transient-client resolution) can never leak a
+ * foreign error shape to `.code`-reading consumers.
+ */
+export async function withHostRpcErrorBoundary<T>(
+  method: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw toHostRpcError(error, method);
+  }
+}
+
+/**
  * A `HostRpcError` whose cause is the transport itself - no host bound, a
  * dropped or unopenable WebSocket, a dial or frame timeout - rather than the
  * host rejecting the operation. The host either never saw the request or
@@ -161,16 +223,18 @@ export class HostTransportFailureError extends HostRpcError {
 }
 
 /**
- * A `HostTransportFailureError` that occurred *before* the request frame was
- * put on the wire - a dial timeout, an `onerror`/`onclose` during the
- * dial-or-handshake phase, or a handshake (`openAck`) frame timeout.
+ * A `HostTransportFailureError` for which the host is known not to have
+ * dispatched the request: either the request frame was never put on the wire
+ * (dial/handshake failure), or the host explicitly reported that its post-open
+ * request deadline elapsed while it was still awaiting that frame.
  *
- * The "before the request was sent" guarantee is what makes it safe to retry
- * even non-idempotent methods: the host never observed the call, so a fresh
- * dial cannot double-apply a side effect. `createRetryingMessenger` keys its
- * bounded retry off this subclass; a post-send drop stays a
+ * The "host did not dispatch the request" guarantee is what makes it safe to
+ * retry even non-idempotent methods: a fresh dial cannot double-apply a side
+ * effect. `createRetryingMessenger` keys its bounded retry off this subclass;
+ * an ambiguous post-send drop stays a
  * `HostTransportFailureError`, and a malformed frame or any host-originated
- * error stays a plain `HostRpcError` - both propagate on the first attempt.
+ * error without the no-dispatch guarantee stays a plain `HostRpcError` - both
+ * propagate on the first attempt.
  */
 export class RetryableTransportError extends HostTransportFailureError {
   constructor(details: {
@@ -182,6 +246,34 @@ export class RetryableTransportError extends HostTransportFailureError {
   }) {
     super(details);
     this.name = "RetryableTransportError";
+  }
+}
+
+/**
+ * A caller-owned request authority was aborted. Unlike a pre-send dial
+ * failure, this is never retryable: the authority belongs to a context or host
+ * binding that has already been replaced or disposed.
+ */
+export class HostRequestAbortedError extends HostTransportFailureError {
+  constructor(details: { message: string; requestId: string; method: string }) {
+    super({
+      code: "RPC_ERROR",
+      message: details.message,
+      requestId: details.requestId,
+      method: details.method,
+      fatalDetails: null,
+    });
+    this.name = "HostRequestAbortedError";
+  }
+}
+
+/** Auth recovery discovered that the captured bearer no longer owns the session. */
+export class HostAuthoritySupersededError extends Error {
+  constructor() {
+    super(
+      "Host request authority was superseded before authentication recovery completed",
+    );
+    this.name = "HostAuthoritySupersededError";
   }
 }
 

@@ -1,14 +1,16 @@
 import type { Disposable } from "../../platform/uri-callback";
 import type {
-  AuthTokenRefreshResult,
-  AuthTokenValidationResult,
+  CredentialsMigrationOutcome,
   DeviceFlowAuthorization,
   DeviceFlowResult,
   DeviceFlowSession,
+  HostRestartRequestResult,
   IDeviceFlowHost,
   IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationForegroundDisplay,
+  NotificationForegroundAppLocal,
   IRunnerHost,
   ISecureStorage,
   ITokenStore,
@@ -17,6 +19,10 @@ import type {
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
   StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
@@ -28,9 +34,26 @@ import type {
 } from "../../platform/runner-host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
-  refreshAuthTokenViaHttp,
-  validateAuthTokenIdentityViaHttp,
-  validateAuthTokenViaHttp,
+  listUserSessionsViaHttp,
+  requestStepUpChallengeViaHttp,
+  mintHostCredentialViaHttp,
+  revokeAllSessionsViaHttp,
+  revokeUserSessionViaHttp,
+  toRetainedStepUpVerifyResult,
+  verifyStepUpChallengeViaHttp,
+  type ListUserSessionsFetchResult,
+  type MintHostCredentialFetchResult,
+  type RetainedStepUpVerifyFetchResult,
+  type RevokeAllSessionsFetchResult,
+  type RevokeUserSessionFetchResult,
+  type StepUpChallengeFetchResult,
+} from "../../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+import {
+  credentialsIdentityFromAuthenticatedUser,
+  refreshOnceAbortable,
+  validateAuthTokenIdentityAccessOnceAbortable,
+  validateAuthTokenIdentityAccessOnly,
 } from "../../auth/auth-validation";
 import type { AuthIdentityValidationResult } from "../../auth/auth-validation-types";
 import type { HostDirectoryEntry } from "../host-directory";
@@ -59,6 +82,12 @@ export interface MockRunnerHostOptions {
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
+const STEP_UP_EXPIRY_SKEW_MS = 5_000;
+
+interface RetainedStepUpCredential {
+  readonly accessToken: string;
+  readonly expiresAtMs: number;
+}
 
 /** Ordered flag-list equality, for the mock's family-default canonicalisation. */
 function sameFlags(a: readonly string[], b: readonly string[]): boolean {
@@ -86,11 +115,19 @@ export class MockRunnerHost implements IRunnerHost {
     readonly payload: unknown;
     readonly replaceKey: string | null;
     readonly deliveryKey: string | null;
+    readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
-  readonly tokenStoreEntries: Map<string, StoredAuthTokens> = new Map();
+  readonly tokenStoreEntries: Map<string, StoredCredentials> = new Map();
   workspaceFolderPickerPaths: readonly string[];
   hosts: readonly HostDirectoryEntry[];
+
+  // In-memory token-store change fan-out (§4). Tests mutate entries then call
+  // `notifyTokenStoreChanged()` to simulate an external write/delete.
+  private readonly tokenStoreChangeListeners = new Set<
+    (change: TokenStoreChange) => void
+  >();
+  private tokenStoreRevision = 0;
 
   private readonly authCallbackHandlers = new Set<() => void>();
   private readonly localHostHandlers = new Set<
@@ -99,8 +136,12 @@ export class MockRunnerHost implements IRunnerHost {
   private readonly notificationClickHandlers = new Set<
     (payload: unknown) => void
   >();
+  private readonly notificationForegroundDisplayHandlers = new Set<
+    (display: NotificationForegroundDisplay) => void
+  >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
+  private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
   readonly tray: MockTrayState = new MockTrayState();
   readonly hostPicker: MockHostPicker = new MockHostPicker();
@@ -121,6 +162,7 @@ export class MockRunnerHost implements IRunnerHost {
     ): Promise<readonly string[]> => {
       return paths;
     },
+    readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;
@@ -165,29 +207,106 @@ export class MockRunnerHost implements IRunnerHost {
     this.beginAuthAttemptCalls += 1;
   }
 
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult> {
-    return validateAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
-  }
-
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult> {
-    return validateAuthTokenIdentityViaHttp(
-      this.authnBaseUrl,
-      token,
-      refreshToken,
-    );
+    // Access-only (§3): the mock mirrors the desktop IPC, which no longer
+    // refreshes on a failed lookup — the spend routes through `tokenStore.rotate`.
+    return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
   }
 
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult> {
-    return refreshAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    // Owning the request in-process, it can hand the caller's signal straight
+    // to `fetch` and abort the real request.
+    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken, signal);
+  }
+
+  async revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    const stepUpToken = useStepUpCredential
+      ? this.activeRetainedStepUpToken()
+      : null;
+    const result = await revokeUserSessionViaHttp(
+      this.authnBaseUrl,
+      stepUpToken ?? bearerToken,
+      familyId,
+    );
+    // Parity with the desktop main-process handler (`auth-ipc.ts`): a
+    // step-up-required verdict on a retained credential means the server just
+    // rejected it, so holding it would make the next revoke re-send a
+    // credential known to be dead and re-prompt in a loop.
+    if (result.kind === "step-up-required" && useStepUpCredential) {
+      this.retainedStepUpCredential = null;
+    }
+    return result;
+  }
+
+  async revokeAllSessions(
+    bearerToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    const result = await revokeAllSessionsViaHttp(
+      this.authnBaseUrl,
+      this.activeRetainedStepUpToken() ?? bearerToken,
+    );
+    this.retainedStepUpCredential = null;
+    return result;
+  }
+
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    // The caller's own bearer: the mint is not step-up gated, so this double
+    // must not substitute a retained step-up credential either.
+    return mintHostCredentialViaHttp(this.authnBaseUrl, bearerToken, request);
+  }
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult> {
+    return requestStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  async verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    const result = await verifyStepUpChallengeViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+    );
+    if (result.kind === "ok") {
+      this.retainedStepUpCredential = {
+        accessToken: result.response.access_token,
+        expiresAtMs:
+          Date.now() +
+          Math.max(
+            0,
+            result.response.expires_in * 1_000 - STEP_UP_EXPIRY_SKEW_MS,
+          ),
+      };
+    }
+    return toRetainedStepUpVerifyResult(result);
+  }
+
+  private activeRetainedStepUpToken(): string | null {
+    if (this.retainedStepUpCredential === null) {
+      return null;
+    }
+    if (this.retainedStepUpCredential.expiresAtMs <= Date.now()) {
+      this.retainedStepUpCredential = null;
+      return null;
+    }
+    return this.retainedStepUpCredential.accessToken;
   }
 
   async openExternalLink(url: string): Promise<void> {
@@ -232,20 +351,147 @@ export class MockRunnerHost implements IRunnerHost {
   };
 
   readonly tokenStore: ITokenStore = {
-    get: async (): Promise<StoredAuthTokens | null> => {
+    get: async (): Promise<StoredCredentials | null> => {
       const value = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
       return value === undefined ? null : value;
     },
-    set: async (tokens: StoredAuthTokens): Promise<void> => {
-      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, tokens);
+    signIn: async (
+      tokens: StoredAuthTokens,
+      identity: StoredCredentialsIdentity,
+    ): Promise<void> => {
+      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
+        token: tokens.token,
+        refreshToken: tokens.refreshToken,
+        authnBaseUrl: this.authnBaseUrl,
+        savedAt: new Date().toISOString(),
+        user: identity,
+      });
+      this.notifyTokenStoreChangedAfterMutation();
+    },
+    rotate: async (expected: {
+      readonly userId: string;
+      readonly token: string;
+    }): Promise<TokenRotateResult> => {
+      // In-memory analogue of the locked rotate: the same guards, then a real
+      // (test-faked) refresh HTTP call — no file, no lock. Lets gui-app tests
+      // drive every rotate outcome by stubbing `fetch` on the authn base URL.
+      const stored = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      if (stored === null) {
+        return { outcome: "deleted", pair: null };
+      }
+      if (stored.user.id !== expected.userId) {
+        return { outcome: "user-mismatch", pair: stored };
+      }
+      if (stored.token !== expected.token) {
+        return { outcome: "superseded", pair: stored };
+      }
+      const refreshed = await refreshOnceAbortable({
+        authnBaseUrl: this.authnBaseUrl,
+        token: stored.token,
+        refreshToken: stored.refreshToken,
+        clientKind: "desktop",
+        signal: null,
+      });
+      if (refreshed.kind === "network-error") {
+        return { outcome: "refresh-network", pair: null };
+      }
+      if (refreshed.kind === "rejected") {
+        return { outcome: "refresh-rejected", pair: null };
+      }
+      const next: StoredCredentials = {
+        ...stored,
+        token: refreshed.token,
+        refreshToken: refreshed.refreshToken,
+        savedAt: new Date().toISOString(),
+      };
+      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, next);
+      this.notifyTokenStoreChangedAfterMutation();
+      return { outcome: "applied", pair: next };
     },
     delete: async (): Promise<void> => {
       this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
+      this.notifyTokenStoreChangedAfterMutation();
+    },
+    subscribe: (listener: (change: TokenStoreChange) => void): Disposable => {
+      this.tokenStoreChangeListeners.add(listener);
+      return {
+        dispose: () => {
+          this.tokenStoreChangeListeners.delete(listener);
+        },
+      };
+    },
+    migrateLegacyCredentials: async (
+      legacy: StoredAuthTokens,
+    ): Promise<CredentialsMigrationOutcome> => {
+      // In-memory analogue of the §6 migration (no lock/WAL; real, test-faked
+      // probe + refresh HTTP). Faithful on the branches gui-app renderer tests
+      // need — a present file wins, an absent file adopts the spent legacy pair;
+      // the deep re-entry / rotate-fallback branching is covered against the
+      // real store in the desktop suite.
+      const existing = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      if (existing !== null) {
+        return "file-wins";
+      }
+      const lProbe = await validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: this.authnBaseUrl,
+        token: legacy.token,
+        signal: null,
+      });
+      if (lProbe.kind === "network-error") return "retryable";
+      if (lProbe.kind !== "valid") return "identity-unknown";
+      const refreshed = await refreshOnceAbortable({
+        authnBaseUrl: this.authnBaseUrl,
+        token: legacy.token,
+        refreshToken: legacy.refreshToken,
+        clientKind: "desktop",
+        signal: null,
+      });
+      if (refreshed.kind === "network-error") return "retryable";
+      if (refreshed.kind === "rejected") return "terminal-dead";
+      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
+        token: refreshed.token,
+        refreshToken: refreshed.refreshToken,
+        authnBaseUrl: this.authnBaseUrl,
+        savedAt: new Date().toISOString(),
+        user: credentialsIdentityFromAuthenticatedUser(lProbe.user),
+      });
+      this.notifyTokenStoreChangedAfterMutation();
+      return "committed";
     },
   };
 
-  async requestHostRespawn(): Promise<void> {
+  /**
+   * Fan out a revisioned `TokenStoreChange` from the current in-memory map.
+   * Tests call this after mutating `tokenStoreEntries` to simulate an external
+   * write/delete that the owned watcher would have observed.
+   *
+   * Self-writes from signIn/rotate/delete schedule the notify on a microtask so
+   * the AuthService apply path can finish first (mirrors production: the FS
+   * watcher fires after the write returns, with a debounce). That keeps the
+   * same-bearer reconcile no-op honest instead of racing applyLiveRotateOutcome.
+   */
+  notifyTokenStoreChanged(): void {
+    this.tokenStoreRevision += 1;
+    const stored = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
+    const change: TokenStoreChange = {
+      present: stored !== undefined,
+      userId: stored?.user.id ?? null,
+      revision: this.tokenStoreRevision,
+    };
+    for (const listener of this.tokenStoreChangeListeners) {
+      listener(change);
+    }
+  }
+
+  private notifyTokenStoreChangedAfterMutation(): void {
+    queueMicrotask(() => {
+      this.notifyTokenStoreChanged();
+    });
+  }
+
+  async requestHostRespawn(): Promise<HostRestartRequestResult> {
     this.requestHostRespawnCalls += 1;
+    return { kind: "restarted" };
   }
 
   readonly notifications: INotificationHost = {
@@ -255,6 +501,7 @@ export class MockRunnerHost implements IRunnerHost {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      foregroundAppLocal: NotificationForegroundAppLocal | null,
     ): Promise<void> => {
       this.notificationsSent.push({
         title,
@@ -262,6 +509,7 @@ export class MockRunnerHost implements IRunnerHost {
         payload,
         replaceKey,
         deliveryKey,
+        foregroundAppLocal,
       });
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
@@ -272,7 +520,25 @@ export class MockRunnerHost implements IRunnerHost {
         },
       };
     },
+    onForegroundDisplay: (
+      handler: (display: NotificationForegroundDisplay) => void,
+    ): Disposable => {
+      this.notificationForegroundDisplayHandlers.add(handler);
+      return {
+        dispose: () => {
+          this.notificationForegroundDisplayHandlers.delete(handler);
+        },
+      };
+    },
   };
+
+  emitForegroundNotificationDisplay(
+    display: NotificationForegroundDisplay,
+  ): void {
+    for (const handler of this.notificationForegroundDisplayHandlers) {
+      handler(display);
+    }
+  }
 
   onLocalHostChange(
     handler: (snapshot: LocalHostSnapshot | null) => void,
@@ -429,10 +695,6 @@ export class MockTraycerCli implements ITraycerCli {
   ]);
   /** Path the next `pickShellProgramFile` resolves with, or null to cancel. */
   pickedProgramFile: string | null = null;
-  /** Last bearer seeded via `cliLogin`, so tests can assert it was forwarded. */
-  lastLoginToken: string | null = null;
-  /** Last refresh token seeded via `cliLogin`, so tests can assert it too. */
-  lastLoginRefreshToken: string | null = null;
 
   async hostStatus(): Promise<TraycerHostStatusSnapshot> {
     return this.hostStatusSnapshot;
@@ -586,16 +848,6 @@ export class MockTraycerCli implements ITraycerCli {
     this.envOverrides = this.envOverrides.filter(
       (row) => row.key !== input.key,
     );
-  }
-
-  async cliLogin(token: string, refreshToken: string): Promise<void> {
-    this.lastLoginToken = token;
-    this.lastLoginRefreshToken = refreshToken;
-  }
-
-  async cliLogout(): Promise<void> {
-    this.lastLoginToken = null;
-    this.lastLoginRefreshToken = null;
   }
 }
 

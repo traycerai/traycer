@@ -23,6 +23,9 @@ import { TicketTile } from "./ticket-tile";
 import { WorkspaceFileTile } from "./workspace-file-tile";
 import { GitDiffTile } from "./git-diff-tile";
 import { SnapshotDiffTile } from "./snapshot-diff-tile";
+import { CommGraphTile } from "./comm-graph-tile";
+import { PrDetailTile } from "./pr-detail-tile";
+import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
@@ -107,6 +110,28 @@ const TILE_RENDERERS: TileRendererRegistry = {
   ),
   "snapshot-diff": ({ node, viewTabId }) => (
     <SnapshotDiffTile node={node} viewTabId={viewTabId} />
+  ),
+  // Epic-scoped, not host-scoped: the tile fans a subscription out per host.
+  // The surrounding `TabHostProvider` carries the ref's inert placeholder host
+  // and this body never reads it.
+  "comm-graph": ({ node, viewTabId }) => (
+    <CommGraphTile node={node} viewTabId={viewTabId} />
+  ),
+  "pr-detail": ({ node, epicId, viewTabId, isActive }) => (
+    <PrDetailTile
+      node={node}
+      epicId={epicId}
+      viewTabId={viewTabId}
+      isActive={isActive}
+    />
+  ),
+  "pr-diff": ({ node, epicId, viewTabId, isActive }) => (
+    <PrDiffTile
+      node={node}
+      epicId={epicId}
+      viewTabId={viewTabId}
+      isActive={isActive}
+    />
   ),
   // A blank tab's body IS the inline opener; picking content replaces it in
   // place (via openTileInPane). `tileId` is the group id; `isActive` drives

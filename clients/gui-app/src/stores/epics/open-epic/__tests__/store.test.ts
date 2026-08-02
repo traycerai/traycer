@@ -957,6 +957,63 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
+  it("resets host dirtiness to unknown until an automatic reconnect receives its atomic dirty snapshot", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-artifact-rooms",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null);
+    handle().callbacks.onDirtySnapshot(false, [
+      { artifactRoomId: "artifact-room-0", dirty: true },
+    ]);
+    expect(opened.store.getState().artifactRoomDirtyByArtifactRoomId).toEqual({
+      "artifact-room-0": true,
+    });
+    expect(opened.store.getState().rootDirty).toBe(false);
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(true);
+
+    // A reconnect must not carry the previous cycle's dirty state forward,
+    // but its empty map is unknown until the new atomic snapshot arrives.
+    handle().callbacks.onConnectionStatus("reconnecting", null);
+    handle().callbacks.onConnectionStatus("open", null);
+
+    expect(opened.store.getState().artifactRoomDirtyByArtifactRoomId).toEqual(
+      {},
+    );
+    expect(opened.store.getState().rootDirty).toBeNull();
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(false);
+
+    // The room became clean while the stream was down. The authoritative
+    // snapshot explicitly establishes that the empty map means clean.
+    handle().callbacks.onDirtySnapshot(false, []);
+    expect(opened.store.getState().rootDirty).toBe(false);
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(true);
+
+    opened.dispose();
+  });
+
+  it("does not let a root-dirty delta stand in for the atomic snapshot", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-root-dirty-delta",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null);
+    handle().callbacks.onRootDirty(false);
+
+    expect(opened.store.getState().rootDirty).toBe(false);
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(false);
+
+    opened.dispose();
+  });
+
   it("forwards artifact-room doc edits as outbound artifactRoomApplyUpdate frames keyed by artifactRoomId", () => {
     const { factory, handle } = fakeFactory();
     const opened = createOpenEpicStore({
@@ -2313,5 +2370,138 @@ describe("createOpenEpicStore", () => {
 
     expect(settled).toBe(true);
     expect(await pending).toBeNull();
+  });
+
+  it("synchronously reports attachment bytes in the local root replica", () => {
+    const hostDoc = new Y.Doc();
+    hostDoc
+      .getMap("attachments")
+      .set("present-hash", new Uint8Array([1, 2, 3]));
+    const { factory, handle } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      Y.encodeStateAsUpdate(hostDoc),
+    );
+
+    expect(opened.store.getState().hasAttachmentBytes("present-hash")).toBe(
+      true,
+    );
+    expect(opened.store.getState().hasAttachmentBytes("missing-hash")).toBe(
+      false,
+    );
+
+    opened.dispose();
+    hostDoc.destroy();
+  });
+
+  describe("sync-pill raw connection legs (hostTransportStatus / cloudSyncStatus / hasConnectedOnce)", () => {
+    it("keeps the optimistic cloud display value separate from fresh cloud proof", () => {
+      const { factory } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-legs-construct",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+
+      const state = opened.store.getState();
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.hostTransportStatus).toBe("connecting");
+      expect(state.connectionStatus).toBe("connecting");
+
+      opened.dispose();
+    });
+
+    it("publishes raw transport, cloud, and freshness legs across each open cycle", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-legs-lifecycle",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+
+      // Transport opens before a current-cycle cloud status arrives. Preserve
+      // the historical functional `open` blend, but freshness remains false
+      // so the pill cannot treat this as cloud-ack proof.
+      handle().callbacks.onConnectionStatus("open", null);
+      let state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.connectionStatus).toBe("open");
+
+      // Genuine cloud connected frame latches hasConnectedOnce; the blend
+      // stays open.
+      handle().callbacks.onCloudSyncStatus("connected");
+      state = opened.store.getState();
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(true);
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("open");
+
+      // A transport re-open preserves the established functional connection
+      // state while invalidating its cloud proof for the new cycle.
+      handle().callbacks.onConnectionStatus("reconnecting", null);
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("reconnecting");
+      expect(state.hasFreshCloudSyncStatus).toBe(true);
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("reconnecting");
+
+      handle().callbacks.onConnectionStatus("open", null);
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("open");
+
+      // A new cloud frame is the fresh proof for this cycle. When it reports
+      // a drop, the functional blend remains reconnecting as before.
+      handle().callbacks.onCloudSyncStatus("disconnected");
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("disconnected");
+      expect(state.hasFreshCloudSyncStatus).toBe(true);
+      expect(state.connectionStatus).toBe("reconnecting");
+
+      opened.dispose();
+    });
+
+    it("requestFreshSnapshot invalidates cloud acknowledgement for its new cycle", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-legs-refresh",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+
+      handle().callbacks.onConnectionStatus("open", null);
+      handle().callbacks.onCloudSyncStatus("connected");
+      expect(opened.store.getState().hasConnectedOnce).toBe(true);
+
+      opened.requestFreshSnapshot();
+
+      const state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("connecting");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.connectionStatus).toBe("connecting");
+
+      opened.dispose();
+    });
   });
 });

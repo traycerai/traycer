@@ -12,6 +12,7 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FileDiff,
   FilePlus,
+  GitPullRequest,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -53,10 +54,14 @@ import type {
 } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
+  isPrDetailTileRef,
+  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
+import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
@@ -66,7 +71,7 @@ import {
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
@@ -86,6 +91,8 @@ import {
   reportShiftKeyHeld,
   useShiftKeyHeld,
 } from "@/hooks/use-shift-key-held";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -218,18 +225,24 @@ export function TabStrip(props: TabStripProps) {
   // Narrow per-strip subscription: preview ticks re-render only the strip
   // actually hovered, not every strip on the canvas.
   const dndDropIndicator = useTabStripDropIndex(groupId);
+  // Terminal-agent tabs are chat-scoped notification entities too: a TUI
+  // agent's `agent.stopped` row is keyed by its agent id, and the tab icon
+  // already reads `chats[tab.id]`.
   const chatIds = useMemo(
-    () => tabs.flatMap((tab) => (tab.type === "chat" ? [tab.id] : [])),
+    () =>
+      tabs.flatMap((tab) =>
+        tab.type === "chat" || tab.type === "terminal-agent" ? [tab.id] : [],
+      ),
     [tabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds,
     enabled: chatIds.length > 0,
   });
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <div
         ref={stripRef}
         data-testid="tab-strip"
@@ -285,7 +298,15 @@ export function TabStrip(props: TabStripProps) {
             </LayoutGroup>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 border-l border-canvas-border/70 bg-canvas px-1">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-0.5 bg-canvas px-1",
+            // Every tab already draws its own right border, so a border here
+            // too would stack two hairlines against each other. Only an empty
+            // strip has no preceding tab to supply the separator.
+            tabs.length === 0 && "border-l border-canvas-border/70",
+          )}
+        >
           <SplitGroupButton groupId={groupId} onSplit={onSplit} />
           <Button
             type="button"
@@ -385,7 +406,7 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onEditTitle"
+    "canRename" | "onCopyFilePath" | "onEditTitle"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
 }
@@ -513,6 +534,18 @@ function TabItem(props: TabItemProps) {
     canEdit: canRename,
     onCommit: handleRename,
   });
+  const { copy } = useClipboardCopy({
+    resetMs: 1500,
+    onSuccess: null,
+    onError: null,
+  });
+  const absoluteFilePath =
+    tab.type === "workspace-file"
+      ? resolveAbsolutePath(tab.workspacePath, tab.filePath)
+      : null;
+  const handleCopyFilePath = useCallback(() => {
+    if (absoluteFilePath !== null) copy(absoluteFilePath);
+  }, [absoluteFilePath, copy]);
 
   const selectTab = useCallback(() => {
     if (rename.isEditing) return;
@@ -623,6 +656,7 @@ function TabItem(props: TabItemProps) {
       <TabStripContextMenu
         {...menuProps}
         canRename={canRename}
+        onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
       />
     </ContextMenu>
@@ -889,11 +923,19 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (isDiffTileRef(props.tab)) {
+  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isPrDetailTileRef(props.tab)) {
+    return (
+      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+    );
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isCommGraphTileRef(props.tab)) {
+    return <CommGraphTileIcon className="size-3.5" />;
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win

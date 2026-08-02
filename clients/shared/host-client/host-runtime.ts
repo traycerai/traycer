@@ -5,6 +5,9 @@ import type { RequestContextProvider } from "../auth/request-context-provider";
 import type { IHostMessenger } from "../host-transport/host-messenger";
 import { HostClient, type IHostQueryInvalidator } from "./host-client";
 import type { HostDirectoryEntry } from "./host-directory";
+import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
+import { HostRequestCoordinator } from "./host-request-coordinator";
+import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
 
 /**
  * Minimal host-directory surface the shared runtime depends on.
@@ -40,6 +43,14 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly requestContextProvider: RequestContextProvider;
   readonly directory: IHostDirectoryService;
   readonly invalidator: IHostQueryInvalidator;
+  readonly schedulingPolicy: RpcSchedulingPolicy<Registry>;
+  /**
+   * Provider-owned binding registry. `null` keeps the standalone-runtime
+   * convenience path for tests and non-React shells.
+   */
+  readonly authorityRegistry?: HostBindingAuthorityRegistry | null;
+  /** Provider-owned in GUI; standalone runtimes may create one. */
+  readonly requestCoordinator: HostRequestCoordinator<Registry> | null;
 }
 
 /**
@@ -66,6 +77,10 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
   readonly directory: IHostDirectoryService;
 
   private readonly runnerHost: IRunnerHost;
+  readonly authorityRegistry: HostBindingAuthorityRegistry;
+  readonly requestCoordinator: HostRequestCoordinator<Registry>;
+  private readonly ownsAuthorityRegistry: boolean;
+  private readonly ownsRequestCoordinator: boolean;
   private started = false;
   private disposed = false;
   private readonly disposables: Disposable[] = [];
@@ -76,10 +91,26 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.runnerHost = options.runnerHost;
     this.requestContextProvider = options.requestContextProvider;
     this.directory = options.directory;
+    this.ownsAuthorityRegistry =
+      options.authorityRegistry === null ||
+      options.authorityRegistry === undefined;
+    this.authorityRegistry =
+      options.authorityRegistry ?? new HostBindingAuthorityRegistry();
+    this.ownsRequestCoordinator = options.requestCoordinator === null;
+    this.requestCoordinator =
+      options.requestCoordinator ??
+      new HostRequestCoordinator({
+        registry: options.registry,
+        schedulingPolicy: options.schedulingPolicy,
+      });
     this.hostClient = new HostClient<Registry>({
       registry: options.registry,
       messenger: options.messenger,
       invalidator: options.invalidator,
+      authorityRegistry: this.authorityRegistry,
+      schedulingPolicy: options.schedulingPolicy,
+      requestCoordinator: this.requestCoordinator,
+      findHostById: (hostId) => options.directory.findById(hostId),
     });
   }
 
@@ -145,5 +176,11 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
       disposable.dispose();
     }
     this.disposables.length = 0;
+    if (this.ownsAuthorityRegistry) {
+      this.authorityRegistry.dispose();
+    }
+    if (this.ownsRequestCoordinator) {
+      this.requestCoordinator.dispose();
+    }
   }
 }

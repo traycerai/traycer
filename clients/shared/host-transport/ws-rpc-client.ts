@@ -14,14 +14,14 @@ import {
 } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import type {
-  BearerSourceProvider,
-  OpenFrameBearerSource,
-} from "@traycer-clients/shared/auth/bearer-source";
+import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  type HostRequestAuthority,
+  type HostTransportEndpoint,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -36,6 +36,7 @@ import type {
 import {
   checkCompatibility,
   hostFrameSchema,
+  RPC_REQUEST_TIMEOUT_FATAL_CODE,
   type ClientFrame,
   type ConnectionManifest,
   type HostFrame,
@@ -45,6 +46,7 @@ import {
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/index";
 import type { TimerHandle } from "./timer-handle";
+import { recordNegotiatedHostMethods } from "./negotiated-manifest-registry";
 
 /**
  * Minimal endpoint shape the transport layer needs to dial a host. The
@@ -53,10 +55,66 @@ import type { TimerHandle } from "./timer-handle";
  * exists purely to keep `host-transport` free of any dependency on the
  * app-runtime host-directory module.
  */
-export interface HostTransportEndpoint {
-  readonly hostId: string;
-  readonly websocketUrl: string | null;
-}
+export type { HostTransportEndpoint } from "./host-messenger";
+
+/**
+ * The complete reason emitted by hosts through 1.1.9 for the post-open timeout,
+ * anchored at both ends so only the host's timeout value may vary.
+ *
+ * A prefix test is not good enough here. This match is what promotes an
+ * `UNAUTHORIZED` - normally a hard credential rejection - into a no-dispatch
+ * attestation that permits retrying a non-idempotent method, so it must
+ * recognize the historical string and nothing that merely starts like it.
+ */
+const LEGACY_RPC_REQUEST_TIMEOUT_REASON =
+  /^Timed out waiting for 'request' frame after openAck \(\d+ms\)$/;
+
+/**
+ * Production value for `WsRpcClientOptions.hostAttestationWindowMs`.
+ *
+ * The host's own deadline is 30s (`DEFAULT_POST_OPEN_TIMEOUT_MS` in its RPC
+ * server), but that timer only *starts* counting event-loop time - a stalled
+ * host fires it late. Issue #726 measured awake stalls of 35.7-40.8s, and the
+ * profiled stall class reaches roughly 45s; 50s covers that class and leaves
+ * bounded slack for delivering the frame afterwards.
+ */
+export const HOST_POST_OPEN_ATTESTATION_WINDOW_MS = 50_000;
+
+/**
+ * Freshly-armed tail of every attestation grace, and the floor for a grace
+ * whose window share is already spent.
+ *
+ * Both peers' deadlines are plain `setTimeout`s, so a suspend/resume or an
+ * event-loop stall runs every overdue callback in a single wake batch. A client
+ * timer that ends the call from inside that batch wins against nothing: the
+ * host's equally overdue post-`openAck` timer has not run yet, let alone put its
+ * no-dispatch fatal on the wire. So no client timer ends the wait directly - it
+ * hands over to this tail, which was armed *after* that callback ran and
+ * therefore measures awake time. Issue #726 recorded 114ms between the desktop's
+ * `system resumed` line and the host firing its overdue post-open timer, so a
+ * few seconds of awake time is generous slack for emitting and delivering the
+ * frame.
+ *
+ * The same value floors the grace when the caller's own deadline already
+ * consumed the whole window - `providers.awaitLogin`'s 16-minute long poll, or
+ * any deadline that expired late because both processes were suspended. Such a
+ * deadline proves nothing about whether the host consumed the request, so it
+ * needs a delivery opportunity too; it just does not need a second full window.
+ */
+const ATTESTATION_DELIVERY_SLACK_MS = 5_000;
+
+/**
+ * Overshoot past a delivery leg's own duration that means the process was not
+ * *running* for most of it, rather than merely busy.
+ *
+ * A healthy event loop fires a timer within milliseconds of its deadline, and
+ * even a badly congested one is late by hundreds; issue #726 measured host
+ * event-loop gaps of 34-41 *seconds* and suspension gaps of minutes. A second
+ * cleanly separates ordinary jitter - which must still let the grace end - from
+ * a scheduling gap that froze this process, and with it the host's ability to
+ * emit and deliver its attestation.
+ */
+const SUSPENSION_OVERSHOOT_TOLERANCE_MS = 1_000;
 
 /**
  * Injectable source of the host endpoint the client should target. Returning
@@ -70,18 +128,44 @@ export type RequestIdProvider = () => string;
 
 export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
   readonly registry: Registry;
-  readonly endpoint: HostEndpointProvider;
-  /**
-   * Source of the bearer for the WS `open` frame. The transport is the ONLY
-   * client-side layer permitted to read it (`source.getBearerToken()`); every
-   * consumer above threads the bearer source itself. `null` → no bearer → the
-   * transport fails before dialing.
-   */
-  readonly bearer: BearerSourceProvider;
   readonly requestId: RequestIdProvider;
   readonly webSocketFactory: IWebSocketFactory;
   readonly dialTimeoutMs: number;
   readonly frameTimeoutMs: number;
+  /**
+   * How long after `openAck` this deployment's hosts are still expected to be
+   * sitting in `awaitingRequest`, and therefore still able to emit their
+   * no-dispatch attestation. Production clients pass
+   * `HOST_POST_OPEN_ATTESTATION_WINDOW_MS`; `0` disables the grace entirely.
+   *
+   * When the client's own response deadline expires first, the response wait is
+   * held open for whatever is left of this window instead of closing the socket
+   * over an ambiguous in-flight request - see `openSession`. Sizing the grace
+   * against this window rather than adding a fixed grace on top of the caller's
+   * deadline makes it shrink as the caller's deadline grows, so a long CLI wait
+   * never stacks a second full window on top of the first.
+   *
+   * It never shrinks to nothing, though: every post-send timeout keeps at least
+   * `ATTESTATION_DELIVERY_SLACK_MS`, because a caller deadline that expired late
+   * across a suspension - or a long-poll budget that outlasts this window
+   * outright - says nothing about whether the host ever consumed the request.
+   * `0` is the only way to opt out of the grace entirely, and means "this caller
+   * cannot act on an attestation even if it arrives" (see the CLI's fast-fail
+   * policy).
+   *
+   * The grace is a bound on *active* time, not on wall-clock time. Every leg is
+   * a `setTimeout`, so a suspend/resume can run any callback arbitrarily late;
+   * when that happens the wait gets a freshly measured delivery leg from
+   * whenever the callback actually ran, and total wall-clock can far exceed this
+   * window. That is the point - a resume is exactly when a host fires its
+   * overdue post-open timer. What is guaranteed is that a process running
+   * uninterrupted never waits longer than `hostAttestationWindowMs`, and that
+   * the grace always ends on the first delivery leg that gets its full duration
+   * of running time. Scheduling gaps neither peer could act through do not
+   * consume that bound - and are not counted, since a count of sleeps is not
+   * something the transport contract should encode.
+   */
+  readonly hostAttestationWindowMs: number;
 }
 
 /**
@@ -117,9 +201,17 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
  *   - dial timeout / transport unreachable / transport aborted / frame timeout
  *     → `HostTransportFailureError(code: "RPC_ERROR")` (the pre-send subset is
  *     a `RetryableTransportError`)
+ *   - host post-open request timeout (including the exact legacy `UNAUTHORIZED`
+ *     spelling) → `RetryableTransportError(code: "RPC_ERROR")`; the fatal is
+ *     host attestation that the request was never dispatched. If the client's
+ *     own response deadline expires first, the socket is held open for a
+ *     bounded remainder of `hostAttestationWindowMs` so that attestation can
+ *     still arrive; the ambiguous local timeout on its own stays non-retryable,
+ *     and once it has been recorded every other non-abort terminal event
+ *     reports it rather than its own error.
  *   - missing / released bearer before dial → `HostRpcError(code: "RPC_ERROR")`
- *   - host `fatalError { code }` (`INCOMPATIBLE`, `UNAUTHORIZED`, or a
- *     domain-specific code) → known RPC codes are preserved on
+ *   - every other host `fatalError { code }` (`INCOMPATIBLE`, `UNAUTHORIZED`,
+ *     or a domain-specific code) → known RPC codes are preserved on
  *     `HostRpcError.code`; domain-specific codes become `RPC_ERROR` while
  *     the original code stays in `fatalDetails`.
  *   - client mirror compat failure (other than cross-major no-bridge on the
@@ -142,47 +234,44 @@ export class WsRpcClient<
   Registry extends VersionedRpcRegistry,
 > implements IHostMessenger<Registry> {
   private readonly registry: Registry;
-  private readonly endpoint: HostEndpointProvider;
-  private readonly bearer: BearerSourceProvider;
   private readonly requestIdProvider: RequestIdProvider;
   private readonly webSocketFactory: IWebSocketFactory;
   private readonly dialTimeoutMs: number;
   private readonly frameTimeoutMs: number;
+  private readonly hostAttestationWindowMs: number;
 
   constructor(options: WsRpcClientOptions<Registry>) {
     this.registry = options.registry;
-    this.endpoint = options.endpoint;
-    this.bearer = options.bearer;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
     this.dialTimeoutMs = options.dialTimeoutMs;
     this.frameTimeoutMs = options.frameTimeoutMs;
+    this.hostAttestationWindowMs = options.hostAttestationWindowMs;
   }
 
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.requestWithResponseTimeout(method, params, this.frameTimeoutMs);
+    return this.requestWithResponseTimeout(
+      method,
+      params,
+      this.frameTimeoutMs,
+      authority,
+    );
   }
 
   async requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
-    const selected = this.endpoint();
+    const selected = authority.endpoint;
 
-    if (selected === null) {
-      throw new HostTransportFailureError({
-        code: "RPC_ERROR",
-        message: "No host is currently bound to the client",
-        requestId,
-        method,
-        fatalDetails: null,
-      });
-    }
+    throwIfAuthorityAborted(authority, requestId, method);
 
     if (selected.websocketUrl === null) {
       throw new HostRpcError({
@@ -196,7 +285,7 @@ export class WsRpcClient<
 
     const clientManifest = this.buildManifest();
     const token = extractBearerOrThrowRpcError(
-      this.bearer(),
+      authority.bearer,
       requestId,
       method,
     );
@@ -204,9 +293,17 @@ export class WsRpcClient<
     const session = openSession({
       socket: this.webSocketFactory.create(selected.websocketUrl),
       dialTimeoutMs: this.dialTimeoutMs,
+      hostAttestationWindowMs: this.hostAttestationWindowMs,
       requestId,
       method,
     });
+    const onAbort = (): void => {
+      session.abort();
+    };
+    authority.abortSignal.addEventListener("abort", onAbort, { once: true });
+    if (authority.abortSignal.aborted) {
+      onAbort();
+    }
 
     try {
       await session.dial();
@@ -224,7 +321,7 @@ export class WsRpcClient<
       const ackFrame = await session.next(this.frameTimeoutMs);
 
       if (ackFrame.kind === "fatalError") {
-        throw hostFatalError(ackFrame, requestId, method);
+        throw hostFatalError(ackFrame, requestId, method, "beforeRequest");
       }
       if (ackFrame.kind !== "openAck") {
         throw new HostRpcError({
@@ -243,6 +340,15 @@ export class WsRpcClient<
       const mergedHostManifest = mergeConnectionManifests(
         ackFrame.manifest,
         ackFrame.optionalManifest,
+      );
+      // Publish what this host advertised so UI layers can gate an optional
+      // (non-floor) affordance without calling the method to find out. Recorded
+      // BEFORE the compatibility check: an incompatible pairing still tells us
+      // truthfully which methods the host has, and the gate wants that fact
+      // even when this particular call is about to fail.
+      recordNegotiatedHostMethods(
+        selected.hostId,
+        Object.keys(mergedHostManifest),
       );
       const clientCanonical = mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];
@@ -311,6 +417,7 @@ export class WsRpcClient<
         responseTimeoutMs,
       );
     } finally {
+      authority.abortSignal.removeEventListener("abort", onAbort);
       session.close(1000, "ok");
     }
   }
@@ -350,7 +457,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
   const responseFrame = await session.next(responseTimeoutMs);
 
   if (responseFrame.kind === "fatalError") {
-    throw hostFatalError(responseFrame, requestId, method);
+    throw hostFatalError(responseFrame, requestId, method, "afterRequest");
   }
   if (responseFrame.kind !== "response") {
     throw new HostRpcError({
@@ -728,8 +835,26 @@ function hostFatalError(
   frame: HostFatalErrorFrame,
   requestId: string,
   method: string,
+  phase: "beforeRequest" | "afterRequest",
 ): HostRpcError {
   const details = frame.details;
+  // Before the request, every host-marked transient is safe to retry. After the
+  // local send, retry only the post-open timeout: that fatal is host attestation
+  // that it remained `awaitingRequest` and never dispatched the call. The legacy
+  // reason match lets new clients recover against hosts through 1.1.9, which
+  // mislabeled the timeout as UNAUTHORIZED and omitted `retryable`.
+  if (
+    (phase === "beforeRequest" && details.retryable === true) ||
+    isRpcRequestTimeout(details)
+  ) {
+    return new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: details.reason,
+      requestId,
+      method,
+      fatalDetails: details,
+    });
+  }
   return new HostRpcError({
     code: isRpcErrorCode(details.code) ? details.code : "RPC_ERROR",
     message: details.reason,
@@ -737,6 +862,26 @@ function hostFatalError(
     method,
     fatalDetails: details,
   });
+}
+
+/**
+ * True for the one host fatal that attests the request was never dispatched:
+ * the host's post-`openAck` deadline expired while it was still in
+ * `awaitingRequest`. Matched in the typed `RPC_REQUEST_TIMEOUT` spelling and in
+ * the exact legacy `UNAUTHORIZED` form emitted by hosts through 1.1.9.
+ */
+function isPostOpenTimeoutAttestation(frame: HostFrame): boolean {
+  return frame.kind === "fatalError" && isRpcRequestTimeout(frame.details);
+}
+
+function isRpcRequestTimeout(details: FatalErrorDetails): boolean {
+  if (details.code === RPC_REQUEST_TIMEOUT_FATAL_CODE) {
+    return true;
+  }
+  return (
+    details.code === "UNAUTHORIZED" &&
+    LEGACY_RPC_REQUEST_TIMEOUT_REASON.test(details.reason)
+  );
 }
 
 function decodeResponseFrame(
@@ -777,9 +922,29 @@ function decodeResponseFrame(
   return frame.result;
 }
 
+/**
+ * The two legs a post-send response timeout waits through before the call is
+ * declared ambiguously failed. Splitting the grace is what makes it
+ * resume-safe: the leg that finally gives up is always armed *after* the
+ * previous timer callback actually ran, so an overdue client timer can never
+ * end the call in the same wake batch that is about to deliver the host's
+ * equally overdue no-dispatch fatal.
+ */
+interface AttestationGrace {
+  /**
+   * Share of `hostAttestationWindowMs` this call has not yet spent. `0` when
+   * the caller's own deadline already consumed the window.
+   */
+  readonly windowMs: number;
+  /** Delivery tail, armed once `windowMs` elapses (immediately when it is 0). */
+  readonly deliveryMs: number;
+}
+
 interface SessionOptions {
   readonly socket: WebSocketLike;
   readonly dialTimeoutMs: number;
+  /** See `WsRpcClientOptions.hostAttestationWindowMs`. */
+  readonly hostAttestationWindowMs: number;
   readonly requestId: string;
   readonly method: string;
 }
@@ -791,9 +956,16 @@ interface Session {
    * not per session: the handshake (`openAck`) wait passes the transport's
    * default frame timeout, while the response wait may pass a caller-extended
    * budget for long-poll methods.
+   *
+   * `timeoutMs` bounds when this wait can *succeed*, not always when it
+   * rejects: a post-send timeout keeps the socket open for the remainder of the
+   * host's attestation window (see `attestationGraceFor`). A frame that arrives
+   * in that window can no longer complete the call - only the host's
+   * no-dispatch fatal is surfaced, and every other frame keeps the timeout.
    */
   next(timeoutMs: number): Promise<HostFrame>;
   send(frame: ClientFrame): void;
+  abort(): void;
   close(code: number, reason: string): void;
 }
 
@@ -805,7 +977,8 @@ interface Session {
  * channel.
  */
 function openSession(options: SessionOptions): Session {
-  const { socket, dialTimeoutMs, requestId, method } = options;
+  const { socket, dialTimeoutMs, hostAttestationWindowMs, requestId, method } =
+    options;
 
   let opened = false;
   let closed = false;
@@ -813,9 +986,17 @@ function openSession(options: SessionOptions): Session {
   // point every transient failure is provably pre-send (the host never saw the
   // call), so it surfaces as a `RetryableTransportError`; after it, the same
   // failure shapes stay a non-retryable `HostTransportFailureError` because a
-  // retry could re-execute a non-idempotent method.
+  // retry could re-execute a non-idempotent method. Only the host itself can
+  // lift that ambiguity, by attesting it never dispatched the request - which
+  // is what the attestation grace below waits for.
   let requestSent = false;
   let failure: HostRpcError | null = null;
+  // Non-null only for the duration of the attestation grace: the ambiguous
+  // post-send response timeout that will be raised unless the host attests,
+  // within the remainder of its post-`openAck` window, that it never dispatched
+  // the request. While it is set it is the session's decided outcome - see the
+  // sticky rule in `failAll`.
+  let ambiguousResponseTimeout: HostRpcError | null = null;
 
   /**
    * Builds the failure for a transient transport/timeout event (dial timeout,
@@ -839,6 +1020,39 @@ function openSession(options: SessionOptions): Session {
           method,
           fatalDetails: null,
         });
+
+  /**
+   * The grace granted at the moment a frame wait times out, or `null` when
+   * there is nothing to wait for: the request frame was never sent (that
+   * failure is already provably no-dispatch and retryable on its own), or this
+   * caller opted out with a zero window.
+   *
+   * The response timer is armed immediately after `openAck` is consumed, so
+   * `waitTimeoutMs` is the share of the window this wait has nominally consumed
+   * - no clock reading needed. It is nominal rather than measured: if the
+   * response timer itself ran late (suspend/resume), more wall-clock has really
+   * elapsed than the window models. That is precisely when an attestation is
+   * about to arrive, which is why the remainder is floored at the delivery
+   * slack instead of collapsing to "no grace". The total stays bounded by
+   * `hostAttestationWindowMs` either way.
+   */
+  const attestationGraceFor = (
+    waitTimeoutMs: number,
+  ): AttestationGrace | null => {
+    if (!requestSent || hostAttestationWindowMs <= 0) {
+      return null;
+    }
+    const deliveryMs = Math.min(
+      ATTESTATION_DELIVERY_SLACK_MS,
+      hostAttestationWindowMs,
+    );
+    const totalMs = Math.max(
+      hostAttestationWindowMs - waitTimeoutMs,
+      deliveryMs,
+    );
+    return { windowMs: totalMs - deliveryMs, deliveryMs };
+  };
+
   const buffer: HostFrame[] = [];
   let dialResolver: {
     readonly resolve: () => void;
@@ -851,22 +1065,115 @@ function openSession(options: SessionOptions): Session {
     readonly timer: TimerHandle;
   } | null = null;
 
+  /**
+   * Single terminal transition for the session. Every failing event routes
+   * here, which is also where the post-deadline outcome is made sticky:
+   * once `ambiguousResponseTimeout` is recorded, that error *is* the call's
+   * answer, because the request may already have been dispatched and only the
+   * host's no-dispatch attestation - which resolves the wait rather than
+   * failing it - can change that. A close, a transport error, a malformed
+   * frame, a late/unrelated frame, and grace expiry are all downstream of a
+   * fate already decided, so none of them may substitute its own error and make
+   * the reported failure race-dependent. An authority abort is the one
+   * caller-owned cancellation that still overrides.
+   */
   const failAll = (error: HostRpcError): void => {
+    const ambiguous = ambiguousResponseTimeout;
+    const settled =
+      ambiguous !== null && !(error instanceof HostRequestAbortedError)
+        ? ambiguous
+        : error;
+    ambiguousResponseTimeout = null;
     if (failure === null) {
-      failure = error;
+      failure = settled;
     }
     if (dialResolver !== null) {
       const resolver = dialResolver;
       dialResolver = null;
       clearTimeout(resolver.timer);
-      resolver.reject(error);
+      resolver.reject(settled);
     }
     if (frameResolver !== null) {
       const resolver = frameResolver;
       frameResolver = null;
       clearTimeout(resolver.timer);
-      resolver.reject(error);
+      resolver.reject(settled);
     }
+  };
+
+  /**
+   * Ends a wait that is already inside its attestation grace. The sticky rule
+   * in `failAll` supplies the recorded timeout; this exists so the callers that
+   * merely observe "the grace produced nothing usable" don't have to invent an
+   * error the caller will never see.
+   */
+  const failWithAmbiguousTimeout = (): void => {
+    const ambiguous = ambiguousResponseTimeout;
+    if (ambiguous === null) {
+      return;
+    }
+    failAll(ambiguous);
+  };
+
+  /**
+   * Re-arms the pending response wait for one leg of the grace, keeping the
+   * caller's resolvers attached so an attestation arriving in any leg still
+   * settles the original `next()` promise. The window leg hands over to the
+   * delivery leg instead of ending the call - see `ATTESTATION_DELIVERY_SLACK_MS`
+   * for why the last word must belong to a freshly armed timer.
+   */
+  const armAttestationLeg = (grace: AttestationGrace): void => {
+    const resolver = frameResolver;
+    if (resolver === null) {
+      return;
+    }
+    const armedAt = Date.now();
+    frameResolver = {
+      resolve: resolver.resolve,
+      reject: resolver.reject,
+      timer:
+        grace.windowMs > 0
+          ? setTimeout(() => {
+              armAttestationLeg({ windowMs: 0, deliveryMs: grace.deliveryMs });
+            }, grace.windowMs)
+          : setTimeout(() => {
+              settleDeliveryLeg(armedAt, grace);
+            }, grace.deliveryMs),
+    };
+  };
+
+  /**
+   * The one place the attestation grace is allowed to end the call, and the
+   * reason it is not simply `failWithAmbiguousTimeout`.
+   *
+   * Handing the window leg over to a freshly armed delivery leg only moves the
+   * resume hazard: if the machine suspends *inside* that delivery leg, its
+   * callback is overdue on wake too and would again beat the host's equally
+   * overdue no-dispatch fatal. So the last leg reads the wall clock. Firing on
+   * time means this process really was running for the whole leg and nothing
+   * arrived - the honest end of the grace. Firing far late means the leg
+   * measured a scheduling gap rather than host silence, so it is re-armed to
+   * become the running delivery opportunity it was meant to be.
+   *
+   * There is deliberately no cap on how often that can happen. A cap would
+   * write a count of sleeps into the transport contract, and the call would
+   * eventually fail for the single reason this whole mechanism exists to rule
+   * out: the client's timer callback won the wake. What bounds the grace is
+   * *active* time - the first delivery leg that actually gets its full duration
+   * of running time ends the call - not wall-clock time or how many scheduling
+   * gaps preceded it. Time in which neither process could make progress is not
+   * evidence about dispatch.
+   */
+  const settleDeliveryLeg = (
+    armedAt: number,
+    grace: AttestationGrace,
+  ): void => {
+    const overshootMs = Date.now() - armedAt - grace.deliveryMs;
+    if (overshootMs > SUSPENSION_OVERSHOOT_TOLERANCE_MS) {
+      armAttestationLeg({ windowMs: 0, deliveryMs: grace.deliveryMs });
+      return;
+    }
+    failWithAmbiguousTimeout();
   };
 
   socket.onopen = () => {
@@ -911,8 +1218,21 @@ function openSession(options: SessionOptions): Session {
     }
     const frame = frameParse.data;
     if (frameResolver !== null) {
+      // Once the caller's response deadline has elapsed no frame can still
+      // satisfy this call. Only the host's no-dispatch attestation changes the
+      // outcome - it is handed to the caller, which maps it to a
+      // `RetryableTransportError`. Anything else, including a `response` that
+      // merely arrived late, keeps the recorded response-timeout failure.
+      if (
+        ambiguousResponseTimeout !== null &&
+        !isPostOpenTimeoutAttestation(frame)
+      ) {
+        failWithAmbiguousTimeout();
+        return;
+      }
       const resolver = frameResolver;
       frameResolver = null;
+      ambiguousResponseTimeout = null;
       clearTimeout(resolver.timer);
       resolver.resolve(frame);
       return;
@@ -973,9 +1293,24 @@ function openSession(options: SessionOptions): Session {
       }
       return new Promise<HostFrame>((resolve, reject) => {
         const timer = setTimeout(() => {
-          failAll(
-            transientFailure(`WebSocket frame timed out after ${timeoutMs}ms`),
+          const ambiguous = transientFailure(
+            `WebSocket frame timed out after ${timeoutMs}ms`,
           );
+          const grace = attestationGraceFor(timeoutMs);
+          if (grace === null || frameResolver === null) {
+            failAll(ambiguous);
+            return;
+          }
+          // The caller's deadline is up, but the host's post-`openAck` deadline
+          // may not be - and if this callback itself ran late, neither peer's
+          // timeline is where the numbers say it is. Closing here would discard
+          // the one frame that can tell us whether the request was ever
+          // dispatched, so hold the socket for the rest of the window plus its
+          // delivery tail instead. Nothing is decided here: the wait still fails
+          // with this same ambiguous, non-retryable timeout unless the host's
+          // no-dispatch fatal lands first.
+          ambiguousResponseTimeout = ambiguous;
+          armAttestationLeg(grace);
         }, timeoutMs);
         frameResolver = { resolve, reject, timer };
       });
@@ -988,6 +1323,26 @@ function openSession(options: SessionOptions): Session {
         requestSent = true;
       }
       socket.send(JSON.stringify(frame));
+    },
+
+    abort(): void {
+      failAll(
+        new HostRequestAbortedError({
+          message:
+            "Host request authority was aborted while the WebSocket was open",
+          requestId,
+          method,
+        }),
+      );
+      if (closed) {
+        return;
+      }
+      closed = true;
+      try {
+        socket.close(1000, "authority-aborted");
+      } catch (cause) {
+        void cause;
+      }
     },
 
     close(code: number, reason: string): void {
@@ -1060,7 +1415,7 @@ export function extractBearerForOpenFrame(
 }
 
 function extractBearerOrThrowRpcError(
-  source: OpenFrameBearerSource | null,
+  source: OpenFrameBearerSource,
   requestId: string,
   method: string,
 ): string {
@@ -1078,4 +1433,19 @@ function extractBearerOrThrowRpcError(
     }
     throw cause;
   }
+}
+
+function throwIfAuthorityAborted(
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+): void {
+  if (!authority.abortSignal.aborted) {
+    return;
+  }
+  throw new HostRequestAbortedError({
+    message: "Host request authority was aborted before the WebSocket dial",
+    requestId,
+    method,
+  });
 }

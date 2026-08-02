@@ -34,6 +34,7 @@ describe("useTabCloseCommand", () => {
       name: "Epic X",
       route: `/epics/epic-x/${tabId}`,
       icon: null,
+      canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
     });

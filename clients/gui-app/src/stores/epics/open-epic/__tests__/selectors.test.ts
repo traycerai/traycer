@@ -110,13 +110,14 @@ function makeMeta(): SnapshotMetaEpic {
 function makeTerminalAgentProjectionDoc(
   terminalAgentArgs: unknown,
   shouldSetTerminalAgentArgs: boolean,
+  harnessId: string,
 ): Y.Doc {
   const doc = new Y.Doc();
   const epic = doc.getMap("epic");
   const tuiAgents = new Y.Map<unknown>();
   const terminalAgent = new Y.Map<unknown>();
   terminalAgent.set("id", "terminal-1");
-  terminalAgent.set("harnessId", "codex");
+  terminalAgent.set("harnessId", harnessId);
   terminalAgent.set("title", "Codex");
   terminalAgent.set("parentId", null);
   terminalAgent.set("createdAt", 0);
@@ -227,6 +228,14 @@ describe("open-epic-store doc projection", () => {
     expect(projected.byId["terminal-1"]).toBeUndefined();
   });
 
+  it("rejects Cursor records from the terminal-agent projection", () => {
+    const doc = makeTerminalAgentProjectionDoc(null, false, "cursor");
+
+    const projected = projectTerminalAgents(doc, null);
+
+    expect(projected.byId["terminal-1"]).toBeUndefined();
+  });
+
   it("projects durable terminal-agent args with fallback and override semantics", () => {
     const cases: ReadonlyArray<{
       readonly label: string;
@@ -262,7 +271,7 @@ describe("open-epic-store doc projection", () => {
 
     cases.forEach(({ label, rawValue, shouldSetRawValue, expected }) => {
       const projected = projectTerminalAgents(
-        makeTerminalAgentProjectionDoc(rawValue, shouldSetRawValue),
+        makeTerminalAgentProjectionDoc(rawValue, shouldSetRawValue, "codex"),
         null,
       );
 

@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Eye,
   Pencil,
 } from "lucide-react";
@@ -30,6 +31,8 @@ export interface TabStripContextMenuProps {
     leading: boolean,
   ) => void;
   readonly onRevealInSidebar: (tabId: string) => void;
+  /** Copies the absolute path for workspace-file tabs; absent for other kinds. */
+  readonly onCopyFilePath: (() => void) | null;
   /**
    * Commit handler for inline title editing. Consumed by the tab item when
    * the rename is committed (Enter / blur), not by the menu itself - the menu
@@ -60,6 +63,7 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
     onCloseAll,
     onSplit,
     onRevealInSidebar,
+    onCopyFilePath,
     canRename,
     onEditTitle,
   } = props;
@@ -119,6 +123,12 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
         Split Right
       </ContextMenuItem>
       <ContextMenuSeparator />
+      {onCopyFilePath === null ? null : (
+        <ContextMenuItem onSelect={onCopyFilePath}>
+          <Copy className="size-4" />
+          Copy File Path
+        </ContextMenuItem>
+      )}
       <ContextMenuItem onSelect={() => onRevealInSidebar(tabId)}>
         <Eye className="size-4" />
         Reveal in Sidebar

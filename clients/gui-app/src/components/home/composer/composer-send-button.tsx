@@ -1,12 +1,14 @@
 import { ArrowUp, Square } from "lucide-react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { cn } from "@/lib/utils";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
 interface ComposerSendButtonProps {
   canSubmit: boolean;
+  attachmentPending: boolean;
   onSubmit: () => void;
   activeTurnStatus: ChatActiveTurn["status"] | null;
   stopDisabled: boolean;
@@ -22,6 +24,7 @@ interface ComposerSendButtonProps {
 function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
   const {
     canSubmit,
+    attachmentPending,
     onSubmit,
     activeTurnStatus,
     stopDisabled,
@@ -57,23 +60,27 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
   );
 
   const button = (
-    <Button
-      type="button"
-      size="icon"
-      onClick={submitOrStopTurn}
-      disabled={hintActive ? false : disabled}
-      aria-disabled={hintActive || undefined}
-      aria-label={label}
-      title={hintActive ? undefined : buttonTitle}
-      data-testid={stopMode ? "chat-stop-button" : undefined}
-      className={buttonClassName}
+    <TooltipWrapper
+      label={hintActive ? undefined : buttonTitle}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {stopMode ? (
-        <Square className="size-3.5 fill-current" />
-      ) : (
-        <ArrowUp className="size-4" />
-      )}
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          size="icon"
+          onClick={submitOrStopTurn}
+          disabled={hintActive ? false : disabled}
+          aria-disabled={hintActive || undefined}
+          aria-label={label}
+          data-testid={stopMode ? "chat-stop-button" : undefined}
+          className={buttonClassName}
+        >
+          {composerSendButtonIcon(attachmentPending, stopMode)}
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 
   if (!hintActive) return button;
@@ -91,6 +98,23 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
 }
 
 export const ComposerSendButton = memo(ComposerSendButtonImpl);
+
+function composerSendButtonIcon(
+  attachmentPending: boolean,
+  stopMode: boolean,
+): ReactNode {
+  if (attachmentPending && !stopMode) {
+    return (
+      <AgentSpinningDots
+        className="text-current"
+        testId="composer-attachment-pending"
+        variant={undefined}
+      />
+    );
+  }
+  if (stopMode) return <Square className="size-3.5 fill-current" />;
+  return <ArrowUp className="size-4" />;
+}
 
 function composerSendButtonLabel(
   activeTurnStatus: ChatActiveTurn["status"] | null,

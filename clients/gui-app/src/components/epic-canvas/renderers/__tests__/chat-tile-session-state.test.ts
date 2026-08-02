@@ -7,7 +7,10 @@ import type {
   ChatQueueState,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatMessage } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage,
+  InterviewSegment,
+} from "@/stores/composer/chat-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const toastSuccess = vi.hoisted(() =>
@@ -35,12 +38,16 @@ vi.mock("sonner", () => ({
 }));
 
 import {
+  canModifyChatMessages,
   chatActivityIndicator,
   chatMessageEditingForInlineEdit,
+  findPendingInterview,
+  findUnanswerableInterviews,
   resolvedTurnStatus,
   showRestoreResultToast,
   type InlineEditState,
 } from "../chat-tile-session-state";
+import type { PendingUserMessage } from "@/stores/chats/chat-session-store";
 
 beforeEach(() => {
   toastSuccess.mockClear();
@@ -123,6 +130,7 @@ function renderInlineEdit(dirty: boolean) {
     canModifyMessages: true,
     editSettings: SETTINGS,
     mentionRoots: [],
+    fallbackToGlobalMentionRoots: true,
     currentEpicId: "epic-1",
     onSnapshot: vi.fn(),
     onSubmit: vi.fn(),
@@ -139,6 +147,10 @@ describe("chatMessageEditingForInlineEdit", () => {
   it("requires a dirty edit before enabling submit", () => {
     expect(renderInlineEdit(false).canSubmit).toBe(false);
     expect(renderInlineEdit(true).canSubmit).toBe(true);
+  });
+
+  it("carries the workspace fallback policy into the inline editor", () => {
+    expect(renderInlineEdit(false).fallbackToGlobalMentionRoots).toBe(true);
   });
 });
 
@@ -244,13 +256,14 @@ function expectToastAction(
 }
 
 const ACTIVE_TURN: ChatActiveTurn = {
+  agentMode: "regular",
+  sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
   harnessId: "codex",
   model: "codex-test",
   reasoningEffort: null,
   serviceTier: null,
-  agentMode: "epic",
   profileId: null,
   userMessageId: "message-1",
   startedAt: 0,
@@ -532,6 +545,52 @@ describe("chatActivityIndicator", () => {
     ).toBe("background");
   });
 
+  it("reads turn (not background) while a detached subagent is still running", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [
+          {
+            taskId: "t2",
+            kind: "subagent" as const,
+            title: "Explore the codebase",
+            blockId: "t2",
+            parentTaskId: null,
+            scheduledFor: null,
+          },
+        ],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads turn (not background) while a detached workflow fleet is still running", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [
+          MONITOR_ITEM,
+          {
+            taskId: "t3",
+            kind: "workflow" as const,
+            title: "review-changes",
+            blockId: "t3",
+            parentTaskId: null,
+            phase: null,
+            activeLabel: null,
+            agentsStarted: null,
+            agentsFinished: null,
+          },
+        ],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
   it("prioritizes the turn when a turn and background work run simultaneously", () => {
     expect(
       chatActivityIndicator({
@@ -587,5 +646,255 @@ describe("chatActivityIndicator", () => {
         turnInProgress: undefined,
       }),
     ).toBe("turn");
+  });
+});
+
+describe("canModifyChatMessages", () => {
+  const PENDING_USER_MESSAGE: PendingUserMessage = {
+    clientActionId: "action-1",
+    messageId: "message-1",
+    content: CONTENT,
+    sender: { type: "user", userId: "owner-1" },
+    settings: SETTINGS,
+    timestamp: 0,
+  };
+
+  function gateState(
+    overrides: Partial<Parameters<typeof canModifyChatMessages>[0]["state"]>,
+  ): Parameters<typeof canModifyChatMessages>[0]["state"] {
+    return {
+      runStatus: "idle",
+      activeTurn: null,
+      queue: EMPTY_QUEUE,
+      backgroundItems: undefined,
+      turnInProgress: undefined,
+      pendingUserMessages: [],
+      pendingActions: {},
+      ...overrides,
+    };
+  }
+
+  it("allows edit/delete on a fully idle chat", () => {
+    expect(canModifyChatMessages({ canAct: true, state: gateState({}) })).toBe(
+      true,
+    );
+  });
+
+  it("denies when the viewer cannot act", () => {
+    expect(canModifyChatMessages({ canAct: false, state: gateState({}) })).toBe(
+      false,
+    );
+  });
+
+  it("denies while the host reports a turn genuinely in progress (pre-turn activating window included)", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({ runStatus: "running", turnInProgress: true }),
+      }),
+    ).toBe(false);
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({ runStatus: "stopping", turnInProgress: true }),
+      }),
+    ).toBe(false);
+  });
+
+  it("allows when runStatus is running purely because visible background work outlives the settled turn - the reported regression", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          backgroundItems: [
+            {
+              taskId: "t1",
+              kind: "command",
+              title: "bun test",
+              blockId: "t1",
+              parentTaskId: null,
+              scheduledFor: null,
+            },
+          ],
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("older-host fallback: background-only running phase opens the gate without turnInProgress", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: undefined,
+          backgroundItems: [
+            {
+              taskId: "t1",
+              kind: "monitor",
+              title: "Monitor",
+              blockId: "t1",
+              parentTaskId: null,
+              scheduledFor: null,
+            },
+          ],
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("older-host fallback: an unexplained running status (activating window) keeps the gate closed", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({ runStatus: "running", turnInProgress: undefined }),
+      }),
+    ).toBe(false);
+  });
+
+  it("denies while a queued item is pending, even with no turn in progress", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          queue: runnableQueue(1),
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("denies while an optimistic user message is still unconfirmed", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          pendingUserMessages: [PENDING_USER_MESSAGE],
+        }),
+      }),
+    ).toBe(false);
+  });
+});
+
+// ── Escape hatch: host-pending interviews with no answerable card ────────────
+
+function interviewMessage(
+  id: string,
+  segments: ReadonlyArray<{
+    readonly blockId: string;
+    readonly status: InterviewSegment["status"];
+  }>,
+): ChatMessage {
+  return {
+    ...MESSAGE,
+    id,
+    role: "assistant",
+    persistentMessageId: id,
+    segments: segments.map((segment) => ({
+      id: segment.blockId,
+      kind: "interview",
+      status: segment.status,
+      toolName: "AskUserQuestion",
+      title: null,
+      description: null,
+      questions: [],
+      answers: [],
+      error: null,
+      forkedWithoutAnswer: false,
+    })),
+  };
+}
+
+describe("findUnanswerableInterviews", () => {
+  it("flags a host-pending block the transcript already settled", () => {
+    // The phantom-interview shape: the harness errored the AskUserQuestion, the
+    // block persisted as `errored`, but the pending wait was rehydrated from a
+    // dangling `interview.requested`. No card renders, yet sends are rejected.
+    const messages = [
+      interviewMessage("m-1", [
+        { blockId: "settled-block", status: "errored" },
+      ]),
+    ];
+
+    expect(
+      findUnanswerableInterviews(messages, [
+        { blockId: "settled-block", requestedAt: 10 },
+      ]),
+    ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
+  });
+
+  it("flags a host-pending block that is absent from the transcript", () => {
+    expect(
+      findUnanswerableInterviews(
+        [],
+        [{ blockId: "ghost-block", requestedAt: 7 }],
+      ),
+    ).toEqual([{ blockId: "ghost-block", requestedAt: 7 }]);
+  });
+
+  it("leaves an answerable streaming block to the interview card", () => {
+    const messages = [
+      interviewMessage("m-1", [
+        { blockId: "streaming-block", status: "streaming" },
+      ]),
+    ];
+    const pending = [{ blockId: "streaming-block", requestedAt: 10 }];
+
+    // The two derivations partition the host's pending set - a block routed to
+    // the card must never also raise the escape hatch.
+    expect(findUnanswerableInterviews(messages, pending)).toEqual([]);
+    expect(
+      findPendingInterview(messages, (id) => id === "streaming-block")?.blockId,
+    ).toBe("streaming-block");
+  });
+
+  it("separates a stuck block from an answerable one in the same chat", () => {
+    const messages = [
+      interviewMessage("m-1", [
+        { blockId: "settled-block", status: "errored" },
+      ]),
+      interviewMessage("m-2", [
+        { blockId: "streaming-block", status: "streaming" },
+      ]),
+    ];
+
+    expect(
+      findUnanswerableInterviews(messages, [
+        { blockId: "settled-block", requestedAt: 10 },
+        { blockId: "streaming-block", requestedAt: 20 },
+      ]),
+    ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
+  });
+
+  it("orders stuck blocks oldest first", () => {
+    expect(
+      findUnanswerableInterviews(
+        [],
+        [
+          { blockId: "newer-block", requestedAt: 20 },
+          { blockId: "older-block", requestedAt: 10 },
+        ],
+      ).map((interview) => interview.blockId),
+    ).toEqual(["older-block", "newer-block"]);
+  });
+
+  it("returns one stable empty reference so the composer memo cannot churn", () => {
+    // `renderedMessages` changes on every streaming token; a fresh `[]` here
+    // would re-identify the composer's props each token.
+    const first = findUnanswerableInterviews([], []);
+    const second = findUnanswerableInterviews(
+      [
+        interviewMessage("m-1", [
+          { blockId: "streaming-block", status: "streaming" },
+        ]),
+      ],
+      [{ blockId: "streaming-block", requestedAt: 10 }],
+    );
+
+    expect(first).toEqual([]);
+    expect(second).toBe(first);
   });
 });

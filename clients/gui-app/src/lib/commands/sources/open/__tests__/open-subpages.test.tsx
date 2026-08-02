@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -56,8 +56,9 @@ const terminalBindingsMock = vi.hoisted(() => ({
       setupState: "not_required",
       disabledReason: null,
       sources: [],
+      isGitResolvePending: false,
     },
-  ] satisfies WorktreeBindingSelectorRow[],
+  ] satisfies WorktreeBindingSelectorRowV12[],
 }));
 
 function chat(id: string, title: string): ChatProjection {
@@ -70,6 +71,7 @@ function chat(id: string, title: string): ChatProjection {
     userId: null,
     hostId: "chat-host",
     isTitleEditedByUser: false,
+    archivedAt: null,
     settings: null,
   };
 }
@@ -89,6 +91,7 @@ function agent(id: string, title: string): TuiAgentProjection {
     reasoningEffort: null,
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,
@@ -163,6 +166,14 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           title: "shell one",
           cwd: "/work/repo",
         },
+        {
+          sessionId: "term-signin",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionKind: "terminal",
+          status: "running",
+          title: "Copilot sign-in",
+          cwd: "~",
+        },
       ],
     },
   }),
@@ -185,12 +196,15 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgent: () => ({ create: spies.createTuiAgent, isPending: false }),
 }));
 
-import { useChatsOpenerItems } from "@/lib/commands/sources/open/chats-subpage";
-import { useTuiOpenerItems } from "@/lib/commands/sources/open/tui-subpage";
+import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import {
+  recordProviderLoginTerminal,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
 
 const navigateNestedFocusSpy = vi.fn<NavigateNestedFocus>();
 
@@ -254,18 +268,39 @@ afterEach(() => {
   vi.clearAllMocks();
   useNewConversationModalOpenStore.getState().close();
   useNewConversationModalStore.getState().resetForTests();
+  useProviderLoginTerminalsStore.setState(
+    useProviderLoginTerminalsStore.getInitialState(),
+    true,
+  );
 });
 
-describe("Chats opener sub-page", () => {
-  it("pins New chat first, then lists existing chats", () => {
-    const items = renderItems(useChatsOpenerItems);
-    expect(items[0].id).toBe("open:chats:new");
-    expect(items[0].label).toBe("Create new chat");
-    expect(items.map((i) => i.id)).toContain("open:chats:c1");
+describe("Agents opener sub-page", () => {
+  it("leads with both interfaces' creation leaves, then every Agent record", () => {
+    const items = renderItems(useAgentsOpenerItems);
+    // Creation for both interfaces sits at the top; records follow as one list
+    // rather than two interface-grouped collections.
+    expect(items.slice(0, 2).map((i) => i.id)).toEqual([
+      "open:chats:new",
+      "open:tui:new",
+    ]);
+    expect(items[0].label).toBe("New agent (Chat)");
+    expect(items[1].label).toBe("New agent (Terminal)");
+    expect(items[1].subpage).toBeNull();
+    const ids = items.map((i) => i.id);
+    expect(ids).toContain("open:chats:c1");
+    expect(ids).toContain("open:tui:a1");
   });
 
-  it("New chat opens the modal in chat mode into the target; existing opens into the target", () => {
-    const items = renderItems(useChatsOpenerItems);
+  it("preserves the leaf id prefixes the palette keys analytics off", () => {
+    const items = renderItems(useAgentsOpenerItems);
+    // `palette-cmdk-controller` maps `open:chats:*` -> open_chat and
+    // `open:tui:*` -> open_terminal. Merging the visible category must not
+    // renumber the leaves out from under that routing.
+    expect(items.every((i) => /^open:(chats|tui):/.test(i.id))).toBe(true);
+  });
+
+  it("starts a Chat-interface agent and opens an existing one into the target", () => {
+    const items = renderItems(useAgentsOpenerItems);
     runById(items, "open:chats:new");
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
@@ -285,6 +320,31 @@ describe("Chats opener sub-page", () => {
     expect(opened.ref.type).toBe("chat");
     // Proves the "existing" opener leaf threads the ctx.router navigation
     // seam through instead of bypassing it.
+    expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
+  });
+
+  it("starts a Terminal-interface agent from the same category", () => {
+    const items = renderItems(useAgentsOpenerItems);
+    runById(items, "open:tui:new");
+    expect(useNewConversationModalOpenStore.getState().request).toEqual({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      placement: { kind: "target-group", groupId: "group-1" },
+      parentId: null,
+    });
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.composerMode,
+    ).toBe("terminal");
+  });
+
+  it("opens an existing Terminal-interface agent into the target group", () => {
+    const items = renderItems(useAgentsOpenerItems);
+    runById(items, "open:tui:a1");
+    const opened = lastTileOpen();
+    expect(opened.groupId).toBe("group-1");
+    expect(opened.ref.id).toBe("a1");
+    expect(opened.ref.type).toBe("terminal-agent");
     expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
 });
@@ -314,6 +374,34 @@ describe("Terminals opener sub-page", () => {
     expect(existing.ref.type).toBe("terminal");
     expect(existing.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
+
+  // A sign-in terminal reopened from the palette must carry its origin too -
+  // `terminal.list` cannot say who created a session, so without this the
+  // eviction-recreate path (correct for an ordinary shell) would spawn a bare
+  // prompt under the sign-in session's id once the host lost the PTY.
+  it("carries provider-login origin for a recorded sign-in session, and leaves an unrecorded one plain", () => {
+    recordProviderLoginTerminal({
+      hostId: "default-host",
+      sessionId: "term-signin",
+      providerId: "copilot",
+    });
+    const items = renderItems(useTerminalsOpenerItems);
+
+    runById(items, "open:terminals:term-signin");
+    const signInOpened = lastTileOpen();
+    if (signInOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(signInOpened.ref.origin).toBe("provider-login");
+    expect(signInOpened.ref.originProviderId).toBe("copilot");
+
+    runById(items, "open:terminals:term-1");
+    const plainOpened = lastTileOpen();
+    if (plainOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(plainOpened.ref.origin).toBeUndefined();
+  });
 });
 
 describe("Artifacts opener sub-page", () => {
@@ -326,40 +414,5 @@ describe("Artifacts opener sub-page", () => {
     expect(opened.ref.id).toBe("s1");
     expect(opened.ref.type).toBe("spec");
     expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
-  });
-});
-
-describe("TUI opener sub-page", () => {
-  it("pins Create new TUI agent first (no sub-page), then existing agents", () => {
-    const items = renderItems(useTuiOpenerItems);
-    expect(items[0].id).toBe("open:tui:new");
-    expect(items[0].label).toBe("Create new TUI agent");
-    expect(items[0].subpage).toBeNull();
-    expect(items.map((i) => i.id)).toContain("open:tui:a1");
-  });
-
-  it("existing agent opens into the target group", () => {
-    const items = renderItems(useTuiOpenerItems);
-    runById(items, "open:tui:a1");
-    const opened = lastTileOpen();
-    expect(opened.groupId).toBe("group-1");
-    expect(opened.ref.id).toBe("a1");
-    expect(opened.ref.type).toBe("terminal-agent");
-    expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
-  });
-
-  it("Create new TUI agent opens the modal in terminal mode into the target", () => {
-    const items = renderItems(useTuiOpenerItems);
-    runById(items, "open:tui:new");
-    expect(useNewConversationModalOpenStore.getState().request).toEqual({
-      epicId: "epic-1",
-      tabId: "tab-1",
-      placement: { kind: "target-group", groupId: "group-1" },
-      parentId: null,
-    });
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
-        ?.composerMode,
-    ).toBe("terminal");
   });
 });

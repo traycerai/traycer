@@ -13,7 +13,7 @@ export function RestartHostConfirmDialog(props: RestartHostConfirmDialogProps) {
       open={props.open}
       onOpenChange={props.onOpenChange}
       title="Restart host?"
-      description="Restarting will stop in-progress chats, end any running terminal sessions, and cancel in-flight requests against this host."
+      description="Restarting will stop in-progress agents, end any running terminal sessions, and cancel in-flight requests against this host."
       cascadeSummary={null}
       actionLabel="Restart host"
       isPending={props.isPending}

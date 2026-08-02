@@ -3,13 +3,18 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
+  pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
+  reconcileTurnSettled,
   sweepStalePendingActions,
+  turnSettledFromStatus,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
+  type ReconcileTurnSettledInput,
 } from "@/stores/chats/chat-queue-reconciler";
 import type {
+  AcceptedChatAction,
   PendingChatAction,
   PendingUserMessage,
 } from "@/stores/chats/chat-session-store";
@@ -45,6 +50,7 @@ function createPendingAction(
   return {
     clientActionId,
     action,
+    interviewBlockId: null,
     messageId,
     restoreContent: isSendOrEdit ? CONTENT : null,
     sender: isSendOrEdit ? SENDER : null,
@@ -53,6 +59,21 @@ function createPendingAction(
     restoreWorktreeStagingRevision: null,
     createdAt: 1000,
     connectionEpoch: 0,
+  };
+}
+
+function createAcceptedAction(
+  clientActionId: string,
+  acceptedAt: number,
+  interviewBlockId: string | null,
+): AcceptedChatAction {
+  return {
+    clientActionId,
+    action: interviewBlockId === null ? "send" : "interviewAnswer",
+    interviewBlockId,
+    messageId: null,
+    acceptedAt,
+    restoreContent: null,
   };
 }
 
@@ -140,6 +161,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
@@ -197,6 +219,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
@@ -353,6 +376,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
@@ -437,6 +461,7 @@ describe("chat-queue-reconciler", () => {
       const pendingAction: PendingChatAction = {
         clientActionId: "action-1",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-1",
         restoreContent: null, // null restore content
         sender: SENDER,
@@ -545,6 +570,51 @@ describe("chat-queue-reconciler", () => {
     });
   });
 
+  describe("pruneAcceptedActions", () => {
+    it("drops a non-interview accepted action past the 5-minute retention window", () => {
+      const acceptedActions = {
+        "action-1": createAcceptedAction("action-1", 0, null),
+      };
+
+      const result = pruneAcceptedActions(acceptedActions, 350_000);
+
+      expect(result).not.toHaveProperty("action-1");
+    });
+
+    it("retains an accepted-but-unresolved interview action past the 5-minute retention window", () => {
+      const acceptedActions = {
+        "action-1": createAcceptedAction("action-1", 0, "block-1"),
+      };
+
+      const result = pruneAcceptedActions(acceptedActions, 350_000);
+
+      // A slow-to-resolve interview must stay gated until the host's
+      // interviewAnswered/interviewErrored frame clears it - the retention
+      // window must not silently un-gate a duplicate dispatch.
+      expect(result).toHaveProperty("action-1");
+    });
+
+    it("retains an accepted-but-unresolved interview action beyond the record cap", () => {
+      const acceptedActions: Record<string, AcceptedChatAction> = {
+        "interview-action": createAcceptedAction(
+          "interview-action",
+          0,
+          "block-1",
+        ),
+      };
+      // Fill past the 64-record cap with unrelated, non-interview traffic.
+      for (let i = 0; i < 70; i += 1) {
+        const id = `action-${i}`;
+        acceptedActions[id] = createAcceptedAction(id, i, null);
+      }
+
+      const result = pruneAcceptedActions(acceptedActions, 5000);
+
+      expect(result).toHaveProperty("interview-action");
+      expect(Object.keys(result).length).toBeLessThanOrEqual(65);
+    });
+  });
+
   describe("sweepStalePendingActions", () => {
     it("drops stale pendings from an older connection epoch, keeping sends", () => {
       const staleStop: PendingChatAction = {
@@ -596,6 +666,147 @@ describe("chat-queue-reconciler", () => {
       const result = sweepStalePendingActions(pendingActions, 0);
       expect(result.pendingActions).toBe(pendingActions);
       expect(result.sweptActionIds.size).toBe(0);
+    });
+  });
+
+  describe("turnSettledFromStatus", () => {
+    it("prefers the host-sent turnInProgress when present", () => {
+      expect(turnSettledFromStatus(false, "running")).toBe(true);
+      expect(turnSettledFromStatus(true, "running")).toBe(false);
+      expect(turnSettledFromStatus(true, "stopping")).toBe(false);
+    });
+
+    it("falls back to runStatus idle for an older host that omits the field", () => {
+      expect(turnSettledFromStatus(undefined, "idle")).toBe(true);
+      expect(turnSettledFromStatus(undefined, "running")).toBe(false);
+      expect(turnSettledFromStatus(undefined, "stopping")).toBe(false);
+    });
+  });
+
+  describe("reconcileTurnSettled", () => {
+    function settledInput(
+      overrides: Partial<ReconcileTurnSettledInput>,
+    ): ReconcileTurnSettledInput {
+      return {
+        pendingActions: {},
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        ...overrides,
+      };
+    }
+
+    it("drops a stranded entry (accepted ack, no messageAccepted) and restores its content to the composer", () => {
+      const result = reconcileTurnSettled(true, settledInput({}));
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toEqual({
+        clientActionId: "action-1",
+        content: CONTENT,
+        reason: "The message was not recorded before the turn stopped.",
+      });
+    });
+
+    it("keeps an entry whose ack is still in flight", () => {
+      const input = settledInput({
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+      });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toBe(input.pendingUserMessages);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("drops an entry whose message reached the transcript as stale bookkeeping, without restoration", () => {
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const input = settledInput({ messages: [confirmedMessage] });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("keeps an entry parked in the queue", () => {
+      const input = settledInput({
+        queue: { status: "paused", items: [createQueueItem("msg-1", CONTENT)] },
+      });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toBe(input.pendingUserMessages);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("restores from the first dead entry, skipping confirmed stale bookkeeping", () => {
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const deadEntry: PendingUserMessage = {
+        clientActionId: "action-2",
+        messageId: "msg-2",
+        content: CONTENT_2,
+        sender: SENDER,
+        settings: SETTINGS,
+        timestamp: 1000,
+      };
+      const result = reconcileTurnSettled(
+        true,
+        settledInput({
+          pendingUserMessages: [
+            createPendingUserMessage("action-1", "msg-1"),
+            deadEntry,
+          ],
+          messages: [confirmedMessage],
+        }),
+      );
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toEqual({
+        clientActionId: "action-2",
+        content: CONTENT_2,
+        reason: "The message was not recorded before the turn stopped.",
+      });
+    });
+
+    it("is a no-op when the report is not settled", () => {
+      const input = settledInput({});
+
+      const result = reconcileTurnSettled(false, input);
+
+      expect(result.pendingUserMessages).toBe(input.pendingUserMessages);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("never overwrites an occupied failedSendRestoration slot", () => {
+      const occupied = {
+        clientActionId: "action-0",
+        content: CONTENT_2,
+        reason: "Message was not accepted.",
+      };
+      const result = reconcileTurnSettled(
+        true,
+        settledInput({ failedSendRestoration: occupied }),
+      );
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toBe(occupied);
     });
   });
 });

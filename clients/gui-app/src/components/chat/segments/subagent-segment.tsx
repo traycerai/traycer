@@ -1,5 +1,5 @@
 import { ChevronDown, Workflow as WorkflowIcon } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, type RefObject } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -312,7 +312,8 @@ function PromotedSubagentSegment(
     },
     [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
-  const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const handleOpenChange = useChatMeasuredOpenChange(updateOpen, triggerRef);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
   const displayAgentType = cleanSubagentNotificationText(agentType);
   const displayTask = cleanSubagentNotificationText(task);
@@ -348,6 +349,7 @@ function PromotedSubagentSegment(
         startedAt={startedAt}
         durationMs={durationMs}
         open={open}
+        triggerRef={triggerRef}
       />
       <CollapsibleContent className="overflow-hidden">
         <div
@@ -383,6 +385,7 @@ interface PromotedSubagentTriggerProps {
   readonly startedAt: number | null;
   readonly durationMs: number | null;
   readonly open: boolean;
+  readonly triggerRef: RefObject<HTMLButtonElement | null>;
 }
 
 function useSubagentCollapsibleKey(renderId: string): ChatCollapsibleKey {
@@ -407,9 +410,11 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
     showHeaderSummary,
     startedAt,
     stopped,
+    triggerRef,
   } = props;
   return (
     <CollapsibleTrigger
+      ref={triggerRef}
       aria-label="Subagent"
       data-find-include="true"
       data-chat-find-unit={headerFindUnitId}
@@ -634,6 +639,7 @@ function SubagentResultPanel(props: {
           markdown={result}
           proseSize="compact"
           quotable={false}
+          components={null}
         />
       </div>
     </SegmentPanel>

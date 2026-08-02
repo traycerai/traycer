@@ -2,18 +2,27 @@
  * Per-pane keep-alive policy for canvas tab bodies (paseo
  * `use-mounted-tab-set` port + traycer terminal pinning):
  *
- *   mounted = {pinned terminal surfaces} ∪ LRU(cap 3, head = active tab)
+ *   mounted = {pinned terminal surfaces} ∪ LRU(cap 3, head = active tab) ∪ {active chat tab}
  *
- * - The LRU tracks the most recently ACTIVE non-terminal tabs, so switching
- *   back to a recently used chat/editor is a visibility toggle instead of a
- *   remount. The active tab IS the LRU head - it occupies one of the slots,
- *   so at most 3 non-terminal bodies are mounted in total, INCLUDING the
- *   active one. The cap bounds how many heavy hidden bodies a pane can hold.
+ * - The LRU tracks the most recently ACTIVE non-terminal, non-chat tabs, so
+ *   switching back to a recently used editor/spec is a visibility toggle
+ *   instead of a remount. The active tab IS the LRU head - it occupies one
+ *   of the slots, so at most 3 such bodies are mounted in total, INCLUDING
+ *   the active one. The cap bounds how many heavy hidden bodies a pane can
+ *   hold.
  * - Terminal surfaces (`terminal` / `terminal-agent`) are PINNED: they are
  *   always mounted while their tab is open and never count against - nor can
  *   they be evicted by - the LRU. A PTY's scrollback cannot be rebuilt from
  *   props, so eviction would destroy state (the pre-LRU policy mounted all
  *   terminals for exactly this reason).
+ * - Chat tabs are the opposite: they never participate in `display:none`
+ *   keep-alive at all, and are excluded from the LRU entirely. Each is
+ *   mounted only while it is the active tab (a real unmount/remount on every
+ *   switch, not a visibility toggle) - decision log #17 of the chat scroller
+ *   refactor. A concealed LegendList instance's scroll-restoration
+ *   and row-identity bookkeeping is not worth defending across the LRU
+ *   eviction path; chat tiles instead rebuild their reading position from a
+ *   module-scope, per-tab cache on remount.
  * - While the surrounding keep-alive pane is HIDDEN (background header tab,
  *   `usePaneVisible() === false`), the LRU collapses to the active tab only:
  *   background panes pay for at most one non-terminal body (+ terminals).
@@ -31,7 +40,7 @@
 import { useMemo, useState } from "react";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
-/** Max recently-active non-terminal tab bodies kept mounted per pane. */
+/** Max recently-active non-terminal, non-chat tab bodies kept mounted per pane. */
 export const MOUNTED_PANE_TAB_LRU_CAP = 3;
 
 /**
@@ -41,6 +50,15 @@ export const MOUNTED_PANE_TAB_LRU_CAP = 3;
  */
 export function isPersistentTerminalSurface(tab: EpicCanvasTileRef): boolean {
   return tab.type === "terminal" || tab.type === "terminal-agent";
+}
+
+/**
+ * Chat tabs skip keep-alive entirely: they mount only while active, and
+ * fully unmount (not `display:none`) the instant another tab is selected.
+ * See the module doc comment above for why.
+ */
+export function remountsOnTabSwitch(tab: EpicCanvasTileRef): boolean {
+  return tab.type === "chat";
 }
 
 export interface UseMountedPaneTabsInput {
@@ -95,18 +113,26 @@ export function useMountedPaneTabs(
 ): ReadonlySet<string> {
   const { activeTabId, tabs, paneVisible } = input;
 
-  // Terminals are pinned; everything else competes for LRU slots.
-  const { pinnedIds, availableLruIds } = useMemo(() => {
+  // Terminals are pinned; chat tabs are excluded outright (picked up below
+  // only while active); everything else competes for LRU slots.
+  const { pinnedIds, availableLruIds, remountOnlyIds } = useMemo(() => {
     const pinned = new Set<string>();
     const available = new Set<string>();
+    const remountOnly = new Set<string>();
     for (const tab of tabs) {
       if (isPersistentTerminalSurface(tab)) {
         pinned.add(tab.instanceId);
+      } else if (remountsOnTabSwitch(tab)) {
+        remountOnly.add(tab.instanceId);
       } else {
         available.add(tab.instanceId);
       }
     }
-    return { pinnedIds: pinned, availableLruIds: available };
+    return {
+      pinnedIds: pinned,
+      availableLruIds: available,
+      remountOnlyIds: remountOnly,
+    };
   }, [tabs]);
 
   const [committedLru, setCommittedLru] =
@@ -132,6 +158,9 @@ export function useMountedPaneTabs(
   return useMemo(() => {
     const mounted = new Set<string>(committedLru);
     for (const id of pinnedIds) mounted.add(id);
+    if (activeTabId !== null && remountOnlyIds.has(activeTabId)) {
+      mounted.add(activeTabId);
+    }
     return mounted;
-  }, [committedLru, pinnedIds]);
+  }, [committedLru, pinnedIds, activeTabId, remountOnlyIds]);
 }

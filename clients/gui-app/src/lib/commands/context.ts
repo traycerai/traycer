@@ -17,11 +17,18 @@ export function buildCommandContext(
 ): CommandContext {
   const pathname = args.router.getPathname();
   const canvas = useEpicCanvasStore.getState();
-  const activeTabId = canvas.activeTabId;
-  const activeEpicId =
-    activeTabId === null
+  const activeTab =
+    canvas.activeTabId === null
       ? null
-      : (canvas.tabsById[activeTabId]?.epicId ?? null);
+      : (canvas.tabsById[canvas.activeTabId] ?? null);
+  const activeTabId =
+    activeTab?.surfaceMode?.kind === "phase-migration"
+      ? null
+      : (activeTab?.tabId ?? null);
+  const activeEpicId =
+    activeTab === null || activeTab.surfaceMode?.kind === "phase-migration"
+      ? null
+      : activeTab.epicId;
   return {
     pathname,
     router: args.router,

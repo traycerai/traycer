@@ -189,11 +189,13 @@ function parseVersionEntry(
     sourceLabel,
     "deprecationReason",
   );
-  // Intentionally parse-only: `requiredCliVersion` is a courtesy field, NOT a
-  // download-time CLI-version gate. The connect-time per-method handshake is
-  // the authoritative compatibility check; enforcing a version range here would
-  // edge into the compat-range download resolution that was explicitly deferred
-  // (T7/C2). Keep reading it so the manifest validates, but do not act on it.
+  // No longer parse-only. `client-floor.ts` enforces this at the one place a
+  // host version is selected (`resolveAsset`), as a REFUSAL rather than as
+  // version resolution - so the deferred compat-RANGE work stays deferred
+  // while the floor itself is real. The connect-time per-method handshake
+  // remains the authoritative runtime compatibility check; what it cannot do
+  // is stop an old client from installing a host it will misrepresent, since
+  // by then the handshake has already succeeded.
   const requiredCliVersion = parseNullableString(
     obj.requiredCliVersion,
     sourceLabel,

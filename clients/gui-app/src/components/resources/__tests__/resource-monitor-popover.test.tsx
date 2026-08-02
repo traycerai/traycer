@@ -30,7 +30,7 @@ import type {
   AppResourceSnapshotWire,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWire,
+  OwnerResourceSnapshotWireV13,
   ResourceProcessSnapshotWire,
 } from "@traycer/protocol/host/resources/subscribe";
 import type {
@@ -48,6 +48,12 @@ const streamVersionMock = vi.hoisted(() => ({
   version: null as { readonly major: number; readonly minor: number } | null,
 }));
 
+const activeHostMock = vi.hoisted(() => ({ hostId: null as string | null }));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => activeHostMock.hostId,
+}));
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
   useStreamMethodSupport: () => null,
@@ -56,6 +62,10 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 
 type MockEpicIntentInput = Readonly<Record<string, unknown>>;
 type MockEpicIntent = MockEpicIntentInput & { readonly kind: "epic" };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 const routerMock = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -90,20 +100,37 @@ vi.mock("@/lib/epic-selectors", () => ({
     _epicId: string,
     artifactId: string | null,
   ) => (artifactId === "chat-1" ? liveArtifactTitleMock.title : null),
+  useRegisteredEpicLiveArtifactTitles: (
+    refs: readonly { readonly artifactId: string | null }[],
+  ) =>
+    refs.map((ref) =>
+      ref.artifactId === "chat-1" ? liveArtifactTitleMock.title : null,
+    ),
 }));
 
 vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
   useHistoryNavAvailable: () => historyNavAvailableMock.enabled,
 }));
 
+// The kill mutation reaches into the host-runtime + query providers, which this
+// pure-render harness does not mount. Stub it so the popover renders the kill
+// affordances without that wiring; `resourcesKillMock.mutate` captures calls.
+const resourcesKillMock = vi.hoisted(() => ({ mutate: vi.fn() }));
+vi.mock("@/hooks/resources/use-resources-kill-mutation", () => ({
+  useResourcesKill: () => ({
+    mutate: resourcesKillMock.mutate,
+    isPending: false,
+  }),
+}));
+
 const tabNavigationMock = vi.hoisted(() => ({
-  existingEpicTabIntentWithNestedFocus: vi.fn(
+  resourceEpicTabIntent: vi.fn(
     (input: MockEpicIntentInput): MockEpicIntent => ({
       kind: "epic",
       ...input,
     }),
   ),
-  navigateToTabIntent: vi.fn(),
+  activateTabIntent: vi.fn(),
 }));
 
 vi.mock("@/lib/tab-navigation", () => tabNavigationMock);
@@ -127,6 +154,14 @@ const canvasMock = vi.hoisted(() => {
   const prepareOpenTileInTabFocusTarget = vi.fn();
   const prepareSetActiveTileTabFocusTarget = vi.fn();
   const resolveTargetTabForEpic = vi.fn(() => "tab-2");
+  const closedTilePayloadsByTabId: Record<
+    string,
+    | Record<
+        string,
+        { node: Record<string, unknown>; pendingCreate: boolean } | undefined
+      >
+    | undefined
+  > = {};
   const state = {
     openTabOrder: ["tab-1", "tab-2"],
     tabsById: {
@@ -209,6 +244,7 @@ const canvasMock = vi.hoisted(() => {
         sizesByGroupId: {},
       },
     },
+    closedTilePayloadsByTabId,
     artifactTreeByEpicId: {
       "epic-1": [
         {
@@ -270,8 +306,8 @@ function app(): AppResourceSnapshotWire {
 }
 
 function owner(
-  over: Partial<OwnerResourceSnapshotWire>,
-): OwnerResourceSnapshotWire {
+  over: Partial<OwnerResourceSnapshotWireV13>,
+): OwnerResourceSnapshotWireV13 {
   return {
     owner: {
       kind: "terminal",
@@ -281,6 +317,7 @@ function owner(
     },
     sampledAt: 1_000,
     rootPids: [100],
+    harnessId: null,
     activeProcessName: "node",
     processCount: 2,
     cpuPercent: 12,
@@ -430,24 +467,547 @@ afterEach(() => {
     ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
     name: "Agent Chat",
   };
-  tabNavigationMock.existingEpicTabIntentWithNestedFocus.mockClear();
-  tabNavigationMock.navigateToTabIntent.mockClear();
+  for (const key of Object.keys(canvasMock.state.closedTilePayloadsByTabId)) {
+    Reflect.deleteProperty(canvasMock.state.closedTilePayloadsByTabId, key);
+  }
+  tabNavigationMock.resourceEpicTabIntent.mockClear();
+  tabNavigationMock.activateTabIntent.mockClear();
   canvasMock.prepareOpenTileInTabFocusTarget.mockReset();
   canvasMock.prepareSetActiveTileTabFocusTarget.mockReset();
   canvasMock.resolveTargetTabForEpic.mockReset();
   canvasMock.resolveTargetTabForEpic.mockReturnValue("tab-2");
   __setResourcesStreamClientFactoryForTests(null);
   streamVersionMock.version = null;
+  activeHostMock.hostId = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
 });
 
 describe("ResourceMonitorPopover", () => {
+  it("defaults to tab order when the popover opens", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const sortTrigger = screen.getByRole("button", {
+      name: "Sort resource rows",
+    });
+    expect(sortTrigger.textContent).toContain("Tab order");
+
+    fireEvent.pointerDown(sortTrigger, {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    expect(
+      screen
+        .getByRole("menuitemradio", { name: "Tab order" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("filters tasks and owners with case-insensitive free text", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({}),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-closed",
+              },
+              rootPids: [200],
+              activeProcessName: "bun",
+              processes: [
+                resourceProcess({
+                  pid: 200,
+                  rootPid: 200,
+                  name: "bun",
+                  command: "bun run build",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+    fireEvent.change(search, { target: { value: "Resource Alpha" } });
+
+    expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.queryByText("Background Task")).toBeNull();
+
+    fireEvent.change(search, { target: { value: "BACKGROUND" } });
+
+    expect(screen.getByText("Background Task")).not.toBeNull();
+    expect(screen.getByText("Background Terminal")).not.toBeNull();
+    expect(screen.queryByText("Resource Task")).toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+
+    resourcesKillMock.mutate.mockClear();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [200],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear resource search" }),
+    );
+    expect(document.activeElement).toBe(search);
+    expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  it("reveals matching nested processes and reports an empty search", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+
+    fireEvent.change(search, { target: { value: "DEV-SERVER" } });
+    expect(screen.getByText("node dev-server.js")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Process tree expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    fireEvent.change(search, { target: { value: "103" } });
+    expect(screen.getByText("make")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Sub-processes of node dev-server.js expanded by search",
+        })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    fireEvent.change(search, { target: { value: "not-a-resource" } });
+    expect(
+      screen.getByText("No resources match “not-a-resource”."),
+    ).not.toBeNull();
+    expect(screen.queryByText("Resource Task")).toBeNull();
+  });
+
+  it("reveals an owner structural root when only that process matches", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "/bin/zsh" } },
+    );
+
+    expect(screen.getByText("/bin/zsh")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Process tree expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("matches tokens across a process ancestor and its descendant", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "zsh dev-server" } },
+    );
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.getByText("node dev-server.js")).not.toBeNull();
+  });
+
+  it("does not retain an owner when tokens only match separate processes", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node dev-server.js",
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "make",
+                  command: "make",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "dev-server make" } },
+    );
+
+    expect(
+      screen.getByText("No resources match “dev-server make”."),
+    ).not.toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+  });
+
+  it("preserves root and descendant matches across separate roots", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              rootPids: [100, 200],
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "shared-shell",
+                  command: "/bin/shared-shell",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node unrelated.js",
+                }),
+                resourceProcess({
+                  pid: 200,
+                  rootPid: 200,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 201,
+                  parentPid: 200,
+                  rootPid: 200,
+                  name: "worker",
+                  command: "shared worker",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "shared" } },
+    );
+
+    expect(screen.getByText("/bin/shared-shell")).not.toBeNull();
+    expect(screen.getByText("shared worker")).not.toBeNull();
+  });
+
+  it("matches across the host header and process metadata", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app() }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Host traycer-host" } },
+    );
+
+    expect(screen.getByText("Traycer Host")).not.toBeNull();
+  });
+
+  it("reveals matching descendants beneath a matching process", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              activeProcessName: "python",
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node parent.js",
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 101,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node child.js",
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "node" } },
+    );
+
+    expect(screen.getByText("node parent.js")).not.toBeNull();
+    expect(screen.getByText("node child.js")).not.toBeNull();
+  });
+
   it("uses the live chat title when the persisted owner name is untitled", async () => {
     liveArtifactTitleMock.title = "Generated chat title";
     canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
       ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
       name: "Untitled chat",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-1",
+              },
+              harnessId: null,
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "Generated" },
+      },
+    );
+
+    expect(await screen.findByText("Generated chat title")).not.toBeNull();
+    expect(screen.queryByText("Untitled chat")).toBeNull();
+  });
+
+  it("clears selected targets when a search hides them", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "not-a-resource" },
+      },
+    );
+
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("prunes a selected owner when a live snapshot stops matching", () => {
+    const stub = installStubFactory();
+    const processes = [
+      resourceProcess({
+        pid: 100,
+        rootPid: 100,
+        name: "zsh",
+        command: "/bin/zsh",
+      }),
+    ];
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "unique-match", processes })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "unique-match" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "renamed", processes })],
+        }),
+      );
+    });
+
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
+
+    act(() => {
+      stub.emit().onUpdate(
+        projection({
+          owners: [owner({ activeProcessName: "unique-match", processes })],
+        }),
+      );
+    });
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Kill 0 selected" }),
+    ).not.toBeNull();
+  });
+
+  it("prunes a selected process root when search stops rendering it", () => {
+    const stub = installStubFactory();
+    const processes = [
+      resourceProcess({
+        pid: 100,
+        parentPid: 1,
+        rootPid: 100,
+        name: "needle-root",
+        command: "needle-root",
+      }),
+      resourceProcess({
+        pid: 101,
+        parentPid: 100,
+        rootPid: 100,
+        name: "needle-child",
+        command: "needle-child",
+      }),
+    ];
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: null, processes })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "needle" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select needle-root" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Kill 1 selected" }),
+    ).not.toBeNull();
+
+    act(() => {
+      stub.emit().onUpdate(
+        projection({
+          owners: [
+            owner({
+              activeProcessName: null,
+              processes: [
+                { ...processes[0], name: "plain-root", command: "plain-root" },
+                processes[1],
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    expect(screen.queryByText("plain-root")).toBeNull();
+    expect(screen.getByText("needle-child")).not.toBeNull();
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("uses the persisted Agent title when the live title is empty", async () => {
+    liveArtifactTitleMock.title = "";
+    canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
+      ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
+      name: "Persisted Agent title",
     };
     const stub = installStubFactory();
     renderPopover();
@@ -472,8 +1032,123 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
 
-    expect(await screen.findByText("Generated chat title")).not.toBeNull();
-    expect(screen.queryByText("Untitled chat")).toBeNull();
+    expect(await screen.findByText("Persisted Agent title")).not.toBeNull();
+  });
+
+  it("offers a kill affordance on an owner row", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-1",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    // The per-row "Kill" text button is present (revealed on hover) and arms an
+    // inline Confirm/Cancel pair rather than opening a modal.
+    resourcesKillMock.mutate.mockClear();
+    const killButton = screen.getByRole("button", { name: /^Kill / });
+    fireEvent.click(killButton);
+    expect(
+      screen.getByRole("button", { name: /^Keep .* running$/ }),
+    ).not.toBeNull();
+
+    // Confirming fires the kill mutation with the owner's host + root pids.
+    fireEvent.click(screen.getByRole("button", { name: /^Confirm kill / }));
+    expect(resourcesKillMock.mutate).toHaveBeenCalledTimes(1);
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [100],
+    });
+  });
+
+  it("enters multi-select mode and reveals row checkboxes", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-1",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes.length).toBeGreaterThan(0);
+
+    // Selecting the owner and confirming the bulk action fires one grouped
+    // kill for its host + root pids.
+    resourcesKillMock.mutate.mockClear();
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+    expect(resourcesKillMock.mutate).toHaveBeenCalledTimes(1);
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [100],
+    });
+  });
+
+  it("prunes the selection count when a selected process exits on its own", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    const chatOwner = owner({
+      owner: {
+        kind: "chat" as const,
+        hostId: "host-1",
+        epicId: "epic-1",
+        ownerId: "chat-1",
+      },
+      harnessId: "claude",
+      activeProcessName: null,
+    });
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [chatOwner] }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    const killOne = screen.getByRole("button", { name: "Kill 1 selected" });
+    expect(killOne.hasAttribute("disabled")).toBe(false);
+
+    // The selected owner's tree exits on its own -> it drops out of the next
+    // frame, and the armed count must fall back to zero (button disabled).
+    act(() => {
+      stub.emit().onUpdate(projection({ owners: [] }));
+    });
+    const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
+    expect(killZero.hasAttribute("disabled")).toBe(true);
   });
 
   it("counts a nested tracked root once in owner tree totals", () => {
@@ -630,6 +1305,48 @@ describe("ResourceMonitorPopover", () => {
       screen.getByRole("button", { name: "Expand sub-processes of worker" }),
     );
     expect(screen.getByText("child")).not.toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "Other child" },
+      },
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Other processes expanded by search" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("keeps a rendered Other root selectable when only its child matches", () => {
+    const stub = installStubFactory();
+    activeHostMock.hostId = "host-1";
+    renderPopover();
+
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(
+          projection({ app: app(), hostTree: hostTree({}), other: other({}) }),
+        );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "child" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [500],
+    });
   });
 
   it("shows compact basename labels for Other roots until expanded", () => {
@@ -749,6 +1466,7 @@ describe("ResourceMonitorPopover", () => {
                 epicId: "epic-2",
                 ownerId: "term-closed",
               },
+              harnessId: null,
               activeProcessName: "bun",
               cpuPercent: 4,
               rssBytes: 50 * 1024 * 1024,
@@ -930,10 +1648,8 @@ describe("ResourceMonitorPopover", () => {
       "pane-1",
       "tile-term-1",
     );
-    expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).not.toHaveBeenCalled();
-    expect(tabNavigationMock.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
   });
 
   it("commits an already-open owner in ANOTHER tab through a single cross-route navigation", async () => {
@@ -956,6 +1672,7 @@ describe("ResourceMonitorPopover", () => {
                 epicId: "epic-1",
                 ownerId: "term-2",
               },
+              harnessId: null,
               activeProcessName: "vim",
             }),
           ],
@@ -969,24 +1686,26 @@ describe("ResourceMonitorPopover", () => {
     // Cross-route: the current-route boundary must NOT be used - the owner's
     // tab (tab-2) differs from the active route (tab-1).
     expect(navigateNestedMock).not.toHaveBeenCalled();
-    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
-      "tab-2",
-      "pane-2",
-      "tile-term-2",
-    );
     expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "epic-1",
         tabId: "tab-2",
-        nestedFocus: { paneId: "pane-2", tileInstanceId: "tile-term-2" },
+        preparation: {
+          kind: "activate-tile",
+          paneId: "pane-2",
+          tileTabId: "tile-term-2",
+        },
+        includeNestedFocus: true,
       }),
     );
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledWith(
       routerMock.navigate,
       expect.objectContaining({ tabId: "tab-2" }),
+      undefined,
     );
   });
 
@@ -1010,6 +1729,7 @@ describe("ResourceMonitorPopover", () => {
                 epicId: "epic-2",
                 ownerId: "term-closed",
               },
+              harnessId: null,
               activeProcessName: "make",
             }),
           ],
@@ -1020,27 +1740,217 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     fireEvent.click(await screen.findByText("Background Terminal"));
 
-    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
-      "tab-closed",
-      "pane-closed",
-      "tile-term-closed",
-    );
     expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "epic-2",
         tabId: "tab-closed",
-        nestedFocus: {
+        preparation: {
+          kind: "activate-tile",
           paneId: "pane-closed",
-          tileInstanceId: "tile-term-closed",
+          tileTabId: "tile-term-closed",
         },
       }),
     );
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledWith(
       routerMock.navigate,
       expect.objectContaining({ tabId: "tab-closed" }),
+      undefined,
     );
+  });
+
+  it("reopens a CLOSED terminal tile from its preserved payload via cross-route navigation", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {
+      "tile-term-bg": {
+        node: {
+          id: "term-bg",
+          instanceId: "tile-term-bg",
+          type: "terminal",
+          name: "Background Build",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work/background",
+        },
+        pendingCreate: false,
+      },
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-bg",
+              },
+              harnessId: null,
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    // The row label comes from the preserved ref's manual title, not the
+    // running process name. Assert the row button is ENABLED before clicking:
+    // a disabled row is the exact regression this covers, and it would
+    // otherwise show up only indirectly as a missing navigation call.
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Background Build/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-2",
+        tabId: "tab-closed",
+        preparation: {
+          kind: "open-tile",
+          node: {
+            id: "term-bg",
+            instanceId: "tile-term-bg",
+            type: "terminal",
+            name: "Background Build",
+            titleSource: "manual",
+            hostId: "host-1",
+            cwd: "/work/background",
+          },
+        },
+      }),
+    );
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledWith(
+      routerMock.navigate,
+      expect.objectContaining({ tabId: "tab-closed" }),
+      undefined,
+    );
+  });
+
+  it("reopens a closed terminal tile of the CURRENT tab through the same-route boundary", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-1"] = {
+      "tile-term-gone": {
+        node: {
+          id: "term-gone",
+          instanceId: "tile-term-gone",
+          type: "terminal",
+          name: "Terminal Gamma",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work",
+        },
+        pendingCreate: false,
+      },
+    };
+    canvasMock.prepareOpenTileInTabFocusTarget.mockReturnValue({
+      paneId: "pane-1",
+      tileInstanceId: "tile-term-gone",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "term-gone",
+              },
+              harnessId: null,
+              activeProcessName: "node",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Terminal Gamma/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    expect(navigateNestedMock).toHaveBeenCalledWith(
+      "epic-1",
+      "tab-1",
+      expect.any(Function),
+    );
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+      "tab-1",
+      {
+        id: "term-gone",
+        instanceId: "tile-term-gone",
+        type: "terminal",
+        name: "Terminal Gamma",
+        titleSource: "manual",
+        hostId: "host-1",
+        cwd: "/work",
+      },
+    );
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("prefers a live tile over a stale preserved payload for the same owner", async () => {
+    // Reachable state: a tile is closed (payload captured) and the same
+    // terminal is later reopened. Eviction only happens in
+    // `restoreClosedTilePreview` (keyed on that exact instanceId) and
+    // `discardClosedTilePayload`, so the stale payload outlives the reopen.
+    // The live tile MUST win - reopening would otherwise add a duplicate tile
+    // instead of focusing the one already on the canvas.
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-1"] = {
+      "tile-term-1-stale": {
+        node: {
+          id: "term-1",
+          instanceId: "tile-term-1-stale",
+          type: "terminal",
+          name: "Stale Alpha",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work",
+        },
+        pendingCreate: false,
+      },
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    // Label comes from the LIVE tile's ref, not the stale payload's name.
+    expect(screen.queryByText("Stale Alpha")).toBeNull();
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Terminal Alpha/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    // activate-tile against the live tile - NOT open-tile from the payload.
+    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
+      "tab-1",
+      "pane-1",
+      "tile-term-1",
+    );
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
   });
 
   it("commits a not-yet-open owner through prepareOpenTileInTabFocusTarget + cross-route navigation", async () => {
@@ -1064,6 +1974,7 @@ describe("ResourceMonitorPopover", () => {
                 epicId: "epic-1",
                 ownerId: "chat-1",
               },
+              harnessId: null,
               activeProcessName: null,
             }),
           ],
@@ -1074,29 +1985,28 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     fireEvent.click(await screen.findByText("Agent Chat"));
 
-    expect(canvasMock.resolveTargetTabForEpic).toHaveBeenCalledWith(
-      "epic-1",
-      expect.any(String),
-    );
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
-      "tab-2",
-      expect.objectContaining({
-        id: "chat-1",
-        type: "chat",
-        hostId: "host-1",
-      }),
-    );
+    expect(canvasMock.resolveTargetTabForEpic).not.toHaveBeenCalled();
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
     expect(navigateNestedMock).not.toHaveBeenCalled();
-    expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        epicId: "epic-1",
-        tabId: "tab-2",
-        nestedFocus: { paneId: "pane-2", tileInstanceId: "instance-new" },
-      }),
-    );
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledTimes(1);
+    const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
+    expect(isRecord(input)).toBe(true);
+    if (!isRecord(input)) throw new Error("expected resource intent input");
+    expect(input.epicId).toBe("epic-1");
+    expect(input.tabId).toBeNull();
+    expect(isRecord(input.preparation)).toBe(true);
+    if (!isRecord(input.preparation)) {
+      throw new Error("expected resource preparation");
+    }
+    expect(input.preparation.kind).toBe("open-tile");
+    expect(isRecord(input.preparation.node)).toBe(true);
+    if (!isRecord(input.preparation.node)) {
+      throw new Error("expected resource tile node");
+    }
+    expect(input.preparation.node.id).toBe("chat-1");
+    expect(input.preparation.node.type).toBe("chat");
+    expect(input.preparation.node.hostId).toBe("host-1");
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
   it("does not carry a prepared nested focus target on browser builds (no persistent history)", async () => {
@@ -1120,6 +2030,7 @@ describe("ResourceMonitorPopover", () => {
                 epicId: "epic-1",
                 ownerId: "term-2",
               },
+              harnessId: null,
               activeProcessName: "vim",
             }),
           ],
@@ -1130,18 +2041,16 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     fireEvent.click(await screen.findByText("Terminal Beta"));
 
-    // The canvas mutation still happens (owner still gets focused), but no
-    // nested search params are written to the URL - matches every other
-    // desktop-only-gated opener's browser-build behavior.
-    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
-      "tab-2",
-      "pane-2",
-      "tile-term-2",
-    );
+    // Preparation is deferred to the controller; browser builds omit only the
+    // nested route-search projection.
     expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({ tabId: "tab-2", nestedFocus: null }),
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabId: "tab-2",
+        includeNestedFocus: false,
+      }),
     );
   });
 
@@ -1202,6 +2111,11 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Expand process tree" }),
     );
@@ -1215,7 +2129,7 @@ describe("ResourceMonitorPopover", () => {
       ).not.toBe(0);
     };
 
-    // Default memory sort: beta's 205 MB subtree outranks alpha's 10 MB.
+    // Memory sort: beta's 205 MB subtree outranks alpha's 10 MB.
     expectBefore("beta (1 sub-process)", "alpha");
 
     fireEvent.pointerDown(
@@ -1253,6 +2167,12 @@ describe("ResourceMonitorPopover", () => {
                 cpu: { percentCPUUsage: 2 },
                 memory: { workingSetSize: 300 * 1024 },
               },
+              {
+                pid: 12,
+                type: "GPU",
+                cpu: { percentCPUUsage: 1 },
+                memory: { workingSetSize: 200 * 1024 },
+              },
             ],
           }),
         },
@@ -1268,10 +2188,22 @@ describe("ResourceMonitorPopover", () => {
     const renderer = await screen.findByText("Renderer");
     const main = screen.getByText("Main");
 
-    // Default memory sort: the renderer (300 KB) outweighs the main
-    // process (100 KB), so the hardcoded Main-first order must not win.
+    // Tab order has no process-group meaning, so the fixed Main-first order is
+    // kept when the popover opens.
     expect(
-      renderer.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING,
+      main.compareDocumentPosition(renderer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
+    expect(
+      screen
+        .getByText("Renderer")
+        .compareDocumentPosition(screen.getByText("Main")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
 
     fireEvent.pointerDown(
@@ -1285,6 +2217,24 @@ describe("ResourceMonitorPopover", () => {
         .compareDocumentPosition(screen.getByText("Renderer")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "TRAYCER MAIN" },
+      },
+    );
+    expect(screen.getByText("Main")).not.toBeNull();
+    expect(screen.queryByText("Renderer")).toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      {
+        target: { value: "traycer other" },
+      },
+    );
+    expect(screen.getByText("Other")).not.toBeNull();
+    expect(screen.queryByText("Main")).toBeNull();
   });
 
   it("pins an expanded owner row beneath its sticky section header", () => {
@@ -1336,6 +2286,7 @@ describe("ResourceMonitorPopover", () => {
                 ownerId: "term-idle",
               },
               rootPids: [900],
+              harnessId: null,
               activeProcessName: "idle-shell",
               processCount: 1,
               cpuPercent: 77,

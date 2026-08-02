@@ -14,11 +14,19 @@ export interface JsonFileStore<T> {
   flush(): Promise<void>;
 }
 
+/**
+ * A JSON store that lets safety-sensitive callers observe a failed durable
+ * write. `save` remains best-effort for existing consumers.
+ */
+export interface StrictJsonFileStore<T> extends JsonFileStore<T> {
+  saveStrict(value: T): Promise<void>;
+}
+
 export function createJsonFileStore<T>(
   filePath: string,
   fallback: T,
   parse: (value: unknown) => T,
-): JsonFileStore<T> {
+): StrictJsonFileStore<T> {
   let writeChain: Promise<unknown> = Promise.resolve();
   let dirEnsured = false;
 
@@ -53,6 +61,13 @@ export function createJsonFileStore<T>(
         log.warn("[json-store] persist failed", { filePath, err });
       });
       await writeChain;
+    },
+    async saveStrict(value: T) {
+      const next = writeChain.then(() => persist(value));
+      writeChain = next.catch((err) => {
+        log.warn("[json-store] persist failed", { filePath, err });
+      });
+      await next;
     },
     flush() {
       return writeChain.then(() => undefined);

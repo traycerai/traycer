@@ -1,12 +1,35 @@
 import "../../../../__tests__/test-browser-apis";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { HeaderNotificationsBell } from "@/components/layout/header/app-header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { __resetHostNotificationsStoreForTests } from "@/stores/notifications/host-notifications-store";
 import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
+
+const activeHostIdRef = vi.hoisted(() => ({
+  value: null as string | null,
+}));
+
+const directoryRef = vi.hoisted(() => ({
+  value: null as {
+    findById: (hostId: string) => typeof mockLocalHostEntry | null;
+  } | null,
+}));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => activeHostIdRef.value,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) => {
+    if (hostId.length === 0 || directoryRef.value === null) return null;
+    return directoryRef.value.findById(hostId);
+  },
+}));
 
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -23,7 +46,13 @@ function createRunnerHost(): MockRunnerHost {
 describe("HeaderNotificationsBell auth gate", () => {
   beforeEach(() => {
     __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
     useAuthStore.getState().setSignedOut();
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
   });
 
   afterEach(() => {

@@ -1,5 +1,9 @@
 import Fuse, { type IFuseOptions } from "fuse.js";
 import {
+  readableModelMatch,
+  resolveModelBySlug,
+} from "@traycer/protocol/host/agent/gui/model-slug-resolution";
+import {
   type HarnessModelSelection,
   type HarnessOption,
   type ModelOption,
@@ -173,9 +177,18 @@ export function selectedModelRowId(
   // Empty slug is the transient "unresolved / catalog loading" marker - point
   // the highlight at the first (preferred) model for this provider.
   if (selection.modelSlug.length === 0) return providerRows.at(0)?.id ?? "";
-  return (
-    providerRows.find((row) => row.model.slug === selection.modelSlug)?.id ?? ""
+  // Read-only (which row is highlighted), so an ambiguous alias may resolve to
+  // the first tied row. Resolving through the shared helper is what keeps a
+  // canonical id persisted before the catalog decorated its row from showing
+  // an empty highlight over a picker that clearly lists the model.
+  const model = readableModelMatch(
+    resolveModelBySlug(
+      providerRows.map((row) => row.model),
+      selection.modelSlug,
+    ),
   );
+  if (model === null) return "";
+  return providerRows.find((row) => row.model === model)?.id ?? "";
 }
 
 function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {

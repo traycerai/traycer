@@ -102,9 +102,17 @@ vi.mock("@/hooks/agent/use-prepare-tui-launch-mutation", () => ({
   useAgentStartTerminalSession: () => mockPrepare,
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (s: unknown) => unknown) =>

@@ -26,6 +26,15 @@ vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
       ? { data: { providers: mocks.providers } }
       : { data: undefined },
 }));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: (
+    _client: unknown,
+    activity: { enabled: boolean },
+  ) =>
+    activity.enabled
+      ? { data: { providers: mocks.providers } }
+      : { data: undefined },
+}));
 vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
   useProfileUsagePresentation: () => ({
     isHostReady: true,
@@ -61,6 +70,7 @@ function profile(input: {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus,
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
@@ -88,6 +98,15 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }
@@ -100,7 +119,13 @@ function ComposerProfileSwitchHarness() {
     true,
     "authoritative",
   );
-  const prompt = useProfileRateLimitSwitchPrompt("claude", profileId, true);
+  const prompt = useProfileRateLimitSwitchPrompt({
+    harnessId: "claude",
+    profileId,
+    selectedModel: null,
+    active: true,
+    client: null,
+  });
   const visible = prompt.kind === "visible";
   return (
     <TooltipProvider delayDuration={0}>
@@ -115,10 +140,12 @@ function ComposerProfileSwitchHarness() {
             harnessId="claude"
             providerId={prompt.providerId}
             severity={prompt.severity}
+            limitedFamilies={prompt.limitedFamilies}
             current={prompt.current}
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
             affectedChatCount={1}
@@ -142,7 +169,13 @@ function ComposerBannerPrecedenceHarness() {
     true,
     "authoritative",
   );
-  const prompt = useProfileRateLimitSwitchPrompt("claude", profileId, true);
+  const prompt = useProfileRateLimitSwitchPrompt({
+    harnessId: "claude",
+    profileId,
+    selectedModel: null,
+    active: true,
+    client: null,
+  });
   const rateLimitVisible = !reauthGate.signedOut && prompt.kind === "visible";
   const topBannerKind = resolveComposerTopBannerKind({
     reauthVisible: reauthGate.signedOut,
@@ -181,10 +214,12 @@ function ComposerBannerPrecedenceHarness() {
             harnessId="claude"
             providerId={prompt.providerId}
             severity={prompt.severity}
+            limitedFamilies={prompt.limitedFamilies}
             current={prompt.current}
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
             affectedChatCount={1}

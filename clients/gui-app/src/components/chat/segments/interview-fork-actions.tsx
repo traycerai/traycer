@@ -15,7 +15,7 @@ export function InterviewForkActions(props: InterviewForkActionsProps) {
   return (
     <div className="flex shrink-0 items-center gap-1">
       <TooltipWrapper
-        label="Fork on this chat's workspace from this Q&A checkpoint"
+        label="Fork on this agent's workspace from this Q&A checkpoint"
         side="top"
         sideOffset={undefined}
         align={undefined}

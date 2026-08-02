@@ -10,6 +10,7 @@ import {
   describeLogErrorSummary,
   type AppLogValue,
 } from "@/lib/logger";
+import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 const SAFE_QUERY_KEY_MARKERS = new Set([
   "auth",
@@ -29,7 +30,7 @@ const SAFE_QUERY_KEY_MARKERS = new Set([
  * different behavior than production.
  */
 export function createAppQueryClient(): QueryClient {
-  return new QueryClient({
+  const client = new QueryClient({
     queryCache: new QueryCache({
       onError: (error, query) => {
         appLogger.warn("[query] request failed", {
@@ -62,9 +63,29 @@ export function createAppQueryClient(): QueryClient {
           !(error instanceof RetryableTransportError) && failureCount < 1,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
+        // Never let `onlineManager` pause work. Its inputs (`navigator.onLine`
+        // + window online/offline events) are exactly the browser signals the
+        // wake-reconnect layer already documents as unreliable in the desktop
+        // shell: after a sleep/wake Chromium can report offline indefinitely,
+        // which under the default `networkMode: "online"` silently parked
+        // every query (`fetchStatus: "paused"`) and every mutation
+        // (paused-pending, so `disabled={isPending}` gates froze) until the
+        // app was relaunched - the whole UI went inert while the streams
+        // (wired to the OS resume pulse instead) kept flowing. Host RPCs
+        // target the loopback host anyway, so "the network is down" must not
+        // gate them even when true; cloud-bound calls fail fast into the
+        // existing toast/error paths instead of pausing.
+        networkMode: "always",
+      },
+      mutations: {
+        // Same reasoning as the query default above: a paused mutation is a
+        // dead button.
+        networkMode: "always",
       },
     },
   });
+  installConditionPollEpisodeCoordinator(client);
+  return client;
 }
 
 export const queryClient = createAppQueryClient();

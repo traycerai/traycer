@@ -14,7 +14,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type {
   GitListChangedFilesResponse,
   GitListChangedFilesResponseV11,
-  WorktreeBindingSelectorRow,
+  WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useGitPrefetchWorktreeStatus } from "@/hooks/git/use-git-prefetch-worktree-status";
@@ -38,6 +38,8 @@ import {
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
+import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
@@ -136,15 +138,26 @@ export function GitDiffPanelBodyLive(
     epicId: props.epicId,
     enabled: true,
   });
-  const rows = useMemo(
-    () => bindingsQuery.data?.rows ?? [],
-    [bindingsQuery.data?.rows],
-  );
-  const gitRows = useMemo(() => rows.filter(isGitSelectable), [rows]);
-
   const selectedRepo = useGitPanelStore(
     (s) => selectGitPanelEpicState(props.epicId)(s).selectedRepo,
   );
+  // Host-proven-missing rows are hidden (no git surface can use them); the
+  // current selection is exempt so a just-deleted selected root routes through
+  // the existing unavailable-roots machinery instead of vanishing.
+  const rows = useMemo(
+    () =>
+      withoutResolvedMissingRows(
+        bindingsQuery.data?.rows ?? [],
+        selectedRepo === null
+          ? null
+          : {
+              hostId: selectedRepo.hostId,
+              runningDir: selectedRepo.rootRunningDir,
+            },
+      ),
+    [bindingsQuery.data?.rows, selectedRepo],
+  );
+  const gitRows = useMemo(() => rows.filter(isGitSelectable), [rows]);
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
@@ -272,7 +285,17 @@ export function GitDiffPanelBodyLive(
 
   if (bindingsQuery.isPending) return <DiffLoadingSkeleton variant="panel" />;
   if (bindingsQuery.error !== null) return <NoGitWorktrees />;
-  if (gitRows.length === 0) return <NoGitWorktrees />;
+  if (gitRows.length === 0) {
+    // Rows whose git facts are still unverified placeholders (cold-resolve
+    // timeout on the host, or a pre-@1.2 host) are pending, not dead: keep
+    // the skeleton instead of declaring "no git workspaces" - the host's
+    // sweep pushes `worktree.changed` and the refetch settles this either
+    // way within a tick.
+    if (rows.some(isWorkspaceResolvePending)) {
+      return <DiffLoadingSkeleton variant="panel" />;
+    }
+    return <NoGitWorktrees />;
+  }
   if (selectedRepo === null || selectedRootRow === null) {
     if (allRowsKnownUnavailable(gitRows, unavailableGitRootKeys.keys)) {
       // Every bound root probed unavailable: an explicit, recoverable degrade -
@@ -296,7 +319,7 @@ export function GitDiffPanelBodyLive(
 }
 
 function allRowsKnownUnavailable(
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
   unavailableKeys: ReadonlySet<string> | null,
 ): boolean {
   return (
@@ -314,9 +337,9 @@ interface GitDiffPanelLoadedProps {
    * folders, setup states) render greyed with their reason instead of
    * silently vanishing from the panel.
    */
-  readonly rows: ReadonlyArray<WorktreeBindingSelectorRow>;
+  readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
   readonly selected: GitPanelSelectedRepo;
-  readonly selectedRootRow: WorktreeBindingSelectorRow;
+  readonly selectedRootRow: WorktreeBindingSelectorRowV12;
 }
 
 function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
@@ -433,19 +456,20 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
   // Explicit generation-aware unary fetch (works under stream ownership too,
   // where the passive unary query is disabled) - see
   // `useGitSubmoduleSnapshotRefresh`.
-  const handleRefresh = useGitSubmoduleSnapshotRefresh({
-    hostId: selectedRootRow.hostId,
-    rootRunningDir: selectedRootRow.runningDir,
-    ignoreWhitespace,
-  });
+  const { refresh: handleRefresh, isRefreshing } =
+    useGitSubmoduleSnapshotRefresh({
+      hostId: selectedRootRow.hostId,
+      rootRunningDir: selectedRootRow.runningDir,
+      ignoreWhitespace,
+    });
   const referenceRefresh = useRefreshSpinner({
     onRefresh: handleRefresh,
-    externalRefreshing: snapshot.isPending,
+    externalRefreshing: snapshot.isPending || isRefreshing,
     timeoutMs: GIT_REFERENCE_REFRESH_TIMEOUT_MS,
   });
 
   const handleSelectRoot = useCallback(
-    (row: WorktreeBindingSelectorRow) => {
+    (row: WorktreeBindingSelectorRowV12) => {
       setSelectedRepo(props.epicId, {
         hostId: row.hostId,
         rootRunningDir: row.runningDir,
@@ -501,11 +525,11 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
 }
 
 function pickDefaultRow(
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
   queryClient: QueryClient,
   excludeKeys: ReadonlySet<string>,
   ignoreWhitespace: boolean,
-): WorktreeBindingSelectorRow | null {
+): WorktreeBindingSelectorRowV12 | null {
   const ready = rows.filter((row) => !excludeKeys.has(worktreeRowKey(row)));
   if (ready.length === 0) return null;
   return ready.toSorted((left, right) => {
@@ -518,7 +542,7 @@ function pickDefaultRow(
 }
 
 function readCachedCount(
-  row: WorktreeBindingSelectorRow,
+  row: WorktreeBindingSelectorRowV12,
   queryClient: QueryClient,
   ignoreWhitespace: boolean,
 ): number {
@@ -528,11 +552,11 @@ function readCachedCount(
   return data?.files.length ?? 0;
 }
 
-function labelForRow(row: WorktreeBindingSelectorRow): string {
+function labelForRow(row: WorktreeBindingSelectorRowV12): string {
   return formatGitWorktreeLabel(row);
 }
 
-function moduleNameForRow(row: WorktreeBindingSelectorRow): string {
+function moduleNameForRow(row: WorktreeBindingSelectorRowV12): string {
   return row.repoIdentifier?.repo ?? getBasename(row.runningDir);
 }
 

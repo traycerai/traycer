@@ -79,11 +79,41 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     cleanup();
   });
 
+  it("opens a header add menu on the configured right side", async () => {
+    render(
+      <AddNodeDropdown
+        open
+        onOpenChange={() => undefined}
+        menuPlacement="header"
+        menuTestId="header-add-node-menu"
+        itemTestId={(type) => `header-add-${type}`}
+        onAdd={() => undefined}
+        epicId="epic-test"
+        onAddTerminalAgent={undefined}
+        terminalAgentWorkspaceSeed={null}
+        terminalAgentHostScope={undefined}
+        terminalAgentStagingKey={undefined}
+        tuiAgentPending={false}
+        disabled={false}
+        disabledTooltip={null}
+        disabledTypes={undefined}
+        excludeTypes={undefined}
+      >
+        <button type="button">Add artifact</button>
+      </AddNodeDropdown>,
+    );
+
+    expect((await screen.findByRole("menu")).getAttribute("data-side")).toBe(
+      "right",
+    );
+  });
+
   it("starts an unseeded terminal agent with the populated global workspace", async () => {
     const folder = {
       path: "/repo/global",
       name: "global",
       repoIdentifier: null,
+      hostId: null,
     };
     const entry = {
       kind: "worktree" as const,
@@ -113,6 +143,7 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
       <AddNodeDropdown
         open
         onOpenChange={() => undefined}
+        menuPlacement="row"
         menuTestId="add-node-menu"
         itemTestId={(type) => `add-${type}`}
         onAdd={() => undefined}

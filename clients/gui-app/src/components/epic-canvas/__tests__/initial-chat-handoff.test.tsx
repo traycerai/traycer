@@ -98,6 +98,10 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
 }));
 
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 // `EpicSessionProvider` opens its own durable transport via this factory, but
 // the coordinator under test installs an `__setEpicStreamClientFactoryForTests`
 // override that short-circuits before `openTransport` runs - so a stable stub
@@ -311,8 +315,8 @@ describe("initial chat handoff route coordinator", () => {
           id: CHAT_ID,
           type: "chat",
           // No chat projected yet (projectedChatTitle null) → the node opens
-          // with the "Untitled chat" render fallback, never "New chat".
-          name: "Untitled chat",
+          // with the "Untitled agent" render fallback, never "New chat".
+          name: "Untitled agent",
           hostId: HOST_ID,
         }),
       );

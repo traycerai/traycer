@@ -16,14 +16,19 @@ export interface TaskWorktreeMetadata {
   readonly error: Error | null;
 }
 
+export interface WorktreeHostIndex {
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly isFetching: boolean;
+  readonly error: Error | null;
+}
+
 /**
- * Batches task-history worktree metadata into two host calls: one cheap
- * owner/path index, then one bounded enrichment request for only paths owned by
- * the visible tasks. The expensive branch/PR probes never walk unrelated rows.
+ * The cheap host-wide owner/path index: `worktree.listAllForHost` without
+ * activity probes, so `branch`/`worktreePath`/`owners` are populated but the
+ * expensive per-worktree probes never run. Shared (same query key) with the
+ * base call of `useTaskWorktreeMetadata`.
  */
-export function useTaskWorktreeMetadata(
-  epicIds: readonly string[],
-): TaskWorktreeMetadata {
+export function useWorktreeHostIndex(enabled: boolean): WorktreeHostIndex {
   const client = useHostClient();
   const baseQuery = useHostQuery<HostRpcRegistry, "worktree.listAllForHost">({
     cacheKeyIdentity: undefined,
@@ -38,17 +43,76 @@ export function useTaskWorktreeMetadata(
       // Settings toolbar's explicit Refresh forces a disk recompute.
       forceRefresh: false,
     },
-    options: { enabled: epicIds.length > 0 },
+    options: { enabled },
   });
+  return {
+    worktrees: baseQuery.data?.worktrees ?? EMPTY_WORKTREES,
+    isFetching: baseQuery.isFetching,
+    error: baseQuery.error instanceof Error ? baseQuery.error : null,
+  };
+}
+
+/**
+ * Host-wide worktree listing WITH activity enrichment (branch/PR probes) for
+ * every worktree on the host. Strictly heavier than `useWorktreeHostIndex` -
+ * the host probes each path (TTL-cached server-side) - so callers must gate
+ * `enabled` on an actual need, e.g. a PR-number history search that has to
+ * resolve "which epic owns PR #N" across all local worktrees.
+ */
+export function useWorktreeHostActivityIndex(
+  enabled: boolean,
+): WorktreeHostIndex {
+  const client = useHostClient();
+  const baseQuery = useWorktreeHostIndex(enabled);
+  const activityPaths = useMemo(
+    () => baseQuery.worktrees.map((entry) => entry.worktreePath),
+    [baseQuery.worktrees],
+  );
+  const enrichedQuery = useHostQuery<
+    HostRpcRegistry,
+    "worktree.listAllForHost"
+  >({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "worktree.listAllForHost",
+    params: {
+      includeActivity: true,
+      activityPaths,
+      cursor: null,
+      limit: null,
+      // Background read - see `useWorktreeHostIndex`.
+      forceRefresh: false,
+    },
+    options: { enabled: enabled && activityPaths.length > 0 },
+  });
+  return {
+    worktrees: enrichedQuery.data?.worktrees ?? EMPTY_WORKTREES,
+    isFetching: baseQuery.isFetching || enrichedQuery.isFetching,
+    error:
+      baseQuery.error ??
+      (enrichedQuery.error instanceof Error ? enrichedQuery.error : null),
+  };
+}
+
+/**
+ * Batches task-history worktree metadata into two host calls: one cheap
+ * owner/path index, then one bounded enrichment request for only paths owned by
+ * the visible tasks. The expensive branch/PR probes never walk unrelated rows.
+ */
+export function useTaskWorktreeMetadata(
+  epicIds: readonly string[],
+): TaskWorktreeMetadata {
+  const client = useHostClient();
+  const baseQuery = useWorktreeHostIndex(epicIds.length > 0);
   const visibleEpicIds = useMemo(() => new Set(epicIds), [epicIds]);
   const ownedPaths = useMemo(
     () =>
-      (baseQuery.data?.worktrees ?? EMPTY_WORKTREES).flatMap((entry) =>
+      baseQuery.worktrees.flatMap((entry) =>
         entry.owners.some((owner) => visibleEpicIds.has(owner.epicId))
           ? [entry.worktreePath]
           : [],
       ),
-    [baseQuery.data, visibleEpicIds],
+    [baseQuery.worktrees, visibleEpicIds],
   );
   const enrichedQuery = useHostQuery<
     HostRpcRegistry,
@@ -86,7 +150,7 @@ export function useTaskWorktreeMetadata(
     worktreesByEpicId,
     isFetching: baseQuery.isFetching || enrichedQuery.isFetching,
     error:
-      (baseQuery.error instanceof Error ? baseQuery.error : null) ??
+      baseQuery.error ??
       (enrichedQuery.error instanceof Error ? enrichedQuery.error : null),
   };
 }

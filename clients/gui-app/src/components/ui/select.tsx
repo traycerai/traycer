@@ -5,11 +5,63 @@ import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react";
+import {
+  usePaneAwareContentGuard,
+  usePaneFocused,
+} from "@/components/epic-tabs/pane-visibility-context";
 
+/**
+ * Un-presents in a background split pane by forcing the root CLOSED, not by
+ * unmounting `SelectContent` the way the other modal-family wrappers do.
+ *
+ * Select is the one primitive whose content does work while closed. Radix
+ * renders closed content into a detached DocumentFragment
+ * (`SelectContentFragment`), and `SelectItemText` portals the SELECTED item's
+ * text out of it into the trigger's value node. Unmounting the content
+ * therefore blanks the trigger's label - and the placeholder cannot cover for
+ * it, because Radix suppresses the placeholder whenever `value` is set. That
+ * shipped as a background pane losing its host name from the composer.
+ *
+ * Closing instead drops exactly what the guard is for: the focus trap,
+ * `hideOthers` and scroll lock all live in `SelectContentImpl`, which Radix
+ * only mounts while open. The closed fragment has no document-wide reach.
+ */
 function Select({
+  open,
+  defaultOpen = false,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />;
+  const paneFocused = usePaneFocused();
+  const controlled = open !== undefined;
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
+  const [wasPaneFocused, setWasPaneFocused] = React.useState(paneFocused);
+
+  // Adjust during render rather than in an effect (the pattern `useMountedSurfaceKeys`
+  // uses): settling the remembered state on blur makes backgrounding a real close, so
+  // the menu does not spring back open when the pane is refocused. An effect here would
+  // be a cascading render, and Radix does not call `onOpenChange` for a controlled
+  // close, so nothing else would clear it.
+  if (wasPaneFocused !== paneFocused) {
+    setWasPaneFocused(paneFocused);
+    if (!paneFocused && uncontrolledOpen) setUncontrolledOpen(false);
+  }
+
+  const requestedOpen = open ?? uncontrolledOpen;
+
+  return (
+    <SelectPrimitive.Root
+      data-slot="select"
+      {...props}
+      // Explicit ternary, not `paneFocused && requestedOpen`:
+      // `react/jsx-no-leaked-render` autofixes that `&&` to `... : null`, which
+      // would hand Radix a null `open` and silently make the root uncontrolled.
+      open={paneFocused ? requestedOpen : false}
+      onOpenChange={(next) => {
+        if (!controlled) setUncontrolledOpen(next);
+        props.onOpenChange?.(next);
+      }}
+    />
+  );
 }
 
 function SelectGroup({
@@ -63,8 +115,14 @@ function SelectContent({
   position = "popper",
   align = "start",
   sideOffset = 4,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  // Deliberately NOT `if (!paneFocused) return null` like the sibling wrappers:
+  // the closed content is what feeds the trigger's label (see `Select` above).
+  // The root forces itself closed in a background pane, which is what actually
+  // drops the focus trap / `hideOthers` / scroll lock.
+  const { handleCloseAutoFocus } = usePaneAwareContentGuard(onCloseAutoFocus);
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -79,6 +137,7 @@ function SelectContent({
         position={position}
         align={align}
         sideOffset={sideOffset}
+        onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
       >
         <SelectScrollUpButton />

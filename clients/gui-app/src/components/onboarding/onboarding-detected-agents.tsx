@@ -14,6 +14,7 @@ import {
 } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type InstallState = "detected" | "missing" | "pending";
 
 function installStateFor(state: ProviderCliState | undefined): InstallState {
@@ -133,14 +134,20 @@ function accountDescription(state: ProviderCliState | undefined): ReactNode {
   if (state === undefined) return null;
   const account = accountLineFor(state);
   return (
-    <span
-      title={account.title ?? undefined}
-      className={cn(
-        account.tone === "good" ? "text-[#7fd6a4]" : "text-white/45",
-      )}
+    <TooltipWrapper
+      label={account.title ?? undefined}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {account.text}
-    </span>
+      <span
+        className={cn(
+          account.tone === "good" ? "text-[#7fd6a4]" : "text-white/45",
+        )}
+      >
+        {account.text}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -161,21 +168,28 @@ function ProviderEnableSwitch(props: {
     onSetEnabled,
   } = props;
   return (
-    <Switch
-      checked={enabled}
-      onCheckedChange={(next) => {
-        if (isSettingEnabled || (!next && disablingLastEnabled)) return;
-        onSetEnabled(providerId, next);
-      }}
-      disabled={isSettingEnabled || disablingLastEnabled}
-      aria-label={`Enable ${name}`}
-      title={
-        disablingLastEnabled
-          ? "At least one provider must stay enabled."
-          : undefined
+    <TooltipWrapper
+      label={
+        disablingLastEnabled ? "At least one provider must stay enabled." : null
       }
-      className="ml-auto"
-    />
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* Guard span: the Switch is `disabled` in exactly the state this
+          explains, and a disabled control emits no pointer events. */}
+      <span className="ml-auto inline-flex">
+        <Switch
+          checked={enabled}
+          onCheckedChange={(next) => {
+            if (isSettingEnabled || (!next && disablingLastEnabled)) return;
+            onSetEnabled(providerId, next);
+          }}
+          disabled={isSettingEnabled || disablingLastEnabled}
+          aria-label={`Enable ${name}`}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -203,7 +217,11 @@ export function OnboardingDetectedAgents() {
 
   const handleSetEnabled = (providerId: ProviderId, enabled: boolean): void => {
     // No profile management UI yet - this call never renames/removes a profile.
-    setEnabled.mutate({ providerId, enabled, profileAction: null });
+    setEnabled.mutate({
+      providerId,
+      enabled,
+      profileAction: null,
+    });
   };
   const rows = ORDERED_PROVIDERS.map(({ providerId }): ProviderListRow => {
     const state = providerStateFor(providers, providerId);

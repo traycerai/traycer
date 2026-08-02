@@ -15,12 +15,13 @@
  * `[epicId, hostId]` so multi-host users keep distinct selections.
  */
 import { useMemo, useState } from "react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { CompactWorkspaceSwitcher } from "@/components/epic-canvas/sidebar/compact-workspace-switcher";
 
 export interface FileTreeWorkspacePickerProps {
@@ -40,9 +41,18 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
     epicId: props.epicId,
     enabled: props.hostId !== null,
   });
+  // Host-proven-missing rows are hidden (nothing to browse); the current
+  // selection is exempt so a just-deleted selected root keeps its labeled row
+  // until the user picks a live one.
   const rows = useMemo(
-    () => listQuery.data?.rows ?? [],
-    [listQuery.data?.rows],
+    () =>
+      withoutResolvedMissingRows(
+        listQuery.data?.rows ?? [],
+        props.hostId === null || props.selectedPath === null
+          ? null
+          : { hostId: props.hostId, runningDir: props.selectedPath },
+      ),
+    [listQuery.data?.rows, props.hostId, props.selectedPath],
   );
   const selectedRow =
     rows.find((row) => row.runningDir === props.selectedPath) ?? null;
@@ -90,7 +100,7 @@ interface SelectedWorkspaceRoot {
 }
 
 function selectedWorkspaceRoot(
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
   selectedPath: string | null,
 ): SelectedWorkspaceRoot | null {
   if (selectedPath === null) return null;

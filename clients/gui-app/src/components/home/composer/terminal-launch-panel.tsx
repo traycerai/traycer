@@ -3,7 +3,6 @@ import { useStore } from "zustand";
 import { Terminal } from "lucide-react";
 
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
-import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -13,6 +12,14 @@ import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-co
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { TUI_HARNESS_ID_TO_PROVIDER_ID } from "@traycer/protocol/host/provider-schemas";
 import { isTuiHarnessId } from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerPackBlocksExecution,
+  providerPackPreparingForProvider,
+  providerPackPreparingLabel,
+} from "@/components/providers/provider-pack-readiness";
+import { providerDisplayName } from "@/lib/provider-ordering";
 
 interface TerminalLaunchPanelProps {
   /** Toolbar store shared with the chat composer, so a model/mode picked here
@@ -46,15 +53,12 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
   const reasoning = useStore(store, (s) => s.reasoning);
-  const agentMode = useStore(store, (s) => s.agentMode);
-  const setAgentMode = useStore(store, (s) => s.setAgentMode);
   // Launch capability is the runtime `modes` the host advertises for the
   // selected harness - the same signal the store uses to reroute off non-TUI
-  // harnesses - NOT the schema id (`isTuiHarnessId`). They diverge for a
-  // schema-TUI harness whose adapter currently exposes only `gui` (e.g.
-  // `cursor`): gating on `modes` keeps Start in lockstep with the store's
-  // reroute and stays disabled until the catalog confirms capability, instead
-  // of briefly enabling a pre-reroute selection that can't back a terminal agent.
+  // harnesses, not the schema id (`isTuiHarnessId`). Gating on `modes` keeps
+  // Start in lockstep with the store's reroute and stays disabled until the
+  // catalog confirms capability, instead of briefly enabling a pre-reroute
+  // selection that can't back a terminal agent.
   const selectionIsTuiCapable = useStore(
     store,
     (s) =>
@@ -98,15 +102,26 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const argsDraft = needsReseed ? savedArgs : argsState.draft;
   const argsTouched = needsReseed ? false : argsState.touched;
 
+  // Managed-pack gate. Derived from the `providers.list` response this panel
+  // already holds, so gating costs no extra query. A terminal agent bypasses
+  // the chat composer entirely, which is exactly why it needs its own gate:
+  // the host resolver would refuse the launch, but the user would only find
+  // out after pressing Start.
+  const packPreparingHint = terminalPackPreparingHint(
+    harnessId,
+    providersQuery.data?.providers,
+  );
+
   // The harness/model picker lists every GUI harness, including ones that can't
-  // back a terminal agent (the GUI-only `traycer`, or a schema-TUI harness whose
-  // adapter advertises only `gui`). Block Start (rather than silently no-op)
-  // unless the shared selection is runtime-TUI-capable.
+  // back a terminal agent. Block Start (rather than silently no-op) unless the
+  // shared selection is runtime-TUI-capable, and likewise while its managed
+  // pack is still being readied.
   const launchHint =
     disabledHint ??
     (selectionIsTuiCapable
       ? null
-      : "Select a terminal-capable agent to start.");
+      : "Select a terminal-capable coding agent to start.") ??
+    packPreparingHint;
   const startDisabled = pending || launchHint !== null;
 
   const start = useCallback((): void => {
@@ -116,14 +131,12 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
     if (!isTuiHarnessId(harnessId)) return;
     onStart({
       harnessId,
-      agentMode,
       model: selection.modelSlug.length > 0 ? selection.modelSlug : null,
       reasoningEffort: reasoning.length > 0 ? reasoning : null,
       terminalAgentArgs: argsTouched ? argsDraft : null,
       profileId: selection.profileId,
     });
   }, [
-    agentMode,
     argsDraft,
     argsTouched,
     harnessId,
@@ -153,9 +166,10 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           // panel's own `useProvidersList()` read above.
           createProfileHostId={null}
           runTargetHostId={null}
+          profileAdmission={null}
         />
         <Input
-          aria-label="Terminal agent CLI arguments"
+          aria-label="Terminal interface CLI arguments"
           className="h-8 min-w-0 flex-1 font-mono text-ui-xs"
           placeholder="CLI arguments (optional)"
           value={argsDraft}
@@ -174,12 +188,6 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
         />
       </div>
       <div className="flex items-center justify-between gap-2 px-0.5 pb-2.5 pt-1">
-        <AgentModeToggle
-          value={agentMode}
-          disabled={pending}
-          showTooltip
-          onChange={setAgentMode}
-        />
         <StartButton
           hint={launchHint}
           disabled={startDisabled}
@@ -211,7 +219,7 @@ function StartButton(props: StartButtonProps) {
       // Match the chat composer's `size-8` (h-8) send button so the terminal
       // toolbar row is the same height as the chat toolbar (no switch flicker).
       className="h-8"
-      aria-label="Start terminal agent"
+      aria-label="Start agent"
       aria-disabled={hasHint || undefined}
       disabled={hasHint ? false : disabled}
       onClick={() => {
@@ -233,4 +241,36 @@ function StartButton(props: StartButtonProps) {
       <span className="inline-flex">{button}</span>
     </TooltipWrapper>
   );
+}
+
+/**
+ * Managed-pack hint for the selected terminal harness, or null when it can run
+ * (or is not a terminal harness at all - `selectionIsTuiCapable` owns that case
+ * and reports it more precisely).
+ *
+ * A terminal agent launch bypasses the chat composer entirely, so it needs its
+ * own gate rather than inheriting one: the host resolver would refuse the
+ * launch either way, but without this the user only finds out after pressing
+ * Start.
+ *
+ * Returns null for a NON-BLOCKING install for the same reason the composer
+ * gate does: this string is the panel's disabled-hint, and the host would
+ * resolve the bundled/PATH/custom binary and launch. A hint here would turn a
+ * background download into a refused launch.
+ */
+function terminalPackPreparingHint(
+  harnessId: GuiHarnessId,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+): string | null {
+  if (!isTuiHarnessId(harnessId) || providers === undefined) return null;
+  const providerId = TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
+  const provider = providers.find(
+    (candidate) => candidate.providerId === providerId,
+  );
+  if (provider === undefined) return null;
+  const preparing = providerPackPreparingForProvider(provider);
+  if (preparing === null || !providerPackBlocksExecution(preparing)) {
+    return null;
+  }
+  return providerPackPreparingLabel(preparing, providerDisplayName(providerId));
 }

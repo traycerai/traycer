@@ -5,6 +5,7 @@ import { Markdown } from "@tiptap/markdown";
 import { Placeholder } from "@tiptap/extensions/placeholder";
 import Link from "@tiptap/extension-link";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 
 import type { ComposerPickerStore } from "../picker/composer-picker-store";
 
@@ -16,14 +17,32 @@ import {
 import { AttachmentGroupNode } from "./extensions/attachment-group-extension";
 import { ImageAttachmentNode } from "./extensions/image-attachment-extension";
 import { ChatListKeymap } from "./extensions/chat-list-keymap";
-import { createChatPasteHandler } from "./extensions/chat-paste-handler";
+import {
+  createChatPasteHandler,
+  type PastedComposerImage,
+  type PastedComposerImageOutcome,
+} from "./extensions/chat-paste-handler";
 import { ChatCopySerializer } from "./extensions/chat-copy-serializer";
 
 export interface BuildComposerExtensionsArgs {
   readonly pickerStore: ComposerPickerStore;
-  readonly placeholder: string;
-  readonly onSubmit: { readonly current: () => void };
+  /**
+   * Live placeholder source. Read through a stable getter (not a static string)
+   * so the chat composer can swap the placeholder - e.g. to a mid-turn steer
+   * hint - without rebuilding the Tiptap editor (which is created once). The
+   * owner pokes a no-op transaction on change so the decoration re-reads it.
+   */
+  readonly getPlaceholder: () => string;
+  readonly onSubmit: {
+    readonly current: (source: ChatComposerSubmitSource) => void;
+  };
   readonly slashProviderId: GuiHarnessId;
+  readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
+  readonly getIngestPastedComposerImages: () =>
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
 }
 
 // Blockquote is button-only (T5): the composer schema stays blockquote-valid
@@ -61,7 +80,11 @@ export function buildComposerExtensions(
       linkOnPaste: true,
     }),
     Placeholder.configure({
-      placeholder: args.placeholder,
+      // An empty code block is still an empty editor to Tiptap. Returning the
+      // composer hint there makes it render as monospaced code inside the new
+      // block; placeholders belong only on ordinary prompt paragraphs.
+      placeholder: ({ node }) =>
+        node.type.name === "paragraph" ? args.getPlaceholder() : "",
       includeChildren: false,
       emptyEditorClass: "is-editor-empty",
     }),
@@ -74,7 +97,11 @@ export function buildComposerExtensions(
       onSubmit: args.onSubmit,
       pickerStore: args.pickerStore,
     }),
-    createChatPasteHandler({ pickerStore: args.pickerStore }),
+    createChatPasteHandler({
+      pickerStore: args.pickerStore,
+      getHasPastedImageBytes: args.getHasPastedImageBytes,
+      getIngestPastedComposerImages: args.getIngestPastedComposerImages,
+    }),
     // Cmd+C / Cmd+X -> structured plain text (list markers, mentions, slash
     // commands) instead of ProseMirror's default blank-line-joined textContent.
     ChatCopySerializer,

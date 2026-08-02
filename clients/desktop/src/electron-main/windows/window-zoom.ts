@@ -10,6 +10,7 @@ import {
   ZOOM_PERCENT_LADDER,
   type ZoomPercent,
 } from "../../ipc-contracts/zoom-types";
+import { windowsTitleBarOverlayHeight } from "./windows-title-bar-overlay";
 
 const STORE_FILE_NAME = "window-zoom.json";
 
@@ -30,6 +31,7 @@ export interface ZoomManagedWindow {
   readonly webContents: {
     setZoomFactor(factor: number): void;
   };
+  setTitleBarOverlay(options: { readonly height: number }): void;
   isDestroyed(): boolean;
 }
 
@@ -256,5 +258,10 @@ function applyZoomToWindows<TWindow extends ZoomManagedWindow>(
     .filter((window) => !window.isDestroyed())
     .forEach((window) => {
       window.webContents.setZoomFactor(factor);
+      if (process.platform === "win32") {
+        window.setTitleBarOverlay({
+          height: windowsTitleBarOverlayHeight(factor),
+        });
+      }
     });
 }

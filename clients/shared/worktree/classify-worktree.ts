@@ -7,13 +7,15 @@ import type {
 /**
  * Evidence tier for a host worktree. Names a PROVEN fact about the worktree, not
  * a safety verdict. Three green tiers each require positive, host-validated proof:
- * `merged` (a PR merged with the live HEAD at the merged SHA, OR local ancestry
- * proof the work landed in the default branch); `at-base-commit` (the worktree
- * never advanced from its birth commit, so deleting loses nothing committed); and
- * `unreferenced` (a proven upstream-tip branch nothing points at). `review` is the
- * amber catch-all for anything unproven or with would-be-lost state; `orphaned`
- * and `in-use` are neutral. The same names are shared verbatim with the
- * Task-delete dialog and the `traycer-housekeeping` skill.
+ * `merged` (a PR merged with the live HEAD at the merged SHA, local ancestry
+ * proof the work landed in the default branch, OR an at-base superproject with
+ * authored owned-submodule work proven landed); `at-base-commit` (the worktree
+ * never advanced from its birth commit and no authored submodule work landed, so
+ * deleting loses nothing committed); and `unreferenced` (a proven upstream-tip
+ * branch nothing points at). `review` is the amber catch-all for anything
+ * unproven or with would-be-lost state; `orphaned` and `in-use` are neutral. The
+ * same names are shared verbatim with the Task-delete dialog and the
+ * `traycer-housekeeping` skill.
  */
 export type WorktreeTier =
   | "in-use"
@@ -69,7 +71,7 @@ export const WORKTREE_TIER_TOOLTIP: Record<WorktreeTier, string> = {
   orphaned:
     "Git can't remove this worktree normally - its directory or metadata is missing or broken. Deleting it uses a forced cleanup.",
   merged:
-    "The work is proven to have landed: a merged PR matching this worktree's current commit, or the branch's commits are contained in the default branch.",
+    "The work is proven to have landed: a merged PR matches this worktree's current commit, the branch's commits are contained in the default branch, or authored submodule work from an otherwise at-base worktree is proven landed.",
   "at-base-commit":
     "The worktree never advanced from the commit it was created on and has no uncommitted changes - deleting it loses no committed work.",
   unreferenced:
@@ -125,7 +127,13 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     The host already validated the live HEAD is the merged SHA, so the pure
  *     client never needs the SHA. A merged PR state WITHOUT the live-HEAD match
  *     does NOT green - it falls through.
- *  7. `atBaseCommit === true` → **at-base-commit** (green). Host-computed
+ *  7. `atBaseCommit === true` + any owned submodule with authored work proven
+ *     landed → **merged** (green). A submodule has authored work when it differs
+ *     from the pinned gitlink (`!atPinnedCommit`); landing proof is the same
+ *     HEAD-validated merged PR or local default-branch ancestry used by the
+ *     submodule safety gate. The gate above still requires EVERY owned submodule
+ *     to be proven safe, so one unproven sibling keeps the row in Review.
+ *  8. `atBaseCommit === true` → **at-base-commit** (green). Host-computed
  *     retroactively from signals every worktree carries: `clean && contained in
  *     default (mergedIntoDefault) && no authored-commit reflog entry` ⇒ untouched.
  *     Checked BEFORE local ancestry ON PURPOSE: an untouched worktree is contained
@@ -135,13 +143,13 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     splitting the two labels - both share the `mergedIntoDefault` safety
  *     floor. Applies
  *     regardless of owners or an open PR; deleting loses nothing committed.
- *  8. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
+ *  9. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
  *     ancestry). Now correctly rare: only a branch that actually ADVANCED from its
  *     base and is now contained in the default lands here (a genuine merge). Proof
  *     stands regardless of owners and of any upstream.
- *  9. clean + non-null status + `ahead === 0` + no owners → **unreferenced**
+ *  10. clean + non-null status + `ahead === 0` + no owners → **unreferenced**
  *     (quiet-green; a PROVEN upstream-tip branch nothing references).
- *  10. else → **review** (null status, `ahead === null`/`> 0` unmerged,
+ *  11. else → **review** (null status, `ahead === null`/`> 0` unmerged,
  *     referenced-unmerged).
  *
  * Green requires positive, host-validated proof; unknown/stale is never green.
@@ -166,6 +174,12 @@ export function classifyWorktreeTier(
   // default, making `mergedIntoDefault` also true) reads the honest "At base
   // commit", not "Landed". A validated merged PR still wins over both.
   if (entry.prState === "merged" && entry.mergedHeadShaMatches) return "merged";
+  if (
+    entry.atBaseCommit &&
+    entry.submodules.some(submoduleAuthoredWorkLanded)
+  ) {
+    return "merged";
+  }
   if (entry.atBaseCommit) return "at-base-commit";
   const status = entry.branchStatus;
   if (status !== null && status.mergedIntoDefault) return "merged";
@@ -240,6 +254,19 @@ export function describeReviewReasons(
 function submoduleMergeProven(fact: WorktreeSubmoduleMergeFactV12): boolean {
   if (fact.prState === "merged" && fact.mergedHeadShaMatches) return true;
   return fact.mergedIntoDefault || fact.atPinnedCommit;
+}
+
+/**
+ * Positive proof that an owned submodule both carried work beyond the
+ * superproject's pinned gitlink and landed that work. `atPinnedCommit` is kept as
+ * a hard exclusion even if another proof bit is also true: the pinned checkout
+ * is safe, but it contains no authored submodule work that should promote an
+ * otherwise at-base superproject to Landed.
+ */
+function submoduleAuthoredWorkLanded(
+  fact: WorktreeSubmoduleMergeFactV12,
+): boolean {
+  return !fact.atPinnedCommit && submoduleMergeProven(fact);
 }
 
 function describeUnprovenSubmodule(
@@ -325,10 +352,11 @@ function worktreeFacts(
 
 /**
  * The row-fact hint that distinguishes HOW a `merged` worktree was proven merged:
- * `PR #123` when the green came from a validated merged PR, or `in default` when
- * it came from local ancestry. Only emitted on the `merged` tier - the provenance
- * is the reassuring detail there. `PR #123` takes precedence because the
- * classifier evaluates the PR row first.
+ * `PR #123` when the green came from a validated superproject PR, `submodule
+ * owner/repo landed` when an otherwise at-base superproject carried landed
+ * authored submodule work, or `in default` when it came from superproject local
+ * ancestry. Only emitted on the `merged` tier - the provenance is the reassuring
+ * detail there. The order mirrors the classifier's evidence ladder.
  */
 function mergedProvenanceFacts(
   entry: WorktreeHostEntryV12,
@@ -344,6 +372,12 @@ function mergedProvenanceFacts(
   }
   if (entry.prState === "merged" && entry.mergedHeadShaMatches) {
     return ["merged PR"];
+  }
+  if (entry.atBaseCommit) {
+    return entry.submodules.filter(submoduleAuthoredWorkLanded).map((fact) => {
+      const name = `${fact.repoIdentifier.owner}/${fact.repoIdentifier.repo}`;
+      return `submodule ${name} landed`;
+    });
   }
   return ["in default"];
 }

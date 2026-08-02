@@ -1,5 +1,6 @@
 import { createHostRuntime } from "@/providers/host-runtime-provider";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 /**
  * Typed host-runtime hook bundle bound to the host's published
@@ -10,7 +11,7 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
  * reads from this bundle so the typing flows from one declared registry
  * instead of being widened back to `VersionedRpcRegistry`.
  */
-const runtime = createHostRuntime<HostRpcRegistry>();
+const runtime = createHostRuntime<HostRpcRegistry>(hostRpcSchedulingPolicy);
 
 export const HostRuntimeProvider = runtime.HostRuntimeProvider;
 export const HostRuntimeContext = runtime.HostRuntimeContext;

@@ -19,6 +19,10 @@ import {
   workspaceReadFileResponseSchema,
   workspaceResolvePathsByRepoIdentifiersRequestSchema,
   workspaceResolvePathsByRepoIdentifiersResponseSchema,
+  workspaceSearchPathsRequestSchema,
+  workspaceSearchPathsResponseSchema,
+  workspaceSearchTextRequestSchema,
+  workspaceSearchTextResponseSchema,
   workspaceWorktreeMentionSuggestionsResponseSchema,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 
@@ -78,6 +82,15 @@ export const workspaceResolvePathsByRepoIdentifiersV10 = defineRpcContract({
   responseSchema: workspaceResolvePathsByRepoIdentifiersResponseSchema,
 });
 
+/**
+ * @deprecated Legacy "ship the whole tree" snapshot (flat list of up to 50k
+ * paths + workspace-wide git status), superseded by the live single-level
+ * stream `workspace.subscribeFileList` (file explorer) and the host-ranked
+ * `workspace.searchPaths` (path search). It CANNOT be removed - the method is
+ * on the released floor, so hosts must keep serving already-shipped clients -
+ * but its only remaining first-party caller is the file tree's fallback for
+ * hosts that predate `workspace.subscribeFileList`. Do not add new consumers.
+ */
 export const workspaceListFileTreeV10 = defineRpcContract({
   method: "workspace.listFileTree",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -97,4 +110,18 @@ export const workspaceReadFileV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: workspaceReadFileRequestSchema,
   responseSchema: workspaceReadFileResponseSchema,
+});
+
+export const workspaceSearchPathsV10 = defineRpcContract({
+  method: "workspace.searchPaths",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceSearchPathsRequestSchema,
+  responseSchema: workspaceSearchPathsResponseSchema,
+});
+
+export const workspaceSearchTextV10 = defineRpcContract({
+  method: "workspace.searchText",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceSearchTextRequestSchema,
+  responseSchema: workspaceSearchTextResponseSchema,
 });

@@ -3,6 +3,7 @@ import {
   use,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Context,
   type ReactNode,
@@ -15,7 +16,10 @@ import type {
 } from "@traycer-clients/shared/host-client/host-client";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
-import { WsRpcClient } from "@traycer-clients/shared/host-transport/ws-rpc-client";
+import {
+  HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+  WsRpcClient,
+} from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
 import {
@@ -24,6 +28,9 @@ import {
 } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { HostBindingAuthorityRegistry } from "@traycer-clients/shared/host-client/host-binding-authority-registry";
+import { HostRequestCoordinator } from "@traycer-clients/shared/host-client/host-request-coordinator";
+import type { RpcSchedulingPolicy } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
@@ -40,15 +47,6 @@ export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
 
 export type MessengerFactory<Registry extends VersionedRpcRegistry> = (args: {
   readonly registry: Registry;
-  readonly endpoint: () =>
-    | import("@traycer-clients/shared/host-client/host-directory").HostDirectoryEntry
-    | null;
-  // Mirrors the transport's actual seam: a bearer source for the WS open frame,
-  // not a full RequestContext. An override that wires a real WsRpcClient passes
-  // this straight through.
-  readonly bearer: () =>
-    | import("@traycer-clients/shared/auth/bearer-source").OpenFrameBearerSource
-    | null;
 }) => IHostMessenger<Registry>;
 
 interface HostRuntimeProviderProps<Registry extends VersionedRpcRegistry> {
@@ -116,9 +114,9 @@ const DEFAULT_WS_FRAME_TIMEOUT_MS = 30_000;
  *
  * Unmount disposes the runtime and services.
  */
-export function createHostRuntime<
-  Registry extends VersionedRpcRegistry,
->(): TypedHostRuntime<Registry> {
+export function createHostRuntime<Registry extends VersionedRpcRegistry>(
+  schedulingPolicy: RpcSchedulingPolicy<Registry>,
+): TypedHostRuntime<Registry> {
   const context: Context<HostRuntimeBinding<Registry> | null> =
     createContext<HostRuntimeBinding<Registry> | null>(null);
   const latestBindingSnapshot: {
@@ -148,6 +146,23 @@ export function createHostRuntime<
 
     const runnerHost = useRunnerHost();
     const queryClient = useQueryClient();
+    const authorityRegistryRef = useRef<HostBindingAuthorityRegistry | null>(
+      null,
+    );
+    const requestCoordinatorRef =
+      useRef<HostRequestCoordinator<Registry> | null>(null);
+    const authorityRegistryDisposalGeneration = useRef(0);
+    if (authorityRegistryRef.current === null) {
+      authorityRegistryRef.current = new HostBindingAuthorityRegistry();
+    }
+    const authorityRegistry = authorityRegistryRef.current;
+    if (requestCoordinatorRef.current === null) {
+      requestCoordinatorRef.current = new HostRequestCoordinator({
+        registry,
+        schedulingPolicy,
+      });
+    }
+    const requestCoordinator = requestCoordinatorRef.current;
     const [binding, setBinding] = useState<HostRuntimeBinding<Registry> | null>(
       null,
     );
@@ -173,27 +188,22 @@ export function createHostRuntime<
 
       let runtime: HostRuntime<Registry> | null = null;
 
-      const endpoint = () =>
-        runtime === null ? null : runtime.hostClient.getActiveHost();
-      // The transport only needs the bearer; hand it the active context's
-      // credential lease (a structural `OpenFrameBearerSource`). Shared by the
-      // factory override and the default client so the port matches the seam.
-      const bearer = () =>
-        runtime === null
-          ? null
-          : (runtime.hostClient.getRequestContext()?.credentials ?? null);
-
       const rawMessenger: IHostMessenger<Registry> =
         messengerFactory !== null
-          ? messengerFactory({ registry, endpoint, bearer })
+          ? messengerFactory({ registry })
           : new WsRpcClient<Registry>({
               registry,
-              endpoint,
-              bearer,
               requestId,
               webSocketFactory: createWhatwgWebSocketFactory(),
               dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
               frameTimeoutMs: DEFAULT_WS_FRAME_TIMEOUT_MS,
+              // The GUI's response deadline matches the host's post-`openAck`
+              // deadline, so which overdue timer runs first is up to scheduling
+              // (or a sleep/resume - and a stalled host fires its timer late,
+              // well past 30s). This window keeps the socket open long enough
+              // for the host's no-dispatch attestation when the client's timer
+              // wins that race.
+              hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
             });
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
       // the Traycer cloud backend is surfaced by the host as
@@ -202,18 +212,19 @@ export function createHostRuntime<
       // the existing context's credential lease in place (refresh
       // succeeded) or signs the user out (refresh rejected) instead of
       // leaving them staring at a generic failure toast.
-      // Retry is the outermost layer: a pre-send transient dial/handshake
-      // failure (`RetryableTransportError`) re-dials on a short backoff before
-      // the auth-aware wrapper or the query layer ever see it. The auth wrapper
-      // only acts on `UNAUTHORIZED`, never a retryable transport error, so the
-      // two never contend. When auth revalidation really rotates the bearer,
+      // Retry is the outermost layer: a transport failure the host provably
+      // never dispatched (`RetryableTransportError` - a pre-send dial/handshake
+      // failure, or a host-attested post-`openAck` request timeout) re-dials on
+      // a short backoff before the auth-aware wrapper or the query layer ever
+      // see it. That includes the legacy `UNAUTHORIZED` spelling of the
+      // post-open timeout, which is why the auth wrapper never sees it as a
+      // credential rejection. The auth wrapper only acts on `UNAUTHORIZED`,
+      // never a retryable transport error, so the two never contend. When auth revalidation really rotates the bearer,
       // retry the same RPC once against the fresh lease; some usage-limit
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.
       const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, auth, {
-          retry: { bearer },
-        }),
+        createAuthAwareMessenger(rawMessenger, auth),
         DEFAULT_TRANSPORT_RETRY_POLICY,
       );
 
@@ -224,6 +235,9 @@ export function createHostRuntime<
         requestContextProvider: auth.getRequestContextProvider(),
         directory,
         invalidator,
+        authorityRegistry,
+        schedulingPolicy,
+        requestCoordinator,
       });
 
       const activeRuntime = runtime;
@@ -291,7 +305,24 @@ export function createHostRuntime<
       registry,
       messengerFactory,
       remoteFetcher,
+      authorityRegistry,
+      requestCoordinator,
     ]);
+
+    useEffect(() => {
+      authorityRegistryDisposalGeneration.current += 1;
+      return () => {
+        const cleanupGeneration = ++authorityRegistryDisposalGeneration.current;
+        queueMicrotask(() => {
+          if (
+            authorityRegistryDisposalGeneration.current === cleanupGeneration
+          ) {
+            authorityRegistry.dispose();
+            requestCoordinator.dispose();
+          }
+        });
+      };
+    }, [authorityRegistry, requestCoordinator]);
 
     if (binding === null) {
       return <>{fallback}</>;

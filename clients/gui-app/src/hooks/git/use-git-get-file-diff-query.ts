@@ -3,12 +3,14 @@ import {
   useQuery,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   GitGetFileDiffRequest,
   GitGetFileDiffResponse,
   GitStage,
 } from "@traycer/protocol/host";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -51,25 +53,28 @@ export function useGitGetFileDiffQuery(args: {
           args.byteBudget,
         ),
       ],
-      queryFn: async () => {
-        // client is captured from closure. enabled: readiness.isReady ensures it's available.
-        // The enabled flag prevents this queryFn from running when client is unavailable,
-        // but a defensive runtime guard is retained against future refactors.
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-        if (!client) {
-          throw new Error("Host client unavailable");
-        }
-        const request: GitGetFileDiffRequest = {
-          hostId: args.hostId ?? "",
-          runningDir: args.runningDir,
-          filePath: args.filePath,
-          previousPath: args.previousPath,
-          stage: args.stage,
-          ignoreWhitespace: args.ignoreWhitespace,
-          byteBudget: args.byteBudget,
-        };
-        return client.request("git.getFileDiff", request);
-      },
+      queryFn: () =>
+        withHostQueryErrorBoundary("git.getFileDiff", async () => {
+          // client is captured from closure. enabled: readiness.isReady ensures it's available.
+          // The enabled flag prevents this queryFn from running when client is unavailable,
+          // but a defensive runtime guard is retained against future refactors.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+          if (!client) {
+            // A `HostRpcError` (not a bare Error): this query publicly declares
+            // that error type and UI surfaces read `.code`.
+            throw hostClientUnavailableError("git.getFileDiff");
+          }
+          const request: GitGetFileDiffRequest = {
+            hostId: args.hostId ?? "",
+            runningDir: args.runningDir,
+            filePath: args.filePath,
+            previousPath: args.previousPath,
+            stage: args.stage,
+            ignoreWhitespace: args.ignoreWhitespace,
+            byteBudget: args.byteBudget,
+          };
+          return client.request("git.getFileDiff", request);
+        }),
       staleTime: Infinity,
       gcTime: 30 * 60 * 1000,
     }),

@@ -3,7 +3,7 @@ import type {
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { ChevronRight, MessageSquareText } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -49,7 +49,8 @@ export function InterviewSegment(props: InterviewSegmentProps) {
     forkAction,
   } = props;
   const [open, setOpen] = useState(forkedWithoutAnswer);
-  const measuredOpenChange = useChatMeasuredOpenChange(setOpen);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const measuredOpenChange = useChatMeasuredOpenChange(setOpen, triggerRef);
 
   if (status === "streaming") return null;
 
@@ -58,7 +59,7 @@ export function InterviewSegment(props: InterviewSegmentProps) {
       ? answeredQuestionsSummaryFromCounts(questions, answers)
       : "Question failed";
   const summary = forkedWithoutAnswer
-    ? "Question carried from the original chat — not answered here"
+    ? "Question carried from the original agent — not answered here"
     : resolvedSummary;
 
   return (
@@ -69,6 +70,7 @@ export function InterviewSegment(props: InterviewSegmentProps) {
     >
       <div className="flex max-w-full items-center gap-1">
         <CollapsibleTrigger
+          ref={triggerRef}
           data-find-include="true"
           data-chat-find-unit={findUnitId ?? undefined}
           className={cn(

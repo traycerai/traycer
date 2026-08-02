@@ -384,6 +384,26 @@ export type MessageSegment =
        */
       model: SetupCardViewModel;
       viewTabId: string;
+      /**
+       * Ticket 13 (decision #28): the raw triggering message id this card is
+       * associated with (`SetupCardRow.triggeringMessageId`) - `null` only
+       * for the genesis card or a defensive creating-event-without-id shape.
+       * A card whose trigger never became (or no longer is) an anchor
+       * target - queued/steered/branched/deleted - keeps this id but FLOATS
+       * by `createdAt` instead of interleaving (`rendered-messages.ts`'s
+       * `floatingCards`), so it can land directly above a completely
+       * unrelated row by coincidence. Anchor-target substitution must
+       * verify this identity against the row it's evaluating, not just
+       * array adjacency, which a floating card can satisfy by chance.
+       */
+      anchorMessageId: string | null;
+      /**
+       * Ticket 13 (decision #28): true only for the pinned genesis card
+       * (the chat's back-filled initial worktree, unconditionally unshifted
+       * to row index 0 - it has no triggering send to match against, so it
+       * substitutes for whatever the chat's first row is).
+       */
+      isGenesisPin: boolean;
     };
 
 export interface InterviewSegment {
@@ -445,7 +465,8 @@ export interface ChatMessageSteerBadge {
 
 /**
  * Per-turn agent run metadata for an assistant row, surfaced in the elapsed
- * footer's info tooltip (provider, model, reasoning effort, fast mode). Only
+ * footer's info tooltip (provider, profile, model, reasoning effort, fast
+ * mode). Only
  * set on assistant rows; `null` for user/system rows and assistant turns that
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
@@ -453,6 +474,8 @@ export interface AssistantTurnMeta {
   /** Raw harness id, used to pick the provider's mono icon for the footer. */
   readonly provider: GuiHarnessId;
   readonly providerLabel: string;
+  /** Profile label snapshotted when the turn's provider session was minted. */
+  readonly profileLabel: string | null;
   readonly modelLabel: string | null;
   /** Raw persisted reasoning effort id from the host turn. */
   readonly reasoningEffort: string | null;

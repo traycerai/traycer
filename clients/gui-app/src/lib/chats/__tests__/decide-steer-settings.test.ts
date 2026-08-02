@@ -16,13 +16,14 @@ const SETTINGS: ChatRunSettings = {
 };
 
 const TURN: ChatActiveTurn = {
+  agentMode: "regular",
+  sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
   harnessId: "codex",
   model: "gpt-5-codex",
   reasoningEffort: "medium",
   serviceTier: "default",
-  agentMode: "regular",
   profileId: null,
   userMessageId: "message-1",
   startedAt: 1,
@@ -76,18 +77,6 @@ describe("decideSteerSettings", () => {
     expect(
       decideSteerSettings(TURN, { ...SETTINGS, serviceTier: "flex" }),
     ).toMatchObject({ kind: "interrupt_restart" });
-  });
-
-  it("restarts on an agent-mode change", () => {
-    const result = decideSteerSettings(TURN, {
-      ...SETTINGS,
-      agentMode: "epic",
-    });
-    expect(result).toEqual({
-      kind: "interrupt_restart",
-      newSettings: { ...SETTINGS, agentMode: "epic" },
-      changed: ["agent mode"],
-    });
   });
 
   it("restarts when a queued item is restamped to a different managed profile mid-turn", () => {

@@ -44,5 +44,11 @@ export default defineConfig({
     // jsdom provides `self` / `window` / `localStorage` so the renderer-shell
     // tests can `import "encrypt-storage"` (UMD wrapper references `self`).
     environment: "jsdom",
+    // Home sandbox: re-points `os.homedir()` at the (per-test) env and
+    // baselines HOME to a temp dir, so no suite - nor electron-log's file
+    // transport - can write into the real `~` on any runtime. Deliberately
+    // NOT wired into vitest.config.packaging.ts: the real electron-builder
+    // pack there needs the real `~/Library/Caches/electron-builder`.
+    setupFiles: ["./vitest.setup.ts"],
   },
 });

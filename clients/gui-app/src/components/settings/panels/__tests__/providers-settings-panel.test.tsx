@@ -9,6 +9,8 @@ import {
   type ProviderProfile,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
 import {
   act,
   cleanup,
@@ -19,6 +21,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
+function selectTab(name: string): void {
+  fireEvent.mouseDown(screen.getByRole("tab", { name }));
+}
 
 type StartLoginVariables = {
   readonly providerId: ProviderCliState["providerId"];
@@ -133,6 +140,8 @@ const providerMocks = vi.hoisted(() => ({
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),
   renameProfileMutate: vi.fn<RenameProfileMutate>(),
+  renameProfilePending: false,
+  renameProfileError: null as Error | null,
   recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
   removeProfileMutate: vi.fn<RemoveProfileMutate>(),
   refreshProviders: vi.fn(() => Promise.resolve()),
@@ -142,6 +151,83 @@ const providerMocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
+}));
+
+vi.mock("@/hooks/providers/use-providers-plugins-list-query", () => ({
+  useProvidersPluginsList: () => ({
+    data: { plugins: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-plugins-mutate-mutation", () => ({
+  useProvidersPluginsMutate: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
+  useProvidersSkillsList: () => ({
+    data: { skills: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
+  useProvidersSkillsMutate: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+// Sibling ticket 11 owns the MCP tab; mock its hooks so panel tests stay isolated.
+vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
+  useProvidersMcpList: () => ({
+    data: { servers: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
+  useProvidersMcpMutate: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-discover-mutation", () => ({
+  useProvidersMcpDiscover: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
+  useProvidersMcpAuth: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
+// goes through TanStack Query. Mocked here alongside the other provider
+// mutations so this panel test keeps rendering without a QueryClientProvider.
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
@@ -282,8 +368,8 @@ vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => {
 vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => {
   const useRenameProviderProfile = () => ({
     mutate: providerMocks.renameProfileMutate,
-    isPending: false,
-    error: null,
+    isPending: providerMocks.renameProfilePending,
+    error: providerMocks.renameProfileError,
   });
   return {
     useRenameProviderProfile,
@@ -333,7 +419,12 @@ vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({
-    data: { harnesses: [] },
+    data: {
+      harnesses: [
+        { id: "claude", modes: ["gui", "tui"] },
+        { id: "codex", modes: ["gui", "tui"] },
+      ],
+    },
   }),
 }));
 
@@ -351,6 +442,35 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     openExternalLink: providerMocks.openExternalLink,
   }),
+}));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: providerMocks.openExternalLink,
+  }),
+}));
+
+// MCP Project scope resolves workspaces via host query; this harness has no
+// QueryClient, so stub a stable empty host-resolved set.
+vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
+  useResolvedWorkspaceFolders: () => ({
+    folders: [],
+    isLoading: false,
+    isFetching: false,
+  }),
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => null,
+    useHostClient: () => null,
+  };
+});
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "host-1",
 }));
 
 // The Traycer provider mounts the subscription card; stub its credits query so
@@ -480,10 +600,14 @@ import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
 } from "@/components/settings/panels/use-provider-profile-login-flow";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const OPENCODE_CANDIDATES: readonly ProviderCliCandidate[] = [
   {
     kind: "bundled",
@@ -506,7 +630,9 @@ function providerState(input: {
   readonly selected: ProviderSelection;
   readonly candidates: readonly ProviderCliCandidate[];
   readonly envOverrides: ProviderCliState["envOverrides"];
+  readonly nativeCapabilities?: ProviderNativeCapabilities;
   readonly profiles?: readonly ProviderProfile[];
+  readonly terminalAgentArgs?: string;
 }): ProviderCliState {
   return {
     providerId: input.providerId,
@@ -523,10 +649,15 @@ function providerState(input: {
     authPending: false,
     checkedAt: null,
     apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
+    terminalAgentArgs: input.terminalAgentArgs ?? "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities:
+      input.nativeCapabilities ?? DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...(input.profiles ?? [])],
   };
 }
@@ -543,6 +674,96 @@ function providerStateWithAuth(
 ): ProviderCliState {
   return { ...providerState(input), auth, authPending };
 }
+
+const BOTH_SCOPES = ["global", "project"] as const;
+
+const SAMPLE_MCP: NonNullable<ProviderNativeCapabilities["mcp"]> = {
+  transports: ["stdio", "http"],
+  authTypes: ["none", "header"],
+  authActions: ["login", "logout"],
+  actionScopes: {
+    list: [...BOTH_SCOPES],
+    add: [...BOTH_SCOPES],
+    update: [...BOTH_SCOPES],
+    remove: [...BOTH_SCOPES],
+    toggleServer: [...BOTH_SCOPES],
+    toggleTool: [...BOTH_SCOPES],
+    discover: [...BOTH_SCOPES],
+    auth: [...BOTH_SCOPES],
+  },
+  addServer: "cli",
+  removeServer: "cli",
+  updateServer: "patch",
+  perToolBacking: "native",
+  statusSource: "probe",
+  toolsSource: "probe",
+  schemasSource: "probe",
+  instructionsSource: "probe",
+  traycerSessionsOnlyEnforcement: false,
+  stdioDegradeNotice: false,
+  oauthDegradesToConfigOnly: true,
+};
+
+const FULL_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["general", "env", "usage", "mcp", "plugins", "skills"],
+  mcp: SAMPLE_MCP,
+  plugins: {
+    addModes: ["cli-source"],
+    marketplaceBrowse: false,
+    actionScopes: {
+      list: ["global"],
+      add: ["global"],
+      remove: ["global"],
+      setEnabled: ["global"],
+    },
+    traycerSessionToolsNotice: false,
+  },
+  skills: {
+    actionScopes: {
+      list: ["global"],
+      add: ["global"],
+      create: ["global"],
+      import: [],
+      remove: ["global"],
+    },
+  },
+};
+
+const CURSOR_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["env", "mcp", "plugins", "skills"],
+  mcp: {
+    ...SAMPLE_MCP,
+    perToolBacking: "degraded-server-level",
+    instructionsSource: "none",
+  },
+  plugins: {
+    addModes: ["read-only"],
+    marketplaceBrowse: false,
+    actionScopes: {
+      list: ["global"],
+      add: [],
+      remove: [],
+      setEnabled: [],
+    },
+    traycerSessionToolsNotice: false,
+  },
+  skills: {
+    actionScopes: {
+      list: ["global"],
+      add: ["global"],
+      create: ["global"],
+      import: [],
+      remove: ["global"],
+    },
+  },
+};
+
+const ENV_ONLY_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["env"],
+  mcp: null,
+  plugins: null,
+  skills: null,
+};
 
 type TestProfileInput = {
   readonly profileId: string;
@@ -584,6 +805,7 @@ function profileWithAccent(
           },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: input.duplicateOfProfileId,
     ambientDriftNotice: input.ambientDriftNotice,
     accentColor,
@@ -651,6 +873,7 @@ function codePasteReauthProviderState(): ProviderCliState {
       oauthArgs: ["auth", "login"],
       token: null,
       codePaste: {},
+      terminalLogin: null,
     },
   };
 }
@@ -714,6 +937,7 @@ function codePasteCreateProviderState(): ProviderCliState {
       oauthArgs: ["auth", "login"],
       token: null,
       codePaste: {},
+      terminalLogin: null,
     },
   };
 }
@@ -745,8 +969,35 @@ function firstRemoveProfileCall(): readonly [
   return call;
 }
 
+// A non-null runner host so the desktop external-link path (preventDefault +
+// openExternalLink) runs; host-less renders fall back to native anchor nav.
+function createRunnerHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.example/sign-in",
+    authnBaseUrl: "https://auth.example",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
+/**
+ * Profiles render on the "Profiles & Limits" tab, not General, so every profile
+ * assertion has to activate that tab after mounting. Kept as one helper so the
+ * next time the section moves this is a one-line change, not forty.
+ */
+function openProfilesTab(): void {
+  selectTab("Profiles & Limits");
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusTab: null,
+    });
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -754,18 +1005,21 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: OPENCODE_CANDIDATES,
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "traycer",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "openrouter",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -801,10 +1055,13 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.touchLoginReset.mockClear();
     providerMocks.openExternalLink.mockClear();
     providerMocks.renameProfileMutate.mockReset();
+    providerMocks.renameProfilePending = false;
+    providerMocks.renameProfileError = null;
     providerMocks.recolorProfileMutate.mockReset();
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
   afterEach(() => {
@@ -812,7 +1069,15 @@ describe("<ProvidersSettingsPanel />", () => {
     // fake timers mid-test, and a leaked fake clock would strand every later
     // test's timers (and Testing Library's own unmount work).
     vi.useRealTimers();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
     cleanup();
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+      focusTab: null,
+    });
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
@@ -895,6 +1160,84 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(
       screen.queryByRole("button", { name: "Add custom path" }),
+    ).toBeNull();
+  });
+
+  it("selects Hermes' PATH candidate without rendering a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/hermes",
+              version: "0.1.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const pathRadio = screen.getByRole<HTMLInputElement>("radio", {
+      name: "Select /usr/local/bin/hermes",
+    });
+    expect(pathRadio.checked).toBe(true);
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
+    ).toBeNull();
+  });
+
+  it("shows Hermes' PATH-only not-found guidance without a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(
+      screen.getByText(
+        "Hermes must be installed on this machine. It ships without a bundled binary.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Hermes installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    fireEvent.click(guide);
+    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
     ).toBeNull();
   });
 
@@ -1119,12 +1462,14 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: OPENCODE_CANDIDATES,
           envOverrides: [{ key: "OPENAI_API_KEY", value: null }],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "traycer",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -1134,6 +1479,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    selectTab("Env");
 
     expect(screen.getByText("Environment variables")).toBeDefined();
     expect(screen.getByDisplayValue("OPENAI_API_KEY")).toBeDefined();
@@ -1160,6 +1507,7 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -1179,6 +1527,292 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("renders capability-driven tabs and hides unsupported ones", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    expect(screen.getByRole("tab", { name: "General" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "Profiles & Limits" }),
+    ).toBeDefined();
+    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+
+    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Profiles & Limits" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+  });
+
+  it("keeps the current tab across providers when both support it", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [{ key: "A", value: "1" }],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [{ key: "B", value: "2" }],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Env");
+    expect(screen.getByDisplayValue("A")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    expect(screen.getByDisplayValue("B")).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
+    ).toBe("active");
+  });
+
+  it("falls back to the first supported tab when the current tab is missing", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: ENV_ONLY_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("MCP");
+    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Amp" }));
+    expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(screen.getByText("Environment variables")).toBeDefined();
+  });
+
+  it("deep-links focusTab once-and-clear alongside focusHarnessId", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("mcp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "MCP" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+  });
+
+  it("ignores focusTab when the target provider does not support it", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("general");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
+    ).toBe("active");
+  });
+
+  it("shows Plugins tab body and Skills tab body", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Plugins");
+    expect(screen.getByText("Installed plugins")).toBeDefined();
+
+    selectTab("Skills");
+    expect(
+      screen.getByText(/Invoked by the agent when relevant/),
+    ).toBeDefined();
+  });
+
+  it("does not flush terminal-agent args on keystroke alone", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    providerMocks.setTerminalAgentArgsMutate.mockClear();
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("General");
+    const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
+    fireEvent.change(input, { target: { value: "--foo" } });
+
+    expect(providerMocks.setTerminalAgentArgsMutate).not.toHaveBeenCalled();
+  });
+
+  it("saves terminal-agent args once across the post-save remount", () => {
+    // `TerminalAgentArgsSection` is keyed on `state.terminalAgentArgs`, so a
+    // successful save remounts it. That remount is the dangerous moment: any
+    // commit-on-unmount or commit-on-mount path would re-fire the mutation
+    // with the value it just saved. The `next === saved` guard in `commit()`
+    // plus having no unmount cleanup is what keeps it at exactly one call.
+    const args = "--foo";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    providerMocks.setTerminalAgentArgsMutate.mockClear();
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("General");
+    const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
+    fireEvent.change(input, { target: { value: args } });
+    fireEvent.blur(input);
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      terminalAgentArgs: args,
+    });
+
+    // The host now reports the saved value: the key changes and the section
+    // remounts with `saved === draft`.
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          terminalAgentArgs: args,
+        }),
+      ],
+    };
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
   });
 
   it("does not render profile management when the host reports no profiles", () => {
@@ -1221,6 +1855,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1231,6 +1866,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     expect(
       screen.getByRole("button", {
@@ -1259,11 +1896,16 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(manageProfileButton.getAttribute("data-variant")).toBe("outline");
     expect(manageProfileButton.getAttribute("data-size")).toBe("xs");
-    const profileSummaryActions = manageProfileButton.closest(".flex-wrap");
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
     if (!(profileSummaryActions instanceof HTMLElement)) {
       throw new Error("Expected profile summary and actions row");
     }
-    expect(within(profileSummaryActions).getByText("No plan")).toBeDefined();
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
     fireEvent.focus(manageProfileButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
@@ -1290,7 +1932,9 @@ describe("<ProvidersSettingsPanel />", () => {
     }
     const removeProfileDisabledReason =
       "This profile uses your default CLI login and cannot be removed.";
-    expect(removeProfileTooltipTrigger.title).toBe(removeProfileDisabledReason);
+    expect(tooltipTextNear(removeProfileTooltipTrigger)).toBe(
+      removeProfileDisabledReason,
+    );
     expect(removeProfileButton.getAttribute("aria-label")).toBe(
       `Remove profile. ${removeProfileDisabledReason}`,
     );
@@ -1304,7 +1948,15 @@ describe("<ProvidersSettingsPanel />", () => {
     const refreshButton = screen.getByRole("button", {
       name: "Refresh profile statuses and usage limits",
     });
-    expect(addProfileButton.nextElementSibling).toBe(refreshButton);
+    // The add-profile button now sits inside the span that lets its tooltip
+    // fire while it is disabled, so adjacency is measured from that span.
+    // Both buttons now sit inside the span that lets their tooltip fire while
+    // disabled, so adjacency is asserted between those spans.
+    expect(
+      addProfileButton.parentElement?.nextElementSibling?.contains(
+        refreshButton,
+      ),
+    ).toBe(true);
     fireEvent.click(refreshButton);
     await waitFor(() => {
       expect(providerMocks.refreshProviders).toHaveBeenCalledTimes(1);
@@ -1338,6 +1990,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1348,6 +2001,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -1436,6 +2091,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1446,6 +2102,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -1522,6 +2180,7 @@ describe("<ProvidersSettingsPanel />", () => {
         oauthArgs: ["auth", "login"],
         token: null,
         codePaste: null,
+        terminalLogin: null,
       },
     };
     const renderSection = (hostId: string): ReactNode => (
@@ -1531,6 +2190,8 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
+          startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}
           onDismissFailedAttempt={vi.fn()}
@@ -1593,6 +2254,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1603,6 +2265,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -1684,6 +2348,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile and shows its persisted label, along
     // with its drift notice, tier, and redacted email.
     expect(screen.getAllByText("Terminal account").length).toBeGreaterThan(0);
@@ -1717,7 +2383,32 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Signed out, Signed out" }),
     );
-    expect(screen.getAllByText("Signed out").length).toBeGreaterThan(0);
+    const manageProfileButton = screen.getByRole("button", {
+      name: "Manage profile",
+    });
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
+    if (!(profileSummaryActions instanceof HTMLElement)) {
+      throw new Error("Expected signed-out profile summary and actions row");
+    }
+    expect(
+      within(profileSummaryActions).getByText("Signed out", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", {
+        name: "Manage profile",
+      }),
+    ).toBe(manageProfileButton);
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {
@@ -1759,6 +2450,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile - select "Work" to bring its email
     // into view.
@@ -1806,6 +2499,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1816,6 +2510,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -1868,6 +2564,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -1878,6 +2575,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -1926,6 +2625,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -1936,6 +2636,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2002,6 +2704,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -2012,6 +2715,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2068,6 +2773,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -2078,6 +2784,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2149,6 +2857,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2195,6 +2905,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2266,6 +2978,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -2276,6 +2989,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2305,6 +3020,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2377,6 +3094,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -2440,6 +3159,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -2534,6 +3255,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2602,6 +3325,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2662,6 +3387,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2720,6 +3447,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2798,6 +3527,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -2808,6 +3538,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2893,6 +3625,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -2903,6 +3636,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2971,6 +3706,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -2981,6 +3717,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -3034,6 +3772,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3044,6 +3783,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // First attempt fails after the await phase - the section banner appears.
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
@@ -3117,6 +3858,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3167,6 +3909,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3177,6 +3920,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -3231,6 +3976,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3241,6 +3987,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3302,6 +4050,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3312,6 +4061,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3378,6 +4129,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3388,6 +4140,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3452,6 +4206,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3462,6 +4217,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3493,6 +4250,96 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("opens a signed-out profile deep link on the exact provider and starts sign-in", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "work-profile",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "claude",
+      hostId: "local",
+      profileId: "work-profile",
+      startSignIn: true,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    expect(
+      screen
+        .getByRole("button", { name: "Claude Code", hidden: true })
+        .getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", {
+          name: "Work, Signed out",
+          hidden: true,
+        })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledWith(
+        {
+          providerId: "claude-code",
+          profileId: "work-profile",
+          createProfile: null,
+        },
+        expect.anything(),
+      );
+    });
   });
 
   it("signs in again for an existing profile, states when a different account was applied, and can cancel the restart", async () => {
@@ -3531,6 +4378,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3542,16 +4390,19 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile - select "Work" (signed out) first.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
     expect(screen.getByLabelText("Profile name")).toHaveProperty(
       "disabled",
       true,
@@ -3680,6 +4531,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3690,6 +4542,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3768,6 +4622,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3778,6 +4633,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3811,6 +4668,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3821,6 +4679,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3870,6 +4730,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3880,6 +4741,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3920,6 +4783,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3930,6 +4794,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3967,11 +4833,506 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(
       screen.getByText(
-        "This account is already linked to Terminal account. No new profile was created.",
+        "Terminal account already uses this account and organization. Sign in again and choose a different organization.",
       ),
     ).toBeDefined();
     expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
+
+    // "Sign in again" restarts the OAuth flow so the user can pick a
+    // different org in the browser picker (not a dead-end Done-only state).
+    fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    });
+    const retryCall = providerMocks.startLoginMutate.mock.calls.at(1);
+    if (retryCall === undefined) {
+      throw new Error("Expected a second start login call.");
+    }
+    expect(retryCall[0]).toEqual({
+      providerId: "codex",
+      profileId: null,
+      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+    });
+  });
+
+  it("holds on a post-auth naming step when the new profile shares an email with an existing one", () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: "Team",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    // Email collision holds the dialog open on the resolved identity instead
+    // of auto-finalizing - the split-by-org case that minting distinct
+    // same-email profiles makes possible.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeDefined();
+    expect(within(dialog).getByText("Signed in as")).toBeDefined();
+    expect(
+      within(dialog).getByText(redactEmail("shared@example.test")),
+    ).toBeDefined();
+    expect(within(dialog).getByText("Team")).toBeDefined();
+    expect(
+      within(dialog).getByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(dialog).getByRole("button", { name: "Save profile" }),
+    ).toBeDefined();
+    expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
+    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+    expect(within(dialog).getByLabelText("Profile name")).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("auto-finalizes without a naming step when the new profile's email is unique", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "ambient@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "fresh@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    // Single-account / unique-email path must keep auto-finalizing - the
+    // naming step is only for the collision case.
+    expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
+    expect(
+      screen.queryByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeNull();
+    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("saves an unedited naming-step label without calling rename", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeDefined();
+    // Label is still the host default - Save must finalize without a rename
+    // RPC (empty labels are disabled; "New profile" is a real non-empty value).
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "New profile",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("renames then finalizes when the naming-step label is edited before Save", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+
+    const [renameVariables, renameOptions] = firstRenameProfileCall();
+    expect(renameVariables).toEqual({
+      providerId: "codex",
+      profileId: "managed-1",
+      label: "Work org",
+    });
+    act(() => renameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("keeps the naming step open with an inline error when rename fails, and allows retry", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
+
+    // Simulate a failed rename mutation: no onSuccess, surface the error
+    // the dialog reads from the rename hook, then re-render.
+    act(() => {
+      providerMocks.renameProfileError = new Error("rename failed");
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(
+      screen.getByText("Couldn't save the name. Try again."),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeDefined();
+    expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
+
+    // Retry: clear the prior error and let the second Save succeed.
+    act(() => {
+      providerMocks.renameProfileError = null;
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(2);
+    const [, retryRenameOptions] =
+      providerMocks.renameProfileMutate.mock.calls.at(1) ?? [];
+    if (retryRenameOptions === undefined) {
+      throw new Error("Expected a second rename call.");
+    }
+    act(() => retryRenameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
   });
 
   it("warns when the selected accent color is already used by the ambient terminal account", () => {
@@ -4003,6 +5364,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -4013,6 +5375,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -4058,6 +5422,7 @@ describe("<ProvidersSettingsPanel />", () => {
               },
               usageUpdatedAt: null,
               rateLimitStatus: "unknown",
+              rateLimitLimitedScopes: null,
               duplicateOfProfileId: null,
               ambientDriftNotice: null,
               accentColor: null,
@@ -4072,6 +5437,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     expect(screen.getAllByText("ChatGPT Pro 20x Subscription").length).toBe(1);
   });
@@ -4116,6 +5483,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile - select "Work" to bring its editable
     // details dialog (name field, actions) into view.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
@@ -4138,7 +5507,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
     expect(
       screen.getByText(
-        "Chats that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
+        "Agents that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
       ),
     ).toBeDefined();
     fireEvent.click(screen.getByTestId("confirm-action"));
@@ -4177,6 +5546,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -4187,6 +5557,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -4283,6 +5655,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -4293,6 +5666,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));

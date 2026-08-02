@@ -1,33 +1,91 @@
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
+import type {
+  NotificationForegroundAppLocal,
+  NotificationForegroundDisplay,
+} from "@traycer-clients/shared/platform/runner-host";
 import { createElement } from "react";
 import { toast } from "sonner";
 import {
   rowFromAppLocalEntry,
+  rowFromCloudFeedRow,
   rowFromHostEntry,
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntryV21,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
 import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
+import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
+import type { NotificationPayload } from "@/lib/notifications/payload";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
   readonly playChime: () => void;
-  readonly onToastClick: (
-    row: MergedNotificationRow,
-    activatedAt: number,
-  ) => void;
+  readonly onToastClick: (row: MergedNotificationRow) => void;
+}
+
+interface NativeNotificationDisplayOptions {
+  readonly deliveryKey: string | null;
+  readonly originHostId: string | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
+}
+
+export function displayForwardedForegroundNotification(
+  display: NotificationForegroundDisplay,
+  target: {
+    readonly playChime: () => void;
+    readonly onToastClick: (payload: unknown) => void;
+  },
+): void {
+  const actionable = display.payload !== null;
+  const title = actionable
+    ? createElement(
+        "button",
+        {
+          type: "button",
+          "aria-label": `${display.title} ${display.body}`,
+          "data-notification-toast-action": "",
+          className: "min-w-0 text-left",
+          onClick: () => target.onToastClick(display.payload),
+        },
+        createElement(
+          "span",
+          { className: "block font-medium leading-normal" },
+          display.title,
+        ),
+        createElement(
+          "span",
+          {
+            className:
+              "mt-0.5 block text-sm leading-snug text-muted-foreground",
+          },
+          display.body,
+        ),
+      )
+    : display.title;
+  toast(title, {
+    description: actionable ? undefined : display.body,
+    id: display.replaceKey ?? undefined,
+  });
+  target.playChime();
 }
 
 export function displayNotificationRows(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
+  originHostId: string | null,
 ): void {
-  void displayNotificationRowsAwaitNative(rows, target, null).catch(() => {
+  void displayNotificationRowsAwaitNative(rows, target, {
+    deliveryKey: null,
+    originHostId,
+    foregroundAppLocal: null,
+  }).catch(() => {
     // The feed remains authoritative; a failed native toast is non-critical.
   });
 }
@@ -35,18 +93,27 @@ export function displayNotificationRows(
 async function displayNotificationRowsAwaitNative(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
-  deliveryKey: string | null,
+  options: NativeNotificationDisplayOptions,
 ): Promise<void> {
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
+  const nativePayload =
+    content.payload === null
+      ? null
+      : buildNotificationActivationEnvelope({
+          route: content.payload,
+          feed: { source: content.row.source, id: content.row.sourceId },
+          originHostId: options.originHostId,
+        });
   let nativeDisplay: Promise<void>;
   try {
     nativeDisplay = target.showNotification({
       title: content.title,
       body: content.body,
-      payload: content.payload,
+      payload: nativePayload,
       replaceKey: content.replaceKey,
-      deliveryKey,
+      deliveryKey: options.deliveryKey,
+      foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
     renderNotificationToast(content, target);
@@ -69,9 +136,7 @@ function renderNotificationToast(
           "aria-label": `${content.title} ${content.body}`,
           "data-notification-toast-action": "",
           className: "min-w-0 text-left",
-          onClick: () => {
-            target.onToastClick(content.row, Date.now());
-          },
+          onClick: () => target.onToastClick(content.row),
         },
         createElement(
           "span",
@@ -104,8 +169,9 @@ function renderNotificationToast(
  * its own activity; rows for other entities still display.
  */
 export function displayHostChannelEmission(
-  entries: ReadonlyArray<HostNotificationEntry>,
+  entries: ReadonlyArray<HostNotificationEntryV21>,
   target: NotificationDisplayTarget,
+  originHostId: string | null,
 ): void {
   const focusedEntity = readFocusedHostNotificationPresenceEntity();
   const visibleEntries =
@@ -118,18 +184,53 @@ export function displayHostChannelEmission(
             !notificationEntityMatchesPresence(entity, focusedEntity)
           );
         });
-  displayNotificationRows(visibleEntries.map(rowFromHostEntry), target);
+  displayNotificationRows(
+    visibleEntries.map(rowFromHostEntry),
+    target,
+    originHostId,
+  );
+}
+
+/** Whole cloud snapshots carry no emission frame, so accepted post-baseline
+ * entryId diffs are the arrival edge. Display each row with its own origin:
+ * unlike a v1 channel batch, one snapshot can contain entries from several
+ * hosts and every native activation envelope must retain the correct one. */
+export function displayCloudSnapshotArrivals(
+  entries: ReadonlyArray<HostNotificationsCloudFeedRow>,
+  target: NotificationDisplayTarget,
+): void {
+  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  for (const entry of entries) {
+    const entity = notificationEntityFromHostEntry(entry.entry);
+    if (
+      focusedEntity !== null &&
+      entity !== null &&
+      notificationEntityMatchesPresence(entity, focusedEntity)
+    ) {
+      continue;
+    }
+    displayNotificationRows(
+      [rowFromCloudFeedRow(entry)],
+      target,
+      entry.originHostId,
+    );
+  }
 }
 
 export function displayAppLocalNotification(
   entry: AppLocalNotificationEntry,
   target: NotificationDisplayTarget,
   deliveryKey: string,
+  userId: string,
 ): Promise<void> {
   return displayNotificationRowsAwaitNative(
     [rowFromAppLocalEntry(entry)],
     target,
-    deliveryKey,
+    {
+      deliveryKey,
+      originHostId: null,
+      foregroundAppLocal: { userId, entry },
+    },
   );
 }
 
@@ -161,7 +262,7 @@ interface NotificationToastContent {
   readonly title: string;
   readonly body: string;
   readonly row: MergedNotificationRow;
-  readonly payload: unknown;
+  readonly payload: NotificationPayload | null;
   readonly replaceKey: string;
 }
 
@@ -207,6 +308,11 @@ function hostEntityReplaceKey(
     case "epic":
     case "terminal":
       return epicReplaceKey(payload.epicId);
+    // Falls through to the per-row id key. Coalescing by entity is right for
+    // repeated activity ON one chat or epic; two finished commands are two
+    // separate results, and replacing the first toast with the second would
+    // hide a failure behind a later success.
+    case "hostSurface":
     case "session":
       return null;
   }

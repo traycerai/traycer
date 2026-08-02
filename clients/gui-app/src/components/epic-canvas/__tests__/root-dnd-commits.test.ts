@@ -185,7 +185,12 @@ function railSource(
   EpicCanvasDragSourceData,
   { readonly kind: "left-panel-rail-item" }
 > {
-  return { kind: "left-panel-rail-item", panelId, origin };
+  return {
+    kind: "left-panel-rail-item",
+    viewTabId: "test-view-tab",
+    panelId,
+    origin,
+  };
 }
 
 function makeRectElement(
@@ -260,6 +265,7 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -307,6 +313,7 @@ describe("root dnd commits - left panel", () => {
         { panelIds: ["artifacts"] },
         { panelIds: ["terminals"] },
         { panelIds: ["git-diff"] },
+        { panelIds: ["pull-requests"] },
         { panelIds: ["file-tree"] },
         { panelIds: ["sharing"] },
         { panelIds: ["comments"] },
@@ -337,6 +344,7 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
     ]);
@@ -377,6 +385,7 @@ describe("root dnd commits - left panel", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "git-diff", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -393,6 +402,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     { panelIds: ["artifacts"] },
     { panelIds: ["terminals"] },
     { panelIds: ["git-diff"] },
+    { panelIds: ["pull-requests"] },
     { panelIds: ["file-tree"] },
     { panelIds: ["sharing"] },
     { panelIds: ["comments"] },
@@ -410,6 +420,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -427,6 +438,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff", "artifacts"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -438,6 +450,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -462,6 +475,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -477,6 +491,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -498,6 +513,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     ).toEqual([
       { panelIds: ["chats", "git-diff", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -668,6 +684,28 @@ describe("root dnd commits - artifact tab commit routing", () => {
 describe("root dnd commits - tile source commit routing", () => {
   beforeEach(resetStores);
   afterEach(resetStores);
+
+  it("rejects a cross-pane canvas target without mutating either pane", () => {
+    commitResolvedCanvasDrop(
+      {
+        source: {
+          kind: "terminal-tile",
+          epicId: EPIC_ID,
+          viewTabId: "source-view",
+          tile: TERMINAL_TILE,
+        },
+        target: {
+          kind: "empty-shell",
+          epicId: "other-epic",
+          viewTabId: "target-view",
+        },
+        preview: { kind: "empty-shell" },
+      },
+      rawNestedFocus,
+    );
+
+    expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+  });
 
   it("opens a dragged terminal tile on an empty canvas", () => {
     commitResolvedCanvasDrop(

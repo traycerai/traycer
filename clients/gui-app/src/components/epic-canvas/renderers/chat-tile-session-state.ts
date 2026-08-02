@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  ChatPendingInterviewState,
   ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -17,7 +18,10 @@ import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-ass
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
-import type { PendingInterviewView } from "./chat-tile-types";
+import type {
+  PendingInterviewView,
+  UnanswerableInterviewView,
+} from "./chat-tile-types";
 
 /**
  * Fallback harness id used when the inline-edit settings do not carry a
@@ -230,16 +234,24 @@ export function resolvedTurnStatus(
 /**
  * Tri-state activity for the chat's progress indicators (sidebar tree, tab
  * icons): is the agent actually processing, or is only background work
- * (Bash `run_in_background` / a subagent / Monitor / a scheduled wakeup)
- * keeping the chat non-idle? `runStatus` alone can't tell the two apart, and
- * showing the same spinner for both left users unable to see whether the
- * agent was really running.
+ * (Bash `run_in_background` / Monitor / a scheduled wakeup) keeping the chat
+ * non-idle? `runStatus` alone can't tell the two apart, and showing the same
+ * spinner for both left users unable to see whether the agent was really
+ * running.
  *
  * `"turn"` wins whenever a genuine turn is active or activating (the host's
  * `turnInProgress`, via {@link resolvedTurnStatus}) — background work running
  * alongside a turn is subsumed by it. A runnable queue also reads `"turn"`:
  * the next prompt is imminent, and the momentary turn-boundary gaps while a
  * queue drains must not flicker the indicator through the background style.
+ *
+ * Native agent work — a spawned subagent or a workflow fleet still running
+ * after the turn ended — also reads `"turn"`: it IS the agent working, just
+ * detached from the turn, so it gets the busy spinner rather than the muted
+ * background-process glyph. Only process-like kinds (command / monitor /
+ * wakeup / mcp) read `"background"`. This deliberately diverges from
+ * {@link resolvedTurnStatus}, which keeps reporting no active turn for the
+ * same state: a detached subagent must not surface a Stop-turn affordance.
  */
 export type ChatActivityIndicator = "turn" | "background" | null;
 
@@ -254,7 +266,12 @@ export function chatActivityIndicator(
   if (resolvedTurnStatus(state, turnStatus) !== null) return "turn";
   const isQueueRunnable =
     state.queue.status !== "paused" && state.queue.items.length > 0;
-  return isQueueRunnable ? "turn" : "background";
+  if (isQueueRunnable) return "turn";
+  const hasNativeAgentWork =
+    state.backgroundItems?.some(
+      (item) => item.kind === "subagent" || item.kind === "workflow",
+    ) ?? false;
+  return hasNativeAgentWork ? "turn" : "background";
 }
 
 export function normalizeInlineEditForSession(
@@ -296,17 +313,30 @@ export function canModifyChatMessages(input: {
     | "runStatus"
     | "activeTurn"
     | "queue"
+    | "backgroundItems"
+    | "turnInProgress"
     | "pendingUserMessages"
     | "pendingActions"
   >;
 }): boolean {
   if (!input.canAct) return false;
-  // `runStatus` is the host-owned source of truth for an in-progress run and
-  // covers windows `activeTurn` misses - the pre-turn `turnActivating` phase
-  // (provider/worktree setup) and stop-during-activation both report a non-idle
-  // `runStatus` while `activeTurn` is still null. Gate on it so edit/delete stay
-  // disabled for the whole run, matching the composer's `runStatus`-driven UX.
-  if (input.state.runStatus !== "idle") return false;
+  // Narrowed via `resolvedTurnStatus`, not the raw `runStatus`: the raw value
+  // also reads "running" while visible background work outlives the settled
+  // turn (Bash `run_in_background` / a subagent / Monitor), which would keep
+  // edit/delete hidden indefinitely with no turn to wait for - the composer
+  // and restore gating already read the narrowed value for the same reason.
+  // The narrowed signal still covers the windows `activeTurn` misses: the
+  // pre-turn `turnActivating` phase (provider/worktree setup) and
+  // stop-during-activation both keep the host's `turnInProgress` true until
+  // the run truly unwinds. Queued sends are handled by the queue check below.
+  if (
+    resolvedTurnStatus(
+      input.state,
+      composerTurnStatus(input.state.runStatus),
+    ) !== null
+  ) {
+    return false;
+  }
   if (input.state.activeTurn !== null) return false;
   if (input.state.queue.items.length > 0) return false;
   if (input.state.pendingUserMessages.length > 0) return false;
@@ -497,6 +527,7 @@ export function chatMessageEditingForInlineEdit(input: {
   readonly canModifyMessages: boolean;
   readonly editSettings: ChatRunSettings | null;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSnapshot: (
     content: JsonContent,
@@ -519,6 +550,7 @@ export function chatMessageEditingForInlineEdit(input: {
       inlineEditHasDraftContent(editing),
     slashProviderId: input.editSettings?.harnessId ?? DEFAULT_SLASH_PROVIDER_ID,
     mentionRoots: input.mentionRoots,
+    fallbackToGlobalMentionRoots: input.fallbackToGlobalMentionRoots,
     currentEpicId: input.currentEpicId,
     onSnapshot: input.onSnapshot,
     onSubmit: input.onSubmit,
@@ -560,4 +592,55 @@ export function findPendingInterview(
     }
   }
   return null;
+}
+
+// Stable identity for the (overwhelmingly common) "nothing is stuck" answer.
+// `findUnanswerableInterviews` runs off `renderedMessages`, which changes on
+// every streaming token, so returning a fresh `[]` would churn the composer
+// memo chain on every token - the exact regression
+// chat-tile-composer-rerender.test.tsx pins.
+const NO_UNANSWERABLE_INTERVIEWS: ReadonlyArray<UnanswerableInterviewView> = [];
+
+/**
+ * Host-pending interviews with no answerable card in this transcript.
+ *
+ * `findPendingInterview` renders a card only for a `streaming` interview block,
+ * so a host-pending blockId whose block is already settled - or missing from
+ * the transcript entirely - yields nothing to answer while the host keeps
+ * rejecting sends. This is the disjoint complement of `findPendingInterview`
+ * over the host's pending set: every id here has no streaming block, so the two
+ * can never name the same block.
+ *
+ * There is no transient window to debounce. The host broadcasts an interview's
+ * `blockDelta` before the `interviewRequested` frame that makes it pending
+ * (chat-session-manager `handleRuntimeEvent`), and hydration surfaces detached
+ * waits in the same snapshot that carries their persisted blocks - so a pending
+ * id without a streaming block is genuinely stuck, not mid-arrival.
+ */
+export function findUnanswerableInterviews(
+  messages: ReadonlyArray<ChatMessageModel>,
+  hostPendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
+): ReadonlyArray<UnanswerableInterviewView> {
+  if (hostPendingInterviews.length === 0) return NO_UNANSWERABLE_INTERVIEWS;
+  const streamingBlockIds = new Set<string>();
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (segment.kind !== "interview") continue;
+      if (segment.status !== "streaming") continue;
+      streamingBlockIds.add(segment.id);
+    }
+  }
+  const unanswerable: UnanswerableInterviewView[] = [];
+  for (const interview of hostPendingInterviews) {
+    if (streamingBlockIds.has(interview.blockId)) continue;
+    unanswerable.push({
+      blockId: interview.blockId,
+      requestedAt: interview.requestedAt,
+    });
+  }
+  if (unanswerable.length === 0) return NO_UNANSWERABLE_INTERVIEWS;
+  // Oldest first: the earliest dangling question is the one that has been
+  // blocking the chat, so it reads first in the notice.
+  unanswerable.sort((left, right) => left.requestedAt - right.requestedAt);
+  return unanswerable;
 }

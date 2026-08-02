@@ -23,6 +23,7 @@ import type {
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingWorkspaceMode } from "@traycer/protocol/host/worktree-schemas";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
@@ -96,6 +97,13 @@ export interface ChatProjection {
   readonly isTitleEditedByUser: boolean;
   /** Persisted run settings (harness/model/permission). `null` until set. */
   readonly settings: ChatRunSettings | null;
+  /**
+   * Host-backed archive flag (`epic.setChatArchived`). `null` = active. The
+   * sidebar hides a node whose ancestor-or-self carries a timestamp unless
+   * "Show archived" is on. Records written before the field existed project as
+   * `null`, so pre-archive chats read as active.
+   */
+  readonly archivedAt: number | null;
 }
 
 export interface ChatsSlice {
@@ -123,6 +131,12 @@ export interface TuiAgentProjection {
   readonly reasoningEffort: string | null;
   readonly agentMode: AgentMode;
   /**
+   * Host-backed archive flag, the terminal-agent twin of
+   * {@link ChatProjection.archivedAt} - one `epic.setChatArchived` RPC keyed by
+   * id covers both record kinds, so the sidebar treats them identically.
+   */
+  readonly archivedAt: number | null;
+  /**
    * Which of the harness's logged-in profiles (subscriptions) this agent runs
    * on. `null` = the ambient/host login, so agents persisted before profiles
    * existed still project cleanly. See the multi-profile decision log.
@@ -148,6 +162,10 @@ export interface TuiAgentProjection {
 export interface TerminalAgentsSlice {
   readonly byId: Readonly<Record<string, TuiAgentProjection>>;
   readonly allIds: readonly string[];
+}
+
+export interface AgentRolesSlice {
+  readonly byAgentId: Readonly<Record<string, readonly RoleClaim[]>>;
 }
 
 export interface TreeNode {
@@ -197,6 +215,7 @@ export interface EpicProjectedSlices {
   readonly deletedArtifacts: DeletedArtifactsSlice;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
+  readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
   readonly contentRevByArtifactId: Readonly<Record<string, number>>;
 }
@@ -207,6 +226,20 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
   stateByArtifactRoomId: Object.freeze(
     {} as Record<string, EpicArtifactRoomAvailability>,
   ),
+});
+
+/**
+ * Starting value for the per-artifact-room host-dirty mirror. Empty means
+ * "nothing known to be dirty", which is also the correct RESET value on every
+ * re-subscribe: the host tracks what it has emitted per subscription, so a
+ * fresh subscription re-emits `artifactRoomDirty` for whatever is still dirty
+ * and never re-states what is clean.
+ */
+export const EMPTY_ARTIFACT_ROOM_DIRTY: Readonly<Record<string, boolean>> =
+  Object.freeze({} as Record<string, boolean>);
+
+export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
+  byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
 });
 
 export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
@@ -231,6 +264,7 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     byId: Object.freeze({} as Record<string, TuiAgentProjection>),
     allIds: EMPTY_ARRAY,
   }),
+  agentRoles: EMPTY_AGENT_ROLES_SLICE,
   tree: Object.freeze({
     rootIds: EMPTY_ARRAY,
     childrenByParent: Object.freeze({} as Record<string, readonly string[]>),

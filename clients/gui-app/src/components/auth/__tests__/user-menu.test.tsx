@@ -195,10 +195,10 @@ describe("<UserMenu />", () => {
 
   it("calls AuthService.signOut() when the Sign out item is selected", async () => {
     const host = buildHost();
-    await host.tokenStore.set({
-      token: "token",
-      refreshToken: "token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "token", refreshToken: "token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     const result = mountMenu(
       host,
       <UserMenu

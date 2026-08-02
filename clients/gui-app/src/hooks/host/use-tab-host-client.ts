@@ -6,7 +6,7 @@ import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 
 /**
- * Builds a transient `HostClient` bound to the CURRENT tab's host
+ * Builds a routed `HostRequester` bound to the CURRENT tab's host
  * (`useTabHostId`) rather than the app-wide active host.
  *
  * Per CLAUDE.md a chat/terminal tab is bound to a host for life, and that

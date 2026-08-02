@@ -4,6 +4,7 @@ import {
   WorkingVerbContext,
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
+import { isFastModeEnabled } from "@/components/home/data/landing-options";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
@@ -470,12 +471,12 @@ function AssistantForkButton({
 }
 
 /**
- * Hover content for the elapsed-footer info icon: provider, model, reasoning
- * effort, and fast mode (only when enabled), plus - for a user-stopped turn -
- * the stop time and reason from the `turn.stopped` event. Mirrors the
- * context-usage chip's label/value row layout so the two tooltips read
- * consistently. Either section is optional; `AssistantElapsedFooter` only
- * renders this tooltip at all when at least one is present.
+ * Hover content for the elapsed-footer info icon: provider, profile, model,
+ * reasoning effort, and fast mode (only when enabled), plus - for a
+ * user-stopped turn - the stop time and reason from the `turn.stopped` event.
+ * Mirrors the context-usage chip's label/value row layout so the two tooltips
+ * read consistently. Either section is optional; `AssistantElapsedFooter`
+ * only renders this tooltip at all when at least one is present.
  */
 function AssistantMetaTooltip({
   meta,
@@ -496,6 +497,9 @@ function AssistantMetaTooltip({
             Agent
           </div>
           <AssistantMetaRow label="Provider" value={meta.providerLabel} />
+          {meta.profileLabel === null ? null : (
+            <AssistantMetaRow label="Profile" value={meta.profileLabel} />
+          )}
           {meta.modelLabel === null ? null : (
             <AssistantMetaRow label="Model" value={meta.modelLabel} />
           )}
@@ -567,14 +571,6 @@ function AssistantMetaRow({ label, value }: { label: string; value: string }) {
       <span className="font-medium">{value}</span>
     </div>
   );
-}
-
-/**
- * Fast mode is on whenever the turn carried a non-default service tier (e.g.
- * Codex `"priority"`); an empty/null tier means the harness default.
- */
-function isFastModeEnabled(serviceTier: string | null): boolean {
-  return serviceTier !== null && serviceTier.trim().length > 0;
 }
 
 /**
@@ -792,12 +788,17 @@ function AssistantSegment({
         />
       );
     case "reasoning":
+      // Unreachable from the timeline - `isActivitySegment` admits reasoning
+      // unconditionally, so every reasoning block reaches the renderer through
+      // an activity group. Kept so the switch stays exhaustive over the segment
+      // taxonomy, and for direct renders in tests.
       return (
         <ReasoningSegment
           findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
+          bodyBoundedByParent={false}
         />
       );
     case "tool": {

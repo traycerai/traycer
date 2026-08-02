@@ -96,6 +96,14 @@ export interface IStreamSession {
   onStatusChange(handler: StatusChangeHandler): void;
 
   /**
+   * Asks this session to discard its current socket and reconnect through its
+   * existing backoff state machine. Consumers keep the same session and never
+   * create their own reconnect loop. No-op when there is no current socket or
+   * the session has already been closed.
+   */
+  requestReconnect(): void;
+
+  /**
    * Tears down the session: cancels any pending reconnect backoff, closes
    * the current socket (if any), and transitions status to `"closed"`.
    * Idempotent.

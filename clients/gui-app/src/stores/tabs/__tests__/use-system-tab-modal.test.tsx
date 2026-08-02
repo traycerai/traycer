@@ -25,6 +25,12 @@ import {
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  historySearchParamsSchema,
+} from "@/lib/history-search";
 
 function GuardedRoot() {
   useSystemTabModalRefreshGuard();
@@ -108,8 +114,14 @@ function buildModalRouter() {
     path: "/",
     component: () => <div data-testid="home" />,
   });
+  const historyRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics",
+    validateSearch: (raw) => historySearchParamsSchema.parse(raw),
+    component: () => <div data-testid="history" />,
+  });
   return createRouter({
-    routeTree: rootRoute.addChildren([indexRoute]),
+    routeTree: rootRoute.addChildren([indexRoute, historyRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
 }
@@ -138,14 +150,24 @@ function buildActionRouter() {
 
 describe("settings section is store-backed, not URL-backed", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     modalProbe.current = null;
     actionProbeRenderSpy.mockClear();
     useSettingsSectionStore.setState({ section: null });
-    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    useTabsStore.setState({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     useSettingsSectionStore.setState({ section: null });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
 
   it("openSettings puts the section in the store + only the open flag in the URL; setSection never navigates", async () => {
@@ -197,10 +219,120 @@ describe("settings section is store-backed, not URL-backed", () => {
       rendersBeforeSectionChange,
     );
   });
+
+  it("preserves modal history search and filters when promoting History to a tab", async () => {
+    const router = buildModalRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() => {
+      expect(router.state.location.search).toMatchObject({
+        historyOverlay: true,
+      });
+    });
+
+    act(() => {
+      useHistorySearchStore.getState().update({
+        query: "persistence",
+        repos: ["traycerai/traycer", "traycerai/traycer-internal"],
+        repoMode: "all",
+        workspaces: [
+          { hostId: "host-a", workspacePath: "/workspace/a" },
+          { hostId: "host-b", workspacePath: "/workspace/b" },
+        ],
+        workspaceMode: "all",
+        ownershipScopes: ["mine", "shared"],
+        sort: "oldest",
+        sortExplicit: true,
+      });
+      modalProbe.current?.promoteToTab();
+    });
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/epics");
+    });
+    expect(router.state.location.search).toMatchObject({
+      historyQuery: "persistence",
+      historyRepos: ["traycerai/traycer", "traycerai/traycer-internal"],
+      historyRepoMode: "all",
+      historyWorkspaces: ["host-a:%2Fworkspace%2Fa", "host-b:%2Fworkspace%2Fb"],
+      historyWorkspaceMode: "all",
+      historyOwnership: ["mine", "shared"],
+      historySort: "oldest",
+    });
+    expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
+
+  it("promotes edited modal filters into an existing History tab after Back restores the overlay", async () => {
+    const router = buildModalRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        historyOverlay: true,
+      }),
+    );
+
+    act(() => {
+      useHistorySearchStore.getState().update({
+        query: "before back",
+        repos: ["traycerai/traycer"],
+        ownershipScopes: ["mine"],
+      });
+      modalProbe.current?.promoteToTab();
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    expect(useTabsStore.getState().systemTabs.history).not.toBeNull();
+
+    act(() => {
+      router.history.back();
+    });
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/");
+      expect(router.state.location.search).toMatchObject({
+        historyOverlay: true,
+      });
+    });
+
+    act(() => {
+      useHistorySearchStore.getState().update({
+        query: "after back",
+        repos: ["traycerai/traycer-internal", "traycerai/traycer"],
+        repoMode: "all",
+        ownershipScopes: ["shared", "mine"],
+        sort: "oldest",
+        sortExplicit: true,
+      });
+      modalProbe.current?.promoteToTab();
+    });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    expect(router.state.location.search).toMatchObject({
+      historyQuery: "after back",
+      historyRepos: ["traycerai/traycer-internal", "traycerai/traycer"],
+      historyRepoMode: "all",
+      historyOwnership: ["shared", "mine"],
+      historySort: "oldest",
+    });
+    expect(router.state.location.search).not.toMatchObject({
+      historyQuery: "before back",
+      historyRepos: ["traycerai/traycer"],
+      historyOwnership: ["mine"],
+    });
+    expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
 });
 
 describe("useSystemTabModalRefreshGuard", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     // The cold-load latch is module-scoped ("once per renderer boot"), not
     // per-hook-instance, so tests must reset it explicitly between cases -
     // otherwise a prior test's boot consumes it and the redirect below never
@@ -210,6 +342,7 @@ describe("useSystemTabModalRefreshGuard", () => {
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     useTabsStore.setState({ systemTabs: { history: null, settings: null } });
   });
 

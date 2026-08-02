@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import {
   buildGitDiffRepoSwitcherModel,
   type GitDiffRepoSelection,
@@ -14,8 +15,8 @@ import {
 } from "../git-diff-repo-switcher";
 
 function row(
-  overrides: Partial<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow {
+  overrides: Partial<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host-1",
     runningDir: "/repo",
@@ -30,6 +31,7 @@ function row(
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
     ...overrides,
   };
 }
@@ -138,7 +140,7 @@ function referenceOnlySubmodules(): ReadonlyArray<GitSubmoduleSummary> {
 function DropdownHarness(props: {
   readonly selected: GitDiffRepoSelection;
   readonly submodules: ReadonlyArray<GitSubmoduleSummary>;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
 }) {
   const [query, setQuery] = useState("");
   const model = buildGitDiffRepoSwitcherModel({
@@ -187,13 +189,13 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
       screen.getByTestId("repo-switcher-trigger").textContent,
     ).not.toContain("vendor/traycer");
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain(`Path: /repo`);
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain("1 changed submodule");
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain("6 changed files");
     expect(
       screen.getByRole("button", {
@@ -260,7 +262,7 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     expect(trigger.getAttribute("data-unavailable")).toBe("true");
     expect(trigger.getAttribute("aria-invalid")).toBeNull();
     expect(trigger.getAttribute("aria-label")).toContain("unavailable");
-    expect(trigger.getAttribute("title")).toContain("Status: unavailable");
+    expect(tooltipTextNear(trigger)).toContain("Status: unavailable");
   });
 
   it("renders workspace rows only with stable path subtext", () => {

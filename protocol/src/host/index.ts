@@ -5,8 +5,11 @@ export * from "./epic";
 export * from "./git-contracts";
 export * from "./git-constants";
 export * from "./git-schemas";
+export * from "./lifecycle";
 export * from "./migration";
 export * from "./notifications";
+export * from "./pr-contracts";
+export * from "./pr-schemas";
 export * from "./rate-limit";
 export * from "./released-floor";
 export * from "./runtime-capabilities";
@@ -39,7 +42,9 @@ export {
   worktreeListBranchesV10,
   worktreeListBindingsForEpicV10,
   worktreeListBindingsForEpicV11,
+  worktreeListBindingsForEpicV12,
   worktreeListBindingsForEpicUpgradeV10ToV11,
+  worktreeListBindingsForEpicUpgradeV11ToV12,
   worktreeListByWorkspacePathsV10,
   worktreeListByWorkspacePathsV11,
   worktreeListByWorkspacePathsV12,
@@ -104,6 +109,7 @@ export {
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
+  worktreeListBindingsForEpicResponseSchemaV12,
   worktreeListByWorkspacePathsRequestSchema,
   worktreeListByWorkspacePathsResponseSchema,
   worktreeListByWorkspacePathsRequestSchemaV11,
@@ -116,6 +122,7 @@ export {
   worktreeScriptsAtRefSchema,
   worktreeBindingSelectorDisabledReasonSchema,
   worktreeBindingSelectorRowSchema,
+  worktreeBindingSelectorRowSchemaV12,
   worktreeBindingSelectorSourceSchema,
   worktreePerEntryResultSchema,
   worktreeRetrySetupRequestSchema,
@@ -178,6 +185,7 @@ export {
   type WorktreeListBindingsForEpicRequest,
   type WorktreeListBindingsForEpicResponse,
   type WorktreeListBindingsForEpicResponseV11,
+  type WorktreeListBindingsForEpicResponseV12,
   type WorktreeListByWorkspacePathsRequest,
   type WorktreeListByWorkspacePathsResponse,
   type WorktreeListByWorkspacePathsRequestV11,
@@ -190,6 +198,7 @@ export {
   type WorktreeScriptsAtRef,
   type WorktreeBindingSelectorDisabledReason,
   type WorktreeBindingSelectorRow,
+  type WorktreeBindingSelectorRowV12,
   type WorktreeBindingSelectorSource,
   type WorktreePerEntryResult,
   type WorktreeRetrySetupRequest,

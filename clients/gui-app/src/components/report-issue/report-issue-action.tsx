@@ -7,12 +7,16 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
+import {
+  isReportIssueDraftContext,
+  type ReportIssueDraftContext,
+} from "@/lib/report-issue-draft-context";
 import { cn } from "@/lib/utils";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface ReportIssueActionProps {
-  readonly context: ReportIssueContext;
+  readonly context: ReportIssueContext | ReportIssueDraftContext;
   readonly presentation: "text" | "icon" | "link";
   readonly className: string | undefined;
 }
@@ -24,13 +28,20 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
   const openReportIssueWithContext = useDesktopDialogStore(
     (state) => state.openReportIssueWithContext,
   );
+  const openReportIssueDraft = useDesktopDialogStore(
+    (state) => state.openReportIssueDraft,
+  );
   if (!reportIssueAvailable) return null;
 
   const handleClick = () => {
     Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
       source: "direct_ui",
     });
-    openReportIssueWithContext(props.context);
+    if (isReportIssueDraftContext(props.context)) {
+      openReportIssueDraft(props.context);
+    } else {
+      openReportIssueWithContext(props.context);
+    }
   };
 
   if (props.presentation === "text") {

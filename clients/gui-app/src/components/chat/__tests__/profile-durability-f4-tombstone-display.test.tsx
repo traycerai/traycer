@@ -51,6 +51,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -74,6 +75,15 @@ function claudeStateWithoutProfile(): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     // The provider HAS enumerated profiles (non-empty, so
     // `resolveTombstonedProfileLabel` doesn't bail out as "flag off / not
     // enumerated") - the removed profile is simply absent from that list,

@@ -196,9 +196,10 @@ function buildNewChatReplaceItem(args: {
   const { epicId, tabId } = args;
   return {
     id: "composer:new-chat:replace",
-    label: "New chat in active tile",
-    description: "Compose a new chat in place of the currently active tile.",
-    keywords: ["new", "chat", "replace"],
+    label: "New agent in active tile",
+    description:
+      "Compose a new Chat-interface agent in place of the currently active tile.",
+    keywords: ["new", "chat", "agent", "replace"],
     group: "suggested",
     scope: "actions",
     shortcut: null,
@@ -217,13 +218,13 @@ function buildNewChatSplitItem(args: {
   const { epicId, tabId, position } = args;
   const label =
     position === "right"
-      ? "New chat in split (right)"
-      : "New chat in split (bottom)";
+      ? "New agent in split (right)"
+      : "New agent in split (bottom)";
   return {
     id: `composer:new-chat:split:${position}`,
     label,
-    description: `Split the active tile and compose a new chat on the ${position}.`,
-    keywords: ["new", "chat", "split", position],
+    description: `Split the active tile and compose a new Chat-interface agent on the ${position}.`,
+    keywords: ["new", "chat", "agent", "split", position],
     group: "suggested",
     scope: "actions",
     shortcut: null,
@@ -249,8 +250,8 @@ function buildNewTerminalAgentItem(args: {
   const { epicId, tabId } = args;
   return {
     id: "composer:new-terminal-agent",
-    label: "New terminal agent",
-    description: "Compose a new terminal agent in the active tile.",
+    label: "New Terminal-interface agent",
+    description: "Compose a new Terminal-interface agent in the active tile.",
     keywords: ["new", "terminal", "agent", "tui"],
     group: "suggested",
     scope: "actions",

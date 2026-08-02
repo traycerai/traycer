@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
   NOTIFICATION_EVENT_TYPES,
 } from "@traycer/protocol/notifications/notification-entry";
 import {
   appLocalFeedId,
-  globalFeedId,
-  hostFeedId,
-  mergeNotificationFeedIds,
   mergedUnreadCount,
   rowFromAppLocalEntry,
+  rowFromCloudFeedRow,
   rowFromGlobalEntry,
   rowFromHostEntry,
 } from "@/stores/notifications/merged-notifications";
@@ -72,28 +73,13 @@ function appLocalEntry(
     kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
-    message: "Chat stream closed unexpectedly",
+    message: "Agent stream closed unexpectedly",
     detail: null,
     displayedUpdatedAt: null,
   };
 }
 
 describe("merged notifications feed", () => {
-  it("merges sources into one newest-first id projection", () => {
-    const ids = mergeNotificationFeedIds(
-      [hostEntry("host-old", 10, null), hostEntry("host-new", 30, null)],
-      [{ feedId: appLocalFeedId("app-local-mid"), createdAt: 25 }],
-      [globalEntry("global-mid", 20, null)],
-    );
-
-    expect(ids).toEqual([
-      hostFeedId("host-new"),
-      appLocalFeedId("app-local-mid"),
-      globalFeedId("global-mid"),
-      hostFeedId("host-old"),
-    ]);
-  });
-
   it("aggregates unread badge counts across all source seams", () => {
     expect(
       mergedUnreadCount({
@@ -112,6 +98,88 @@ describe("merged notifications feed", () => {
       approvalId: "approval-1",
       sessionId: undefined,
       artifactId: undefined,
+    });
+  });
+
+  it("targets the terminal agent from TUI completion rows", () => {
+    const entry: HostNotificationEntry = {
+      id: "agent.stopped:tui-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: "tui-1",
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "tui-1",
+      payload: {
+        kind: "epic",
+        epicId: "epic-1",
+        tuiAgentId: "tui-1",
+        agentName: "Terminal agent",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+
+    expect(rowFromHostEntry(entry).payload).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "tui-1",
+    });
+  });
+
+  it("uses embedded cloud payload titles when the presentation snapshot is absent", () => {
+    const embedded: HostNotificationsCloudFeedRow = {
+      entryId: "entry-legacy",
+      originHostId: "host-a",
+      coalesceKey: "agent.stopped:legacy",
+      entry: {
+        id: "agent.stopped:legacy",
+        updatedAt: 10,
+        readAt: null,
+        kind: "agent.stopped",
+        sourceRef: "legacy",
+        severity: "done",
+        outcome: "completed",
+        epicId: "epic-legacy",
+        chatId: "chat-legacy",
+        payload: {
+          kind: "chat",
+          epicId: "epic-legacy",
+          chatId: "chat-legacy",
+          agentName: "Legacy agent",
+          taskTitle: "Legacy task",
+          outcome: "completed",
+        },
+      },
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+
+    expect(rowFromCloudFeedRow(embedded)).toMatchObject({
+      title: "Legacy task",
+      body: "Legacy agent • Done",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        ...embedded,
+        entryId: "entry-untitled",
+        coalesceKey: "agent.stopped:untitled",
+        entry: {
+          ...embedded.entry,
+          id: "agent.stopped:untitled",
+          sourceRef: "untitled",
+          payload: {
+            kind: "chat",
+            epicId: "epic-legacy",
+            chatId: "chat-legacy",
+            outcome: "completed",
+          },
+        },
+      }),
+    ).toMatchObject({
+      title: "Task",
+      body: "Agent • Done",
     });
   });
 
@@ -194,20 +262,59 @@ describe("merged notifications feed", () => {
         outcome: "errored",
       },
     };
-    const interview: HostNotificationEntry = {
+    const interviewPayload = {
+      kind: "interview" as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      interviewBlockId: "block-1",
+    };
+    const interviewWaiting: HostNotificationEntry = {
       ...base,
       kind: "interview.requested",
       severity: "needs_action",
       outcome: null,
       resolvedAt: null,
-      payload: {
-        kind: "interview",
-        epicId: "epic-1",
-        chatId: "chat-1",
-        chatTitle: "Deploy checkout fix",
-        taskTitle: "Checkout notifications",
-        interviewBlockId: "block-1",
-      },
+      payload: interviewPayload,
+    };
+    // resolvedAt is the only resolved/unresolved signal for this kind
+    // (outcome is always null) - presentation must branch on that field alone.
+    const interviewResolved: HostNotificationEntry = {
+      ...base,
+      id: "notification-interview-resolved",
+      kind: "interview.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: 99,
+      payload: interviewPayload,
+    };
+    const approvalPayload = {
+      kind: "approval" as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      approvalId: "approval-1",
+    };
+    const approvalWaiting: HostNotificationEntry = {
+      ...base,
+      id: "notification-approval-waiting",
+      kind: "approval.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      payload: approvalPayload,
+    };
+    // Same resolvableRequestStatus branch as interview - resolvedAt only.
+    const approvalResolved: HostNotificationEntry = {
+      ...base,
+      id: "notification-approval-resolved",
+      kind: "approval.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: 99,
+      payload: approvalPayload,
     };
 
     expect(rowFromHostEntry(stopped)).toMatchObject({
@@ -227,9 +334,21 @@ describe("merged notifications feed", () => {
       body: "Deploy checkout fix • Worktree creation failed",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     });
-    expect(rowFromHostEntry(interview)).toMatchObject({
+    expect(rowFromHostEntry(interviewWaiting)).toMatchObject({
       title: "Checkout notifications",
       body: "Deploy checkout fix • Question waiting",
+    });
+    expect(rowFromHostEntry(interviewResolved)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Question resolved",
+    });
+    expect(rowFromHostEntry(approvalWaiting)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Approval requested",
+    });
+    expect(rowFromHostEntry(approvalResolved)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Approval resolved",
     });
   });
 
@@ -347,7 +466,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(futureShape)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
 
@@ -371,7 +490,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(crossKind)).toMatchObject({
       title: "Task",
-      body: "Chat • Approval requested",
+      body: "Agent • Approval requested",
       payload: null,
     });
 
@@ -394,7 +513,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(malformed)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
   });
@@ -406,7 +525,7 @@ describe("merged notifications feed", () => {
       sourceId: "setup",
       createdAt: 10,
       readAt: null,
-      title: "Chat stream closed unexpectedly",
+      title: "Agent stream closed unexpectedly",
       body: "Traycer notification",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       hostKind: null,
@@ -414,6 +533,112 @@ describe("merged notifications feed", () => {
       globalEntry: null,
       severity: "failure",
       outcome: null,
+      resolvedAt: null,
+      sourceRef: null,
+      originHostId: null,
+      category: "system",
     });
+  });
+
+  it("projects host resolvedAt and category onto merged rows", () => {
+    const unresolved = hostEntry("approval", 10, null);
+    expect(rowFromHostEntry(unresolved)).toMatchObject({
+      resolvedAt: null,
+      category: "task",
+      severity: "needs_action",
+    });
+
+    // Build a resolved approval row without spreading a union-typed entry
+    // (TS loses the `approval.requested` arm under `{...entry, resolvedAt}`).
+    const resolved = hostEntry("approval", 10, null);
+    expect(
+      rowFromHostEntry({
+        id: resolved.id,
+        updatedAt: resolved.updatedAt,
+        readAt: resolved.readAt,
+        kind: "approval.requested",
+        sourceRef: resolved.sourceRef,
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: 99,
+        epicId: resolved.epicId,
+        chatId: resolved.chatId,
+        payload: resolved.payload,
+      }),
+    ).toMatchObject({
+      resolvedAt: 99,
+      category: "task",
+    });
+  });
+
+  it("projects global category as collaboration", () => {
+    expect(rowFromGlobalEntry(globalEntry("global", 10, null))).toMatchObject({
+      category: "collaboration",
+      resolvedAt: null,
+      severity: "info",
+    });
+  });
+
+  it("routes a worktree-deletion row to the worktree settings surface with the host's own copy", () => {
+    expect(
+      rowFromHostEntry({
+        id: "worktree.deletion:command-1",
+        updatedAt: 10,
+        readAt: null,
+        kind: "host.operation.finished",
+        sourceRef: "command-1",
+        severity: "failure",
+        outcome: "errored",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "worktree_deletion",
+          operation: "worktree.deletion",
+          title: "Some worktrees were not deleted",
+          message: "Deleted 2 of 3 worktrees; 1 failed.",
+          commandId: "command-1",
+          source: "settings",
+          requestedCount: 3,
+          deletedCount: 2,
+          failedCount: 1,
+        },
+      }),
+    ).toMatchObject({
+      title: "Some worktrees were not deleted",
+      body: "Deleted 2 of 3 worktrees; 1 failed.",
+      // Surface-only: the worktree the row describes is gone, so there is no
+      // resource left to focus.
+      payload: {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        focus: undefined,
+      },
+    });
+  });
+
+  it("renders a newer host's unknown operation payload from its common fields, with no destination", () => {
+    const row = rowFromHostEntry({
+      id: "testbox.provision:command-2",
+      updatedAt: 10,
+      readAt: null,
+      kind: "host.operation.finished",
+      sourceRef: "command-2",
+      severity: "done",
+      outcome: "completed",
+      epicId: null,
+      chatId: null,
+      payload: {
+        kind: "testbox_provision",
+        operation: "testbox.provision",
+        title: "Test box ready",
+        message: "Provisioned 1 test box.",
+      },
+    });
+    expect(row).toMatchObject({
+      title: "Test box ready",
+      body: "Provisioned 1 test box.",
+    });
+    // Readable and acknowledgeable, but never routed by guesswork.
+    expect(row.payload).toBeNull();
   });
 });

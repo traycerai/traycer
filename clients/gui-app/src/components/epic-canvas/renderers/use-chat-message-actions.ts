@@ -50,6 +50,7 @@ export interface ChatMessageActionsInput {
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly node: EpicNodeRef;
   readonly chatTitle: string | null;
@@ -111,6 +112,7 @@ export function useChatMessageActions(
     currentComposerSettings,
     editSettings,
     mentionRoots,
+    fallbackToGlobalMentionRoots,
     currentEpicId,
     node,
     chatTitle,
@@ -359,6 +361,7 @@ export function useChatMessageActions(
           canModifyMessages,
           editSettings,
           mentionRoots,
+          fallbackToGlobalMentionRoots,
           currentEpicId,
           onSnapshot: updateInlineEdit,
           onSubmit: submitInlineEdit,
@@ -396,6 +399,7 @@ export function useChatMessageActions(
       deleteMessageSuffix,
       dispatchUi,
       editSettings,
+      fallbackToGlobalMentionRoots,
       forkAtAssistantMessage,
       mentionRoots,
       submitInlineEdit,

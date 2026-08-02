@@ -22,6 +22,7 @@ const PROFILE: ProviderProfile = {
   identity: null,
   usageUpdatedAt: null,
   rateLimitStatus: "unknown",
+  rateLimitLimitedScopes: null,
   duplicateOfProfileId: null,
   accentColor: null,
   ambientDriftNotice: null,
@@ -32,7 +33,9 @@ function entry(
 ): ProfileDropdownUsageEntry {
   return {
     profileId: "work",
+    fetchEligible: true,
     refresh: vi.fn(() => Promise.resolve()),
+    ensureFresh: vi.fn(() => Promise.resolve()),
     ...overrides,
   };
 }

@@ -54,6 +54,16 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
     isLoading: false,
   }),
 }));
+// Its sibling above is mocked, so the real hook's `useQueryClient` would be
+// the only thing in this file demanding a provider it deliberately has none of.
+vi.mock("@/hooks/worktree/use-worktree-workspaces-refresh", () => ({
+  useWorktreeWorkspacesRefresh: () => ({
+    refresh: () => Promise.resolve(),
+    isRefreshing: false,
+    checkedAt: null,
+    canRefresh: false,
+  }),
+}));
 vi.mock("@/hooks/worktree/use-worktree-set-entry-mode-mutation", () => ({
   useWorktreeSetEntryModeForClient: () => ({
     mutate: vi.fn(),
@@ -156,6 +166,7 @@ function renderBoundSurface(kind: "chat" | "terminal-agent"): void {
   render(
     <TooltipProvider>
       <HostWorkspaceSelector
+        disabled={false}
         surface={{
           kind,
           hostId: "host-test",

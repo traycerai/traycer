@@ -27,6 +27,14 @@ import {
 // what the entry-point wires up via `withRunner`, capturing stdout
 // to assert the envelope shape.
 
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
@@ -39,20 +47,30 @@ let stderrChunks: string[];
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-legacy-json-test-"));
+  osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   stdoutChunks = [];
   stderrChunks = [];
+  // `write`'s completion callback is load-bearing, not decoration: the
+  // runner awaits it (via `flushStdio`) before `process.exit` so a terminal
+  // NDJSON line larger than the 64 KiB pipe buffer is not truncated on the
+  // way to Desktop. A stub that swallows the callback would leave that
+  // flush waiting on a write that never reports completion, so invoke it.
   stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   // The runner owns process.exit - translate to a throw so the test

@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
 import type {
   CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
   TerminalSessionExitReason,
   TerminalSessionInfo,
   TerminalSessionKind,
@@ -116,6 +117,14 @@ export interface TerminalSessionState {
   readonly lastOutputPreview: string | null;
   readonly title: string | null;
   readonly activeProcessName: string | null;
+  readonly currentCwd: string | null;
+  /**
+   * Whether a negotiated stream frame has explicitly carried `currentCwd`.
+   * This distinguishes a pre-1.5/absent field from an explicit empty value,
+   * which is normalized to `currentCwd: null` but must still clear cached
+   * `terminal.list` metadata.
+   */
+  readonly currentCwdReported: boolean;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */
   setWriter: (writer: TerminalDataWriter | null) => void;
@@ -235,6 +244,16 @@ function activeProcessNameFromSession(
   if (name === undefined || name === null) return null;
   const trimmed = name.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function currentCwdFromSession(
+  session:
+    | CanonicalTerminalSessionInfoWithCurrentCwd
+    | CanonicalTerminalSessionInfo
+    | TerminalSessionInfo,
+): string | null | undefined {
+  if (!("currentCwd" in session)) return undefined;
+  return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
 export function createTerminalSessionStore(
@@ -392,6 +411,7 @@ export function createTerminalSessionStore(
     const callbacks: TerminalStreamCallbacks = {
       onSnapshot: (frame, scrollback) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         // First host frame for this session: the scrollback is in hand even
         // if xterm hasn't registered its writer yet (it lands in pendingWrites).
         markTerminalLoad(options.sessionId, "snapshot");
@@ -452,6 +472,9 @@ export function createTerminalSessionStore(
           lastOutputPreview,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
         flushRequestedResize();
       },
@@ -506,11 +529,15 @@ export function createTerminalSessionStore(
       },
       onSessionUpdated: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         set({
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
       },
       onConnectionStatus: (
@@ -566,6 +593,8 @@ export function createTerminalSessionStore(
       lastOutputPreview: null,
       title: null,
       activeProcessName: null,
+      currentCwd: null,
+      currentCwdReported: false,
 
       setWriter: (next) => {
         writer = next;
@@ -600,11 +629,29 @@ export function createTerminalSessionStore(
       requestResize: (cols, rows) => {
         if (disposed || streamClient === null) return null;
         const state = get();
-        if (state.status === "exited" || state.status === "lost") return null;
-        if (state.requestedCols === cols && state.requestedRows === rows) {
+        if (state.status === "exited") return null;
+        // Dedupe only a size that is BOTH already requested and already the
+        // effective grid. Skipping on requested alone stranded the xterm
+        // engine's latch self-heal: a resize frame lost in flight leaves
+        // `requested` recorded while the host never adopted it, and the
+        // engine's deliberate re-report of the same size must reach the wire
+        // to retry. Calls arriving here are already engine-dedupe-gated, so
+        // this cannot re-send on render-tick churn.
+        if (
+          state.requestedCols === cols &&
+          state.requestedRows === rows &&
+          state.effectiveCols === cols &&
+          state.effectiveRows === rows
+        ) {
           return null;
         }
-        if (state.connectionStatus !== "open") {
+        // "lost" stashes rather than drops: the xterm engine records every
+        // report in its own dedupe before this store sees it, so a dropped
+        // resize here is never re-offered - after the reconnect the session
+        // would stay latched at the pre-disconnect grid. The stash is flushed
+        // by `flushRequestedResize` once the reconnect's snapshot restores the
+        // session to "running".
+        if (state.status === "lost" || state.connectionStatus !== "open") {
           set({
             requestedCols: cols,
             requestedRows: rows,

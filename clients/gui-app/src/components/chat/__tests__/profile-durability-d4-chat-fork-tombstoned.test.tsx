@@ -201,6 +201,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -227,6 +228,15 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }
@@ -274,7 +284,7 @@ function renderDialog(target: ChatForkDialogTarget): void {
 }
 
 async function submitFork(): Promise<void> {
-  fireEvent.change(screen.getByRole("textbox", { name: "Fork chat title" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Fork agent title" }), {
     target: { value: "Sibling fork" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Fork" }));
@@ -289,6 +299,7 @@ function seedLiveForkWorkspace(): void {
     path: "/repo/lifecycle",
     name: "lifecycle",
     repoIdentifier: null,
+    hostId: null,
   };
   useSeededWorkspaceSnapshotStore.getState().setSnapshot(stagingKey, {
     folders: [folder.path],
@@ -357,6 +368,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
       path: "/repo/added-after-open",
       name: "added-after-open",
       repoIdentifier: null,
+      hostId: null,
     };
     const stagedEntry = {
       kind: "worktree" as const,

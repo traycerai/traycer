@@ -23,7 +23,8 @@ export const tuiHarnessOptionSchema = z.object({
   error: z.string().nullable(),
   // True while the host's availability probe for this harness is still running
   // in the background (mirrors `guiHarnessOptionSchema`). A pending row carries
-  // `available: false`; a TUI consumer should re-fetch until it flips false
+  // the last settled verdict for `available` - `false` only when the host has
+  // never settled one; a TUI consumer should re-fetch until it flips false
   // rather than treat the harness as unavailable. `.catch(false)` tolerates old
   // host builds that omit the field.
   availabilityPending: z.boolean().catch(false),
@@ -105,6 +106,24 @@ export type PrepareTuiLaunchRequest = z.infer<
   typeof prepareTuiLaunchRequestSchema
 >;
 
+// ─── `agent.tui.prepareLaunch@1.1` - + stable fork-source agent id ────────
+//
+// Additive minor bump (tech plan governing mechanism 2, "source identity"
+// decision). `forkSourceTuiAgentId` lets a new client name the fork source by
+// its own stable artifact id, so the resolver can validate the exact tuple
+// `{id, epic, harness, session, user, host}` directly instead of scanning
+// every TUI agent in the epic for a `(harnessId, harnessSessionId, hostId,
+// userId)` match (`resolveForkSourceTuiAgentStrict`). `null` - the
+// v1.0-upgraded default - keeps that strict-scan fallback for old clients;
+// never the fail-open missing⇒ambient shape. The response is unchanged.
+export const prepareTuiLaunchRequestSchemaV11 =
+  prepareTuiLaunchRequestSchema.extend({
+    forkSourceTuiAgentId: z.string().nullable().default(null),
+  });
+export type PrepareTuiLaunchRequestV11 = z.infer<
+  typeof prepareTuiLaunchRequestSchemaV11
+>;
+
 export const prepareTuiLaunchResponseSchema = z.object({
   harnessId: tuiHarnessIdSchema,
   // `null` when the harness hasn't allocated a CLI-resumable id yet (Codex
@@ -128,6 +147,80 @@ export const prepareTuiLaunchResponseSchema = z.object({
 });
 export type PrepareTuiLaunchResponse = z.infer<
   typeof prepareTuiLaunchResponseSchema
+>;
+
+// ─── `agent.tui.validateForkProfile@1.0` - preflight fork-profile admission ─
+//
+// Optional (non-floor) capability: read-only admission check that runs the
+// SAME continuation-scope guard core `agent.tui.prepareLaunch` enforces
+// authoritatively (`tui-fork-scope-guard.ts`) ahead of any client-side
+// worktree/binding work, so a doomed cross-profile fork can be rejected
+// before the client does anything it would need to roll back. This call is
+// advisory only - prepareLaunch re-runs the same guard at the top of its own
+// resolver (TOCTOU-safe) and remains the sole authority.
+//
+// Its negotiated presence in the RPC manifest IS the capability signal for
+// cross-profile fork UI (see `useHostSupportsMethod`) - there is no separate
+// capability flag to check. A caller sends every candidate target profile it
+// wants a verdict for in one round trip, so the SAME call serves both a
+// single pre-submit check (a one-element array) and the profile picker's
+// per-row admission (many elements) without a second wire method.
+export const validateTuiForkProfileRequestSchema = z.object({
+  epicId: z.string(),
+  sourceTuiAgentId: z.string(),
+  targetProfileIds: z.array(z.string().nullable()).min(1),
+});
+export type ValidateTuiForkProfileRequest = z.infer<
+  typeof validateTuiForkProfileRequestSchema
+>;
+
+// Mirrors `TuiForkScopeGuardSubcode` in the host's `tui-fork-scope-guard.ts`
+// (kept as an independent literal union here - the wire schema must not
+// import host domain code), plus `TARGET_PROFILE_UNAVAILABLE` for a
+// candidate-specific profile-lifecycle rejection (unknown/tombstoned/
+// setup-pending/unsupported-provider) that is NOT a `TuiForkScopeGuardError` -
+// the bulk resolver reshapes that error family into its own verdict row
+// (amend-01, T3 review) rather than aborting the whole batch.
+//
+// `SOURCE_NOT_READY` (follow-up fix): a Claude source's `harnessSessionId` is
+// minted synchronously at launch, before any turn writes its transcript to
+// disk - `--resume <source> --fork-session` needs that transcript to exist,
+// so forking a source with zero turns hard-fails the spawned CLI. Fires
+// regardless of whether the target profile matches the source's own (a
+// same-profile plain Fork is exactly the reachable repro), so it is asserted
+// ahead of the scope-equality check rather than folded into a "profiles
+// differ" branch.
+export const tuiForkProfileAdmissionSubcodeSchema = z.enum([
+  "SCOPE_MISMATCH",
+  "FORK_SOURCE_NOT_FOUND",
+  "FORK_SOURCE_AMBIGUOUS",
+  "TARGET_PROFILE_UNAVAILABLE",
+  "SOURCE_NOT_READY",
+]);
+export type TuiForkProfileAdmissionSubcode = z.infer<
+  typeof tuiForkProfileAdmissionSubcodeSchema
+>;
+
+// One verdict per requested `targetProfileId`, same order as the request.
+// `subcode`/`message` are non-null only when `admitted` is false - the same
+// subcode/message pair `TuiForkScopeGuardError` throws with, reshaped as data
+// instead of an exception since the bulk picker needs N independent verdicts
+// rather than a single throw.
+export const tuiForkProfileAdmissionVerdictSchema = z.object({
+  targetProfileId: z.string().nullable(),
+  admitted: z.boolean(),
+  subcode: tuiForkProfileAdmissionSubcodeSchema.nullable(),
+  message: z.string().nullable(),
+});
+export type TuiForkProfileAdmissionVerdict = z.infer<
+  typeof tuiForkProfileAdmissionVerdictSchema
+>;
+
+export const validateTuiForkProfileResponseSchema = z.object({
+  verdicts: z.array(tuiForkProfileAdmissionVerdictSchema),
+});
+export type ValidateTuiForkProfileResponse = z.infer<
+  typeof validateTuiForkProfileResponseSchema
 >;
 
 // ─── `agent.tui.generateTitle@1.0` - hook-driven title generation ──────────

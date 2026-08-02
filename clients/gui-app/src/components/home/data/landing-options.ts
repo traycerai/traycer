@@ -1,20 +1,18 @@
 import {
-  DEFAULT_AGENT_MODE as PROTOCOL_DEFAULT_AGENT_MODE,
-  agentModeSchema,
   guiHarnessIdSchema,
+  modelsForHarness,
+  readableModelMatch,
+  resolveModelBySlug,
   tuiHarnessIdSchema,
   type GuiAgentModelOption,
   type GuiHarnessId,
   type GuiHarnessOption,
   type AgentReasoningEffortOption,
   type AgentServiceTierOption,
-  type AgentMode as ProtocolAgentMode,
 } from "@traycer/protocol/host/index";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import {
-  Code2,
   FileCheck2,
-  Layers,
   ShieldCheck,
   UnlockKeyhole,
   type LucideIcon,
@@ -49,7 +47,6 @@ export function nextComposerMode(mode: ComposerMode): ComposerMode {
 // Gate for the terminal-launch flow: a harness picked in the (shared) model
 // picker that isn't TUI-capable can't start a terminal agent. Derived from the
 // protocol schema (the single source of truth) rather than a re-listed literal,
-// mirroring how `isAgentMode` validates against `agentModeSchema`.
 export function isTuiHarnessId(value: string): value is TuiHarnessId {
   return tuiHarnessIdSchema.safeParse(value).success;
 }
@@ -161,58 +158,15 @@ export type ReasoningLevelOption = AgentReasoningEffortOption;
 export type ServiceTier = string;
 export type ServiceTierOption = AgentServiceTierOption;
 
-export type AgentMode = ProtocolAgentMode;
-
-export interface AgentModeOption {
-  readonly id: AgentMode;
-  readonly label: string;
-  readonly shortLabel: string;
-  readonly description: string;
-  readonly icon: LucideIcon;
-}
-
-const REGULAR_AGENT_MODE_OPTION = {
-  id: "regular",
-  label: "Regular Mode",
-  shortLabel: "Regular",
-  description: "Native coding agent experience with Traycer flavour.",
-  icon: Code2,
-} satisfies AgentModeOption;
-
-const EPIC_AGENT_MODE_OPTION = {
-  id: "epic",
-  label: "Epic Mode",
-  shortLabel: "Epic",
-  description: "Traycer Planning experience",
-  icon: Layers,
-} satisfies AgentModeOption;
-
-export const AGENT_MODE_OPTIONS: ReadonlyArray<AgentModeOption> = [
-  REGULAR_AGENT_MODE_OPTION,
-  EPIC_AGENT_MODE_OPTION,
-];
-
-const AGENT_MODE_OPTIONS_BY_ID: Readonly<Record<AgentMode, AgentModeOption>> = {
-  [REGULAR_AGENT_MODE_OPTION.id]: REGULAR_AGENT_MODE_OPTION,
-  [EPIC_AGENT_MODE_OPTION.id]: EPIC_AGENT_MODE_OPTION,
-};
-const NEXT_AGENT_MODE_BY_ID: Readonly<Record<AgentMode, AgentMode>> = {
-  [REGULAR_AGENT_MODE_OPTION.id]: EPIC_AGENT_MODE_OPTION.id,
-  [EPIC_AGENT_MODE_OPTION.id]: REGULAR_AGENT_MODE_OPTION.id,
-};
-
-export const DEFAULT_AGENT_MODE: AgentMode = PROTOCOL_DEFAULT_AGENT_MODE;
-
-export function isAgentMode(value: string): value is AgentMode {
-  return agentModeSchema.safeParse(value).success;
-}
-
-export function findAgentModeOption(mode: AgentMode): AgentModeOption {
-  return AGENT_MODE_OPTIONS_BY_ID[mode];
-}
-
-export function nextAgentMode(mode: AgentMode): AgentMode {
-  return NEXT_AGENT_MODE_BY_ID[mode];
+/**
+ * Whether a persisted service tier means "fast mode is on" - i.e. the value is
+ * a real non-default tier rather than the harness default. Per the `ServiceTier`
+ * contract above, both `null` (never set) and `""` ("use the harness default")
+ * mean off. The single definition shared by every surface that reports fast
+ * mode: the assistant turn footer and the sidebar hover card's settings header.
+ */
+export function isFastModeEnabled(serviceTier: string | null): boolean {
+  return serviceTier !== null && serviceTier.trim().length > 0;
 }
 
 export interface HarnessModelSelection {
@@ -264,17 +218,35 @@ export function modelDisplayLabel(model: ModelOption): string {
   return stripProviderPrefix(model.label, providerPrefix);
 }
 
+// A READ-ONLY lookup: the row is used for display and for reading capability
+// off, never to rewrite the persisted slug. That is why an AMBIGUOUS alias
+// match is acceptable here - tied rows are the same underlying model, so any
+// of them answers "what is this model called / what can it do". The write side
+// (`resolveModelSlug` in the composer toolbar store) is the one that must
+// refuse an ambiguous match.
+//
+// KNOWN LIMIT, deliberately not designed around: the caller also clamps the
+// sticky reasoning effort and service tier against this row
+// (`normalizeReasoningForModel` / `normalizeServiceTierForModel` in
+// `deriveToolbarState`), so if tied rows ever disagreed about an effort the
+// user had selected, first-in-catalog-order would silently drop it from the
+// emitted settings. Measured against the live Claude catalog the two tied rows
+// (`default`, `opus[1m]`) expose identical efforts and both expose the fast
+// tier, so there is nothing to choose between them today. Preferring whichever
+// tied row happens to support the request would pick a row based on what was
+// asked for, which is worse than picking one by a stable order. The host-side
+// A2A readers, which CAN report back, surface the disagreement through their
+// `warnings` channel instead - see `aliasDisagreementWarnings`.
 export function findSelectedModel(
   models: ReadonlyArray<ModelOption>,
   selection: HarnessModelSelection,
 ): ModelOption | null {
   if (selection.modelSlug.length === 0) return findDefaultModel(models);
-  return (
-    models.find(
-      (model) =>
-        model.harnessId === selection.harnessId &&
-        model.slug === selection.modelSlug,
-    ) ?? null
+  return readableModelMatch(
+    resolveModelBySlug(
+      modelsForHarness(models, selection.harnessId),
+      selection.modelSlug,
+    ),
   );
 }
 

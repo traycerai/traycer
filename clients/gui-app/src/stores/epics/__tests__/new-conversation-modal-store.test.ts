@@ -10,11 +10,13 @@ const WORKSPACE_A: WorkspaceFolderInfo = {
   path: "/tmp/workspace-a",
   name: "workspace-a",
   repoIdentifier: null,
+  hostId: null,
 };
 const WORKSPACE_B: WorkspaceFolderInfo = {
   path: "/tmp/workspace-b",
   name: "workspace-b",
   repoIdentifier: null,
+  hostId: null,
 };
 
 beforeEach(() => {

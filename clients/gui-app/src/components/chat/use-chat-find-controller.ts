@@ -11,14 +11,17 @@ import {
   type ChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import {
-  chatScrollLocationForMessage,
+  chatTimelineLocationForMessage,
+  chatViewportAnchorRowIndex,
   selectActiveUserMessageId,
-} from "@/components/chat/chat-messages-virtuoso-helpers";
+  type ChatTimelineNavigationLocation,
+  type ChatViewportAnchorListState,
+} from "@/components/chat/chat-messages-scroll-helpers";
+import type { RequestChatMeasuredItemChange } from "@/components/chat/chat-measured-item-change-context";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { useSetChatFindForcedOpen } from "@/stores/chats/chat-find-force-store-context";
 import { arrayShallowEq } from "@/stores/epics/open-epic/projection-helpers";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { ItemLocation } from "@virtuoso.dev/message-list";
 import {
   use,
   useCallback,
@@ -41,24 +44,37 @@ interface ChatFindControllerArgs {
   readonly messages: ReadonlyArray<ChatMessageModel>;
   /** Latest transcript, read lazily by the adapter's getRows supplier. */
   readonly messagesRef: RefObject<ReadonlyArray<ChatMessageModel>>;
+  /**
+   * Live background-tool promotion set. Drives the notify-rows-changed
+   * lifecycle alongside `messages`: promotion changes which runs group
+   * together, so it changes unit ids and owning chains even when no message
+   * did, and a projection that missed it would be stale in exactly the way
+   * that produces unpaintable matches.
+   */
+  readonly backgroundToolBlockIds: ReadonlySet<string>;
+  /** Latest promotion set, read lazily by the adapter's getRows supplier. */
+  readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
   readonly messageIndexByIdRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
-  readonly scrollToItem: (location: ItemLocation) => void;
-  /** Component-owned measured-item-change trigger, read through a ref. */
-  readonly requestMeasuredItemChangeRef: RefObject<() => void>;
-  readonly setBottomFollowingIfChanged: (next: boolean) => void;
+  /** LegendList's own measured positions (no DOM rect probing - jsdom
+   *  reports unreliable, non-scroll-relative rects for virtualized rows),
+   *  for resolving the row at the viewport's reading line. */
+  readonly getViewportAnchorListState: () => ChatViewportAnchorListState | null;
+  readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
+  /** Manual-navigation cancel (decision #21: find performs it first). */
+  readonly cancelManualNavigation: () => void;
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,
   ) => void;
-  readonly cancelScrollRestorationRetry: () => void;
-  /** Clears the last user scroll-gesture direction before a programmatic move. */
-  readonly resetScrollGesture: () => void;
+  /** Disclosure-preserving flushSync helper (chat-scroll-disclosure.ts),
+   *  shared with segment toggles - see `requestFindReveal`'s use below. */
+  readonly requestMeasuredItemChange: RequestChatMeasuredItemChange;
 }
 
 interface ChatFindController {
   /** Repaint the mounted highlight after a measured-item layout change. */
   readonly scheduleMountedHighlightSync: () => void;
-  /** Find-side follow-up to Virtuoso's onRenderedDataChange. */
+  /** Find-side follow-up to the timeline's rendered-data change. */
   readonly onRenderedDataChange: () => void;
 }
 
@@ -76,14 +92,15 @@ export function useChatFindController(
     instanceId,
     messages,
     messagesRef,
+    backgroundToolBlockIds,
+    backgroundToolBlockIdsRef,
     messageIndexByIdRef,
     getScroller,
-    scrollToItem,
-    requestMeasuredItemChangeRef,
-    setBottomFollowingIfChanged,
+    getViewportAnchorListState,
+    scrollToLocation,
+    cancelManualNavigation,
     setScrolledActiveUserMessageIdIfChanged,
-    cancelScrollRestorationRetry,
-    resetScrollGesture,
+    requestMeasuredItemChange,
   } = args;
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
@@ -145,27 +162,23 @@ export function useChatFindController(
 
   const scrollToMessageForFind = useCallback(
     (messageId: string): void => {
-      resetScrollGesture();
-      cancelScrollRestorationRetry();
-      setBottomFollowingIfChanged(false);
+      cancelManualNavigation();
       setScrolledActiveUserMessageIdIfChanged(
         selectActiveUserMessageId(messagesRef.current, messageId, false),
       );
-      const location = chatScrollLocationForMessage(
+      const location = chatTimelineLocationForMessage(
         messageId,
         messageIndexByIdRef.current,
-        "auto",
+        false,
       );
       if (location === null) return;
-      scrollToItem(location);
+      scrollToLocation(location);
     },
     [
-      cancelScrollRestorationRetry,
+      cancelManualNavigation,
       messageIndexByIdRef,
       messagesRef,
-      resetScrollGesture,
-      scrollToItem,
-      setBottomFollowingIfChanged,
+      scrollToLocation,
       setScrolledActiveUserMessageIdIfChanged,
     ],
   );
@@ -221,8 +234,35 @@ export function useChatFindController(
     [setFindForcedOpen],
   );
 
+  // Anchors a find chain-open on the row currently at the viewport's own top
+  // edge (not the reveal target - the target is scrolled to separately right
+  // after) - see requestMeasuredItemChange's caller below and
+  // chat-scroll-disclosure.ts's doc comment for why the top edge specifically.
+  // Resolved from LegendList's own measured positions (no DOM rect probing -
+  // jsdom reports unreliable, non-scroll-relative rects for virtualized rows),
+  // matching viewportActiveUserMessageId's approach; only the final anchor
+  // element itself needs a real DOM node, since
+  // preserveChatScrollAcrossDisclosureChange measures its live rect.
+  const getViewportTopAnchorElement = useCallback((): HTMLElement | null => {
+    const state = getViewportAnchorListState();
+    if (state === null) return null;
+    const rowIndex = chatViewportAnchorRowIndex(
+      state,
+      messagesRef.current.length,
+      0,
+    );
+    if (rowIndex === null) return null;
+    // chatViewportAnchorRowIndex clamps its result to [0, rowCount - 1] - a
+    // non-null return is always a valid index into messagesRef.current.
+    return getMountedMessageRoot(messagesRef.current[rowIndex].id);
+  }, [getMountedMessageRoot, getViewportAnchorListState, messagesRef]);
+
   const applyFindOpenedTarget = useCallback(
-    (target: ChatFindReconcileTarget, forceApply: boolean): boolean => {
+    (
+      target: ChatFindReconcileTarget,
+      forceApply: boolean,
+      preserveScrollAcrossOpen: boolean,
+    ): boolean => {
       const chainKeyIds = target.owningChain.map(serializeChatCollapsibleKey);
       const previousTarget = findOpenedTargetRef.current;
       const targetChanged =
@@ -231,7 +271,13 @@ export function useChatFindController(
         previousTarget.unitId !== target.unitId ||
         !arrayShallowEq(previousTarget.chainKeyIds, chainKeyIds);
       if (!forceApply && !targetChanged) return false;
-      applyFindOpenedChain(target.owningChain);
+      if (preserveScrollAcrossOpen) {
+        requestMeasuredItemChange(getViewportTopAnchorElement(), () =>
+          applyFindOpenedChain(target.owningChain),
+        );
+      } else {
+        applyFindOpenedChain(target.owningChain);
+      }
       findOpenedTargetRef.current = {
         messageId: target.messageId,
         unitId: target.unitId,
@@ -239,7 +285,11 @@ export function useChatFindController(
       };
       return true;
     },
-    [applyFindOpenedChain],
+    [
+      applyFindOpenedChain,
+      getViewportTopAnchorElement,
+      requestMeasuredItemChange,
+    ],
   );
 
   const releaseFindOpenedChain = useCallback((): void => {
@@ -336,14 +386,36 @@ export function useChatFindController(
       activeFindRevealRef.current = target;
       findRevealAnchorMissCountRef.current = 0;
       findRevealSkipUnitScrollRef.current = sameUnit;
-      applyFindOpenedTarget(target, true);
+      // LegendList remeasures a row's height via its own per-row
+      // ResizeObserver, so the chain-open below picks up the target row's OWN
+      // layout change without an explicit nudge. What LegendList does not do
+      // is correct the scroll offset for content ABOVE the viewport changing
+      // size (`maintainVisibleContentPosition.size` is off), so an
+      // uncorrected chain-open revealing a deeply nested match can shift the
+      // reader's current view before the deliberate scroll below catches up.
+      // `preserveScrollAcrossOpen: true` closes that gap: the chain-open runs
+      // through the same flushSync + geometric-delta helper segment toggles
+      // use (chat-scroll-disclosure.ts), anchored on the row at the
+      // viewport's own top edge, so the reader's view stays pixel-stable
+      // across the open and this frame's scroll lands cleanly on top of it.
+      // This is safe here because a live find navigation (search/next/
+      // previous) always originates from a real DOM event handler - the one
+      // reachable exception is the tile-find store's registration-time
+      // search REPLAY (an open session restored across a chat tile's
+      // whole-tile remount on tab switch), which runs synchronously inside
+      // this controller's own adapter-registration layout effect; flushSync
+      // there degrades to a warned no-op (see chat-messages.tsx's
+      // scroll-request effect comment for why), so that one path keeps the
+      // pre-ticket-6 jump risk. Not fixed here: doing so would mean deferring
+      // this call (e.g. a microtask) uniformly, which risks the delicate
+      // generation/rAF sequencing above for a narrow, low-stakes case (a
+      // tile that's remounting has no settled reading position to protect
+      // yet).
+      applyFindOpenedTarget(target, true, true);
       cancelFindRevealFrame();
       findRevealFrameRef.current = window.requestAnimationFrame(() => {
         findRevealFrameRef.current = null;
         if (findRevealGenerationRef.current !== generation) return;
-        // Always remeasure: it is position-maintaining, and a manual collapse
-        // followed by next() re-opens the same unit (a real height change).
-        requestMeasuredItemChangeRef.current();
         if (!sameUnit) scrollToMessageForFind(target.messageId);
         scheduleFindRevealStep(generation, sameUnit);
       });
@@ -351,7 +423,6 @@ export function useChatFindController(
     [
       applyFindOpenedTarget,
       cancelFindRevealFrame,
-      requestMeasuredItemChangeRef,
       scheduleFindRevealStep,
       scrollToMessageForFind,
     ],
@@ -359,23 +430,28 @@ export function useChatFindController(
 
   const requestFindReconcile = useCallback(
     (target: ChatFindReconcileTarget): void => {
-      const applied = applyFindOpenedTarget(target, false);
-      if (!applied) return;
-      requestMeasuredItemChangeRef.current();
+      // Passive streaming resync of an already-active target, not a user-
+      // driven reveal - no scroll-preservation wrapping needed here.
+      applyFindOpenedTarget(target, false, false);
     },
-    [applyFindOpenedTarget, requestMeasuredItemChangeRef],
+    [applyFindOpenedTarget],
   );
 
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
-  }, [messages]);
+  }, [backgroundToolBlockIds, messages]);
 
   useLayoutEffect(() => {
     if (tileFindContext === null) return undefined;
 
     const adapter = createChatFindAdapter({
       tileInstanceId: instanceId,
-      getRows: () => buildChatFindRows(messagesRef.current, instanceId),
+      getRows: () =>
+        buildChatFindRows(
+          messagesRef.current,
+          instanceId,
+          backgroundToolBlockIdsRef.current,
+        ),
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,
@@ -394,6 +470,7 @@ export function useChatFindController(
       adapter.dispose();
     };
   }, [
+    backgroundToolBlockIdsRef,
     clearFindReveal,
     getMountedMessageRoot,
     instanceId,

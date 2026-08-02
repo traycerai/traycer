@@ -18,6 +18,7 @@ import {
   type Mock,
 } from "vitest";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist";
 import {
   useMigrationRunStore,
@@ -119,6 +120,13 @@ const windowsBridgeMock = vi.hoisted(
 
 interface TestRunnerHost {
   hostManagement: { uninstallTraycer: Mock } | null;
+}
+
+interface TestFeatureSettingsBridge {
+  readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
+  readonly setAgentRolesEnabled: Mock<
+    (enabled: boolean) => Promise<{ readonly agentRoles: boolean }>
+  >;
 }
 
 const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
@@ -262,6 +270,83 @@ describe("GeneralSettingsPanel", () => {
     useAuthStore.getState().setSignedOut();
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    delete (globalThis as { runnerHost?: unknown }).runnerHost;
+  });
+
+  it("hydrates and updates Agent roles under Experimental", async () => {
+    let agentRoles = false;
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles })),
+      setAgentRolesEnabled: vi.fn((enabled) => {
+        agentRoles = enabled;
+        return Promise.resolve({ agentRoles });
+      }),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    expect(screen.getByText("Experimental")).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "Agent roles" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.setAgentRolesEnabled).toHaveBeenCalledWith(true),
+    );
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("true"),
+    );
+    await waitFor(() => expect(bridge.get).toHaveBeenCalledTimes(2));
+  });
+
+  it("surfaces feature-settings read failures and keeps Agent roles disabled", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.reject(new Error("invalid config"))),
+      setAgentRolesEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: enabled }),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    expect(
+      await screen.findByText(/Couldn't read feature settings/),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("switch", { name: "Agent roles" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(bridge.setAgentRolesEnabled).not.toHaveBeenCalled();
+  });
+
+  it("preserves the Agent roles value when the settings write fails", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+      setAgentRolesEnabled: vi.fn(() =>
+        Promise.reject(new Error("write failed")),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", { name: "Agent roles" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.setAgentRolesEnabled).toHaveBeenCalledWith(true),
+    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
   it("renders the Data migration row and starts the stream on click", () => {
@@ -321,6 +406,20 @@ describe("GeneralSettingsPanel", () => {
     fireEvent.click(toggle);
 
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("labels the steering chord with the platform modifier", () => {
+    renderPanel();
+
+    const chord = `${modLabel()}+Enter`;
+    expect(
+      screen.getByRole("switch", { name: `Steer with ${chord}` }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        `While a turn is running on a supported harness, ${chord} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`,
+      ),
+    ).toBeTruthy();
   });
 
   it("navigates to replay onboarding without clearing first-run completion", () => {
@@ -562,7 +661,161 @@ describe("GeneralSettingsPanel", () => {
     await screen.findByText("Traycer removed");
     expect(screen.getByRole("button", { name: "Quit Traycer" })).toBeTruthy();
   });
+
+  it("renders the four named section headers in order", () => {
+    renderPanel();
+
+    const chat = screen.getByText("Chat & composer");
+    const running = screen.getByText("Running agents");
+    const setup = screen.getByText("Setup & migration");
+    const danger = screen.getByText("Danger Zone");
+
+    expect(documentPosition(chat, running)).toBe("before");
+    expect(documentPosition(running, setup)).toBe("before");
+    expect(documentPosition(setup, danger)).toBe("before");
+  });
+
+  it("renders named sections as h2 headings outside separate bordered cards", () => {
+    renderPanel();
+
+    // SettingsGroup renders real <h2> labels, not row-shaped bands inside a
+    // single shared card. Each group is its own <section>; the h2 and the
+    // bordered rows-container are siblings.
+    const sectionTitles = [
+      "Chat & composer",
+      "Running agents",
+      "Setup & migration",
+      "Danger Zone",
+    ] as const;
+
+    const headings = sectionTitles.map((title) =>
+      screen.getByRole("heading", { level: 2, name: title }),
+    );
+
+    for (const heading of headings) {
+      const section = heading.closest("section");
+      expect(section).not.toBeNull();
+      // Heading sits outside the bordered card (sibling of the card div).
+      expect(heading.closest("div.rounded-lg")).toBeNull();
+      expect(section?.contains(heading)).toBe(true);
+    }
+
+    // Representative rows live inside each section's card, not the heading.
+    const voice = screen.getByText("Voice input");
+    const preventSleep = screen.getByText("Prevent sleep while running");
+    const productTour = screen.getByText("Product tour");
+    const snapshots = screen.getByText("File Edit Snapshots");
+
+    const chatHeading = headings[0];
+    const runningHeading = headings[1];
+    const setupHeading = headings[2];
+    const dangerHeading = headings[3];
+
+    // Heading and its rows do NOT share the closest bordered card.
+    expect(chatHeading.closest("div.rounded-lg")).toBeNull();
+    expect(voice.closest("div.rounded-lg")).not.toBeNull();
+    expect(voice.closest("div.rounded-lg")).not.toBe(
+      chatHeading.closest("div.rounded-lg"),
+    );
+
+    // Two rows in the same group DO share the bordered card.
+    const quote = screen.getByText("Quote reply on text selection");
+    expect(voice.closest("div.rounded-lg")).toBe(
+      quote.closest("div.rounded-lg"),
+    );
+
+    // Rows from different groups do NOT share a card.
+    expect(voice.closest("div.rounded-lg")).not.toBe(
+      preventSleep.closest("div.rounded-lg"),
+    );
+    expect(preventSleep.closest("div.rounded-lg")).not.toBe(
+      productTour.closest("div.rounded-lg"),
+    );
+    expect(productTour.closest("div.rounded-lg")).not.toBe(
+      snapshots.closest("div.rounded-lg"),
+    );
+
+    // Each heading's section owns its representative row.
+    expect(chatHeading.closest("section")).toBe(voice.closest("section"));
+    expect(runningHeading.closest("section")).toBe(
+      preventSleep.closest("section"),
+    );
+    expect(setupHeading.closest("section")).toBe(
+      productTour.closest("section"),
+    );
+    expect(dangerHeading.closest("section")).toBe(snapshots.closest("section"));
+    // Distinct sections per group.
+    expect(chatHeading.closest("section")).not.toBe(
+      runningHeading.closest("section"),
+    );
+  });
+
+  it("places representative rows under the correct section headers", () => {
+    renderPanel();
+
+    const chat = screen.getByText("Chat & composer");
+    const running = screen.getByText("Running agents");
+    const setup = screen.getByText("Setup & migration");
+    const danger = screen.getByText("Danger Zone");
+
+    const voice = screen.getByText("Voice input");
+    const quote = screen.getByText("Quote reply on text selection");
+    const pin = screen.getByText("Pin context usage breakdown");
+    const preventSleep = screen.getByText("Prevent sleep while running");
+    const globalResources = screen.getByText("Show global resources button");
+    const productTour = screen.getByText("Product tour");
+    const dataMigration = screen.getByText("Data migration");
+    const snapshots = screen.getByText("File Edit Snapshots");
+
+    // Chat & composer rows sit between that header and Running agents.
+    expect(documentPosition(chat, voice)).toBe("before");
+    expect(documentPosition(voice, quote)).toBe("before");
+    expect(documentPosition(quote, pin)).toBe("before");
+    expect(documentPosition(pin, running)).toBe("before");
+
+    // Running agents rows sit between that header and Setup & migration.
+    expect(documentPosition(running, preventSleep)).toBe("before");
+    expect(documentPosition(preventSleep, globalResources)).toBe("before");
+    expect(documentPosition(globalResources, setup)).toBe("before");
+    // Prevent sleep is not still in Chat & composer.
+    expect(documentPosition(chat, preventSleep)).toBe("before");
+    expect(documentPosition(preventSleep, running)).not.toBe("before");
+
+    // Setup & migration: Product tour before Data migration.
+    expect(documentPosition(setup, productTour)).toBe("before");
+    expect(documentPosition(productTour, dataMigration)).toBe("before");
+    expect(documentPosition(dataMigration, danger)).toBe("before");
+
+    // Danger Zone content after its header.
+    expect(documentPosition(danger, snapshots)).toBe("before");
+  });
+
+  it("does not render the Worktree branch prefix row (moved to Worktrees)", () => {
+    renderPanel();
+
+    // Current accessible name is "Branch prefix" (compact strip on Worktrees).
+    // The obsolete "Worktree branch prefix" name alone would miss a regression
+    // that re-mounted WorktreeBranchPrefixSection on General.
+    expect(screen.queryByRole("textbox", { name: "Branch prefix" })).toBeNull();
+    expect(
+      screen.queryByTestId("worktree-branch-prefix-saving-spinner"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("worktree-branch-prefix-saved-check"),
+    ).toBeNull();
+    expect(screen.queryByText("Worktree branch prefix")).toBeNull();
+  });
 });
+
+function documentPosition(
+  earlier: HTMLElement,
+  later: HTMLElement,
+): "before" | "after" | "unrelated" {
+  const relation = earlier.compareDocumentPosition(later);
+  if ((relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return "before";
+  if ((relation & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return "after";
+  return "unrelated";
+}
 
 function getDialogButton(name: string): HTMLElement {
   return within(screen.getByRole("dialog")).getByRole("button", { name });

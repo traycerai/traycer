@@ -22,7 +22,7 @@ import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitChangedFilesView } from "../git-changed-files-view";
 import { SelectedRepoChanges } from "../selected-repo-changes";
-import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
+import { expectModuleHeaderPreview } from "./git-module-header-test-utils";
 
 vi.mock("../bundle-open-button", () => ({
   BundleOpenButton: (props: { readonly group: string }) => (
@@ -222,11 +222,11 @@ describe("<SelectedRepoChanges /> module section state", () => {
     });
     expect(rootHeader.getAttribute("aria-expanded")).toBe("true");
     expect(submoduleHeader.getAttribute("aria-expanded")).toBe("true");
-    const tooltipText = await expectModuleHeaderTooltip(
+    const previewText = await expectModuleHeaderPreview(
       submoduleHeader,
       "Path: /repo/traycer",
     );
-    expect(tooltipText).toContain("Status: pinned commit out of date");
+    expect(previewText).toContain("Status: pinned commit out of date");
     expect(rootHeader.className).toContain("bg-background");
     expect(rootHeader.className).toContain("hover:bg-muted");
     expect(rootHeader.className).toContain("z-40");

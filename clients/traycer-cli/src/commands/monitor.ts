@@ -8,12 +8,12 @@ import {
   type AgentInboxMessage,
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
-import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import type { RoleAwarenessEvent } from "@traycer/protocol/host/agent/roles";
 import {
-  createBearerRevalidator,
-  type RevalidateOutcome,
-} from "../../../shared/auth/bearer-revalidator";
+  MutableBearerLease,
+  readLeaseBearer,
+} from "../../../shared/auth/bearer-source";
+import type { RevalidateOutcome } from "../../../shared/auth/bearer-revalidator";
 import {
   createProactiveRefreshScheduler,
   DEFAULT_REFRESH_LEAD_MS,
@@ -35,7 +35,13 @@ import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
 } from "../host/pid-metadata";
-import { cliBearerStore, resolveHostAuth } from "../internal/host-auth";
+import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
+import { resolveHostAuth } from "../internal/host-auth";
+import { writeStderr, writeStdout } from "../runner/std-write";
+import {
+  createCliCredentialsStore,
+  createStoreBackedRevalidator,
+} from "../store/credentials-store";
 
 /**
  * `traycer monitor` — long-running background command spawned inside a Claude
@@ -112,9 +118,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     logger.warn("Monitor missing epic id", {
       environment: config.environment,
     });
-    throw new Error(
-      "traycer monitor: epic id required — pass --epic-id or set TRAYCER_EPIC_ID.",
-    );
+    throw new Error("traycer monitor: epic id required — set TRAYCER_EPIC_ID.");
   }
   const auth = await resolveHostAuth();
   if (auth === null) {
@@ -134,13 +138,14 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   });
 
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  const revalidator = createBearerRevalidator({
-    authnBaseUrl: auth.authnBaseUrl,
-    lease,
-    store: cliBearerStore,
-    clearOnReject: false,
-    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  });
+  // Reactive (on-UNAUTHORIZED) and proactive (pre-TTL) refreshes both route
+  // through the locked `rotate` (§7) so a monitor refresh and a concurrent
+  // desktop refresh can never double-spend the single-use refresh token. One
+  // store for the monitor's lifetime - its background continuation timer can
+  // land a `commit-failed` spend while the monitor keeps running - disposed in
+  // the `finally` below.
+  const store = createCliCredentialsStore();
+  const revalidator = createStoreBackedRevalidator({ store, lease });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
   // refreshes the cached endpoint is the CLI's equivalent of the renderer's
@@ -192,6 +197,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // back off and re-subscribe on `network-error`), so wiring the client
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
+    // Delegated host-credential provisioning. `monitor` is the CLI command that
+    // most needs it: the host it watches should keep serving after this process
+    // exits. Provisioning is silent, so this works the same whether `monitor` is
+    // run from a terminal or as the background command it usually is.
+    hostCredentialMint: createCliHostCredentialMintFlow({
+      authnBaseUrl: auth.authnBaseUrl,
+      bearer: () => readLeaseBearer(lease),
+      diag: (message) => diag(message),
+    }),
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
@@ -245,30 +259,12 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   } finally {
     refreshScheduler.stop();
     clearInterval(poll);
+    store.dispose();
     logger.info("Monitor subscription loop stopped", {
       environment: config.environment,
       agentId,
       epicId,
     });
-  }
-}
-
-/**
- * Reads the lease's current bearer, mapping the "no bearer" throw
- * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so the
- * refresh scheduler treats it as "signed out, nothing to schedule".
- */
-function readLeaseBearer(lease: MutableBearerLease): string | null {
-  try {
-    return lease.getBearerToken();
-  } catch (cause) {
-    // Only the "no bearer / signed out" signal maps to null. Any other lease
-    // failure is a real bug; rethrow it rather than silently disabling the
-    // refresh scheduler and masking it as a benign signed-out state.
-    if (cause instanceof CredentialLeaseReleasedError) {
-      return null;
-    }
-    throw cause;
   }
 }
 
@@ -427,7 +423,7 @@ function runInboxSubscription(
           // blaming the bearer.
           fail(
             new Error(
-              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id/--epic-id).`,
+              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
             ),
           );
           return;
@@ -498,6 +494,17 @@ function handleServerFrame(
       droppedReceiverCount: parsed.data.notice.droppedReceivers?.length ?? 0,
     });
     printInboxNotice(parsed.data.notice);
+    return;
+  }
+  if (parsed.data.kind === "role-awareness") {
+    logger.debug("Monitor received role awareness frame", {
+      environment: config.environment,
+      agentId: target.agentId,
+      epicId: target.epicId,
+      eventKind: parsed.data.event.kind,
+      claimAgentId: parsed.data.event.claim.agentId,
+    });
+    printRoleAwareness(parsed.data.event);
   }
 }
 
@@ -563,7 +570,7 @@ function printInboxMessage(item: AgentInboxMessage): void {
     reply: item.reply,
     body: item.prompt,
   });
-  process.stdout.write(`${output}\n`);
+  writeStdout(`${output}\n`);
 }
 
 /**
@@ -617,7 +624,20 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     `[traycer inbox] based on your judgment decide how to proceed — read transcript, follow up, launch a new agent, etc.`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
+}
+
+/**
+ * Role awareness is ambient coordination state, not a message — a single
+ * compact line informs the transcript without crowding it. Role and scope are
+ * normalized non-empty text by schema, so both always render.
+ */
+function printRoleAwareness(event: RoleAwarenessEvent): void {
+  const verb =
+    event.kind === "role-claimed" ? "claimed role" : "relinquished role";
+  writeStdout(
+    `[traycer roles] agent ${event.claim.agentId} ${verb} "${event.claim.role}" (scope: ${event.claim.scope})\n`,
+  );
 }
 
 /**
@@ -653,9 +673,9 @@ function printReceiverCancelledNotice(
     `[traycer inbox] if you are working on the user's behalf, wait for their next instruction; if you are working on behalf of another agent, let that agent know`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
 }
 
 function diag(message: string): void {
-  process.stderr.write(`[traycer monitor] ${message}\n`);
+  writeStderr(`[traycer monitor] ${message}\n`);
 }

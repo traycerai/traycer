@@ -82,6 +82,22 @@ export const appLocalNotificationDisplayReceiptKey = (input: {
 }): string =>
   `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
 
+// Interview answer drafts persist ONE localStorage key per (chatId, blockId)
+// instead of a single full-snapshot Zustand blob. Separate keys prevent a
+// full-map write from one window (or a stale store context) from erasing an
+// unrelated chat's draft persisted by another window — the same isolation the
+// app-local display receipts above rely on. Both segments are percent-encoded so
+// a `:` inside an id can never split the key.
+export const interviewDraftKeyPrefix = (): string =>
+  `${persistKey("interview-drafts")}:`;
+
+export const interviewDraftKey = (chatId: string, blockId: string): string =>
+  scopedPersistKey(
+    "interview-drafts",
+    encodeURIComponent(chatId),
+    encodeURIComponent(blockId),
+  );
+
 // Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
 // of per-path activity entries (worktrees-enrichment-persistence.ts). A host
 // id is always non-empty, so no `scopeBucket` collapse applies.
@@ -148,22 +164,33 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
 
-  // ── Static zustand stores (18) ───────────────────────────────────────────
+  // ── Static zustand stores (26) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
+  // Enumerated under the `interview-drafts` leaf, but persisted as one key per
+  // (chatId, blockId) — `interview-drafts:{encChatId}:{encBlockId}` — for
+  // cross-window isolation (see `interviewDraftKey`). The `traycer-gui-app:`
+  // prefix sweep in `wipe.ts` still clears every per-draft key.
+  {
+    camelName: "interviewDraft",
+    leaf: "interview-drafts",
+    kind: "static",
+  },
   {
     camelName: "artifactReadState",
     leaf: "artifact-read-state",
     kind: "static",
   },
   { camelName: "gitPanel", leaf: "git-panel", kind: "static" },
+  { camelName: "prPresence", leaf: "pr-presence", kind: "static" },
   {
     camelName: "initialChatHandoff",
     leaf: "initial-chat-handoffs",
     kind: "static",
   },
   { camelName: "leftPanel", leaf: "left-panel", kind: "static" },
+  { camelName: "commGraphPanel", leaf: "comm-graph-panel", kind: "static" },
   { camelName: "fileTree", leaf: "file-tree", kind: "static" },
   { camelName: "historySearch", leaf: "history-search", kind: "static" },
   { camelName: "landingDraft", leaf: "draft", kind: "static" },
@@ -181,6 +208,11 @@ export const PERSIST_STORES = [
   { camelName: "settings", leaf: "settings", kind: "static" },
   { camelName: "settingsSection", leaf: "settings-section", kind: "static" },
   {
+    camelName: "worktreesSettingsView",
+    leaf: "worktrees-settings-view",
+    kind: "static",
+  },
+  {
     camelName: "rateLimitPopover",
     leaf: "rate-limit-popover",
     kind: "static",
@@ -189,6 +221,16 @@ export const PERSIST_STORES = [
   {
     camelName: "workspaceFolders",
     leaf: "workspace-folders",
+    kind: "static",
+  },
+  {
+    camelName: "providersWorkspaceSelection",
+    leaf: "providers-workspace-selection",
+    kind: "static",
+  },
+  {
+    camelName: "providerLoginTerminals",
+    leaf: "provider-login-terminals",
     kind: "static",
   },
 

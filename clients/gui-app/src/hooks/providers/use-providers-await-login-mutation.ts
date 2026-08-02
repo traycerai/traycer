@@ -12,8 +12,9 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import { providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
 
 type AwaitLoginRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -23,11 +24,23 @@ type AwaitLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.awaitLogin"
 >;
-type ProvidersListResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.list"
->;
 type AwaitLoginContext = { readonly hostId: string | null };
+
+// The provider state a login echo carries. Named rather than inlined so the
+// capability-stripping helper below states its own contract.
+type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
+
+/**
+ * Drops `loginCapability` from a mutation state echo so an overlay cannot
+ * narrow the cached capability. See the call site for why this one field is
+ * different from every other field on the echo.
+ */
+function withoutLoginCapability(
+  state: AwaitLoginProviderState,
+): Omit<AwaitLoginProviderState, "loginCapability"> {
+  const { loginCapability: _dropped, ...rest } = state;
+  return rest;
+}
 
 /**
  * Awaits the honest login-completion edge for a provider on the CURRENT tab's
@@ -104,24 +117,44 @@ export function useProvidersAwaitLoginForClient(args: {
     options: {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
-      onSuccess: (data: AwaitLoginResponse, _variables, context) => {
+      onSuccess: async (data: AwaitLoginResponse, _variables, context) => {
         const next = data.state;
         if (next === null || context.hostId === null) return;
-        queryClient.setQueryData<ProvidersListResponse>(
-          hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-            context.hostId,
-            "providers.list",
-            {},
-          ),
-          (prev) => {
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: context.hostId,
+          update: (prev) => {
             if (prev === undefined) return prev;
             return {
               providers: prev.providers.map((p) =>
-                p.providerId === next.providerId ? next : p,
+                p.providerId === next.providerId
+                  ? // Overlay the echo onto the cached entry rather than
+                    // replacing it. The echo is pinned to the frozen
+                    // `providerMutationCliStateSchemaV21`, so it does not
+                    // carry the provider-pack-registry fields
+                    // (`managedInstallState`, `versionVisibility`,
+                    // `advisory`) - only `providers.list@5.0` does. A
+                    // straight replace would blank whatever the last list
+                    // fetch established, since a login cannot change what is
+                    // installed. The echo stays authoritative for every
+                    // field it does model.
+                    //
+                    // `loginCapability` is the one field it must NOT be
+                    // authoritative for. It is PRESENT on the echo but frozen
+                    // at the v4.0 shape, so it lacks `terminalLogin` - and a
+                    // present-but-narrower object overwrites wholesale. That
+                    // would silently retract the terminal sign-in affordance
+                    // the moment any login echo landed, which is exactly when
+                    // the user is looking at it. Capability is a property of
+                    // the installed CLI, not of a login attempt; only
+                    // `providers.list` may set it.
+                    { ...p, ...withoutLoginCapability(next) }
+                  : p,
               ),
+              native: prev.native,
             };
           },
-        );
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't confirm sign-in."),

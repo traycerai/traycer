@@ -36,7 +36,6 @@ describe("chat run settings", () => {
         permission: "supervised",
         reasoning: "high",
         serviceTier: "",
-        agentMode: "regular",
       }),
     ).toEqual({
       harnessId: "codex",
@@ -54,7 +53,6 @@ describe("chat run settings", () => {
         permission: "full_access",
         reasoning: "",
         serviceTier: "",
-        agentMode: "epic",
       }),
     ).toEqual({
       harnessId: "codex",
@@ -62,7 +60,7 @@ describe("chat run settings", () => {
       permissionMode: "full_access",
       reasoningEffort: null,
       serviceTier: null,
-      agentMode: "epic",
+      agentMode: "regular",
       profileId: null,
     });
 
@@ -76,7 +74,6 @@ describe("chat run settings", () => {
         permission: "auto_accept_edits",
         reasoning: "medium",
         serviceTier: "fast",
-        agentMode: "regular",
       }),
     ).toEqual({
       harnessId: "opencode",

@@ -4,6 +4,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   AgentSender,
   ChatEvent,
+  ChatSessionAnchor,
   Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -100,6 +101,29 @@ function userMessageAt(
   timestamp: number,
 ): Extract<Message, { role: "user" }> {
   return { ...userMessage(messageId), timestamp };
+}
+
+function claudeSessionAnchor(
+  profileId: string | null,
+  labelSnapshot: string | null,
+): ChatSessionAnchor {
+  return {
+    profileId,
+    labelSnapshot,
+    accountUuid: null,
+    accentColor: null,
+    harnessId: "claude",
+    hostId: "host-1",
+    sessionId: "session-1",
+    sessionWorkspaceSnapshot: {
+      workspaceKind: "session-snapshot",
+      primaryWorkspace: "/repo",
+      secondaryWorkspaces: [],
+    },
+    claudeMessageUuid: "claude-message-1",
+    createdAt: 1000,
+    coveredUntilMessageId: null,
+  };
 }
 
 function steerRequestedQueueItem(
@@ -878,12 +902,86 @@ describe("useRenderedMessages", () => {
     expect(result.current[0]?.assistantMeta).toEqual({
       provider: "claude",
       providerLabel: "Claude Code",
+      profileLabel: null,
       modelLabel: null,
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
       costUsd: null,
     });
+  });
+
+  it("threads the provider-session profile snapshot onto its assistant turns", () => {
+    const anchoredUser = {
+      ...userMessage("profile-user"),
+      sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+    };
+    const continuationUser = userMessageAt("continuation-user", 3000);
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [
+            anchoredUser,
+            assistantMessage("turn-profile-1", 2000),
+            continuationUser,
+            assistantMessage("turn-profile-2", 4000),
+          ],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const assistantRows = result.current.filter(
+      (message) => message.role === "assistant",
+    );
+    expect(
+      assistantRows.map((message) => message.assistantMeta?.profileLabel),
+    ).toEqual(["Work", "Work"]);
+  });
+
+  it("shows the initiating profile on the active turn before output starts", () => {
+    const initiatingUser = {
+      ...userMessage("active-profile-user"),
+      sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+    };
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [initiatingUser],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: {
+            agentMode: "regular",
+            sameTurnSteeringSupported: false,
+            turnId: "turn-active-profile",
+            status: "starting",
+            harnessId: "claude",
+            model: "claude-sonnet-4-5",
+            reasoningEffort: "high",
+            serviceTier: null,
+            profileId: "work-profile",
+            userMessageId: initiatingUser.messageId,
+            startedAt: 2000,
+            updatedAt: 2000,
+          },
+          runStatus: "running",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(
+      result.current.find((message) => message.role === "assistant")
+        ?.assistantMeta?.profileLabel,
+    ).toBe("Work");
   });
 
   it("threads the turn's cost onto assistantMeta for the completion footer", () => {
@@ -1144,11 +1242,12 @@ describe("useRenderedMessages", () => {
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: {
+            agentMode: "regular",
+            sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
             model: "claude-sonnet-4-5",
-            agentMode: "regular",
             profileId: null,
             userMessageId: null,
             startedAt: 1,
@@ -2827,11 +2926,12 @@ describe("useRenderedMessages", () => {
   it("keeps persisted rows stable while only the live row streams", () => {
     const u1 = userMessage("m1");
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 1,
@@ -3018,11 +3118,12 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an approval is pending", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -3083,11 +3184,12 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an interview is pending from snapshot state", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -3128,11 +3230,12 @@ describe("useRenderedMessages", () => {
 
   it("keeps the assistant row id stable from live turn to completion", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3186,11 +3289,12 @@ describe("useRenderedMessages", () => {
 
   it("keeps an accepted pending user before the pre-turn assistant row", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-2",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m2",
       startedAt: 2500,
@@ -3335,11 +3439,12 @@ describe("useRenderedMessages", () => {
       blocks: [fileChangeBlock("/repo/src/app.ts")],
     };
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3541,11 +3646,12 @@ describe("useRenderedMessages", () => {
             serviceTier: null,
           },
           activeTurn: {
+            agentMode: "regular",
+            sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
             model: "claude-sonnet-4-5",
-            agentMode: "regular",
             profileId: null,
             userMessageId: null,
             startedAt: 1,
@@ -3567,11 +3673,12 @@ describe("useRenderedMessages", () => {
 
   it("holds back the file change group for the streaming live assistant", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3667,11 +3774,12 @@ function forkEvent(input: {
 }
 
 const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
+  agentMode: "regular",
+  sameTurnSteeringSupported: false,
   turnId: "turn-setup",
   status: "running",
   harnessId: "claude",
   model: "claude-sonnet-4-5",
-  agentMode: "regular",
   profileId: null,
   userMessageId: null,
   startedAt: 1,
@@ -4790,7 +4898,7 @@ describe("useRenderedMessages head/tail partition", () => {
     ]);
   });
 
-  it("suppresses code:auth error segments while keeping surrounding content", () => {
+  it("renders code:auth error segments alongside other errors (no suppression)", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [
@@ -4809,14 +4917,17 @@ describe("useRenderedMessages head/tail partition", () => {
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
     expect(row?.segments.some((s) => s.kind === "text")).toBe(true);
-    // The auth error is gone; the non-auth error survives.
+    // Auth errors render like any other error: suppressing them made headless
+    // (A2A-triggered) auth failures invisible once the transient re-auth
+    // banner cleared.
     const errorSegments = row?.segments.filter((s) => s.kind === "error") ?? [];
-    expect(errorSegments).toHaveLength(1);
-    const onlyError = errorSegments[0];
-    expect(onlyError.code).toBe("RUNTIME_THROWN");
+    expect(errorSegments.map((segment) => segment.code)).toEqual([
+      "auth",
+      "RUNTIME_THROWN",
+    ]);
   });
 
-  it("collapses an auth-only turn to zero segments", () => {
+  it("keeps an auth-only turn's error segment as its durable record", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [turnErrorBlock("block-1", 2000, "auth")],
@@ -4830,7 +4941,9 @@ describe("useRenderedMessages head/tail partition", () => {
     );
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
-    expect(row?.segments ?? []).toHaveLength(0);
+    const segments = row?.segments ?? [];
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.kind).toBe("error");
   });
 });
 
@@ -5233,11 +5346,12 @@ describe("useRenderedMessages turn.stopped", () => {
 
   it("keeps an event-only stopped boundary behind the active-turn snapshot gate", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-pre-setup",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -5528,11 +5642,12 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,

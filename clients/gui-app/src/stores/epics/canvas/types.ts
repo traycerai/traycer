@@ -1,3 +1,4 @@
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
@@ -10,7 +11,10 @@ import type {
 } from "./tile-tree";
 import {
   TILE_KIND_BLANK,
+  TILE_KIND_COMM_GRAPH,
   TILE_KIND_GIT_DIFF,
+  TILE_KIND_PR_DETAIL,
+  TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
@@ -108,6 +112,31 @@ export interface EpicTerminalRef {
   readonly titleSource: TerminalTitleSource;
   readonly hostId: string;
   readonly cwd: string;
+  /**
+   * Who created the session behind this tile. Absent (the overwhelming
+   * majority) and `"shell"` both mean the ordinary case: the tile owns the
+   * session and may `terminal.create` it if the host has no record - that is
+   * how a restart or a reopened epic gets its shell back.
+   *
+   * `"provider-login"` means the HOST created it, for a provider sign-in. That
+   * tile must never create: re-creating the id would spawn a bare shell with
+   * none of the provider's spawn env, so the user would face a prompt that
+   * cannot sign them in and no error saying why. It renders a retry affordance
+   * that re-runs the RPC instead.
+   *
+   * Optional rather than required: making it required would force every
+   * existing terminal-ref construction site to state `origin: "shell"` for no
+   * behavioural gain, and absent already means the same thing.
+   */
+  readonly origin?: "shell" | "provider-login";
+  /**
+   * Which provider's sign-in this terminal was opened for. Meaningful only
+   * alongside `origin: "provider-login"`, and required for the retry
+   * affordance to work at all: restarting a sign-in means calling
+   * `providers.startTerminalLogin` again, and only the tile knows which
+   * provider it is standing in for.
+   */
+  readonly originProviderId?: ProviderId;
 }
 
 export function makeOpenableNodeRef(args: {
@@ -249,6 +278,45 @@ export interface SnapshotDiffTileRef {
 }
 
 /**
+ * Persisted view state of a comm-graph tile: the canvas viewport ONLY.
+ *
+ * Node positions are deliberately NOT persisted - the graph is auto-laid-out
+ * from the epic's live agent set on every data change, so a stored position
+ * would go stale the moment an agent is created, archived, or reparented.
+ * Zoom/pan is the user's own framing of that layout and is worth keeping.
+ */
+export interface CommGraphTileViewState {
+  readonly x: number;
+  readonly y: number;
+  readonly zoom: number;
+}
+
+/**
+ * The per-epic communication graph tile.
+ *
+ * Non-record-backed (there is no Y.Doc artifact behind it) with a COMPUTED,
+ * epic-scoped id, following the `git-diff` precedent: reopening the graph for
+ * the same epic dedups onto the same tile rather than stacking duplicates.
+ *
+ * NO HOST BINDING. Every other tile kind is bound to one `hostId` for life
+ * because its content lives on exactly one host. The communication graph is the
+ * exception: an epic's agents can live on several hosts, each holding its own
+ * disjoint slice of the event log, so the tile opens one subscription PER host
+ * and merges them. `hostId` is therefore the same inert placeholder the blank
+ * tile carries (the field is structural - `renderTile` wraps every tile in a
+ * `TabHostProvider`) and the tile body must never read `useTabHostId()`.
+ */
+export interface CommGraphTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_COMM_GRAPH;
+  readonly name: string;
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly view: CommGraphTileViewState;
+}
+
+/**
  * A blank tab. A real strip tab (titled "New tab", closable) whose body renders
  * the inline opener; picking content replaces it in place. `hostId` is a
  * placeholder - the opener binds the real default host at create time, and
@@ -262,13 +330,73 @@ export interface BlankTileRef {
   readonly hostId: string;
 }
 
+/**
+ * GitHub-style PR full-view tile. Pure ref, `isRecordBacked: false` (same
+ * family as `GitDiffTileRef`/`SnapshotDiffTileRef`) - the heavy PR fact is
+ * fetched live over `pr.subscribeDetail`, never stored in the tile itself.
+ * `githubHost`/`owner`/`repo`/`prNumber` are the PR's base coordinates (only
+ * fully-identified rows are tile-able, per the panel's unknown-base rule).
+ * `epicId` is deliberately NOT part of the ref: it is resolved from canvas
+ * context (`TileRenderArgs.epicId`) at subscribe time, since the ref is a
+ * pure GitHub-coordinate identity that must dedupe/reopen the same tile
+ * regardless of which epic's panel opened it.
+ */
+export interface PrDetailTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_PR_DETAIL;
+  readonly name: string;
+  readonly hostId: string;
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+}
+
+/**
+ * The PR's own diff, as a full canvas tile - the same shape as
+ * {@link PrDetailTileRef} plus the diff view state, because it is the same
+ * identity viewed a different way.
+ *
+ * Deliberately a PURE PR-coordinate ref: no `runningDir`, no base/head OIDs,
+ * no ref names. All of those are re-derived from `pr.subscribeDetail` at
+ * render time, so a tile reopened a week later diffs the PR as it is NOW
+ * rather than replaying a range that has since been rebased away. It also
+ * means the host - not the client - stays the only thing that ever turns a
+ * `linkGroupKey` into a directory.
+ */
+export interface PrDiffTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_PR_DIFF;
+  readonly name: string;
+  readonly hostId: string;
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly view: GitDiffTileViewState;
+}
+
 export type EpicCanvasTileRef =
-  EpicNodeRef | GitDiffTileRef | SnapshotDiffTileRef | BlankTileRef;
+  | EpicNodeRef
+  | GitDiffTileRef
+  | SnapshotDiffTileRef
+  | CommGraphTileRef
+  | PrDetailTileRef
+  | PrDiffTileRef
+  | BlankTileRef;
 
 export function isBlankTileRef(
   value: EpicCanvasTileRef,
 ): value is BlankTileRef {
   return value.type === TILE_KIND_BLANK;
+}
+
+export function isCommGraphTileRef(
+  value: EpicCanvasTileRef,
+): value is CommGraphTileRef {
+  return value.type === TILE_KIND_COMM_GRAPH;
 }
 
 export function isGitDiffTileRef(
@@ -287,6 +415,18 @@ export function isSnapshotDiffTileRef(
   value: EpicCanvasTileRef,
 ): value is SnapshotDiffTileRef {
   return value.type === TILE_KIND_SNAPSHOT_DIFF;
+}
+
+export function isPrDetailTileRef(
+  value: EpicCanvasTileRef,
+): value is PrDetailTileRef {
+  return value.type === TILE_KIND_PR_DETAIL;
+}
+
+export function isPrDiffTileRef(
+  value: EpicCanvasTileRef,
+): value is PrDiffTileRef {
+  return value.type === TILE_KIND_PR_DIFF;
 }
 
 export function isDiffTileRef(
@@ -345,4 +485,7 @@ export interface EpicViewTab {
   readonly tabId: string;
   readonly epicId: string;
   readonly name: string;
+  readonly surfaceMode?:
+    | { readonly kind: "epic" }
+    | { readonly kind: "phase-migration"; readonly phaseId: string };
 }

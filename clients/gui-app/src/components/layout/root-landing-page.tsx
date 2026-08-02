@@ -1,5 +1,4 @@
 import { AuthLandingPage } from "@/components/auth/auth-landing-page";
-import { HomePage } from "@/components/home/home-page";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -17,5 +16,5 @@ export function RootLandingPage() {
     return <AuthLandingPage />;
   }
 
-  return <HomePage />;
+  return null;
 }

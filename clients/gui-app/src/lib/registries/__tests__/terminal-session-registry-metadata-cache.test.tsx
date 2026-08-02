@@ -6,8 +6,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import type {
-  CanonicalTerminalSessionInfo,
-  ListTerminalsResponseV20,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+  ListTerminalsResponseV22,
   TerminalSessionInfo,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -19,6 +19,9 @@ import { hostQueryKeys } from "@/lib/query-keys";
 // fetch gate released the session handle, the re-subscribe's snapshot
 // re-set the metadata, and the cycle repeated forever - bouncing the PTY
 // stream ~3x/second and leaving reattached terminals permanently blank.
+//
+// Also covers `homeCwd` preservation on those session-row patches: top-level
+// response metadata must survive title / activeProcessName updates.
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
@@ -59,6 +62,7 @@ import {
 const HOST_ID = "host-1";
 const EPIC_ID = "epic-1";
 const SESSION_ID = "term-1";
+const HOME_CWD = "/Users/dev";
 
 const listKey = [
   ...hostQueryKeys.methodScope(HOST_ID, "terminal.list"),
@@ -66,13 +70,14 @@ const listKey = [
 ] as const;
 
 function sessionInfo(
-  overrides: Partial<CanonicalTerminalSessionInfo>,
-): CanonicalTerminalSessionInfo {
+  overrides: Partial<CanonicalTerminalSessionInfoWithCurrentCwd>,
+): CanonicalTerminalSessionInfoWithCurrentCwd {
   return {
     sessionId: SESSION_ID,
     scope: { kind: "epic", epicId: EPIC_ID },
     sessionKind: "terminal",
     cwd: "/work/repo",
+    currentCwd: "/work/repo",
     shellCommand: "/bin/zsh",
     shellArgs: [],
     cols: 80,
@@ -117,8 +122,9 @@ function setup() {
     sessionId: "term-other",
     title: "other",
   });
-  queryClient.setQueryData<ListTerminalsResponseV20>(listKey, {
+  queryClient.setQueryData<ListTerminalsResponseV22>(listKey, {
     sessions: [sessionInfo({}), otherSession],
+    homeCwd: HOME_CWD,
   });
 
   let capturedCallbacks: TerminalStreamCallbacks | null = null;
@@ -195,11 +201,13 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
     });
 
     const data =
-      harness.queryClient.getQueryData<ListTerminalsResponseV20>(listKey);
+      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
     expect(data).toBeDefined();
     const patched = data?.sessions.find((s) => s.sessionId === SESSION_ID);
     expect(patched?.activeProcessName).toBe("bun");
     expect(patched?.title).toBe("Setup: repo");
+    // Top-level response metadata must survive a sessions-only patch.
+    expect(data?.homeCwd).toBe(HOME_CWD);
     // The untouched sibling row must be reference-equal (no spurious churn).
     const sibling = data?.sessions.find((s) => s.sessionId === "term-other");
     expect(sibling).toBe(harness.otherSession);
@@ -232,13 +240,89 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
     });
 
     const data =
-      harness.queryClient.getQueryData<ListTerminalsResponseV20>(listKey);
+      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
     const patched = data?.sessions.find((s) => s.sessionId === SESSION_ID);
     expect(patched?.title).toBe("renamed");
     expect(patched?.activeProcessName).toBe("vim");
+    expect(patched?.currentCwd).toBe("/work/repo");
+    expect(data?.homeCwd).toBe(HOME_CWD);
     expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
       false,
     );
     expect(harness.factoryCalls()).toBe(1);
+  });
+
+  it("patches a live current-directory update into the cached row", async () => {
+    const harness = setup();
+    await waitFor(() => {
+      expect(harness.rendered.result.current).not.toBeNull();
+    });
+
+    act(() => {
+      harness.callbacks().onSessionUpdated({
+        kind: "sessionUpdated",
+        hasBinaryPayload: false,
+        sessionId: SESSION_ID,
+        session: sessionInfo({ currentCwd: "/work/next" }),
+      });
+    });
+
+    const data =
+      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
+    expect(
+      data?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("/work/next");
+
+    act(() => {
+      harness.callbacks().onSessionUpdated({
+        kind: "sessionUpdated",
+        hasBinaryPayload: false,
+        sessionId: SESSION_ID,
+        session: sessionInfo({ currentCwd: "" }),
+      });
+    });
+
+    expect(
+      harness.queryClient
+        .getQueryData<ListTerminalsResponseV22>(listKey)
+        ?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("");
+    expect(data?.homeCwd).toBe(HOME_CWD);
+    expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
+      false,
+    );
+  });
+
+  it("clears a cached cwd when the first stream frame explicitly reports empty", async () => {
+    const harness = setup();
+    await waitFor(() => {
+      expect(harness.rendered.result.current).not.toBeNull();
+    });
+
+    act(() => {
+      harness.callbacks().onSnapshot(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessionId: SESSION_ID,
+          session: sessionInfo({ currentCwd: "" }),
+          scrollback: "",
+          ackCreditSupported: true,
+        },
+        "",
+      );
+    });
+
+    expect(
+      harness.queryClient
+        .getQueryData<ListTerminalsResponseV22>(listKey)
+        ?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("");
+    expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
+      false,
+    );
   });
 });

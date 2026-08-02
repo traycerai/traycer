@@ -1,14 +1,27 @@
 import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  publishAgentActivity,
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
-import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicArtifactRef,
+  EpicTerminalRef,
+} from "@/stores/epics/canvas/types";
 
 const TERMINAL_NODE: EpicTerminalRef = {
   id: "terminal-1",
@@ -79,3 +92,109 @@ function renderTerminalTabIcon(): void {
     </NotificationIndicatorsProvider>,
   );
 }
+
+const TUI_AGENT_NODE: EpicArtifactRef = {
+  id: "agent-1",
+  instanceId: "agent-instance-1",
+  type: "terminal-agent",
+  name: "Plan Critic",
+  hostId: "host-1",
+};
+
+const SPINNER_LABEL = "Agent in progress";
+
+describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+    resetAgentActivity();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  // Regression: the TUI-agent tab used to hardcode `running={false}`, so a
+  // working agent spun in the sidebar but never in its own tab.
+  it("swaps the idle icon for the spinner while the agent is working", () => {
+    registerEpicSession("epic-1");
+
+    renderTuiAgentTabIcon();
+
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
+
+    act(() => {
+      publishWorking([TUI_AGENT_NODE.id]);
+    });
+
+    expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
+
+    act(() => {
+      publishWorking([]);
+    });
+
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
+  });
+
+  // The shared icon renders outside an open-epic session too (drag previews,
+  // mount-lifecycle tests); an Epic with no presence must read as idle, not
+  // throw.
+  it("renders the idle icon with no registered Epic session", () => {
+    renderTuiAgentTabIcon();
+
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
+  });
+
+  // The defect this whole signal move fixes: activity for an Epic this window
+  // has NEVER opened. There is no session and no per-epic room here, so the
+  // spinner can only come from the host-selected activity view.
+  it("spins for an Epic that was never opened in this window", () => {
+    renderTuiAgentTabIcon();
+
+    act(() => {
+      publishWorking([TUI_AGENT_NODE.id]);
+    });
+
+    expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
+  });
+});
+
+function publishWorking(agentIds: readonly string[]): void {
+  publishAgentActivity([
+    {
+      hostId: "host-1",
+      byEpic: { "epic-1": { working: agentIds, turn: agentIds } },
+    },
+  ]);
+}
+
+function registerEpicSession(epicId: string): OpenEpicStoreHandle {
+  return __getOpenEpicRegistryForTests().acquire(epicId, () =>
+    createOpenEpicStore({
+      epicId,
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    }),
+  );
+}
+
+function renderTuiAgentTabIcon(): void {
+  render(
+    <NotificationIndicatorsProvider indicators={{ epics: {}, chats: {} }}>
+      <EpicNodeTabIcon
+        node={TUI_AGENT_NODE}
+        epicId="epic-1"
+        variant="live"
+        className="size-3.5 shrink-0"
+        defaultIcon={undefined}
+      />
+    </NotificationIndicatorsProvider>,
+  );
+}
+
+const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});

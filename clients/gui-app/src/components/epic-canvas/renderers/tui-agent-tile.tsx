@@ -46,6 +46,7 @@ import {
   peekPreparedTerminalAgentLaunch,
 } from "@/stores/terminals/prepared-terminal-agent-launch-store";
 import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
+import { TerminalGridMeasureProbe } from "./terminal-grid-measure-probe";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
@@ -54,20 +55,26 @@ import {
   emitTerminalCrashedNotification,
 } from "@/stores/notifications/app-local-notifications-store";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { cn } from "@/lib/utils";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useTuiForkProfileSupported } from "@/hooks/agent/use-tui-fork-profile-support";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
 import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setup-terminal-list-refresh-driver";
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
-import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
-import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
@@ -81,31 +88,16 @@ import {
   worktreeStagingKeyString,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
-import { TerminalAgentForkDialog } from "./terminal-agent-fork-dialog";
+import {
+  TerminalAgentForkDialog,
+  type TerminalAgentForkIntent,
+} from "./terminal-agent-fork-dialog";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
-// Poll cadence for the setup card's binding while a worktree setup script is
-// still in flight. The script runs in a background PTY server-side and only
-// mutates the binding, so without polling a completion/failure would not
-// surface until the next window refocus - the card would stay "setting up".
-const SETUP_BINDING_POLL_INTERVAL_MS = 2_000;
-
-// A created worktree whose setup script has neither settled nor failed yet.
-// `pending`/`running` are the only non-terminal setup states; every other
-// state (succeeded / not_required / failed / cancelled) is final, so polling
-// stops once no entry is in flight.
-function hasInFlightWorktreeSetup(binding: WorktreeBinding | null): boolean {
-  if (binding === null) return false;
-  return binding.entries.some(
-    (entry) =>
-      entry.mode === "worktree" &&
-      (entry.setupState === "pending" || entry.setupState === "running"),
-  );
-}
-
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * A bound worktree/folder is gone from disk. The host's prepare-launch
  * resolver rejects with the typed `WORKTREE_MISSING` envelope instead of
@@ -235,6 +227,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
+        ownerKind="agent"
         onClose={closeCanvasTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
@@ -329,10 +322,15 @@ function TuiAgentTileLive(
         epicId,
         model: agent.model,
         reasoningEffort: agent.reasoningEffort,
-        agentMode: agent.agentMode,
+        // Epic Mode was removed; the protocol still carries the field.
+        agentMode: "regular",
         tuiAgentId: agent.id,
         harnessSessionId: agent.harnessSessionId,
         forkSourceHarnessSessionId: null,
+        // `null`: a reopen/reattach carries no wire-level fork-source id -
+        // the resolver's strict-scan fallback (or persisted pending-fork
+        // provenance) is what applies here, never this field.
+        forkSourceTuiAgentId: null,
         // Raw per-agent override: `null` keeps provider Settings as the
         // fallback, while `""` and non-empty strings are durable overrides.
         terminalAgentArgs: agent.terminalAgentArgs,
@@ -571,7 +569,6 @@ function TuiAgentTileLive(
         epicId={epicId}
         viewTabId={props.viewTabId}
         agent={agent}
-        agentMode={agent.agentMode}
         isOwnerActive={isOwnerActive}
         onWorkspaceBindingCommitted={restartAfterWorkspaceBindingChange}
       />
@@ -591,6 +588,15 @@ function TuiAgentTileLive(
           isActive={props.isActive}
           recovery={props.recovery}
           onCrashExit={props.onCrashExit}
+          measureProbe={
+            <TerminalGridMeasureProbe
+              sessionId={sessionId}
+              instanceId={instanceId}
+              tileKind="terminal-agent"
+              chrome="padded"
+              onMeasured={bootstrap.reportMeasuredGrid}
+            />
+          }
         />
       </div>
     </TerminalAgentTileShell>
@@ -619,6 +625,8 @@ interface TerminalAgentBodyProps {
   readonly isRestartKillSuppressed: () => boolean;
   readonly recovery: TerminalSessionRecovery;
   readonly onCrashExit: () => void;
+  /** Pre-subscribe grid measurement probe, rendered in the loading state. */
+  readonly measureProbe: React.ReactNode;
 }
 
 function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
@@ -695,8 +703,21 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   if (props.handle === null) {
     // One stable skeleton for the whole pre-ready window (preparing → starting
     // → xterm suspense all render `TerminalLoadingSkeleton`), so the transition
-    // into the live terminal never flickers between placeholder strings.
-    return <TerminalLoadingSkeleton />;
+    // into the live terminal never flickers between placeholder strings. The
+    // measurement probe mounts the persistent xterm engine beneath it (both
+    // fill the same relative box) so the container's grid is measured before
+    // the subscribe is dispatched - see `TerminalGridMeasureProbe`. Probe
+    // first, skeleton in an overlay after: the probe's container is
+    // `absolute inset-0`, so in-flow content preceding it would be painted
+    // over.
+    return (
+      <>
+        {props.measureProbe}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
+      </>
+    );
   }
 
   return (
@@ -720,7 +741,6 @@ interface TerminalAgentPreLaunchToolbarProps {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly agent: TuiAgentProjection;
-  readonly agentMode: AgentMode;
   readonly isOwnerActive: boolean;
   readonly onWorkspaceBindingCommitted: () => void;
 }
@@ -738,11 +758,32 @@ interface TerminalAgentPreLaunchToolbarProps {
  * `binding={null}` so the chip degrades to "not selected"; once it resolves
  * the chip reflects Local / worktree branch deterministically.
  */
+/** Tooltip/aria reason for the disabled "Continue under another profile…"
+ *  dropdown item: the old-host capability gate takes precedence over the
+ *  same session/binding readiness gate plain Fork uses, since it names a
+ *  concrete remediation ("update the host") the other reason doesn't have. */
+function continueUnderProfileDisabledReasonFor(
+  continueUnderProfileSupported: boolean,
+  forkDisabled: boolean,
+): string | undefined {
+  if (!continueUnderProfileSupported) {
+    return "Update Traycer host to continue this session under another profile.";
+  }
+  if (forkDisabled) {
+    return "Fork is available after the terminal agent session and workspace binding are ready.";
+  }
+  return undefined;
+}
+
 function TerminalAgentPreLaunchToolbar(
   props: TerminalAgentPreLaunchToolbarProps,
 ) {
   const paneVisible = usePaneVisible();
-  const [forkDialogOpen, setForkDialogOpen] = useState(false);
+  const [forkDialogIntent, setForkDialogIntent] =
+    useState<TerminalAgentForkIntent | null>(null);
+  const continueUnderProfileSupported = useTuiForkProfileSupported(
+    props.hostId,
+  );
   const bindingQuery = useWorktreeGetBinding({
     client: props.hostClient,
     epicId: props.epicId,
@@ -757,7 +798,7 @@ function TerminalAgentPreLaunchToolbar(
     refetchOnWindowFocus: paneVisible,
     // The nested setup notice owns the in-flight polling; this observer only
     // needs the binding for the chip, so it shares the cache without polling.
-    refetchInterval: false,
+    poll: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
@@ -790,11 +831,22 @@ function TerminalAgentPreLaunchToolbar(
     props.hostClient === null ||
     props.agent.harnessSessionId === null ||
     !bindingQuery.isSuccess;
-  const openForkDialog = useCallback((): void => {
-    if (forkDisabled) return;
-    clearStagedIntent(pendingForkStagingKey);
-    setForkDialogOpen(true);
-  }, [clearStagedIntent, forkDisabled, pendingForkStagingKey]);
+  const openForkDialog = useCallback(
+    (dialogIntent: TerminalAgentForkIntent): void => {
+      if (forkDisabled) return;
+      clearStagedIntent(pendingForkStagingKey);
+      setForkDialogIntent(dialogIntent);
+    },
+    [clearStagedIntent, forkDisabled, pendingForkStagingKey],
+  );
+  const handleForkDialogOpenChange = useCallback((nextOpen: boolean): void => {
+    if (!nextOpen) setForkDialogIntent(null);
+  }, []);
+  const continueUnderProfileDisabledReason =
+    continueUnderProfileDisabledReasonFor(
+      continueUnderProfileSupported,
+      forkDisabled,
+    );
   const onWorkspaceBindingCommitted = props.onWorkspaceBindingCommitted;
   const handleWorkspaceBindingCommitted = useCallback(
     (_changedWorkspacePaths: ReadonlyArray<string>): void => {
@@ -803,8 +855,12 @@ function TerminalAgentPreLaunchToolbar(
     [onWorkspaceBindingCommitted],
   );
   const forkTarget =
-    forkDialogOpen && !forkDisabled
-      ? { sourceAgent: props.agent, workspaceSeed: forkWorkspaceSeed }
+    forkDialogIntent !== null && !forkDisabled
+      ? {
+          sourceAgent: props.agent,
+          workspaceSeed: forkWorkspaceSeed,
+          intent: forkDialogIntent,
+        }
       : null;
   return (
     <div
@@ -812,6 +868,7 @@ function TerminalAgentPreLaunchToolbar(
       data-testid="terminal-agent-pre-launch-toolbar"
     >
       <HostWorkspaceSelector
+        disabled={false}
         surface={{
           kind: "terminal-agent",
           hostId: props.hostId,
@@ -834,23 +891,92 @@ function TerminalAgentPreLaunchToolbar(
           onBindingCommitted: handleWorkspaceBindingCommitted,
         }}
       />
-      <AgentModeReadonlyLabel value={props.agentMode} />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-        disabled={forkDisabled}
-        title={
-          forkDisabled
-            ? "Fork is available after the terminal agent session and workspace binding are ready."
-            : "Fork terminal agent"
-        }
-        onClick={openForkDialog}
-      >
-        <GitFork aria-hidden className="size-3.5" />
-        Fork
-      </Button>
+      <DropdownMenu>
+        <ButtonGroup aria-label="Fork actions" className="shrink-0">
+          <TooltipWrapper
+            label={
+              forkDisabled
+                ? "Fork is available after the terminal agent session and workspace binding are ready."
+                : "Fork terminal agent"
+            }
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            {/* The span keeps the disabled button hoverable for its readiness
+                tooltip. Its button still owns the visible first segment. */}
+            <span className="inline-flex">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 rounded-r-none! px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+                disabled={forkDisabled}
+                onClick={() => openForkDialog("fork")}
+              >
+                <GitFork aria-hidden className="size-3.5" />
+                Fork
+              </Button>
+            </span>
+          </TooltipWrapper>
+          <DropdownMenuTrigger asChild>
+            <TooltipWrapper
+              label="More fork options"
+              side="top"
+              sideOffset={6}
+              align="end"
+            >
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                className="text-muted-foreground hover:text-foreground"
+                disabled={forkDisabled}
+                aria-label="More fork options"
+              >
+                <ChevronDown aria-hidden className="size-3" />
+              </Button>
+            </TooltipWrapper>
+          </DropdownMenuTrigger>
+        </ButtonGroup>
+        <DropdownMenuContent align="start" className="w-max max-w-[90vw]">
+          <TooltipWrapper
+            label={continueUnderProfileDisabledReason}
+            side="right"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <span className="flex w-full">
+              <DropdownMenuItem
+                disabled={forkDisabled || !continueUnderProfileSupported}
+                aria-label={
+                  continueUnderProfileDisabledReason === undefined
+                    ? undefined
+                    : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
+                }
+                className={cn(
+                  continueUnderProfileDisabledReason !== undefined &&
+                    "flex-col items-start gap-0.5",
+                )}
+                onSelect={() => openForkDialog("continue")}
+              >
+                <span className="w-full whitespace-nowrap">
+                  Continue under another profile…
+                </span>
+                {/* Radix's roving-tabindex skips this item entirely while
+                    disabled, so its aria-label (and the hover-only tooltip
+                    above) never reach keyboard/AT users - a static second
+                    line needs no focus/hover to be perceivable. */}
+                {continueUnderProfileDisabledReason !== undefined ? (
+                  <span className="text-left text-[11px] leading-tight text-muted-foreground">
+                    {continueUnderProfileDisabledReason}
+                  </span>
+                ) : null}
+              </DropdownMenuItem>
+            </span>
+          </TooltipWrapper>
+        </DropdownMenuContent>
+      </DropdownMenu>
       {/* Right-aligned status-bar group: the worktree-creation notice sits
           beside the agent controls. The notice's expanded detail opens as a
           downward Popover overlay, so it never reflows the terminal below. */}
@@ -863,17 +989,18 @@ function TerminalAgentPreLaunchToolbar(
         />
         <TerminalAgentHeaderControls
           epicId={props.epicId}
+          viewTabId={props.viewTabId}
           tuiAgentId={props.agent.id}
         />
       </div>
       <TerminalAgentForkDialog
-        open={forkDialogOpen}
+        open={forkDialogIntent !== null}
         target={forkTarget}
         epicId={props.epicId}
         tabId={props.viewTabId}
         hostId={props.hostId}
         hostClient={props.hostClient}
-        onOpenChange={setForkDialogOpen}
+        onOpenChange={handleForkDialogOpenChange}
       />
     </div>
   );
@@ -923,12 +1050,9 @@ function TerminalAgentWorktreeNotice(props: {
     refetchOnWindowFocus: paneVisible,
     // Poll while a setup script is in flight so a background completion/failure
     // surfaces on the card even while the agent PTY runs (no chat subscription
-    // to push binding transitions). TanStack re-runs this against the freshest
-    // binding after each fetch, so polling stops the moment every entry settles.
-    refetchInterval: (query) =>
-      hasInFlightWorktreeSetup(query.state.data?.binding ?? null)
-        ? SETUP_BINDING_POLL_INTERVAL_MS
-        : false,
+    // to push binding transitions). The table stops polling once every entry
+    // settles.
+    poll: true,
   });
   const binding = bindingQuery.data?.binding ?? null;
   // Setup PTYs are spawned server-side, so nothing invalidates the renderer's
@@ -996,6 +1120,7 @@ function TerminalAgentTileShell(props: {
  */
 function TerminalAgentHeaderControls(props: {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly tuiAgentId: string;
 }) {
   const controls = useAgentStopControls({
@@ -1015,7 +1140,7 @@ function TerminalAgentHeaderControls(props: {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
             data-testid="tui-agent-subagents-trigger"
@@ -1031,6 +1156,7 @@ function TerminalAgentHeaderControls(props: {
         <PopoverContent align="end" className="w-[min(90vw,22rem)] p-0">
           <AgentStopList
             epicId={props.epicId}
+            viewTabId={props.viewTabId}
             self={self}
             descendants={controls.descendants}
             surface="tui-popover"
@@ -1225,6 +1351,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
           onContainerResize={handleContainerResize}
           onWriterReady={handleWriterReady}
           shouldFocusOnActivePane={props.isActive}
+          registerImperativeFocus
           findTargetId={
             props.isActive
               ? `terminal-agent:${props.viewTabId}:${props.tileId}:${handle.sessionId}`

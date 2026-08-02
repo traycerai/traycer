@@ -13,7 +13,10 @@ import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usa
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileCommitId,
+  type ProfileRowAdmission,
+} from "@/components/providers/provider-profile-model";
 
 const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
 
@@ -32,6 +35,10 @@ interface PickerProfileDropdownProps {
   readonly contentContainer: HTMLElement | null;
   readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly runTargetHostId: string | null;
+  readonly admissionByProfileId: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
 }
 
 /** Picker-only opt-in boundary: Settings never mounts this component. */
@@ -196,6 +203,7 @@ function PickerProfileDropdownView({
       contentContainer={props.contentContainer}
       onCloseAutoFocus={() => props.inputRef.current?.focus()}
       usagePresentation={usagePresentation}
+      admissionByProfileId={props.admissionByProfileId}
     />
   );
 }

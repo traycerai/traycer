@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
 import { paneTabRefs, setActiveTab } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import {
@@ -15,11 +24,22 @@ import {
   makeSelectActiveEpicArtifactId,
   makeSelectIsActiveEpicArtifact,
   makeSelectIsActivePane,
+  makeSelectIsActiveTile,
   makeSelectTabActivation,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import * as chatTabViewportHandoff from "@/stores/chats/chat-tab-viewport-handoff";
+import {
+  evictChatTabState,
+  evictChatTabStateForChat,
+  hasSavedChatTabState,
+  restoreChatTabState,
+} from "@/stores/chats/chat-tab-state-cache";
+import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { appLogger } from "@/lib/logger";
 import { isBlankTileRef } from "@/stores/epics/canvas/types";
 import { epicCanvasKey } from "@/lib/persist";
+import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -31,7 +51,13 @@ import {
   getCurrentNestedFocusTarget,
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
-import { SPEC_A, SPEC_B, SPEC_C, TEST_HOST_ID } from "./canvas-test-fixtures";
+import {
+  CHAT_A,
+  SPEC_A,
+  SPEC_B,
+  SPEC_C,
+  TEST_HOST_ID,
+} from "./canvas-test-fixtures";
 
 // Resolve a pane's tab payloads in strip order via tilesByInstanceId.
 function tabRefsOfPane(
@@ -118,6 +144,13 @@ function canvasWithPaneActivationHistory(
 }
 
 describe("epic canvas store header tabs", () => {
+  it("uses the user-facing task placeholder for a new untitled tab", () => {
+    const created = useEpicCanvasStore.getState().createEpicFromPrompt("   ");
+
+    expect(created.name).toBe("Untitled task");
+    expect(requireTab(created.tabId).name).toBe("Untitled task");
+  });
+
   it("sanitizes removed Workspaces tile refs from local persisted state", async () => {
     window.localStorage.setItem(
       epicCanvasKey(null),
@@ -450,6 +483,33 @@ describe("epic canvas store header tabs", () => {
     expect(state.tabsById[tabId]).toBe(beforeCloseTab);
   });
 
+  it("openEpicTabWithId reveals a preserved-but-closed record instead of no-op", () => {
+    // The id handed to this action is routinely a PRESERVED one (callers resolve
+    // it via `resolveTabIdForEpic`, which reads `mostRecentTabIdByEpicId` -
+    // a pointer `closeTab` sets). "Already have the record" must therefore not
+    // be read as "already open": the caller's postcondition is an open tab, and
+    // strip reconciliation drops any layout ref `openTabOrder` does not back.
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-preserved", "Preserved");
+    store.openTileInTab(tabId, SPEC_A);
+    const beforeCloseCanvas = requireCanvas(tabId);
+    store.closeTab(tabId);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+
+    const reopenedTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(tabId, "epic-preserved", "Ignored");
+
+    const state = useEpicCanvasStore.getState();
+    expect(reopenedTabId).toBe(tabId);
+    expect(state.openTabOrder).toEqual([tabId]);
+    expect(state.activeTabId).toBe(tabId);
+    // Revealing must not resurrect the tab as a blank one: the preserved canvas
+    // and the stored name both survive, so the caller's `name` is ignored.
+    expect(state.canvasByTabId[tabId]).toBe(beforeCloseCanvas);
+    expect(state.tabsById[tabId]?.name).toBe("Preserved");
+  });
+
   it("keeps hidden tabs when desktop projection refreshes the visible strip", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-hidden", "Hidden Epic");
@@ -665,15 +725,27 @@ describe("epic canvas store header tabs", () => {
       "epic-prepare-preview",
       "Prepare Preview",
     );
-    store.openTilePreviewInTab(previewTabId, SPEC_A);
+    // Same CONTENT id as `SPEC_A`, opened into a different epic tab - per the
+    // instanceId-per-tab contract (`EpicArtifactRef`'s doc comment), that
+    // gets its OWN instanceId. Reusing `SPEC_A`'s instanceId across two
+    // unrelated tabs would violate the canvas-wide immutable identity tuple
+    // (same instanceId, different epicId).
+    const specAInPreviewTab: EpicCanvasTileRef = {
+      ...SPEC_A,
+      instanceId: "inst-a-preview",
+    };
+    store.openTilePreviewInTab(previewTabId, specAInPreviewTab);
     const previewPaneId = requireCanvas(previewTabId).activePaneId;
     if (previewPaneId === null) throw new Error("expected preview pane");
     expect(
       requirePane(requireCanvas(previewTabId), previewPaneId).previewTabId,
-    ).toBe(SPEC_A.instanceId);
-    expect(store.prepareOpenTileInTabFocusTarget(previewTabId, SPEC_A)).toEqual(
-      { paneId: previewPaneId, tileInstanceId: SPEC_A.instanceId },
-    );
+    ).toBe(specAInPreviewTab.instanceId);
+    expect(
+      store.prepareOpenTileInTabFocusTarget(previewTabId, specAInPreviewTab),
+    ).toEqual({
+      paneId: previewPaneId,
+      tileInstanceId: specAInPreviewTab.instanceId,
+    });
     expect(
       requirePane(requireCanvas(previewTabId), previewPaneId).previewTabId,
     ).toBeNull();
@@ -973,6 +1045,40 @@ describe("epic canvas store header tabs", () => {
     expect(state.activeTabId).toBe(newTabId);
   });
 
+  /**
+   * Ticket 20: backs the corrected doc comment at `commitHeaderStripDrop`
+   * (`root-dnd-commits.ts`) - the tile that tears off keeps its OWN
+   * instanceId; only the new HEADER TAB record gets a fresh id
+   * (`newTabId` above, an `EpicViewTab.tabId`, not a tile instanceId). The
+   * old comment's "clone semantics: new instance ids" conflated the two.
+   * Mutation-verified: temporarily minting a fresh instanceId for the moved
+   * tile in `tearOffTabIntoNewHeaderTab` (simulating what the old comment
+   * claimed) turns this red.
+   */
+  it("ticket 20: tearing a tab off preserves the tile's own instanceId (MOVE, not clone)", () => {
+    const store = useEpicCanvasStore.getState();
+    const sourceTabId = store.openEpicTab("epic-1", "Epic Foo");
+    store.openTileInTab(sourceTabId, SPEC_A);
+    const sourceGroupId = requireCanvas(sourceTabId).activePaneId;
+    if (sourceGroupId === null) throw new Error("expected active group");
+
+    const newTabId = useEpicCanvasStore.getState().tearOffTabIntoNewHeaderTab({
+      sourceTabId,
+      sourcePaneId: sourceGroupId,
+      sourceTileTabId: SPEC_A.instanceId,
+      insertIndex: 1,
+    });
+    if (newTabId === null) throw new Error("expected tear-off tab");
+
+    const newCanvas = requireCanvas(newTabId);
+    const newPane = collectPanes(newCanvas.root).at(0);
+    if (newPane === undefined) throw new Error("expected a promoted pane");
+
+    expect(newPane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(newPane.tabInstanceIds).toEqual([SPEC_A.instanceId]);
+    expect(newCanvas.tilesByInstanceId[SPEC_A.instanceId]?.id).toBe(SPEC_A.id);
+  });
+
   it("closes every header tab for a deleted epic", () => {
     const store = useEpicCanvasStore.getState();
     const firstDeletedTabId = store.openEpicTab("epic-delete", "Delete Me");
@@ -1067,6 +1173,96 @@ describe("makeSelectIsActiveEpicArtifact", () => {
     expect(makeSelectIsActiveEpicArtifact(tabId, firstActive)(after)).toBe(
       false,
     );
+  });
+});
+
+describe("makeSelectIsActiveTile", () => {
+  it("resolves a renderer-only tile the artifact selector deliberately hides", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pr", "PR");
+    const tile = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+      prNumber: 4226,
+      name: "Remote Host Support",
+    });
+    store.openTileInTab(tabId, tile);
+
+    const state = useEpicCanvasStore.getState();
+    // The artifact selector returns null for a PR tile by design (its id must
+    // never become `lastFocusedArtifactId`), which is exactly why the PR panel
+    // cannot reuse it to light up its row.
+    expect(makeSelectActiveEpicArtifactId(tabId)(state)).toBeNull();
+    expect(makeSelectIsActiveTile(tabId, tile.id)(state)).toBe(true);
+  });
+
+  it("is false for another tile, a null id, and an unknown tab", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pr-2", "PR");
+    const shown = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+      prNumber: 4226,
+      name: "Shown",
+    });
+    const hidden = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      prNumber: 675,
+      name: "Hidden",
+    });
+    store.openTileInTab(tabId, shown);
+
+    const state = useEpicCanvasStore.getState();
+    expect(makeSelectIsActiveTile(tabId, hidden.id)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(tabId, null)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(undefined, shown.id)(state)).toBe(false);
+    expect(makeSelectIsActiveTile("tab-missing", shown.id)(state)).toBe(false);
+  });
+
+  it("follows the ACTIVE pane, so a tile parked in the other pane is not active", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pr-3", "PR");
+    const left = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+      prNumber: 4226,
+      name: "Left",
+    });
+    const right = makePrDetailTile({
+      hostId: TEST_HOST_ID,
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      prNumber: 675,
+      name: "Right",
+    });
+    store.openTileInTab(tabId, left);
+    // Two `openTileInTab` calls land in the SAME pane, which makes this the
+    // active-TAB case, not the active-PANE one - and the assertions below pass
+    // either way. Split first so `right` genuinely sits in another pane.
+    const sourcePaneId = requireCanvas(tabId).activePaneId;
+    if (sourcePaneId === null) throw new Error("expected an active pane");
+    const otherPaneId = useEpicCanvasStore
+      .getState()
+      .splitPaneEmptyRightInTab(tabId, sourcePaneId);
+    if (otherPaneId === null) throw new Error("expected a second pane");
+    useEpicCanvasStore.getState().openTileInPane(tabId, otherPaneId, right);
+
+    // `splitPaneEmpty` makes the NEW pane active, so `right` is the tile the
+    // user is looking at and `left` is parked beside it.
+    expect(requireCanvas(tabId).activePaneId).toBe(otherPaneId);
+    const state = useEpicCanvasStore.getState();
+    expect(makeSelectIsActiveTile(tabId, right.id)(state)).toBe(true);
+    expect(makeSelectIsActiveTile(tabId, left.id)(state)).toBe(false);
   });
 });
 
@@ -1169,5 +1365,1209 @@ describe("makeSelectTabActivation", () => {
       makeSelectTabActivation(undefined, "group-left", SPEC_A.instanceId)(state)
         .isGloballyActive,
     ).toBe(false);
+  });
+});
+
+describe("closedTilePayloadsByTabId", () => {
+  it("captures a tile payload when the tile is closed via closeCanvasTab", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-closed-payload", "Closed Payload");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toEqual(SPEC_A);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        SPEC_A.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("keeps pending-create state with a cached tile until the create flow unmarks it", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pending-payload", "Pending Payload");
+    store.markArtifactPendingCreate(SPEC_A.id);
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    const afterClose = useEpicCanvasStore.getState();
+    expect(afterClose.pendingCreateArtifactIds.has(SPEC_A.id)).toBe(false);
+    expect(
+      afterClose.closedTilePayloadsByTabId[tabId]?.[SPEC_A.instanceId]
+        ?.pendingCreate,
+    ).toBe(true);
+
+    store.unmarkArtifactPendingCreate(SPEC_A.id);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.pendingCreate,
+    ).toBe(false);
+  });
+
+  it("discardClosedTilePayload drops a single cached entry", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-discard-payload", "Discard Payload");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toEqual(SPEC_A);
+
+    store.discardClosedTilePayload(tabId, SPEC_A.instanceId);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toBeUndefined();
+  });
+
+  it("discardClosedTilePayload is a no-op for a tabId/instanceId that isn't cached", () => {
+    const store = useEpicCanvasStore.getState();
+    const before = useEpicCanvasStore.getState().closedTilePayloadsByTabId;
+
+    store.discardClosedTilePayload("no-such-tab", "no-such-instance");
+
+    expect(useEpicCanvasStore.getState().closedTilePayloadsByTabId).toBe(
+      before,
+    );
+  });
+
+  it("captures a preview tile when successive preview opens evict the prior", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-preview-evict", "Preview Evict");
+    store.openTilePreviewInTab(tabId, SPEC_A);
+    store.openTilePreviewInTab(tabId, SPEC_B);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toEqual(SPEC_A);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        SPEC_A.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("preserves closed-tile payloads across a plain Task close (closeTab)", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-task-close", "Task Close");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    store.closeTab(tabId);
+
+    // Task is hidden but preserved, including its closed-tile cache.
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+    expect(useEpicCanvasStore.getState().tabsById[tabId]).toBeDefined();
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toEqual(SPEC_A);
+  });
+
+  it("GC's closed-tile payloads on permanent tab discard", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-discard", "Discard");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId],
+    ).toBeDefined();
+
+    store.discardTabState(tabId);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId],
+    ).toBeUndefined();
+  });
+
+  it("GC's closed-tile payloads on closeTabsForEpics", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-delete", "Delete Epic");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    store.closeTabsForEpics(["epic-delete"]);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId],
+    ).toBeUndefined();
+  });
+
+  it("FIFO-evicts the oldest closed-tile payload past the per-tab cap of 20", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-fifo", "FIFO");
+    // Seed a pinned base tile so the pane never empties.
+    store.openTileInTab(tabId, {
+      id: "art-base",
+      instanceId: "inst-base",
+      type: "spec",
+      name: "Base",
+      hostId: TEST_HOST_ID,
+    });
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    // Open+close 21 distinct tiles; the first closed should be FIFO-evicted.
+    for (let i = 0; i < 21; i += 1) {
+      const ref: EpicCanvasTileRef = {
+        id: `art-fifo-${i}`,
+        instanceId: `inst-fifo-${i}`,
+        type: "spec",
+        name: `FIFO ${i}`,
+        hostId: TEST_HOST_ID,
+      };
+      store.openTileInTab(tabId, ref);
+      store.closeCanvasTab(tabId, paneId, ref.instanceId);
+    }
+
+    const cached =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId] ?? {};
+    expect(Object.keys(cached)).toHaveLength(20);
+    expect(cached["inst-fifo-0"]).toBeUndefined();
+    expect(cached["inst-fifo-1"]?.node).toEqual({
+      id: "art-fifo-1",
+      instanceId: "inst-fifo-1",
+      type: "spec",
+      name: "FIFO 1",
+      hostId: TEST_HOST_ID,
+    });
+    expect(cached["inst-fifo-20"]?.node).toEqual({
+      id: "art-fifo-20",
+      instanceId: "inst-fifo-20",
+      type: "spec",
+      name: "FIFO 20",
+      hostId: TEST_HOST_ID,
+    });
+  });
+
+  it("restoring at a full cache does not evict an unrelated payload (removal is layered before capture)", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-fifo-restore", "FIFO Restore");
+    store.openTileInTab(tabId, {
+      id: "art-base",
+      instanceId: "inst-base",
+      type: "spec",
+      name: "Base",
+      hostId: TEST_HOST_ID,
+    });
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    // Fill the cache to EXACTLY the cap (20), no eviction needed yet.
+    for (let i = 0; i < 20; i += 1) {
+      const ref: EpicCanvasTileRef = {
+        id: `art-fifo-${i}`,
+        instanceId: `inst-fifo-${i}`,
+        type: "spec",
+        name: `FIFO ${i}`,
+        hostId: TEST_HOST_ID,
+      };
+      store.openTileInTab(tabId, ref);
+      store.closeCanvasTab(tabId, paneId, ref.instanceId);
+    }
+    const oldest = "inst-fifo-0";
+    const beingRestored = "inst-fifo-19";
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[oldest],
+    ).toBeDefined();
+    const restoredPayload =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        beingRestored
+      ];
+    if (restoredPayload === undefined) {
+      throw new Error("expected cached payload for " + beingRestored);
+    }
+
+    // A live preview tile occupies the destination pane; restoring R will
+    // evict (and thus capture) it in the SAME transaction as R's removal.
+    const previewTile: EpicCanvasTileRef = {
+      id: "art-preview-occupant",
+      instanceId: "inst-preview-occupant",
+      type: "spec",
+      name: "Preview Occupant",
+      hostId: TEST_HOST_ID,
+    };
+    store.openTilePreviewInTab(tabId, previewTile);
+
+    store.restoreClosedTilePreview(tabId, paneId, restoredPayload.node);
+
+    const cached =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId] ?? {};
+    // Atomic result: R removed (now live), P added, Q (oldest) retained -
+    // still exactly 20, not 19 (an over-eviction) and not 21.
+    expect(Object.keys(cached)).toHaveLength(20);
+    expect(cached[beingRestored]).toBeUndefined();
+    expect(cached[oldest]?.node).toEqual({
+      id: "art-fifo-0",
+      instanceId: oldest,
+      type: "spec",
+      name: "FIFO 0",
+      hostId: TEST_HOST_ID,
+    });
+    expect(cached[previewTile.instanceId]?.node).toEqual(previewTile);
+  });
+
+  it("is session-only: not written into the zustand persist partialize surface", async () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-session-only", "Session Only");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toEqual(SPEC_A);
+
+    // Flush any pending persist write.
+    await useEpicCanvasStore.persist.rehydrate();
+    const raw = window.localStorage.getItem(epicCanvasKey(null));
+    expect(raw).not.toBeNull();
+    if (raw === null) return;
+    const parsed: unknown = JSON.parse(raw);
+    expect(isRecord(parsed)).toBe(true);
+    if (!isRecord(parsed)) return;
+    const state = parsed.state;
+    expect(isRecord(state)).toBe(true);
+    if (!isRecord(state)) return;
+    expect(state.closedTilePayloadsByTabId).toBeUndefined();
+  });
+});
+
+describe("restoreClosedTilePreview", () => {
+  it("reopens under the original instanceId into the preferred pane and evicts the cache entry", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore", "Restore");
+    // A pinned sibling so the pane survives SPEC_A's close instead of
+    // collapsing (a single-tab pane closes itself along with its last tab).
+    store.openTileInTab(tabId, {
+      id: "art-pinned",
+      instanceId: "inst-pinned",
+      type: "spec",
+      name: "Pinned",
+      hostId: TEST_HOST_ID,
+    });
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    const preserved =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ];
+    expect(preserved?.node).toEqual(SPEC_A);
+    if (preserved === undefined) return;
+
+    store.restoreClosedTilePreview(tabId, paneId, preserved.node);
+
+    const canvas = requireCanvas(tabId);
+    expect(canvas.activePaneId).toBe(paneId);
+    expect(canvas.tilesByInstanceId[SPEC_A.instanceId]).toEqual(SPEC_A);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toBeUndefined();
+  });
+
+  it("falls back to the active pane when the preferred pane id doesn't exist", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore-fallback", "Fallback");
+    store.openTileInTab(tabId, SPEC_A);
+    const activePaneId = requireCanvas(tabId).activePaneId;
+    if (activePaneId === null) throw new Error("expected pane");
+
+    store.restoreClosedTilePreview(tabId, "pane-never-existed", SPEC_B);
+
+    const canvas = requireCanvas(tabId);
+    expect(canvas.activePaneId).toBe(activePaneId);
+    expect(canvas.tilesByInstanceId[SPEC_B.instanceId]).toEqual(SPEC_B);
+  });
+
+  it("restores the exact instance when the same content is already open elsewhere", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore-duplicate", "Duplicate");
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    // Explicit-pane opens intentionally bypass content dedup and mint another
+    // instance for the same content id.
+    store.openTileInPane(tabId, paneId, SPEC_A);
+    const withDuplicate = requirePane(requireCanvas(tabId), paneId);
+    const duplicateInstanceId = withDuplicate.tabInstanceIds.find(
+      (instanceId) => instanceId !== SPEC_A.instanceId,
+    );
+    if (duplicateInstanceId === undefined) {
+      throw new Error("expected duplicate content instance");
+    }
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    const preserved =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ];
+    if (preserved === undefined) throw new Error("expected cached payload");
+    store.restoreClosedTilePreview(tabId, paneId, preserved.node);
+
+    const canvas = requireCanvas(tabId);
+    const pane = requirePane(canvas, paneId);
+    expect(pane.tabInstanceIds).toContain(duplicateInstanceId);
+    expect(pane.tabInstanceIds).toContain(SPEC_A.instanceId);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(pane.previewTabId).toBe(SPEC_A.instanceId);
+    expect(canvas.tilesByInstanceId[duplicateInstanceId]?.id).toBe(SPEC_A.id);
+    expect(canvas.tilesByInstanceId[SPEC_A.instanceId]).toEqual(SPEC_A);
+  });
+
+  it("captures the evicted preview tile into the cache while restoring another", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore-evict", "Restore Evict");
+    // A pinned permanent tile plus SPEC_A as the current preview.
+    store.openTileInTab(tabId, {
+      id: "art-pinned",
+      instanceId: "inst-pinned",
+      type: "spec",
+      name: "Pinned",
+      hostId: TEST_HOST_ID,
+    });
+    store.openTilePreviewInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.restoreClosedTilePreview(tabId, paneId, SPEC_B);
+
+    // SPEC_A (the prior preview) was evicted and captured; SPEC_B is live.
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.node,
+    ).toEqual(SPEC_A);
+    const canvas = requireCanvas(tabId);
+    expect(canvas.tilesByInstanceId[SPEC_A.instanceId]).toBeUndefined();
+    expect(canvas.tilesByInstanceId[SPEC_B.instanceId]).toEqual(SPEC_B);
+  });
+});
+
+/**
+ * Ticket 20: the 5 mechanism pins in chat-messages.test.tsx prove the
+ * handoff registry works; the tear-off instanceId pin above proves MOVE
+ * semantics. These wiring tests pin that EACH of the 9 structural action
+ * creators calls `flushChatTabViewportHandoff` with the correct instanceId
+ * set, from PRE-mutation tree state, and that the sibling paths that must
+ * NOT remount anything skip the flush (or flush `[]` for the dissolve
+ * predictor's no-op).
+ */
+function spyOnFlushChatTabViewportHandoff() {
+  return vi.spyOn(chatTabViewportHandoff, "flushChatTabViewportHandoff");
+}
+
+describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
+  let flushSpy: Mock<(instanceIds: ReadonlyArray<string>) => void>;
+
+  beforeEach(() => {
+    flushSpy = spyOnFlushChatTabViewportHandoff();
+  });
+
+  /** Seed a header tab with the given canvas already in place. */
+  function seedHeaderTab(
+    tabId: string,
+    canvas: EpicCanvasState,
+    epicId: string,
+  ): void {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        [tabId]: { tabId, epicId, name: "Ticket 20" },
+      },
+      canvasByTabId: { [tabId]: canvas },
+      openTabOrder: [tabId],
+      activeTabId: tabId,
+      mostRecentTabIdByEpicId: { [epicId]: tabId },
+    });
+  }
+
+  /** Two-pane horizontal split: left holds A+B, right holds C. */
+  function twoPaneSplitCanvas(): EpicCanvasState {
+    return {
+      activePaneId: "pane-left",
+      root: {
+        kind: "group",
+        id: "split-2",
+        direction: "horizontal",
+        children: [
+          {
+            kind: "pane",
+            id: "pane-left",
+            tabInstanceIds: [SPEC_A.instanceId, SPEC_B.instanceId],
+            activeTabId: SPEC_A.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_A.instanceId, SPEC_B.instanceId],
+          },
+          {
+            kind: "pane",
+            id: "pane-right",
+            tabInstanceIds: [SPEC_C.instanceId],
+            activeTabId: SPEC_C.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_C.instanceId],
+          },
+        ],
+      },
+      tilesByInstanceId: {
+        [SPEC_A.instanceId]: SPEC_A,
+        [SPEC_B.instanceId]: SPEC_B,
+        [SPEC_C.instanceId]: SPEC_C,
+      },
+      sizesByGroupId: { "split-2": [0.5, 0.5] },
+    };
+  }
+
+  /**
+   * Nested dissolve fixture: closing `pane-gone` promotes a 2-pane survivor
+   * group (the mounts=3/unmounts=2 case). Active tabs: B and C survive.
+   */
+  function nestedSurvivorDissolveCanvas(): EpicCanvasState {
+    return {
+      activePaneId: "pane-gone",
+      root: {
+        kind: "group",
+        id: "split-outer",
+        direction: "horizontal",
+        children: [
+          {
+            kind: "pane",
+            id: "pane-gone",
+            tabInstanceIds: [SPEC_A.instanceId],
+            activeTabId: SPEC_A.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_A.instanceId],
+          },
+          {
+            kind: "group",
+            id: "split-survivor",
+            direction: "vertical",
+            children: [
+              {
+                kind: "pane",
+                id: "pane-keep-1",
+                tabInstanceIds: [SPEC_B.instanceId],
+                activeTabId: SPEC_B.instanceId,
+                previewTabId: null,
+                activationHistory: [SPEC_B.instanceId],
+              },
+              {
+                kind: "pane",
+                id: "pane-keep-2",
+                tabInstanceIds: [SPEC_C.instanceId],
+                activeTabId: SPEC_C.instanceId,
+                previewTabId: null,
+                activationHistory: [SPEC_C.instanceId],
+              },
+            ],
+          },
+        ],
+      },
+      tilesByInstanceId: {
+        [SPEC_A.instanceId]: SPEC_A,
+        [SPEC_B.instanceId]: SPEC_B,
+        [SPEC_C.instanceId]: SPEC_C,
+      },
+      sizesByGroupId: {
+        "split-outer": [0.5, 0.5],
+        "split-survivor": [0.5, 0.5],
+      },
+    };
+  }
+
+  /** Three flat sibling panes - removing one does NOT dissolve. */
+  function threePaneFlatCanvas(): EpicCanvasState {
+    return {
+      activePaneId: "pane-a",
+      root: {
+        kind: "group",
+        id: "split-3",
+        direction: "horizontal",
+        children: [
+          {
+            kind: "pane",
+            id: "pane-a",
+            tabInstanceIds: [SPEC_A.instanceId],
+            activeTabId: SPEC_A.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_A.instanceId],
+          },
+          {
+            kind: "pane",
+            id: "pane-b",
+            tabInstanceIds: [SPEC_B.instanceId],
+            activeTabId: SPEC_B.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_B.instanceId],
+          },
+          {
+            kind: "pane",
+            id: "pane-c",
+            tabInstanceIds: [SPEC_C.instanceId],
+            activeTabId: SPEC_C.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_C.instanceId],
+          },
+        ],
+      },
+      tilesByInstanceId: {
+        [SPEC_A.instanceId]: SPEC_A,
+        [SPEC_B.instanceId]: SPEC_B,
+        [SPEC_C.instanceId]: SPEC_C,
+      },
+      sizesByGroupId: { "split-3": [1 / 3, 1 / 3, 1 / 3] },
+    };
+  }
+
+  /** Bare single-pane root with one tile (tear-off / wrap targets). */
+  function singlePaneCanvas(node: EpicCanvasTileRef): EpicCanvasState {
+    return {
+      activePaneId: "pane-root",
+      root: {
+        kind: "pane",
+        id: "pane-root",
+        tabInstanceIds: [node.instanceId],
+        activeTabId: node.instanceId,
+        previewTabId: null,
+        activationHistory: [node.instanceId],
+      },
+      tilesByInstanceId: { [node.instanceId]: node },
+      sizesByGroupId: {},
+    };
+  }
+
+  /**
+   * Two panes where the target's painted tab must be resolved from its first
+   * live tab because activeTabId is absent or stale. The source keeps a second
+   * tab so splitPaneWithTab does not add a dissolve-survivor target that could
+   * mask the target-pane assertion.
+   */
+  function fallbackActiveSplitCanvas(
+    targetActiveTabId: string | null,
+  ): EpicCanvasState {
+    return {
+      activePaneId: "pane-left",
+      root: {
+        kind: "group",
+        id: "split-fallback-active",
+        direction: "horizontal",
+        children: [
+          {
+            kind: "pane",
+            id: "pane-left",
+            tabInstanceIds: [SPEC_A.instanceId, SPEC_B.instanceId],
+            activeTabId: targetActiveTabId,
+            previewTabId: null,
+            activationHistory: [SPEC_A.instanceId, SPEC_B.instanceId],
+          },
+          {
+            kind: "pane",
+            id: "pane-right",
+            tabInstanceIds: [SPEC_C.instanceId, CHAT_A.instanceId],
+            activeTabId: SPEC_C.instanceId,
+            previewTabId: null,
+            activationHistory: [SPEC_C.instanceId, CHAT_A.instanceId],
+          },
+        ],
+      },
+      tilesByInstanceId: {
+        [SPEC_A.instanceId]: SPEC_A,
+        [SPEC_B.instanceId]: SPEC_B,
+        [SPEC_C.instanceId]: SPEC_C,
+        [CHAT_A.instanceId]: CHAT_A,
+      },
+      sizesByGroupId: { "split-fallback-active": [0.5, 0.5] },
+    };
+  }
+
+  /**
+   * When the flush fires, the pre-mutation tree must still be intact - i.e.
+   * the action creator called it BEFORE its own `set()`. The spy records the
+   * call either way; this implementation only asserts timing.
+   */
+  function withPreMutationCheck(
+    tabId: string,
+    paneThatMustStillExist: string,
+  ): void {
+    flushSpy.mockImplementation(() => {
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+      expect(canvas).toBeDefined();
+      if (canvas === undefined) return;
+      expect(findPaneById(canvas.root, paneThatMustStillExist)).not.toBeNull();
+    });
+  }
+
+  // ---- moveTabOnTabStrip ------------------------------------------------
+
+  it("moveTabOnTabStrip: cross-pane move flushes the dragged tab (and not a no-op sibling)", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-left");
+
+    useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
+      sourcePaneId: "pane-left",
+      tabId: SPEC_B.instanceId,
+      targetPaneId: "pane-right",
+      targetIndex: 0,
+    });
+
+    // SPEC_B was not the only tab in pane-left, so no dissolve targets.
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_B.instanceId]);
+  });
+
+  it("moveTabOnTabStrip: cross-pane move of a pane's last tab also flushes dissolve survivors", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-right");
+
+    useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
+      sourcePaneId: "pane-right",
+      tabId: SPEC_C.instanceId,
+      targetPaneId: "pane-left",
+      targetIndex: 0,
+    });
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    // Dragged tab + dissolve survivor (left pane's active tab is SPEC_A).
+    expect(flushSpy.mock.calls[0]?.[0]).toEqual([
+      SPEC_C.instanceId,
+      SPEC_A.instanceId,
+    ]);
+  });
+
+  it("moveTabOnTabStrip: same-pane reorder does NOT flush (no remount)", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+
+    useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
+      sourcePaneId: "pane-left",
+      tabId: SPEC_B.instanceId,
+      targetPaneId: "pane-left",
+      targetIndex: 0,
+    });
+
+    expect(flushSpy).not.toHaveBeenCalled();
+  });
+
+  // ---- insertNodeOnTabStrip ---------------------------------------------
+
+  it("insertNodeOnTabStrip: cross-pane re-insert of an already-open node flushes it", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-right");
+
+    // SPEC_C is already open in pane-right; inserting it onto pane-left is a
+    // cross-pane move via findPaneTabByContentId.
+    useEpicCanvasStore
+      .getState()
+      .insertNodeOnTabStrip("tab-1", "pane-left", 0, SPEC_C);
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy.mock.calls[0]?.[0]).toEqual([
+      SPEC_C.instanceId,
+      SPEC_A.instanceId, // dissolve of emptied pane-right
+    ]);
+  });
+
+  it("insertNodeOnTabStrip: brand-new node does NOT flush (no existing mount to move)", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+
+    useEpicCanvasStore
+      .getState()
+      .insertNodeOnTabStrip("tab-1", "pane-left", 0, CHAT_A);
+
+    expect(flushSpy).not.toHaveBeenCalled();
+  });
+
+  // ---- splitPaneWithNode ------------------------------------------------
+
+  it("splitPaneWithNode: flushes the target pane's active tab (wrap or flat)", () => {
+    seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-root");
+
+    // Bare root + edge split always wraps the target.
+    useEpicCanvasStore
+      .getState()
+      .splitPaneWithNode("tab-1", "pane-root", "right", SPEC_B);
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
+  });
+
+  /**
+   * Ticket 20 review round 1, finding 1 (CONFIRMED HIGH): `splitPaneAtEdge`
+   * resolves a `node` source whose content is ALREADY OPEN elsewhere into a
+   * `tab`-kind cross-pane MOVE before doing anything else - the same
+   * "already open" resolution `insertNodeOnTabStrip` performs - but this
+   * production creator only flushed the target pane's active tab, missing
+   * the moved instance and its source-pane dissolve survivors entirely.
+   * Mutation-verified: reverting the `existing`/dissolve branch (leaving
+   * only the target-active flush) drops `SPEC_B.instanceId` and
+   * `SPEC_C.instanceId` from the flushed set - red.
+   */
+  it(
+    "splitPaneWithNode: existing-node edge split (already open elsewhere) " +
+      "flushes the moved instance, target active, AND its source-pane dissolve survivor",
+    () => {
+      seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas(), "epic-t20");
+      withPreMutationCheck("tab-1", "pane-keep-1");
+
+      // SPEC_B is already open (as the only tab) in the nested pane-keep-1,
+      // sibling to pane-keep-2 (SPEC_C) under split-survivor. Edge-splitting
+      // it onto the UNRELATED pane-gone (SPEC_A) resolves internally to a
+      // cross-pane tab move: the moved tab (B) always lands in a brand-new
+      // pane, the target (A) may wrap, and pane-keep-1 emptying dissolves
+      // split-survivor, promoting pane-keep-2 (C) to a new ancestor.
+      useEpicCanvasStore
+        .getState()
+        .splitPaneWithNode("tab-1", "pane-gone", "right", SPEC_B);
+
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+      const flushed = flushSpy.mock.calls[0]?.[0] ?? [];
+      expect(flushed).toContain(SPEC_A.instanceId); // target active
+      expect(flushed).toContain(SPEC_B.instanceId); // moved instance
+      expect(flushed).toContain(SPEC_C.instanceId); // dissolve survivor
+    },
+  );
+
+  it("splitPaneWithNode: brand-new node does NOT trigger the existing-node move flush", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+
+    useEpicCanvasStore
+      .getState()
+      .splitPaneWithNode("tab-1", "pane-left", "right", CHAT_A);
+
+    // Only the target-pane active-tab (wrap-risk) flush fires - no moved
+    // instance or dissolve survivor, since CHAT_A was not open anywhere.
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
+  });
+
+  // ---- splitPaneWithTab -------------------------------------------------
+
+  it("splitPaneWithTab: flushes the dragged tab + target active + dissolve survivors", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-right");
+
+    // Drag SPEC_C (only tab in pane-right) onto an edge of pane-left →
+    // remounts the dragged tab, may wrap pane-left (its active is A), and
+    // dissolves pane-right's parent (survivor is pane-left → A again).
+    useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
+      sourcePaneId: "pane-right",
+      tabId: SPEC_C.instanceId,
+      targetPaneId: "pane-left",
+      position: "bottom", // cross-axis wrap of pane-left
+    });
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    const flushed = flushSpy.mock.calls[0]?.[0] ?? [];
+    expect(flushed).toContain(SPEC_C.instanceId); // dragged
+    expect(flushed).toContain(SPEC_A.instanceId); // target active (+ dissolve)
+  });
+
+  it("splitPaneWithTab: same-pane edge split still flushes the dragged tab", () => {
+    // Dragging a non-last tab from pane-left onto an edge of the same pane:
+    // still creates a brand-new pane for the dragged tab → remounts it.
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+
+    useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
+      sourcePaneId: "pane-left",
+      tabId: SPEC_B.instanceId,
+      targetPaneId: "pane-left",
+      position: "bottom",
+    });
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    const flushed = flushSpy.mock.calls[0]?.[0] ?? [];
+    expect(flushed).toContain(SPEC_B.instanceId);
+    expect(flushed).toContain(SPEC_A.instanceId); // target active
+    // sourcePane was not emptied (A remains) and source===target, so no dissolve.
+    expect(flushed).toHaveLength(2);
+  });
+
+  const newSplitNode: EpicCanvasTileRef = {
+    ...CHAT_A,
+    id: "chat-new-split-node",
+    instanceId: "inst-chat-new-split-node",
+    name: "New split chat",
+  };
+  const fallbackActiveCases: ReadonlyArray<{
+    activeCase: string;
+    activeTabId: string | null;
+  }> = [
+    { activeCase: "null activeTabId", activeTabId: null },
+    { activeCase: "stale activeTabId", activeTabId: "inst-stale-active" },
+  ];
+  const splitTargetCases: ReadonlyArray<{
+    entryPoint: string;
+    expected: ReadonlyArray<string>;
+    invoke: (tabId: string) => void;
+  }> = [
+    {
+      entryPoint: "splitPaneWithNode",
+      expected: [SPEC_A.instanceId],
+      invoke: (tabId) => {
+        useEpicCanvasStore
+          .getState()
+          .splitPaneWithNode(tabId, "pane-left", "bottom", newSplitNode);
+      },
+    },
+    {
+      entryPoint: "splitPaneWithTab",
+      expected: [SPEC_C.instanceId, SPEC_A.instanceId],
+      invoke: (tabId) => {
+        useEpicCanvasStore.getState().splitPaneWithTab(tabId, {
+          sourcePaneId: "pane-right",
+          tabId: SPEC_C.instanceId,
+          targetPaneId: "pane-left",
+          position: "bottom",
+        });
+      },
+    },
+    {
+      entryPoint: "splitPaneEmptyInTab",
+      expected: [SPEC_A.instanceId],
+      invoke: (tabId) => {
+        useEpicCanvasStore
+          .getState()
+          .splitPaneEmptyInTab(tabId, "pane-left", "vertical");
+      },
+    },
+  ];
+  const fallbackSplitTargetCases = fallbackActiveCases.flatMap((activeCase) =>
+    splitTargetCases.map((splitCase) => ({ ...activeCase, ...splitCase })),
+  );
+
+  it.each(fallbackSplitTargetCases)(
+    "$entryPoint flushes the painted first tab for a $activeCase target",
+    ({ activeTabId, expected, invoke }) => {
+      seedHeaderTab(
+        "tab-fallback-active",
+        fallbackActiveSplitCanvas(activeTabId),
+        "epic-t20",
+      );
+
+      invoke("tab-fallback-active");
+
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+      expect(flushSpy).toHaveBeenCalledWith(expected);
+    },
+  );
+
+  // ---- splitPaneEmptyInTab ----------------------------------------------
+
+  it("splitPaneEmptyInTab: flushes the target pane's active tab", () => {
+    seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-root");
+
+    useEpicCanvasStore
+      .getState()
+      .splitPaneEmptyInTab("tab-1", "pane-root", "horizontal");
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
+  });
+
+  // ---- closeCanvasTab ---------------------------------------------------
+
+  it("closeCanvasTab: last-tab close that dissolves flushes survivor actives", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-right");
+
+    useEpicCanvasStore
+      .getState()
+      .closeCanvasTab("tab-1", "pane-right", SPEC_C.instanceId);
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
+  });
+
+  it("closeCanvasTab: non-last-tab close does NOT flush (pane stays, no dissolve)", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+
+    useEpicCanvasStore
+      .getState()
+      .closeCanvasTab("tab-1", "pane-left", SPEC_B.instanceId);
+
+    expect(flushSpy).not.toHaveBeenCalled();
+  });
+
+  it("closeCanvasTab: last-tab close with >2 siblings flushes [] (no dissolve remount)", () => {
+    seedHeaderTab("tab-1", threePaneFlatCanvas(), "epic-t20");
+
+    useEpicCanvasStore
+      .getState()
+      .closeCanvasTab("tab-1", "pane-a", SPEC_A.instanceId);
+
+    // Still called (last-tab path), but dissolve predictor returns [].
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([]);
+  });
+
+  // ---- closeAllCanvasTabs -----------------------------------------------
+
+  it("closeAllCanvasTabs: dissolve flushes survivor actives", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-right");
+
+    useEpicCanvasStore.getState().closeAllCanvasTabs("tab-1", "pane-right");
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
+  });
+
+  it("closeAllCanvasTabs: >2 siblings flushes [] (no dissolve)", () => {
+    seedHeaderTab("tab-1", threePaneFlatCanvas(), "epic-t20");
+
+    useEpicCanvasStore.getState().closeAllCanvasTabs("tab-1", "pane-a");
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([]);
+  });
+
+  // ---- closeCanvasPane --------------------------------------------------
+
+  it("closeCanvasPane: dissolve flushes survivor actives", () => {
+    seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-left");
+
+    useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-left");
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_C.instanceId]);
+  });
+
+  it("closeCanvasPane: >2 siblings flushes [] (no dissolve remount)", () => {
+    seedHeaderTab("tab-1", threePaneFlatCanvas(), "epic-t20");
+
+    useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-b");
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([]);
+  });
+
+  it("closeCanvasPane: multi-pane promoted survivor flushes EVERY descendant active tab", () => {
+    seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas(), "epic-t20");
+    withPreMutationCheck("tab-1", "pane-gone");
+
+    useEpicCanvasStore.getState().closeCanvasPane("tab-1", "pane-gone");
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([
+      SPEC_B.instanceId,
+      SPEC_C.instanceId,
+    ]);
+  });
+
+  // ---- tearOffTabIntoNewHeaderTab ---------------------------------------
+
+  it("tearOffTabIntoNewHeaderTab: always flushes the torn-off tile instanceId", () => {
+    // Two tabs in one pane: tear-off does not dissolve a sibling pane.
+    const canvas: EpicCanvasState = {
+      activePaneId: "pane-root",
+      root: {
+        kind: "pane",
+        id: "pane-root",
+        tabInstanceIds: [SPEC_A.instanceId, SPEC_B.instanceId],
+        activeTabId: SPEC_A.instanceId,
+        previewTabId: null,
+        activationHistory: [SPEC_A.instanceId, SPEC_B.instanceId],
+      },
+      tilesByInstanceId: {
+        [SPEC_A.instanceId]: SPEC_A,
+        [SPEC_B.instanceId]: SPEC_B,
+      },
+      sizesByGroupId: {},
+    };
+    seedHeaderTab("tab-src", canvas, "epic-t20");
+    withPreMutationCheck("tab-src", "pane-root");
+
+    const newTabId = useEpicCanvasStore.getState().tearOffTabIntoNewHeaderTab({
+      sourceTabId: "tab-src",
+      sourcePaneId: "pane-root",
+      sourceTileTabId: SPEC_A.instanceId,
+      insertIndex: 1,
+    });
+    expect(newTabId).not.toBeNull();
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
+  });
+
+  it("tearOffTabIntoNewHeaderTab: only-tab tear-off also flushes dissolve survivors", () => {
+    seedHeaderTab("tab-src", twoPaneSplitCanvas(), "epic-t20");
+    withPreMutationCheck("tab-src", "pane-right");
+
+    const newTabId = useEpicCanvasStore.getState().tearOffTabIntoNewHeaderTab({
+      sourceTabId: "tab-src",
+      sourcePaneId: "pane-right",
+      sourceTileTabId: SPEC_C.instanceId,
+      insertIndex: 1,
+    });
+    expect(newTabId).not.toBeNull();
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    expect(flushSpy.mock.calls[0]?.[0]).toEqual([
+      SPEC_C.instanceId,
+      SPEC_A.instanceId,
+    ]);
+  });
+
+  it("a failed viewport capture cannot abort remaining captures or the structural mutation", () => {
+    const throwingChat: EpicCanvasTileRef = {
+      ...CHAT_A,
+      id: "chat-capture-throws",
+      instanceId: "inst-chat-capture-throws",
+      name: "Throwing capture",
+    };
+    const healthyChat: EpicCanvasTileRef = {
+      ...CHAT_A,
+      id: "chat-capture-healthy",
+      instanceId: "inst-chat-capture-healthy",
+      name: "Healthy capture",
+    };
+    const identity: ChatTabPersistenceIdentity = {
+      epicId: "epic-t20",
+      chatId: throwingChat.id,
+      tileInstanceId: throwingChat.instanceId,
+    };
+    evictChatTabState([identity.tileInstanceId]);
+    evictChatTabStateForChat(identity);
+    onTestFinished(() => {
+      evictChatTabState([identity.tileInstanceId]);
+      evictChatTabStateForChat(identity);
+    });
+
+    seedHeaderTab(
+      "tab-capture-isolation",
+      {
+        activePaneId: "pane-gone",
+        root: {
+          kind: "group",
+          id: "split-outer",
+          direction: "horizontal",
+          children: [
+            {
+              kind: "pane",
+              id: "pane-gone",
+              tabInstanceIds: [SPEC_A.instanceId],
+              activeTabId: SPEC_A.instanceId,
+              previewTabId: null,
+              activationHistory: [SPEC_A.instanceId],
+            },
+            {
+              kind: "group",
+              id: "split-survivor",
+              direction: "vertical",
+              children: [
+                {
+                  kind: "pane",
+                  id: "pane-throwing",
+                  tabInstanceIds: [throwingChat.instanceId],
+                  activeTabId: throwingChat.instanceId,
+                  previewTabId: null,
+                  activationHistory: [throwingChat.instanceId],
+                },
+                {
+                  kind: "pane",
+                  id: "pane-healthy",
+                  tabInstanceIds: [healthyChat.instanceId],
+                  activeTabId: healthyChat.instanceId,
+                  previewTabId: null,
+                  activationHistory: [healthyChat.instanceId],
+                },
+              ],
+            },
+          ],
+        },
+        tilesByInstanceId: {
+          [SPEC_A.instanceId]: SPEC_A,
+          [throwingChat.instanceId]: throwingChat,
+          [healthyChat.instanceId]: healthyChat,
+        },
+        sizesByGroupId: {
+          "split-outer": [0.5, 0.5],
+          "split-survivor": [0.5, 0.5],
+        },
+      },
+      "epic-t20",
+    );
+
+    const captureFailure = new Error("capture failed");
+    const unregisterThrowing =
+      chatTabViewportHandoff.registerChatTabViewportCapture(
+        throwingChat.instanceId,
+        () => {
+          throw captureFailure;
+        },
+      );
+    onTestFinished(unregisterThrowing);
+    const healthyCapture = vi.fn();
+    const unregisterHealthy =
+      chatTabViewportHandoff.registerChatTabViewportCapture(
+        healthyChat.instanceId,
+        healthyCapture,
+      );
+    onTestFinished(unregisterHealthy);
+    const logError = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    expect(() => {
+      useEpicCanvasStore
+        .getState()
+        .closeCanvasPane("tab-capture-isolation", "pane-gone");
+    }).not.toThrow();
+
+    expect(healthyCapture).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith(
+      "chat tab viewport capture failed during structural handoff",
+      { instanceId: throwingChat.instanceId },
+      captureFailure,
+    );
+    expect(
+      findPaneById(requireCanvas("tab-capture-isolation").root, "pane-gone"),
+    ).toBeNull();
+    expect(hasSavedChatTabState(identity)).toBe(false);
+    expect(restoreChatTabState(identity, [])).toEqual({
+      mode: "following-end",
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+    });
   });
 });

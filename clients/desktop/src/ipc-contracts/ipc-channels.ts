@@ -9,7 +9,6 @@
  * values the renderer needs before constructing its `IRunnerHost`.
  */
 export const RunnerHostInvoke = {
-  validateAuthToken: "runnerHost:auth:validateToken",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
   // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
   // runs `/device/authorize` + the `/device/token` poll loop in main (CORS-safe,
@@ -22,7 +21,29 @@ export const RunnerHostInvoke = {
   deviceFlowStart: "runnerHost:auth:deviceFlowStart",
   deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
   deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
-  refreshAuthToken: "runnerHost:auth:refreshToken",
+  // Credentials-file token store (tech plan §3). `get`/`signIn`/`rotate`/`delete`
+  // route the renderer's `ITokenStore` through the main-process `FileTokenStore`,
+  // which owns the single machine-local credentials file + its lock/WAL. `rotate`
+  // performs the refresh HTTP spend in main, inside the file lock.
+  authTokenStoreGet: "runnerHost:auth:tokenStore:get",
+  authTokenStoreSignIn: "runnerHost:auth:tokenStore:signIn",
+  authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
+  authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
+  authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // Devices & Sessions account-security surface. These authn-v3 calls run in
+  // main for the same renderer-origin CORS reason as token validation.
+  listUserSessions: "runnerHost:auth:sessions:list",
+  revokeUserSession: "runnerHost:auth:sessions:revoke",
+  revokeAllSessions: "runnerHost:auth:sessions:revokeAll",
+  // Delegated host-credential mint. Same main-process placement as the revoke
+  // calls, with the added reason that the retained step-up bearer must never
+  // reach the renderer.
+  mintHostCredential: "runnerHost:auth:hosts:mintCredential",
+  // Cross-window arbitration for the mint above. Each BrowserWindow is its own
+  // module realm, so the renderer's "one prompt per host" memo does not span
+  // them; main holds the single registry every window claims against.
+  requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
+  verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -35,6 +56,8 @@ export const RunnerHostInvoke = {
   workspaceFoldersPick: "runnerHost:workspaceFolders:pick",
   fileDropWriteTemporary: "runnerHost:fileDrops:writeTemporary",
   fileDropCopyTemporary: "runnerHost:fileDrops:copyTemporary",
+  fileDropReadNativeClipboardPaths:
+    "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
   requestHostRespawn: "runnerHost:host:requestRespawn",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
@@ -55,6 +78,7 @@ export const RunnerHostInvoke = {
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
+  perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
   authSessionGet: "runnerHost:windows:authSession:get",
@@ -63,7 +87,18 @@ export const RunnerHostInvoke = {
   supportRevealLog: "runnerHost:support:log:reveal",
   supportSubmitReport: "runnerHost:support:report:submit",
   supportTailLog: "runnerHost:support:log:tail",
-  serviceStatus: "runnerHost:service:status",
+  supportFreezeEvidence: "runnerHost:support:evidence:freeze",
+  supportDiscardFrozenEvidence: "runnerHost:support:evidence:discard",
+  supportReadFrozenLogTail: "runnerHost:support:evidence:log:tail",
+  supportSaveDiagnosticBundle: "runnerHost:support:diagnosticBundle:save",
+  // Per-install report ledger (T3.5). Read-only surface for the dialog's
+  // "Nth time on this install" strip; sightings write via freezeEvidence,
+  // filed reports write on delivered submit - neither is renderer-writable.
+  supportGetFingerprintOccurrence:
+    "runnerHost:support:ledger:fingerprintOccurrence:get",
+  // Ticket 09 / T6: the sole main-process producer of public (GitHub-bound)
+  // text, always behind the deep scrubber.
+  supportBuildPublicDraft: "runnerHost:support:publicDraft:build",
   serviceInstall: "runnerHost:service:install",
   serviceUninstall: "runnerHost:service:uninstall",
   serviceStart: "runnerHost:service:start",
@@ -93,12 +128,6 @@ export const RunnerHostInvoke = {
   traycerConfigEnvList: "runnerHost:traycer:config:env:list",
   traycerConfigEnvSet: "runnerHost:traycer:config:env:set",
   traycerConfigEnvDelete: "runnerHost:traycer:config:env:delete",
-  // Seeds the CLI's stored credentials from the captured bearer post sign-in
-  // (`traycer login --token -`, token piped on stdin so it never lands in argv).
-  traycerCliLogin: "runnerHost:traycer:cli:login",
-  // Deletes the CLI's stored credentials at sign-out (`traycer logout`) so the
-  // host's owner-binding gate falls back to deny-by-default on this machine.
-  traycerCliLogout: "runnerHost:traycer:cli:logout",
   recentDocumentAdd: "runnerHost:recentDocuments:add",
   windowFlashFrame: "runnerHost:window:flashFrame",
   windowSetProgressBar: "runnerHost:window:setProgressBar",
@@ -112,8 +141,11 @@ export const RunnerHostInvoke = {
   diagnosticsTraceStop: "runnerHost:diagnostics:trace:stop",
   appUpdateGetSnapshot: "runnerHost:appUpdate:getSnapshot",
   appUpdateCheck: "runnerHost:appUpdate:check",
+  appUpdateSetAllowPrerelease: "runnerHost:appUpdate:setAllowPrerelease",
   appUpdateDownload: "runnerHost:appUpdate:download",
   appUpdateInstall: "runnerHost:appUpdate:install",
+  globalShortcutsGetSnapshot: "runnerHost:globalShortcuts:getSnapshot",
+  globalShortcutsSet: "runnerHost:globalShortcuts:set",
   systemPreferencesAccentColor: "runnerHost:systemPreferences:accentColor",
   systemPreferencesAppearance: "runnerHost:systemPreferences:appearance",
   systemPreferencesAccessibilityTheme:
@@ -139,11 +171,17 @@ export const RunnerHostInvoke = {
   // Windows-only: repaints the native min/max/close controls (Chromium's
   // Window Controls Overlay) with the renderer's theme-derived colors.
   windowSetTitleBarOverlay: "runnerHost:window:setTitleBarOverlay",
+  // Windows frameless title bars cannot display Electron's native menu row.
+  // The renderer supplies the clicked top-level label's anchor point and main
+  // opens the corresponding submenu from the canonical application Menu.
+  menuOpenTopLevel: "runnerHost:menu:openTopLevel",
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
   gpuAccelerationSet: "runnerHost:gpu:set",
   logLevelsGet: "runnerHost:logLevels:get",
   logLevelsSet: "runnerHost:logLevels:set",
+  featureSettingsGet: "runnerHost:featureSettings:get",
+  agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
   // Enumerates fonts installed on this machine for the Appearance font
   // pickers (Settings → Appearance → UI/Code/Terminal font).
   fontsList: "runnerHost:fonts:list",
@@ -156,13 +194,23 @@ export const RunnerHostInvoke = {
   // (NDJSON) and projects the terminal `result.data` payload to the
   // renderer. Long-running invokes also fan out progress on
   // `cliOperationProgress` keyed by `operationId`.
-  traycerHostInstall: "runnerHost:traycer:host:install",
-  // Idempotent "ensure the host is installed + registered + running".
-  // The renderer invokes this once after sign-in (post-auth provisioning);
-  // it streams NDJSON progress on `cliOperationProgress` keyed by
-  // `operationId` and resolves once the host is reachable.
-  traycerHostEnsure: "runnerHost:traycer:host:ensure",
-  traycerHostUpdate: "runnerHost:traycer:host:update",
+  // Two-lane canonical `HostController` status (Host Update Layer Redesign
+  // Tech Plan). Read once on mount; live updates arrive on
+  // `hostControllerStatusChange`.
+  traycerHostControllerStatusGet:
+    "runnerHost:traycer:host:controllerStatus:get",
+  // Idempotent "converge the host to reachable" (post-auth provisioning,
+  // manual retry, Force restart). Resolves a `MutationOutcome`.
+  traycerHostConvergeReady: "runnerHost:traycer:host:convergeReady",
+  // Applies the currently-staged version. Resolves a `MutationOutcome`.
+  traycerHostApplyStaged: "runnerHost:traycer:host:applyStaged",
+  // Activates an installed-but-not-activated record (packaged-macOS
+  // post-commit activation, or clearing activation debt). Resolves a
+  // `MutationOutcome`.
+  traycerHostActivateInstalled: "runnerHost:traycer:host:activateInstalled",
+  // Pins an explicit version (incl. downgrades). Resolves a
+  // `MutationOutcome`.
+  traycerHostInstallVersion: "runnerHost:traycer:host:installVersion",
   traycerHostUninstall: "runnerHost:traycer:host:uninstall",
   // In-app "Remove Traycer" (Settings → General → Danger Zone). Orchestrates
   // the full background-component teardown (sentinel + login item + `host
@@ -180,11 +228,6 @@ export const RunnerHostInvoke = {
   traycerServiceRegister: "runnerHost:traycer:service:register",
   traycerServiceDeregister: "runnerHost:traycer:service:deregister",
   traycerRegistryCheck: "runnerHost:traycer:registry:check",
-  // Reads the current cross-surface host operation status (or null when
-  // idle) once on mount, so a component that mounts mid-operation (e.g.
-  // Settings opened after the banner already started an update) sees it
-  // immediately instead of waiting for the next `hostOperationStatusChange`.
-  traycerHostOperationStatusGet: "runnerHost:traycer:host:operationStatus:get",
   traycerFreePortAndRestart: "runnerHost:traycer:freePortAndRestart",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
@@ -198,6 +241,11 @@ export const RunnerHostInvoke = {
 
 export const RunnerHostEvent = {
   authCallback: "runnerHost:event:authCallback",
+  // Credentials-file change broadcast (tech plan §3/§4). Fired by the main
+  // `FileTokenStore`'s owned watcher on every observed change (external writes
+  // AND self-writes) so each renderer's reconcile worker re-reads the file. The
+  // watcher itself lands in §4; the channel + preload subscription ship now.
+  authTokenStoreChange: "runnerHost:event:auth:tokenStore:change",
   // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",
@@ -208,6 +256,8 @@ export const RunnerHostEvent = {
   // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
   systemResumed: "runnerHost:event:systemResumed",
   notificationClick: "runnerHost:event:notificationClick",
+  notificationForegroundDisplay:
+    "runnerHost:event:notificationForegroundDisplay",
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   hostPickerChange: "runnerHost:event:hostPickerChange",
   quitRequested: "runnerHost:event:quitRequested",
@@ -222,27 +272,18 @@ export const RunnerHostEvent = {
   certificateErrorPending: "runnerHost:event:cert:errorPending",
   appUpdateChange: "runnerHost:event:appUpdate:change",
   displayTopologyChange: "runnerHost:event:display:topologyChange",
-  // Progress events emitted by long-running host-management invokes
-  // (install / update / register-service). The preload bridge filters by
-  // `operationId` so concurrent operations don't cross-contaminate.
-  cliOperationProgress: "runnerHost:event:cli:operationProgress",
   // Tray-driven host commands forwarded to the renderer's
   // `HostTrayCommandListener`. Payloads match the shared
   // `HostTrayCommand` union.
   hostTrayCommand: "runnerHost:event:host:trayCommand",
-  // Main-process registry refreshes (launch probe, auto-update reconcile,
-  // renderer forced checks) fan out here so already-mounted renderer update
-  // surfaces can keep their TanStack Query cache in lockstep.
-  hostRegistryUpdateStateChange:
-    "runnerHost:event:host:registryUpdateStateChange",
-  // Canonical cross-surface "is a host mutation running" broadcast (see
-  // `HostOperationStatus`). Fired on start, every progress tick, and settle
-  // (success/error) of any install/update/register-service/ensure
-  // operation, whether triggered by a renderer surface or the background
-  // auto-update reconciler, so every open window's banner/Settings stay in
-  // lockstep without racing the CLI's cross-process lock file.
-  hostOperationStatusChange: "runnerHost:event:host:operationStatusChange",
+  // Canonical two-lane `HostController` status broadcast (Host Update Layer
+  // Redesign Tech Plan). Fired on every mutation-lane progress/status
+  // change (push) and on a download-lane poll tick while a download is
+  // active (see `host-controller-status-broadcast.ts`), so every open
+  // window's gate/banner/Settings/tray stay in lockstep.
+  hostControllerStatusChange: "runnerHost:event:host:controllerStatusChange",
   zoomChange: "runnerHost:event:zoom:change",
+  globalShortcutsChange: "runnerHost:event:globalShortcuts:change",
 } as const;
 
 /**

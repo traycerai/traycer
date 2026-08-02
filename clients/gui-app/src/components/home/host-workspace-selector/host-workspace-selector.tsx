@@ -33,6 +33,10 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
+import {
+  useWorktreeWorkspacesRefresh,
+  type WorktreeWorkspacesRefresh,
+} from "@/hooks/worktree/use-worktree-workspaces-refresh";
 import { useWorktreeSetEntryModeForClient } from "@/hooks/worktree/use-worktree-set-entry-mode-mutation";
 import { useWorktreeImportForClient } from "@/hooks/worktree/use-worktree-import-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
@@ -73,6 +77,7 @@ import {
 } from "@/lib/worktree/worktree-intent-seeding";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { bindingEntryToFolderIntent } from "@/lib/worktree/binding-to-intent";
 import {
   WorktreeScriptsDialog,
@@ -110,6 +115,7 @@ import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  *
  *
@@ -159,6 +165,11 @@ type BoundOwnerSurface = {
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
+// Stable identity for "the query has not answered yet", so the summaries array
+// can be threaded straight into memos and the refresh hook without a fresh
+// `[]` per render invalidating every one of them.
+const EMPTY_WORKSPACE_SUMMARIES: ReadonlyArray<WorktreeWorkspaceSummaryV13> =
+  [];
 
 /**
  * Binding-entry → `WorktreeWorkspaceSummaryV13` fallback, rendered for a row until
@@ -200,6 +211,8 @@ export type HostWorkspaceSelectorSurface =
 
 interface HostWorkspaceSelectorProps {
   readonly surface: HostWorkspaceSelectorSurface;
+  /** A draft create owns the snapshot until it settles. */
+  readonly disabled: boolean;
 }
 
 export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
@@ -229,7 +242,9 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
     (directoryList.data === undefined ? hostLabel : "Unavailable");
 
   if (props.surface.kind === "home") {
-    return <HomeSurface draftId={props.surface.draftId} />;
+    return (
+      <HomeSurface draftId={props.surface.draftId} disabled={props.disabled} />
+    );
   }
   return (
     <InEpicSurface
@@ -244,6 +259,7 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
 
 interface HomeSurfaceProps {
   readonly draftId: string | null;
+  readonly disabled: boolean;
 }
 
 function HomeSurface(props: HomeSurfaceProps) {
@@ -259,6 +275,7 @@ function HomeSurface(props: HomeSurfaceProps) {
       seedIntent={null}
       seedIntentOverride={null}
       hostScope={{ kind: "active" }}
+      disabled={props.disabled}
     />
   );
 }
@@ -295,12 +312,14 @@ type ActiveHostWorkspaceControlsProps = {
   // file-tree-style Host list above a Workspaces section, no trailing chip.
   readonly layout: "inline" | "stacked";
   readonly hostScope: HostWorkspaceControlsHostScope;
+  readonly disabled: boolean;
 };
 
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
 ) {
   const directoryList = useHostDirectoryList();
+  const disabled = props.disabled;
   const directoryEntries = directoryList.data ?? [];
   const reactiveActiveHostId = useReactiveActiveHostId();
   const activeHostId =
@@ -325,9 +344,25 @@ export function ActiveHostWorkspaceControls(
             fixedUnavailableHostEntry(props.hostScope.hostId, hostLabel),
         ]
       : directoryEntries;
-  const workspaceSource = useHomeWorkspaceSource(
+  const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
+  );
+  const workspaceSource = useMemo<HomeWorkspaceSource>(
+    () =>
+      disabled
+        ? {
+            ...homeWorkspaceSource,
+            addResolvedFolders: () => undefined,
+            removeFolder: () => ({
+              primaryChanged: false,
+              newPrimaryName: null,
+            }),
+            setPrimaryFolder: () => undefined,
+            stageEntry: () => undefined,
+          }
+        : homeWorkspaceSource,
+    [disabled, homeWorkspaceSource],
   );
   // Resolve repo-identifier → path against the scope-correct host: the
   // default host in active scope, the source agent's FIXED host in the
@@ -337,6 +372,7 @@ export function ActiveHostWorkspaceControls(
     activeHostClient,
   );
   const handleSelectHost = (hostId: string): void => {
+    if (disabled) return;
     if (props.hostScope.kind === "fixed") return;
     if (binding === null) return;
     binding.directory.selectById(hostId);
@@ -353,6 +389,7 @@ export function ActiveHostWorkspaceControls(
           entries={visibleHostEntries}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
+          disabled={disabled}
         />
         <section
           aria-label="Workspaces"
@@ -366,11 +403,13 @@ export function ActiveHostWorkspaceControls(
             workspaceSource={workspaceSource}
             resolvedFolders={resolved.folders}
             activeHostClient={activeHostClient}
+            activeHostId={activeHostId}
             stagingKey={props.stagingKey}
             seedIntent={props.seedIntent}
             seedIntentOverride={props.seedIntentOverride}
             restingMode="rows"
             hostSlot={null}
+            disabled={disabled}
           />
         </section>
       </div>
@@ -387,6 +426,7 @@ export function ActiveHostWorkspaceControls(
       mode="editable"
       onSelect={handleSelectHost}
       loading={false}
+      disabled={disabled}
     />
   );
   return (
@@ -394,11 +434,13 @@ export function ActiveHostWorkspaceControls(
       workspaceSource={workspaceSource}
       resolvedFolders={resolved.folders}
       activeHostClient={activeHostClient}
+      activeHostId={activeHostId}
       stagingKey={props.stagingKey}
       seedIntent={props.seedIntent}
       seedIntentOverride={props.seedIntentOverride}
       restingMode="summary"
       hostSlot={deviceSelect}
+      disabled={disabled}
     />
   );
 }
@@ -421,6 +463,14 @@ function HomeWorkspaceRows(props: {
   readonly workspaceSource: HomeWorkspaceSource;
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
+  /**
+   * Passed separately from the client because it is the only one of the two
+   * that MOVES on a host swap. `HostClient.bind()` rebinds in place, so the
+   * active-scope client is one object for the app's lifetime - reading its host
+   * id inside a memo keyed on the client alone would pin the first host's
+   * answer. See `rowsIntentKey`.
+   */
+  readonly activeHostId: string | null;
   readonly stagingKey: WorktreeStagingKey;
   /**
    * The source conversation's intent - top precedence when seeding folders (the
@@ -434,6 +484,7 @@ function HomeWorkspaceRows(props: {
   readonly seedIntentOverride: SeedIntentOverride | null;
   readonly restingMode: "rows" | "summary";
   readonly hostSlot: ReactNode;
+  readonly disabled: boolean;
 }) {
   const {
     workspaceSource,
@@ -484,15 +535,80 @@ function HomeWorkspaceRows(props: {
       enabled: true,
     },
   );
+  const summaries =
+    summariesQuery.data?.workspaces ?? EMPTY_WORKSPACE_SUMMARIES;
+  // Adjacent to the query ON PURPOSE: it writes its forced response into that
+  // query's cache entry, and the path list is part of the key - so both must
+  // read the same `queryableFolderPaths`, not two independently derived lists.
+  const summariesRefresh = useWorktreeWorkspacesRefresh({
+    client: activeHostClient,
+    workspacePaths: queryableFolderPaths,
+    summaries,
+  });
+  // MOUNT is the intent edge for the rows arm.
+  //
+  // The summary arm gets its forced re-derive from the picker popover's
+  // `onOpenChange`. The rows arm has no open/close of its own - it renders
+  // inline in the fork-chat dialog, the terminal-agent fork dialog and the
+  // add-node launcher, each a Radix `Dialog`/`DropdownMenu` with no
+  // `forceMount`, so it unmounts on close and mounts fresh on every open.
+  // Without this, those surfaces render `forceRefresh: false` branch metadata
+  // with no user recovery at all when the host's watcher cannot see a checkout
+  // (network mount, container boundary, LRU eviction, failed arm). They need no
+  // Refresh button of their own: close-and-reopen is the recovery, and with
+  // this edge wired it is a real re-derive rather than another cache-only read.
+  //
+  // Latched per TARGET, not per mount, and released on failure.
+  //
+  // A bare boolean would be wrong in both directions. It never resets, so a
+  // surface that switches hosts in place - or has folders added while open -
+  // would keep the first target's answer and never heal the new one. And
+  // because `canRefresh` only asserts a non-null client and a non-empty path
+  // list, the active scope's always-present default client makes it true even
+  // against an unbound or unreachable host: that attempt fails, toasts, and a
+  // latch set before the request would spend the surface's only chance before
+  // any recovery was possible.
+  const rowsIntentTarget = useRef<string | null>(null);
+  const rowsResting = props.restingMode === "rows";
+  const canRefreshSummaries = summariesRefresh.canRefresh;
+  const refreshSummaries = summariesRefresh.refresh;
+  // Keyed on the REACTIVE host id, not on `activeHostClient.getActiveHostId()`.
+  // The active-scope client rebinds in place, so its identity survives a host
+  // swap: a memo keyed on the client would keep returning the previous host's
+  // key, and this surface - which unmounts on close and has no Refresh button
+  // of its own - would spend its one intent edge on the host the user just left.
+  // `JSON.stringify`, not a space-joined string: folder paths routinely contain
+  // spaces, and joining on one loses the boundaries - `["/a b", "/c"]` and
+  // `["/a", "/b c"]` collapse to the same key, so moving between those two
+  // scopes would read as "same target" and skip the re-derive.
+  const rowsIntentKey = useMemo(
+    () => JSON.stringify([props.activeHostId, queryableFolderPaths]),
+    [props.activeHostId, queryableFolderPaths],
+  );
+  useEffect(() => {
+    if (!rowsResting || !canRefreshSummaries) return;
+    if (rowsIntentTarget.current === rowsIntentKey) return;
+    rowsIntentTarget.current = rowsIntentKey;
+    // The rows keep rendering the cached view meanwhile, so this costs no blank
+    // frame; the hook toasts its own failure, so the rejection is already
+    // reported by the time it lands here. Releasing the latch on failure lets
+    // the next move of target or readiness try again, without spinning: this
+    // effect only runs when one of its deps actually changes.
+    void refreshSummaries().catch(() => {
+      if (rowsIntentTarget.current === rowsIntentKey) {
+        rowsIntentTarget.current = null;
+      }
+    });
+  }, [canRefreshSummaries, refreshSummaries, rowsIntentKey, rowsResting]);
   const summariesByPath = useMemo<
     ReadonlyMap<string, WorktreeWorkspaceSummaryV13>
   >(() => {
     const map = new Map<string, WorktreeWorkspaceSummaryV13>();
-    for (const ws of summariesQuery.data?.workspaces ?? []) {
+    for (const ws of summaries) {
       map.set(ws.workspacePath, ws);
     }
     return map;
-  }, [summariesQuery.data]);
+  }, [summaries]);
   const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
     (state) => state.setSuspendedWorkspacePaths,
   );
@@ -505,8 +621,14 @@ function HomeWorkspaceRows(props: {
     [queryableFolderPaths, summariesByPath],
   );
   useLayoutEffect(() => {
+    if (props.disabled) return;
     setSuspendedWorkspacePaths(stagingKey, unresolvedMetadataPaths);
-  }, [setSuspendedWorkspacePaths, stagingKey, unresolvedMetadataPaths]);
+  }, [
+    props.disabled,
+    setSuspendedWorkspacePaths,
+    stagingKey,
+    unresolvedMetadataPaths,
+  ]);
   const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
     () =>
       resolvedFolders.flatMap((entry) => {
@@ -519,11 +641,16 @@ function HomeWorkspaceRows(props: {
       }),
     [resolvedFolders, summariesByPath],
   );
+  const worktreeBranchPrefix = useSettingsStore((s) => s.worktreeBranchPrefix);
   const defaultBranchByPath = useMemo(
-    () => buildDefaultBranchByPath(gitSummaries, gitSummaries.length > 1),
-    [gitSummaries],
+    () =>
+      buildDefaultBranchByPath(
+        gitSummaries,
+        gitSummaries.length > 1,
+        worktreeBranchPrefix,
+      ),
+    [gitSummaries, worktreeBranchPrefix],
   );
-
   // Seed every freshly-added git folder by precedence: per-epic memory >
   // per-folder memory (validated against disk) > default new worktree off the
   // working tree. A folder the user already touched this session is never
@@ -726,14 +853,22 @@ function HomeWorkspaceRows(props: {
   const [scriptsTargetPath, setScriptsTargetPath] = useState<string | null>(
     null,
   );
-  const handleEditEnvironment = useCallback((path: string): void => {
-    // Keep the picker open: the scripts modal stacks on top of it, so closing
-    // the modal returns to the still-open picker.
-    Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
-      source: "direct_ui",
-    });
-    setScriptsTargetPath(path);
-  }, []);
+  const handleEditEnvironment = useCallback(
+    (path: string): void => {
+      if (props.disabled) return;
+      // Keep the picker open: the scripts modal stacks on top of it, so closing
+      // the modal returns to the still-open picker.
+      Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
+        source: "direct_ui",
+      });
+      setScriptsTargetPath(path);
+    },
+    [props.disabled],
+  );
+  const addFolders = useCallback(async (): Promise<boolean> => {
+    if (props.disabled) return false;
+    return pickAndAddFolders();
+  }, [pickAndAddFolders, props.disabled]);
   const scriptsTarget = useMemo<WorktreeScriptsTarget | null>(() => {
     if (scriptsTargetPath === null) return null;
     const summary = summariesByPath.get(scriptsTargetPath);
@@ -760,17 +895,19 @@ function HomeWorkspaceRows(props: {
           items={items}
           hostSlot={props.hostSlot}
           addFolderPending={addFolderPending}
-          onAddFolder={pickAndAddFolders}
+          onAddFolder={addFolders}
           onEditEnvironment={handleEditEnvironment}
+          refresh={summariesRefresh}
+          disabled={props.disabled}
         />
       ) : (
         <WorkspaceFolderRows
           items={items}
           trailingSlot={null}
           addFolderPending={addFolderPending}
-          addFolderDisabled={false}
+          addFolderDisabled={props.disabled}
           addFolderDisabledReason={null}
-          onAddFolder={pickAndAddFolders}
+          onAddFolder={addFolders}
           // Landing has no live PTY to resume: edits apply inline, no Update.
           onUpdate={null}
           updateEnabled={false}
@@ -804,6 +941,8 @@ function HomeWorkspaceSummaryControl(props: {
   readonly addFolderPending: boolean;
   readonly onAddFolder: AddFolderHandler;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly refresh: WorktreeWorkspacesRefresh;
+  readonly disabled: boolean;
 }) {
   return (
     <div
@@ -821,7 +960,7 @@ function HomeWorkspaceSummaryControl(props: {
           readOnly={false}
           bindingResolved
           addFolderPending={props.addFolderPending}
-          addFolderDisabled={false}
+          addFolderDisabled={props.disabled}
           addFolderDisabledReason={null}
           onAddFolder={props.onAddFolder}
           onUpdate={null}
@@ -829,6 +968,7 @@ function HomeWorkspaceSummaryControl(props: {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={props.onEditEnvironment}
+          refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
           popoverSide="top"
         />
@@ -844,35 +984,52 @@ function HostOnlySelect(props: {
   readonly mode: "editable" | "clone-on-switch" | "locked";
   readonly onSelect: (hostId: string) => void;
   readonly loading: boolean;
+  readonly disabled: boolean;
 }) {
   const options = hostSelectOptions(
     props.entries,
     props.activeHostId,
     props.hostLabel,
   );
-  const disabled = props.mode === "locked";
+  // Two reasons to go inert, but only one of them explains itself: `locked`
+  // means this surface can never switch host, while `props.disabled` is a
+  // transient draft-create settle. Labelling the second "Terminal host is
+  // fixed" would tell an editable composer's user their host is permanent.
+  const lockedToFixedHost = props.mode === "locked";
+  const disabled = lockedToFixedHost || props.disabled;
   return (
     <Select
       value={props.activeHostId ?? undefined}
       onValueChange={props.onSelect}
       disabled={disabled}
     >
-      <SelectTrigger
-        size="sm"
-        aria-label="Host"
-        title={disabled ? "Terminal host is fixed" : undefined}
-        data-testid="composer-host-trigger"
-        className="h-7 w-full min-w-0 max-w-full justify-start gap-1.5 overflow-hidden border-transparent bg-transparent px-1.5 text-ui-sm text-muted-foreground opacity-70 transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-70 data-[state=open]:rounded-b-none dark:bg-transparent dark:hover:bg-accent/50 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:overflow-hidden *:data-[slot=select-value]:truncate"
+      <TooltipWrapper
+        label={lockedToFixedHost ? "Terminal host is fixed" : undefined}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <SelectValue placeholder={props.hostLabel} />
-        {props.loading ? (
-          <AgentSpinningDots
-            className="text-current/70"
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-      </SelectTrigger>
+        {/* `flex w-full min-w-0`, NOT `inline-flex`: the trigger below is
+            `w-full`, and a shrink-to-fit guard would make that resolve against
+            the guard rather than the selector's cell, collapsing the control. */}
+        <span className="flex w-full min-w-0">
+          <SelectTrigger
+            size="sm"
+            aria-label="Host"
+            data-testid="composer-host-trigger"
+            className="h-7 w-full min-w-0 max-w-full justify-start gap-1.5 overflow-hidden border-transparent bg-transparent px-1.5 text-ui-sm text-muted-foreground opacity-70 transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-70 data-[state=open]:rounded-b-none dark:bg-transparent dark:hover:bg-accent/50 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:overflow-hidden *:data-[slot=select-value]:truncate"
+          >
+            <SelectValue placeholder={props.hostLabel} />
+            {props.loading ? (
+              <AgentSpinningDots
+                className="text-current/70"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+          </SelectTrigger>
+        </span>
+      </TooltipWrapper>
       <SelectContent
         data-testid="composer-host-popover"
         sideOffset={0}
@@ -1390,15 +1547,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     props.hostClient,
     { workspacePaths: bindingWorkspacePaths, enabled: true },
   );
+  const metadataSummaries =
+    metadataQuery.data?.workspaces ?? EMPTY_WORKSPACE_SUMMARIES;
+  // Adjacent to the query ON PURPOSE - see the landing surface's copy: the
+  // forced response is written into that query's cache entry, whose key
+  // includes this exact path list.
+  const summariesRefresh = useWorktreeWorkspacesRefresh({
+    client: props.hostClient,
+    workspacePaths: bindingWorkspacePaths,
+    summaries: metadataSummaries,
+  });
   const summariesByPath = useMemo(
-    () =>
-      new Map(
-        (metadataQuery.data?.workspaces ?? []).map((ws) => [
-          ws.workspacePath,
-          ws,
-        ]),
-      ),
-    [metadataQuery.data],
+    () => new Map(metadataSummaries.map((ws) => [ws.workspacePath, ws])),
+    [metadataSummaries],
   );
   /**
    * Rows the host has actually resolved. Listing reads are served from the
@@ -1497,9 +1658,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
   );
+  const worktreeBranchPrefix = useSettingsStore((s) => s.worktreeBranchPrefix);
   const defaultBranchByPath = useMemo(
-    () => buildDefaultBranchByPath(gitWorkspaces, gitWorkspaces.length > 1),
-    [gitWorkspaces],
+    () =>
+      buildDefaultBranchByPath(
+        gitWorkspaces,
+        gitWorkspaces.length > 1,
+        worktreeBranchPrefix,
+      ),
+    [gitWorkspaces, worktreeBranchPrefix],
   );
   const onBindingCommitted = surface.onBindingCommitted;
   const handleBindingCommitted = useCallback(
@@ -2087,6 +2254,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             mode={surface.kind === "chat" ? "clone-on-switch" : "locked"}
             onSelect={handleSelectHostForChat}
             loading={metadataPending}
+            disabled={false}
           />
         </div>
         <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
@@ -2119,6 +2287,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 : null
             }
             onEditEnvironment={handleEditEnvironment}
+            refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).

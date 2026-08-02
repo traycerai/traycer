@@ -19,10 +19,18 @@ import {
   AttachmentStrip,
   NO_SESSION_OBJECT_URL,
 } from "@/components/chat/composer/attachments/attachment-strip";
-import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import {
+  useEpicAttachmentBytesPresence,
+  useEpicImageFetcher,
+} from "@/lib/attachments/use-attachment-blob-src";
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import {
+  NewConversationTransientContext,
+  useNewConversationTransient,
+  type NewConversationTransientState,
+} from "./new-conversation-transient-context";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,11 +46,15 @@ import {
 } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import {
   mentionRootsFromWorktreeIntent,
   useWorkspaceMentionRoots,
 } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
@@ -152,32 +164,31 @@ interface NewConversationModalActionProps {
   readonly triggerLabel: string;
   readonly triggerTestId: string;
   readonly actionRevealClassName: string;
+  readonly onBeforeOpen: (() => void) | undefined;
 }
 
 /**
  * The single "+" trigger for the New Conversation modal, shared by the chats
- * panel header (top-level) and each chat row (child). It always opens in chat
- * mode; the modal's own switcher is the one way to flip to a terminal agent, so
- * there are no per-trigger dropdowns. Forcing chat mode here overrides the
- * projection-derived seed default and prevents a previously-dismissed
- * terminal/PaneOpener draft from leaking its mode in.
+ * panel header (top-level) and each chat row (child). The modal opens with its
+ * remembered draft mode, falling back to the latest conversation's interface
+ * when there is no draft, so a terminal-agent launch carries forward just like
+ * a chat launch. The modal's own switcher remains the one way to change modes.
  */
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
 ) {
+  const { disabled, epicId, onBeforeOpen, parentId, tabId } = props;
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const handleOpen = useCallback((): void => {
-    if (props.disabled) return;
-    useNewConversationModalStore
-      .getState()
-      .setComposerMode(props.epicId, "chat");
+    if (disabled) return;
+    onBeforeOpen?.();
     openModal({
-      epicId: props.epicId,
-      tabId: props.tabId,
+      epicId,
+      tabId,
       placement: ACTIVE_TILE_PLACEMENT,
-      parentId: props.parentId,
+      parentId,
     });
-  }, [openModal, props.disabled, props.epicId, props.parentId, props.tabId]);
+  }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
   // Activation while aria-disabled stays blocked via `handleOpen`'s early
   // return; see `disabled-presentation.ts` for why native `disabled` can't
   // carry the tooltip.
@@ -302,6 +313,27 @@ function NewConversationModalDialog(props: {
   // recognizes their content as its own.
   const [overlayBoundaryEl, setOverlayBoundaryEl] =
     useState<HTMLElement | null>(null);
+  // The composer picker store outlives the body's focus-driven unmount. A fresh
+  // store is minted each time the modal opens, so a reopened modal starts clean,
+  // while it survives focus toggles within one open session (this dialog stays
+  // mounted throughout).
+  const [transientSession, setTransientSession] = useState<
+    NewConversationTransientState & { readonly open: boolean }
+  >(() => ({
+    open: props.open,
+    pickerStore: createComposerPickerStore(),
+  }));
+  if (props.open !== transientSession.open) {
+    setTransientSession((prev) =>
+      props.open
+        ? { open: true, pickerStore: createComposerPickerStore() }
+        : { ...prev, open: false },
+    );
+  }
+  const transient = useMemo<NewConversationTransientState>(
+    () => ({ pickerStore: transientSession.pickerStore }),
+    [transientSession.pickerStore],
+  );
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -327,20 +359,20 @@ function NewConversationModalDialog(props: {
             <XIcon className="size-3.5" />
           </Button>
         </DialogClose>
-        <DialogTitle className="sr-only">
-          New chat or terminal agent
-        </DialogTitle>
+        <DialogTitle className="sr-only">New agent</DialogTitle>
         {props.open ? (
           <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
             <SurfaceActivityProvider active>
-              <NewConversationModalBody
-                epicId={props.epicId}
-                tabId={props.tabId}
-                placement={props.placement}
-                parentId={props.parentId}
-                dismissPickerRef={dismissPickerRef}
-                onSubmitted={() => props.onOpenChange(false)}
-              />
+              <NewConversationTransientContext.Provider value={transient}>
+                <NewConversationModalBody
+                  epicId={props.epicId}
+                  tabId={props.tabId}
+                  placement={props.placement}
+                  parentId={props.parentId}
+                  dismissPickerRef={dismissPickerRef}
+                  onSubmitted={() => props.onOpenChange(false)}
+                />
+              </NewConversationTransientContext.Provider>
             </SurfaceActivityProvider>
           </DialogOverlayBoundaryContext.Provider>
         ) : null}
@@ -356,25 +388,23 @@ function NewConversationModalDialog(props: {
  * parent (chat or terminal agent), and tracks the current mode ("child chat" vs
  * "child terminal agent") so it stays accurate as the user switches.
  */
-function NewConversationModalHeader(props: {
+export function NewConversationModalHeader(props: {
   readonly composerMode: ComposerMode;
   readonly parentId: string | null;
   readonly switcher: ReactNode;
 }) {
   const { composerMode, parentId, switcher } = props;
-  const isChildChat = parentId !== null;
-  // The parent can be a chat or a terminal agent (both live in the chats tree);
-  // resolve its display title from the right projection slice.
+  const isChildAgent = parentId !== null;
+  // The parent is an Agent either way - the two projection slices are just the
+  // interface it uses - so both arms resolve to the interface-agnostic
+  // "Untitled agent" fallback rather than naming the interface.
   const parentTitle = useEpicStore((state) => {
     if (parentId === null) return null;
     if (Object.hasOwn(state.chats.byId, parentId)) {
-      return displayTitle(state.chats.byId[parentId].title, "chat");
+      return displayTitle(state.chats.byId[parentId].title, "agent");
     }
     if (Object.hasOwn(state.tuiAgents.byId, parentId)) {
-      return displayTitle(
-        state.tuiAgents.byId[parentId].title,
-        "terminal-agent",
-      );
+      return displayTitle(state.tuiAgents.byId[parentId].title, "agent");
     }
     return null;
   });
@@ -382,23 +412,30 @@ function NewConversationModalHeader(props: {
     <div className="flex min-w-0 flex-col gap-0.5">
       <div className="flex min-w-0 items-center justify-between">
         <span className="text-sm font-medium text-foreground">
-          {composerMode === "chat"
-            ? "Start a new chat"
-            : "Start a new terminal agent"}
+          Start a new agent
         </span>
         {switcher}
       </div>
-      {isChildChat ? (
-        <span className="truncate text-ui-xs text-muted-foreground">
-          Creating a child {composerMode === "chat" ? "chat" : "terminal agent"}{" "}
-          from {parentTitle ?? displayTitle("", "chat")}
-        </span>
-      ) : null}
+      <span className="truncate text-ui-xs text-muted-foreground">
+        {isChildAgent
+          ? `Child agent of ${parentTitle ?? displayTitle("", "agent")} · ${AGENT_INTERFACE_LABELS[composerMode]} interface`
+          : `${AGENT_INTERFACE_LABELS[composerMode]} interface`}
+      </span>
     </div>
   );
 }
 
-function NewConversationModalBody(props: {
+/**
+ * Interface names for the creation header. Chat and Terminal are how the user
+ * interacts with the new Agent, not what it is - the title above stays
+ * "Start a new agent" for both.
+ */
+const AGENT_INTERFACE_LABELS: Readonly<Record<ComposerMode, string>> = {
+  chat: "Chat",
+  terminal: "Terminal",
+};
+
+export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
@@ -413,7 +450,10 @@ function NewConversationModalBody(props: {
   const isDisconnected = connectionStatus === "closed";
   const canMutate = isEditableRole(permissionRole) && !isDisconnected;
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const [pickerStore] = useState(() => createComposerPickerStore());
+  // The picker store is lifted onto the always-mounted dialog so it survives
+  // this body's focus-driven unmount (see the transient context); the hook falls
+  // back to a local store when rendered outside the dialog.
+  const { pickerStore } = useNewConversationTransient();
   // Bridge the editor's imperative picker dismiss up to the dialog's Escape
   // handler (see `NewConversationModalDialog`). Returns true when a picker was
   // open and got closed, so the dialog keeps itself open for that Escape.
@@ -456,6 +496,13 @@ function NewConversationModalBody(props: {
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
         ?.content ?? seed.content,
   );
+  // Reseed the caret from the draft store on every (re)mount, so a focus
+  // round-trip that unmounts this body restores the selection, not just bytes.
+  const [initialSelection] = useState<{ from: number; to: number } | null>(
+    () =>
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+        ?.selection ?? null,
+  );
   const stagingKey = useMemo(
     () => newConversationModalStagingKey(epicId, parentId),
     [epicId, parentId],
@@ -465,6 +512,9 @@ function NewConversationModalBody(props: {
     (state) => state.intentByKey[stagingKeyId] ?? null,
   );
   const setContent = useNewConversationModalStore((state) => state.setContent);
+  const setSelection = useNewConversationModalStore(
+    (state) => state.setSelection,
+  );
   const setSettings = useNewConversationModalStore(
     (state) => state.setSettings,
   );
@@ -546,23 +596,36 @@ function NewConversationModalBody(props: {
       deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
+        resolvedWorkspace.isError,
       ),
-    [resolvedWorkspace.folders, resolvedWorkspace.isLoading],
+    [
+      resolvedWorkspace.folders,
+      resolvedWorkspace.isLoading,
+      resolvedWorkspace.isError,
+    ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
+  const runnerHost = useRunnerHost();
+  const paste = useComposerPaste(editorRef, runnerHost.fileDrops, mentionRoots);
+  const attachmentPending = isAttachmentIngestPending(paste);
   const canSubmit =
-    canMutate && !isSubmitting && workspaceCanStart && hasSubmittableContent;
+    canMutate &&
+    !isSubmitting &&
+    !attachmentPending &&
+    workspaceCanStart &&
+    hasSubmittableContent;
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
-  const paste = useComposerPaste(editorRef);
+  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
   });
   const workspaceControls = (
     <ActiveHostWorkspaceControls
+      disabled={false}
       stagingKey={stagingKey}
       layout="inline"
       workspaceSeed={draftWorkspace}
@@ -576,8 +639,8 @@ function NewConversationModalBody(props: {
       type="button"
       aria-label={
         draftComposerMode === "chat"
-          ? "Switch to terminal mode"
-          : "Switch to chat mode"
+          ? "Switch to the Terminal interface"
+          : "Switch to the Chat interface"
       }
       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       onClick={() => {
@@ -621,7 +684,6 @@ function NewConversationModalBody(props: {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
-      agentMode: toolbar.agentMode,
     });
     if (settings.model.length === 0) return;
     // Global, single-selection billing context captured at create time; it
@@ -635,12 +697,12 @@ function NewConversationModalBody(props: {
     const activeHostId = hostClient.getActiveHostId();
     if (activeHostId === null) {
       reportableErrorToast(
-        "Couldn't start the chat.",
+        "Couldn't start the agent.",
         {
           description: "No active device. Reconnect and try again.",
         },
         {
-          title: "Could not start chat",
+          title: "Could not start agent",
           message: "No active device was available.",
           code: null,
           source: "Chat",
@@ -723,7 +785,7 @@ function NewConversationModalBody(props: {
             .getState()
             .markFailed(
               { hostId: activeHostId, userId, epicId },
-              "Couldn't create the chat.",
+              "Couldn't create the agent.",
             );
         },
       },
@@ -766,8 +828,9 @@ function NewConversationModalBody(props: {
           harnessId: launch.harnessId,
           model: launch.model,
           reasoningEffort: launch.reasoningEffort,
-          agentMode: launch.agentMode,
           forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
           onStatusChange: null,
           worktreeIntent,
           workspaceMode,
@@ -791,10 +854,13 @@ function NewConversationModalBody(props: {
     ],
   );
   const handleSnapshot = useCallback(
-    (content: JsonContent, _selection: { from: number; to: number }) => {
+    (content: JsonContent, selection: { from: number; to: number }) => {
       setContent(epicId, content);
+      // Persist the caret alongside the bytes so a focus round-trip that
+      // unmounts + remounts the editor restores it (see `initialSelection`).
+      setSelection(epicId, selection);
     },
-    [epicId, setContent],
+    [epicId, setContent, setSelection],
   );
   const handleRemoveImage = useCallback((id: string) => {
     editorRef.current?.removeImageAttachmentById(id);
@@ -808,11 +874,13 @@ function NewConversationModalBody(props: {
       chatEditorIsActive={chatComposerActive}
       editorClassName={COMPOSER_EDITOR_CLASSNAME}
       initialContent={initialContent}
-      initialSelection={null}
+      initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
       header={header}
+      topBanner={null}
       attachmentsStrip={
         <NewConversationModalAttachmentStrip
           epicId={epicId}
@@ -824,6 +892,9 @@ function NewConversationModalBody(props: {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
+      hasPastedImageBytes={hasPastedImageBytes}
+      ingestPastedComposerImages={null}
+      onEditorReady={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}
@@ -959,7 +1030,9 @@ function useLatestConversationSettingsSeed(): {
           defaults.defaultServiceTier.trim().length === 0
             ? null
             : defaults.defaultServiceTier,
-        agentMode: agent.agentMode,
+        // Epic Mode was removed: seed the one remaining mode rather than
+        // carrying a legacy value off the source agent.
+        agentMode: "regular",
         profileId: agent.profileId,
         // TUI agents carry no billing context; seed Personal (the store
         // default). The composer lets the user switch before sending.

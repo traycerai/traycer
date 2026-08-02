@@ -10,4 +10,19 @@ export const authQueryKeys = {
     "user",
     authService,
   ],
+  // Devices & Sessions account-security list, keyed to both the live
+  // AuthService and signed-in user. An AuthService survives account changes,
+  // so the user id is required to keep an old account's promise/cache from
+  // becoming visible to its replacement.
+  userSessions: (authService: object, userId: string): readonly unknown[] => [
+    "auth",
+    "user-sessions",
+    authService,
+    userId,
+  ],
+  userSessionsMissing: (): readonly unknown[] => [
+    "auth",
+    "user-sessions",
+    "missing",
+  ],
 };

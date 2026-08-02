@@ -1,8 +1,12 @@
-import { open as openCallback } from "node:fs";
+import { appendFileSync, mkdirSync, open as openCallback } from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Environment } from "../runner/environment";
-import { bootstrapLogPath, ensureHostHomeDir } from "../store/paths";
+import {
+  bootstrapLogPath,
+  ensureHostHomeDir,
+  hostHomeDir,
+} from "../store/paths";
 
 // Async open that resolves to a BARE integer fd (the callback `fs.open`
 // contract), not a `FileHandle` - see `openBootstrapLogFd`.
@@ -21,6 +25,11 @@ export type BootstrapPhase =
 // Every field is explicit (no optional `?:` per project style). Callers
 // pass `undefined` for unset fields; `formatFields` skips any field
 // whose value is `undefined` (or `null` for the nullable members).
+//
+// `attemptId` + `supervisorPid` are additive identity fields (Finding F):
+// new writers always set them; old parsers ignore unknown keys so the
+// append-only format stays backward-compatible. Baseline correlation
+// remains the compat path for hosts started by older CLIs that omit them.
 export interface BootstrapMarkerFields {
   readonly shell: string | undefined;
   readonly args: readonly string[] | undefined;
@@ -28,6 +37,8 @@ export interface BootstrapMarkerFields {
   readonly exitCode: number | null | undefined;
   readonly signal: string | null | undefined;
   readonly error: string | undefined;
+  readonly attemptId: string | undefined;
+  readonly supervisorPid: number | undefined;
 }
 
 export interface BootstrapLogEntry {
@@ -57,6 +68,13 @@ function formatFields(fields: BootstrapMarkerFields): string {
     parts.push(`signal=${fields.signal}`);
   if (fields.error !== undefined)
     parts.push(`error=${escapeValue(fields.error)}`);
+  // Identity fields last so pre-existing key=value parsers that only
+  // walk known keys keep working, and so a human reading the line still
+  // sees the diagnostic payload first.
+  if (fields.attemptId !== undefined)
+    parts.push(`attempt=${escapeValue(fields.attemptId)}`);
+  if (fields.supervisorPid !== undefined)
+    parts.push(`supervisorPid=${fields.supervisorPid}`);
   return parts.join(" ");
 }
 
@@ -70,6 +88,23 @@ export async function writeBootstrapMarker(
   const fieldsStr = formatFields(fields);
   const line = `[${ts}] phase=${phase}${fieldsStr.length === 0 ? "" : ` ${fieldsStr}`}\n`;
   await appendFile(bootstrapLogPath(environment), line);
+}
+
+// Exit handlers cannot await an asynchronous append before calling
+// `process.exit()`: Node can terminate before the promise has reached disk.
+// Terminal markers are readiness authority, so write them synchronously at
+// that process boundary. Normal `starting` / pre-spawn failure markers retain
+// the non-blocking writer above.
+export function writeBootstrapTerminalMarker(
+  environment: Environment,
+  phase: Exclude<BootstrapPhase, "starting">,
+  fields: BootstrapMarkerFields,
+): void {
+  mkdirSync(hostHomeDir(environment), { recursive: true });
+  const ts = new Date().toISOString();
+  const fieldsStr = formatFields(fields);
+  const line = `[${ts}] phase=${phase}${fieldsStr.length === 0 ? "" : ` ${fieldsStr}`}\n`;
+  appendFileSync(bootstrapLogPath(environment), line);
 }
 
 // Opens the bootstrap log for spawn(stdio: [_, fd, fd]) handoff and
@@ -97,6 +132,13 @@ export async function openBootstrapLogFd(
 }
 
 const LINE_RE = /^\[([^\]]+)\] phase=(\w[\w-]*)(?:\s+(.*))?$/;
+
+// Exported so spawn-evidence and unit tests can parse a single log line
+// without re-implementing the key=value grammar. Unknown keys (including
+// the additive attempt/supervisorPid fields) land in `fields` as strings.
+export function parseBootstrapLogLine(line: string): BootstrapLogEntry | null {
+  return parseLine(line);
+}
 
 function parseLine(line: string): BootstrapLogEntry | null {
   const match = LINE_RE.exec(line);

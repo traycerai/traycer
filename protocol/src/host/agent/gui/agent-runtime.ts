@@ -187,6 +187,15 @@ export type RuntimeSlashInvocation = z.infer<
   typeof runtimeSlashInvocationSchema
 >;
 
+export const runtimeSkillInvocationSchema = z.object({
+  name: z.string(),
+  path: z.string().nullable(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+export type RuntimeSkillInvocation = z.infer<
+  typeof runtimeSkillInvocationSchema
+>;
+
 export const runtimeAgentRunInputSchema = z.object({
   harnessId: guiHarnessIdSchema,
   prompt: z.string(),
@@ -205,6 +214,9 @@ export const runtimeAgentRunInputSchema = z.object({
   providerWorkspace: providerWorkspaceSchema,
   systemPrompt: z.string().nullable().default(null),
   slashInvocation: runtimeSlashInvocationSchema.nullable().default(null),
+  // Skills selected as inline composer modifiers. Optional preserves runtime
+  // compatibility with callers created before multi-skill composer support.
+  skillInvocations: z.array(runtimeSkillInvocationSchema).optional(),
   // Billing/account context for the turn, sourced from the turn-bearing frame's
   // `accountContext` (a global app-wide selection), not from per-chat
   // `chatRunSettings`. The Traycer harness threads this to its per-user
@@ -918,6 +930,22 @@ export const piUserMessageAnchorResolvedSchema = z.object({
   piSessionId: z.string().nullable(),
 });
 
+export const hermesUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("hermes"),
+  sessionId: z.string(),
+  // The ACP session id the `hermes acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  hermesSessionId: z.string().nullable(),
+});
+
+export const ompUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("omp"),
+  sessionId: z.string(),
+  // The omp RPC session id assigned for this turn. Null until the session is
+  // resolved; used to resume the same omp session on a later turn.
+  ompSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -939,6 +967,8 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     ampUserMessageAnchorResolvedSchema,
     devinUserMessageAnchorResolvedSchema,
     piUserMessageAnchorResolvedSchema,
+    hermesUserMessageAnchorResolvedSchema,
+    ompUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
@@ -1015,9 +1045,12 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
  * Stable `ErrorEvent.code` flagging a *recoverable* provider auth failure (an
  * invalid/expired/missing credential the user can fix by reconnecting). Part of
  * the wire contract: host harnesses emit it and the renderer keys on it,
- * provider-agnostic, to suppress the transcript row, mount the composer re-auth
- * banner, and restore the doomed prompt for re-send. Lives here (next to
- * `errorEventSchema`) so both sides import the one definition.
+ * provider-agnostic, to mount the composer re-auth banner and restore the
+ * doomed prompt for re-send. The error row itself renders in the transcript
+ * like any other error - it is the failure's durable record (a headless
+ * A2A-triggered turn may fail with no live subscriber, so the persisted row is
+ * the only trace). Lives here (next to `errorEventSchema`) so both sides
+ * import the one definition.
  */
 export const AUTH_ERROR_CODE = "auth";
 

@@ -30,6 +30,10 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => authService,
 }));
 
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 // `EpicSessionProvider` opens its own durable transport via this factory, but
 // the test installs an `__setEpicStreamClientFactoryForTests` override that
 // short-circuits before `openTransport` runs - so a stable stub opener that is
@@ -177,8 +181,11 @@ describe("<EpicShell />", () => {
   it("renders the stable shell frame while the session is not ready", () => {
     render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
 
-    expect(screen.getByTestId("epic-shell").dataset.sessionReady).toBe("false");
-    expect(screen.getByTestId("tile-canvas-loading")).not.toBeNull();
+    const shell = screen.getByTestId("epic-shell");
+    const canvas = screen.getByTestId("tile-canvas-loading");
+    expect(shell.dataset.sessionReady).toBe("false");
+    expect(shell.className).not.toContain("rounded-r-lg");
+    expect(canvas.className).not.toContain("rounded-t-lg");
     expect(screen.queryByTestId("epic-session-loading")).toBeNull();
   });
 

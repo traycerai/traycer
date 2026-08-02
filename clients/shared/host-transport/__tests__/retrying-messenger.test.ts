@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
+  type HostRequestAuthority,
   RetryableTransportError,
   type IHostMessenger,
 } from "../host-messenger";
@@ -62,8 +63,14 @@ function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
   calls: () => number;
 } {
   let call = 0;
-  const messenger: IHostMessenger<typeof testRegistry> = {
-    request(method, params) {
+  // Written as a `vi.fn()` rather than a hand-rolled `request<Method>(…)`
+  // method: the interface promises `ResponseOfMethod<Registry, Method>` for an
+  // unresolved `Method`, which a concrete `{ echoed }` literal cannot satisfy
+  // (the real wrapper only type-checks because it *delegates*, preserving the
+  // type parameter). The mock stays loosely typed and assignable.
+  const request = vi
+    .fn()
+    .mockImplementation((method: string, params: { message: string }) => {
       const index = call;
       call += 1;
       const outcome = outcomes[index];
@@ -72,7 +79,12 @@ function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
       }
       void method;
       return Promise.resolve({ echoed: params.message.toUpperCase() });
-    },
+    });
+  const messenger: IHostMessenger<typeof testRegistry> = {
+    request,
+    // The retry wrapper drives both paths through the same `runWithRetries`,
+    // so the long-poll variant shares this mock (and its call counter).
+    requestWithResponseTimeout: request,
   };
   return { messenger, calls: () => call };
 }
@@ -100,6 +112,17 @@ function makeRecordingPolicy(
   return { policy, delays };
 }
 
+function authority(): HostRequestAuthority {
+  return {
+    endpoint: { hostId: "test-host", websocketUrl: "ws://test-host/rpc" },
+    bearer: {
+      identity: { userId: "u1" },
+      getBearerToken: () => "token",
+    },
+    abortSignal: new AbortController().signal,
+  };
+}
+
 describe("createRetryingMessenger", () => {
   it("returns the first success without sleeping", async () => {
     const { messenger, calls } = fakeInner([]);
@@ -108,6 +131,7 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
+      authority(),
     );
 
     expect(result).toEqual({ echoed: "HI" });
@@ -122,6 +146,7 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
+      authority(),
     );
 
     expect(result).toEqual({ echoed: "HI" });
@@ -139,9 +164,13 @@ describe("createRetryingMessenger", () => {
     const { policy, delays } = makeRecordingPolicy(2, 100, 1_000, () => 0.5);
 
     await expect(
-      createRetryingMessenger(messenger, policy).request("host.echo", {
-        message: "hi",
-      }),
+      createRetryingMessenger(messenger, policy).request(
+        "host.echo",
+        {
+          message: "hi",
+        },
+        authority(),
+      ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
     expect(calls()).toBe(3);
     expect(delays).toHaveLength(2);
@@ -152,9 +181,13 @@ describe("createRetryingMessenger", () => {
     const { policy, delays } = makeRecordingPolicy(2, 100, 1_000, () => 0.5);
 
     await expect(
-      createRetryingMessenger(messenger, policy).request("host.echo", {
-        message: "hi",
-      }),
+      createRetryingMessenger(messenger, policy).request(
+        "host.echo",
+        {
+          message: "hi",
+        },
+        authority(),
+      ),
     ).rejects.toSatisfy(
       (error: unknown) =>
         error instanceof HostRpcError &&
@@ -171,6 +204,7 @@ describe("createRetryingMessenger", () => {
       createRetryingMessenger(messenger, NO_RETRY_TRANSPORT_POLICY).request(
         "host.echo",
         { message: "hi" },
+        authority(),
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
     expect(calls()).toBe(1);
@@ -181,9 +215,13 @@ describe("createRetryingMessenger", () => {
     const random = () => 0.5;
     const { policy, delays } = makeRecordingPolicy(2, 100, 1_000, random);
 
-    await createRetryingMessenger(messenger, policy).request("host.echo", {
-      message: "hi",
-    });
+    await createRetryingMessenger(messenger, policy).request(
+      "host.echo",
+      {
+        message: "hi",
+      },
+      authority(),
+    );
 
     expect(delays).toEqual([
       jitteredBackoffFor(0, 100, 1_000, random),

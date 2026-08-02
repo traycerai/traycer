@@ -163,4 +163,41 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
       "interviewBlockId",
     ],
   },
+  worktree_deletion: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "worktree_deletion" },
+      operation: { type: "string", const: "worktree.deletion" },
+      title: { type: "string", minLength: 1 },
+      message: { type: "string", minLength: 1 },
+      commandId: { type: "string", minLength: 1 },
+      source: { type: "string", minLength: 1 },
+      requestedCount: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+      deletedCount: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+      failedCount: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+    },
+    required: [
+      "kind",
+      "operation",
+      "title",
+      "message",
+      "commandId",
+      "source",
+      "requestedCount",
+      "deletedCount",
+      "failedCount",
+    ],
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;
