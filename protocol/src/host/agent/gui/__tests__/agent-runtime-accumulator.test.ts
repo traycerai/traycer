@@ -1878,6 +1878,85 @@ describe("accumulateEvent", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].status).toBe("completed");
     expect((blocks[0] as CommandBlock).exitCode).toBe(0);
+    expect((blocks[0] as CommandBlock).stopped).toBe(false);
+  });
+
+  it("a promotion re-emit marks the open command block instead of duplicating it", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "cmd1",
+      timestamp: 1,
+      command: "npm test",
+      cwd: "/workspace",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "cmd1",
+      timestamp: 9,
+      command: "npm test",
+      cwd: "/workspace",
+      backgroundTask: true,
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as CommandBlock).backgroundTask).toBe(true);
+    // The elapsed anchor is the FIRST sighting - the promotion is bookkeeping,
+    // not a restart.
+    expect(blocks[0].timestamp).toBe(1);
+    expect(blocks[0].status).toBe("streaming");
+  });
+
+  it("a host-initiated stop settles the command as stopped, not failed", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "cmd1",
+      timestamp: 1,
+      command: "sleep 600",
+      cwd: "/workspace",
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.completed",
+      blockId: "cmd1",
+      timestamp: 2,
+      command: "sleep 600",
+      exitCode: -1,
+      terminationReason: "stopped",
+    });
+
+    expect((blocks[0] as CommandBlock).stopped).toBe(true);
+    expect((blocks[0] as CommandBlock).backgroundTask).toBe(true);
+  });
+
+  it("turn.completed keeps a backgrounded command streaming", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "bg",
+      timestamp: 1,
+      command: "npm run dev",
+      cwd: "/workspace",
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "fg",
+      timestamp: 1,
+      command: "npm test",
+      cwd: "/workspace",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn1",
+      timestamp: 3,
+      turnId: "turn1",
+    });
+
+    const byId = new Map(blocks.map((block) => [block.blockId, block]));
+    expect(byId.get("bg")?.status).toBe("streaming");
+    expect(byId.get("fg")?.status).toBe("completed");
   });
 
   // ── sub-agent events ─────────────────────────────────────────

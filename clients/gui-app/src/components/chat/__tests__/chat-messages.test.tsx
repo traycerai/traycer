@@ -3831,11 +3831,12 @@ describe("ChatMessages scroll policy", () => {
     // used here (see the outer `afterEach`'s own comment: it would clear the
     // file's `vi.mock` module mocks for isMac / activity store).
 
-    it("stays visible and interactive when an epic canvas tile is narrow", async () => {
+    it("stays visible but leaves a narrow epic canvas transcript interactive", async () => {
       const messages = makeTranscript(20);
       renderChatMessages({ messages, scrollStateKey: "always-on-minimap" });
-      // Retain the narrow rect as a regression guard against reintroducing
-      // width-based minimap gating; current assertions do not derive from it.
+      // The rail stays painted as an orientation aid, but its transparent hit
+      // strip must not cover transcript text when the centered content column
+      // consumes the full pane width.
       mockNarrowTranscriptWidth(420);
       await settleLegendList();
 
@@ -3843,13 +3844,13 @@ describe("ChatMessages scroll policy", () => {
       const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
       expect(rail.classList).toContain("opacity-100");
       expect(rail.classList).not.toContain("opacity-0");
-      expect(hitStrip.hasAttribute("inert")).toBe(false);
-      expect(hitStrip.getAttribute("aria-hidden")).toBeNull();
-      expect(hitStrip.classList.contains("pointer-events-auto")).toBe(true);
-      expect(hitStrip.tabIndex).toBe(0);
-      expect(screen.getByRole("button", { name: "Message minimap" })).toBe(
-        hitStrip,
-      );
+      expect(hitStrip.hasAttribute("inert")).toBe(true);
+      expect(hitStrip.getAttribute("aria-hidden")).toBe("true");
+      expect(hitStrip.classList.contains("pointer-events-none")).toBe(true);
+      expect(hitStrip.tabIndex).toBe(-1);
+      expect(
+        screen.queryByRole("button", { name: "Message minimap" }),
+      ).toBeNull();
     });
 
     it("stays interactive at the harness's default pane width", async () => {
@@ -4344,8 +4345,10 @@ describe("ChatMessages scroll policy", () => {
             exitCode: 0,
             isStreaming: false,
             endState: null,
+            stopped: false,
             progress: null,
             startedAt: 0,
+            backgroundTask: null,
             parentId: null,
           },
         ],
@@ -4423,8 +4426,10 @@ describe("ChatMessages scroll policy", () => {
             exitCode: 0,
             isStreaming: false,
             endState: null,
+            stopped: false,
             progress: null,
             startedAt: 0,
+            backgroundTask: null,
             parentId: null,
           },
         ],

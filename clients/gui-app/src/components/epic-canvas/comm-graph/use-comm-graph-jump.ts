@@ -61,15 +61,12 @@ export interface CommGraphJump {
   readonly canJumpToCreated: (event: CommGraphEvent) => boolean;
   readonly jumpToCreated: (event: CommGraphEvent) => void;
   /**
-   * Notice-row jump for the IDLE agent (the one the broker gave up on): open
-   * it scrolled to the TAIL of its transcript, where the evidence for the
-   * notice lives - the blocking question, the error, the last output before
-   * it went quiet. Available only when that agent is a projected GUI chat; a
-   * terminal agent shows its tail by merely opening.
+   * Opens an agent's own tile - the detail panel's header affordance, and the
+   * degrade for every endpoint with no anchor of its own. A notice row's IDLE
+   * agent is deliberately only ever this: the broker OBSERVED it going quiet,
+   * so nothing in its transcript is the notice, and its tail is whatever it
+   * happens to be doing now rather than the row that was clicked.
    */
-  readonly canJumpToNoticed: (event: CommGraphEvent) => boolean;
-  readonly jumpToNoticed: (event: CommGraphEvent) => void;
-  /** Opens an agent's own tile - the detail panel's header affordance. */
   readonly openAgent: (agent: CommGraphAgentNode) => void;
 }
 
@@ -188,28 +185,6 @@ export function useCommGraphJump(
     [agentById, epicId, requestJump, tileNavigation],
   );
 
-  const canJumpToNoticed = useCallback(
-    (event: CommGraphEvent): boolean => {
-      if (event.kind !== "a2a_notice") return false;
-      if (event.receiverAgentId === null) return false;
-      return agentById.get(event.receiverAgentId)?.kind === "chat";
-    },
-    [agentById],
-  );
-
-  const jumpToNoticed = useCallback(
-    (event: CommGraphEvent): void => {
-      if (event.kind !== "a2a_notice" || event.receiverAgentId === null) {
-        return;
-      }
-      const noticed = agentById.get(event.receiverAgentId);
-      if (noticed === undefined || noticed.kind !== "chat") return;
-      tileNavigation.openTileInEpic(epicId, openableRefForAgent(noticed));
-      requestJump(event.receiverAgentId, { kind: "last-message" });
-    },
-    [agentById, epicId, requestJump, tileNavigation],
-  );
-
   const openAgent = useCallback(
     (agent: CommGraphAgentNode): void => {
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(agent));
@@ -224,8 +199,6 @@ export function useCommGraphJump(
     jumpToSender,
     canJumpToCreated,
     jumpToCreated,
-    canJumpToNoticed,
-    jumpToNoticed,
     openAgent,
   };
 }

@@ -475,7 +475,10 @@ describe("ChatTimeline", () => {
     });
   });
 
-  it("uses the native Legend List scroll owner without custom hiding or gutter treatment", () => {
+  it("keeps Legend List as the sole scroll owner on the app-wide compact scrollbar theme", () => {
+    // Chat previously set data-native-scrollbar to opt out of index.css's
+    // 4px transparent-track theme. That left the OS gutter overlapping the
+    // absolute lower composer; the transcript now uses the global theme.
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
     const { getByTestId } = renderTimeline({
       messages,
@@ -483,10 +486,14 @@ describe("ChatTimeline", () => {
     });
 
     const listElement = getByTestId("chat-timeline");
-    expect(listElement.getAttribute("data-native-scrollbar")).toBe("true");
+    expect(listElement.hasAttribute("data-native-scrollbar")).toBe(false);
     expect(listElement.className).toContain("overflow-y-auto");
+    expect(listElement.className).toContain("overflow-x-hidden");
+    expect(listElement.className).toContain("overscroll-y-contain");
     expect(listElement.className).not.toContain("scrollbar-gutter");
     expect(listElement.className).not.toContain("scrollbar-native-thin");
+    // showsVerticalScrollIndicator stays on; LegendList only adds this class
+    // when the indicator is suppressed.
     expect(listElement.className).not.toContain(
       "legend-list-scrollbar-y-hidden",
     );

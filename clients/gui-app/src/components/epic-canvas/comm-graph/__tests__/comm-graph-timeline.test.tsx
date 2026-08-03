@@ -338,6 +338,12 @@ afterEach(() => {
  * lifecycle, all unit-tested under `lib/comm-graph/__tests__/`. The rendering
  * itself belongs to the dev-app pass, and is stated as unverified rather than
  * implied to be green.
+ *
+ * That gap extends to REACHING an edge at all: `getEdgePosition` bails unless
+ * both endpoints carry DOM-measured `handleBounds`, so `EdgeWrapper` renders no
+ * <g> here - nothing to dispatch at, no tab stop to land on. Everything in
+ * `commGraphEdgeInteraction` is therefore a dev-app check, unlike its
+ * `onNodeClick` twin below, which a mounted node wrapper does let us pin.
  */
 describe("CommGraphTile projection", () => {
   it("reveals an agent only once the cursor reaches its createdAt", async () => {
@@ -633,7 +639,7 @@ describe("CommGraphTile projection", () => {
     ).toEqual({ kind: "first-message" });
   });
 
-  it("parks a last-message jump from a Notice row's idle GUI agent", async () => {
+  it("opens a Notice row's idle GUI agent with NO parked jump", async () => {
     await renderTile();
     deliverSnapshot([
       // The CHAT went idle on a thread the TUI agent was awaiting: displayed
@@ -657,13 +663,15 @@ describe("CommGraphTile projection", () => {
       await screen.findByTestId(`comm-graph-detail-${HOST_A}-1-sender`),
     );
 
+    // The tile opens - and that is ALL. The idle agent never wrote this
+    // notice, so there is no anchor in its transcript to park a jump on.
     expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
       EPIC_ID,
       expect.objectContaining({ id: CHAT_ID, type: "chat", hostId: HOST_A }),
     );
     expect(
-      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ID]?.target,
-    ).toEqual({ kind: "last-message" });
+      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ID],
+    ).toBeUndefined();
   });
 
   it("jumps an anchored notice to the WAITING SENDER's transcript", async () => {

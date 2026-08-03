@@ -18,6 +18,10 @@ interface CommandSegmentProps {
   // Terminal outcome when the turn ended mid-run (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
   endState: SegmentEndState;
+  // True when the run ended because the host stopped it rather than because the
+  // command failed: the provider reports its own kill with a synthetic exit
+  // code, and showing that would blame the command for something we did.
+  stopped: boolean;
   // Latest progress line (null today; commands carry no progress signal yet).
   progress: string | null;
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
@@ -26,19 +30,34 @@ interface CommandSegmentProps {
   headerFindUnitId: string | null;
 }
 
+// Mirrors `toolCardTone` so a promoted background command reads the same as a
+// promoted background tool call: live work is tinted, a failure is destructive.
+function commandCardTone(
+  errored: boolean,
+  isStreaming: boolean,
+): "default" | "destructive" | "primary" {
+  if (errored) return "destructive";
+  if (isStreaming) return "primary";
+  return "default";
+}
+
 export function CommandSegment(props: CommandSegmentProps) {
   const { command, cwd, exitCode, isStreaming, variant } = props;
-  const { endState, progress, startedAt } = props;
-  const errored = exitCode !== null && exitCode !== 0;
+  const { endState, stopped, progress, startedAt } = props;
+  const errored = !stopped && exitCode !== null && exitCode !== 0;
   const [open, setOpen] = useState<boolean>(false);
-  // Elapsed heartbeat beneath the nested row while the command runs (commands
-  // always render in the ROW variant - they group into the activity timeline).
+  // Elapsed heartbeat while the command runs. A backgrounded command renders in
+  // the CARD variant (promoted out of the activity timeline), so both variants
+  // need it - the card shows it as its collapsed preview.
   const streamingFooter = isStreaming ? (
     <StreamingActivityFooter startedAt={startedAt} progress={progress} />
   ) : null;
 
   const exitBadge = (() => {
     if (isStreaming) return null;
+    // A stop is reported by the provider as a synthetic exit code; the
+    // "Stopped" badge below is the honest rendering of it.
+    if (stopped) return null;
     if (exitCode === null) return null;
     return (
       <span
@@ -87,7 +106,7 @@ export function CommandSegment(props: CommandSegmentProps) {
         />
       ) : null}
       {exitBadge}
-      <SegmentEndStateBadge endState={endState} stopped={false} />
+      <SegmentEndStateBadge endState={endState} stopped={stopped} />
     </>
   );
 
@@ -133,11 +152,11 @@ export function CommandSegment(props: CommandSegmentProps) {
       onOpenChange={setOpen}
       header={header}
       headerAction={null}
-      // Commands never render in the card variant (they group into a row); the
-      // heartbeat lives in the row branch above.
-      collapsedPreview={null}
+      // The card variant is the promoted background command; its heartbeat has
+      // no row footer to live in, so it rides the collapsed preview.
+      collapsedPreview={streamingFooter}
       body={body}
-      tone={errored ? "destructive" : "default"}
+      tone={commandCardTone(errored, isStreaming)}
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable
