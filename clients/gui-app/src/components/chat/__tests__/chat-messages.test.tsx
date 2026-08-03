@@ -27,9 +27,7 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
-import {
-  CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
-} from "@/components/chat/chat-messages-scroll-helpers";
+import { CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX } from "@/components/chat/chat-messages-scroll-helpers";
 import { captureChatFreeScrollingOffset } from "@/components/chat/chat-scroll-restoration";
 import {
   evictChatTabState,
@@ -2780,7 +2778,6 @@ describe("ChatMessages scroll policy", () => {
         expect.any(Function),
       );
     });
-
   });
 
   // -------------------------------------------------------------------------

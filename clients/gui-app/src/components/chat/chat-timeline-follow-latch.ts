@@ -192,8 +192,5 @@ export function useChatTimelineFollowLatch(
     };
   }, [scrollNode, followEndIfPermitted]);
 
-  return useMemo(
-    () => ({ followEndIfPermitted }),
-    [followEndIfPermitted],
-  );
+  return useMemo(() => ({ followEndIfPermitted }), [followEndIfPermitted]);
 }
