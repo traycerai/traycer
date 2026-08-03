@@ -38,9 +38,12 @@ export const SIDEBAR_NODE_DND_TYPE = "sidebar-node";
 export const TERMINAL_TILE_DND_TYPE = "terminal-tile";
 export const GIT_DIFF_TILE_DND_TYPE = "git-diff-tile";
 export const WORKSPACE_FILE_DND_TYPE = "workspace-file";
+export const WORKSPACE_FOLDER_DND_TYPE = "workspace-folder";
 export const CHAT_ARTIFACT_DND_TYPE = "chat-artifact";
 export const ACTIVE_AGENT_DND_TYPE = "active-agent";
 export const LEFT_PANEL_RAIL_ITEM_DND_TYPE = "left-panel-rail-item";
+export const COMPOSER_ATTACHMENT_DROP_TARGET_TYPE =
+  "composer-attachment-drop-target";
 export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   ARTIFACT_TAB_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
@@ -117,6 +120,21 @@ export interface EpicCanvasWorkspaceFileDragData {
   readonly ref: WorkspaceFileRef;
 }
 
+/**
+ * A workspace directory row is mentionable but not canvas-openable, so it has
+ * its own source shape instead of pretending to be a `WorkspaceFileRef`.
+ * `folderPath` is the host-canonical, workspace-relative token (including its
+ * trailing slash) used by the existing @-mention contract.
+ */
+export interface EpicCanvasWorkspaceFolderDragData {
+  readonly kind: typeof WORKSPACE_FOLDER_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly workspacePath: string;
+  readonly folderPath: string;
+  readonly name: string;
+}
+
 export interface EpicCanvasLeftPanelRailDragData {
   readonly kind: typeof LEFT_PANEL_RAIL_ITEM_DND_TYPE;
   readonly viewTabId: string;
@@ -167,9 +185,22 @@ export type EpicCanvasDragSourceData =
   | EpicCanvasTerminalTileDragData
   | EpicCanvasGitDiffTileDragData
   | EpicCanvasWorkspaceFileDragData
+  | EpicCanvasWorkspaceFolderDragData
   | EpicCanvasChatArtifactDragData
   | EpicCanvasActiveAgentDragData
   | EpicCanvasLeftPanelRailDragData;
+
+/**
+ * Ephemeral composer target data. The callbacks deliberately live in dnd-kit
+ * `data`: the root DndContext is outside every composer/editor provider, while
+ * the target owns the exact editor instance that must receive the attachment.
+ */
+export interface ComposerAttachmentDropTargetData {
+  readonly kind: typeof COMPOSER_ATTACHMENT_DROP_TARGET_TYPE;
+  readonly viewTabId: string;
+  readonly accepts: (source: EpicCanvasDragSourceData) => boolean;
+  readonly attach: (source: EpicCanvasDragSourceData) => void;
+}
 
 export type LeftPanelRailDropPosition = "before" | "after" | "combine";
 
@@ -487,6 +518,28 @@ function readWorkspaceFileSource(
   return { kind: WORKSPACE_FILE_DND_TYPE, ...scope, ref };
 }
 
+function readWorkspaceFolderSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  if (
+    scope === null ||
+    !isNonEmptyString(value.workspacePath) ||
+    !isNonEmptyString(value.folderPath) ||
+    !value.folderPath.endsWith("/") ||
+    !isNonEmptyString(value.name)
+  ) {
+    return null;
+  }
+  return {
+    kind: WORKSPACE_FOLDER_DND_TYPE,
+    ...scope,
+    workspacePath: value.workspacePath,
+    folderPath: value.folderPath,
+    name: value.name,
+  };
+}
+
 function readChatArtifactSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
@@ -566,12 +619,32 @@ export function readEpicCanvasDragSourceData(
     return readGitDiffTileSource(value);
   if (value.kind === WORKSPACE_FILE_DND_TYPE)
     return readWorkspaceFileSource(value);
+  if (value.kind === WORKSPACE_FOLDER_DND_TYPE)
+    return readWorkspaceFolderSource(value);
   if (value.kind === CHAT_ARTIFACT_DND_TYPE)
     return readChatArtifactSource(value);
   if (value.kind === ACTIVE_AGENT_DND_TYPE) return readActiveAgentSource(value);
   if (value.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE)
     return readLeftPanelRailItemSource(value);
   return null;
+}
+
+function isComposerAttachmentDropTargetData(
+  value: unknown,
+): value is ComposerAttachmentDropTargetData {
+  if (!isRecord(value)) return false;
+  return (
+    value.kind === COMPOSER_ATTACHMENT_DROP_TARGET_TYPE &&
+    isNonEmptyString(value.viewTabId) &&
+    typeof value.accepts === "function" &&
+    typeof value.attach === "function"
+  );
+}
+
+export function readComposerAttachmentDropTargetData(
+  value: unknown,
+): ComposerAttachmentDropTargetData | null {
+  return isComposerAttachmentDropTargetData(value) ? value : null;
 }
 
 export function readEpicCanvasDropTargetData(
