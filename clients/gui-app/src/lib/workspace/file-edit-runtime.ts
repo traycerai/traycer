@@ -197,7 +197,10 @@ export class FileEditRuntime {
       // Retain the Query-backed writer while recovery persistence is awaited.
       // The tile may disappear immediately, but its mutation function remains
       // safe to invoke and lets this renderer-owned runtime finish the flush.
-      this.detachedOwnerWriter = attachment.writer;
+      // Null-safe like `releaseOwnership` below: a `null` attachment writer
+      // (surface detached before ever gaining one) must not clobber a writer
+      // already retained from an earlier detach of the same owner.
+      this.detachedOwnerWriter = attachment.writer ?? this.detachedOwnerWriter;
       void this.flush();
       this.store.setState({ ownerSurfaceId: null });
     }
@@ -237,7 +240,16 @@ export class FileEditRuntime {
     if (current.draftContent === content) return true;
 
     const contentRevision = current.contentRevision + 1;
-    const isDirty = content !== current.baselineContent;
+    // "offline" means the write attempt threw instead of getting a definite
+    // response (network drop, host unreachable) - the host may have already
+    // committed it. `baselineContent` still reflects the pre-attempt read, so
+    // it cannot be trusted to decide "nothing to save": if the user edits the
+    // draft back to match it, that's not proof the disk matches too. Stay
+    // dirty so `retry()` sends a real round-trip (idempotent per the write
+    // contract) instead of silently discarding the recovery journal while the
+    // outcome is still ambiguous.
+    const isDirty =
+      current.status === "offline" || content !== current.baselineContent;
     const blockedStatus =
       current.status === "conflict" ||
       current.status === "offline" ||

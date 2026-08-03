@@ -91,7 +91,12 @@ export class FileEditRuntimeRegistry {
       runtime.teardown(),
     );
     this.runtimes.clear();
-    return Promise.all(recoveries).then(() => undefined);
+    // `allSettled`, not `all`: every caller (sign-out/user-switch teardown,
+    // the local-state wipe) either discards this promise or awaits it without
+    // a `.catch`. One runtime's rejected teardown must not fail the whole
+    // aggregate and surface as an unhandled rejection or abort an unrelated
+    // caller's flow.
+    return Promise.allSettled(recoveries).then(() => undefined);
   }
 
   resetForTesting(): void {

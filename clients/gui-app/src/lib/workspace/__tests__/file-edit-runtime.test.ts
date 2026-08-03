@@ -267,6 +267,64 @@ describe("FileEditRuntimeRegistry", () => {
     });
   });
 
+  it("keeps an ambiguous offline write recoverable and reconciles on retry, even after the draft is edited back to the pre-attempt baseline", async () => {
+    const journal = new MemoryRecoveryJournal();
+    const requests: WorkspaceWriteFileRequest[] = [];
+    // The host actually applied the first (ambiguous) write before the ack
+    // was lost: a same-content retry is idempotent and just confirms it.
+    const appliedRevision = await fileContentRevision("base");
+    const writer: FileEditWriter = (request) => {
+      requests.push(request);
+      return requests.length === 1
+        ? Promise.reject(new Error("connection closed after write"))
+        : Promise.resolve(savedResponse(appliedRevision));
+    };
+    const registry = makeRegistry(journal);
+    const initialDisk = await snapshot("base");
+    const attachment = registry.attach({
+      identity: IDENTITY,
+      initialDisk,
+      surfaceId: "surface-a",
+      writer,
+    });
+    await attachment.runtime.whenRecovered();
+    attachment.runtime.claimOwnership("surface-a");
+    attachment.runtime.setDraft("surface-a", "attempted");
+
+    await attachment.runtime.flush();
+    expect(attachment.runtime.store.getState().status).toBe("offline");
+    expect(journal.entries.size).toBe(1);
+
+    // The user, seeing the offline error, edits the draft back to what they
+    // read from disk before attempting the change. Without the ambiguous-
+    // offline fix, this content now matches `baselineContent` again, so
+    // `isDirty` would flip to false: the recovery journal would be deleted
+    // and a subsequent `retry()` would no-op (`canStartSave()` requires
+    // `isDirty`), silently abandoning reconciliation.
+    attachment.runtime.setDraft("surface-a", "base");
+    expect(attachment.runtime.store.getState()).toMatchObject({
+      status: "offline",
+      isDirty: true,
+      draftContent: "base",
+    });
+    expect(journal.entries.size).toBe(1);
+
+    await attachment.runtime.retry();
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toMatchObject({
+      expectedRevision: initialDisk.revision,
+      content: "base",
+    });
+    expect(attachment.runtime.store.getState()).toMatchObject({
+      status: "clean",
+      isDirty: false,
+      baselineContent: "base",
+      baselineRevision: appliedRevision,
+    });
+    expect(journal.entries.size).toBe(0);
+  });
+
   it("adopts a freshly read baseline before Keep mine resubmits a conflict", async () => {
     const journal = new MemoryRecoveryJournal();
     const externalDisk = await snapshot("external change");
@@ -613,5 +671,28 @@ describe("FileEditRuntimeRegistry", () => {
     stale.detach();
 
     expect(current.runtime.claimOwnership("surface-a")).toBe(true);
+  });
+
+  it("resolves registry teardown even when one runtime's own teardown rejects", async () => {
+    const journal = new MemoryRecoveryJournal();
+    const registry = makeRegistry(journal);
+    const attachment = registry.attach({
+      identity: IDENTITY,
+      initialDisk: await snapshot("base"),
+      surfaceId: "surface-a",
+      writer: null,
+    });
+    await attachment.runtime.whenRecovered();
+
+    // A single misbehaving runtime must not fail the whole aggregate: every
+    // caller of `registry.teardown()` either discards the promise (`void`) or
+    // awaits it without a `.catch`, so an `all`-style rejection would surface
+    // as an unhandled rejection or abort an unrelated caller's flow (e.g. the
+    // local-state wipe).
+    vi.spyOn(attachment.runtime, "teardown").mockRejectedValue(
+      new Error("teardown failed"),
+    );
+
+    await expect(registry.teardown()).resolves.toBeUndefined();
   });
 });

@@ -173,11 +173,29 @@ export function WindowsBridgeProvider(
 function installMissingDesktopWindowsBridge(): () => void {
   clearDesktopWindowsBridge();
   configureBrowserTabsPersistence();
+  // No desktop bridge here (web/browser path), so `installDesktopWindowsBridge`
+  // below never runs and its `pagehide`/`beforeunload` flush never installs
+  // either. File-edit drafts still need that flush independent of the bridge:
+  // without it, a reload within the 100ms recovery debounce after typing loses
+  // the draft (only in renderer memory, never reaching the IndexedDB journal).
+  const flushFileEditRecovery = (): void => {
+    void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", flushFileEditRecovery);
+    window.addEventListener("beforeunload", flushFileEditRecovery);
+  }
   queueMicrotask(() => {
     trackAppOpenedOnce(false);
     markHydrated();
   });
-  return clearDesktopWindowsBridge;
+  return () => {
+    if (typeof window !== "undefined") {
+      window.removeEventListener("pagehide", flushFileEditRecovery);
+      window.removeEventListener("beforeunload", flushFileEditRecovery);
+    }
+    clearDesktopWindowsBridge();
+  };
 }
 
 function installDesktopWindowsBridge(

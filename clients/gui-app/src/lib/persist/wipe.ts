@@ -186,9 +186,6 @@ export async function clearAllPersistedStores(args: {
       error: describeLogError(error),
     });
   });
-  // Stop edit timers before deleting their journal. The retired runtimes then
-  // cannot recreate a recovery entry from the reload's pagehide handler.
-  await fileEditRuntimeRegistry.teardown();
   // Then the authoritative host clear when the RPC exists. On a shell without
   // it (older preload) the drain above is the degraded fallback; in web mode
   // `hostClear` is null and there is nothing host-side to clear.
@@ -204,6 +201,15 @@ export async function clearAllPersistedStores(args: {
   } else {
     appLogger.info("[persist] host-side state clear unavailable", {});
   }
+
+  // Stop edit timers before deleting their journal (step 3 below). Deferred
+  // until after the failure-prone host clear above: if `hostClear` rejects,
+  // this function aborts before ever reaching here, so the still-mounted
+  // file-editor hooks keep pointing at live (not disposed) runtimes and
+  // in-place editing keeps working without a manual reload. The retired
+  // runtimes still cannot recreate a recovery entry from the reload's
+  // pagehide handler, since this remains ordered before the journal delete.
+  await fileEditRuntimeRegistry.teardown();
 
   // 2. Blanket-prefix sweep across BOTH storages.
   const localStorageCount = sweepStorage(window.localStorage);
