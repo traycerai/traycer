@@ -46,6 +46,7 @@ import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { type ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
+  advanceLegendListFrames,
   setLegendListMessageRowHeightOverrides,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
@@ -548,12 +549,7 @@ describe("ChatMessages scroll policy", () => {
 
       // The scroll node can appear one frame after the component's layout
       // effect; wait only for its passive wheel listener, not anchor settle.
-      await act(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          }),
-      );
+      await advanceLegendListFrames(1);
       fireEvent.wheel(getScrollNode(), { deltaY: -0.1 });
       getScrollNode().scrollTop = 360;
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");

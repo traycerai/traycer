@@ -28,6 +28,7 @@ import {
   makeMessageAt,
 } from "./chat-message-fixtures";
 import {
+  advanceLegendListTime,
   setLegendListScrollContainerScrollHeightOverride,
   setLegendListSyntheticScrollEventsEnabled,
   settleLegendList,
@@ -240,27 +241,18 @@ describe("ChatMessages scroll policy", () => {
       // version slept `PILL_SHOW_DEBOUNCE_MS - 30` and asserted "not yet" -
       // a 30ms scheduler stall on a loaded runner fires the debounce early
       // and flips that assertion (an observed CI shard-2 flake).
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        act(() => {
-          enterFreeScrollingAwayFromEnd();
-        });
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
 
-        // Debounced show: still hidden before 150ms.
-        expect(isJumpPillVisible()).toBe(false);
+      // Debounced show: still hidden before 150ms.
+      expect(isJumpPillVisible()).toBe(false);
 
-        act(() => {
-          vi.advanceTimersByTime(PILL_SHOW_DEBOUNCE_MS - 1);
-        });
-        expect(isJumpPillVisible()).toBe(false);
+      await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS - 1);
+      expect(isJumpPillVisible()).toBe(false);
 
-        act(() => {
-          vi.advanceTimersByTime(1);
-        });
-        expect(isJumpPillVisible()).toBe(true);
-      } finally {
-        vi.useRealTimers();
-      }
+      await advanceLegendListTime(1);
+      expect(isJumpPillVisible()).toBe(true);
     });
 
     it("hides the pill immediately when clicking Jump to latest", async () => {
@@ -271,11 +263,7 @@ describe("ChatMessages scroll policy", () => {
       act(() => {
         enterFreeScrollingAwayFromEnd();
       });
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 30);
-        });
-      });
+      await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS + 30);
       expect(isJumpPillVisible()).toBe(true);
 
       fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
@@ -534,11 +522,7 @@ describe("ChatMessages scroll policy", () => {
     act(() => {
       enterFreeScrollingAwayFromEnd();
     });
-    await act(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 30);
-      });
-    });
+    await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS + 30);
     expect(isJumpPillVisible()).toBe(true);
 
     const scrollNode = getScrollNode();
@@ -602,11 +586,7 @@ describe("ChatMessages scroll policy", () => {
       act(() => {
         enterFreeScrollingAwayFromEnd();
       });
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 30);
-        });
-      });
+      await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS + 30);
       fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
       await settleLegendList();
 
@@ -735,11 +715,7 @@ describe("ChatMessages scroll policy", () => {
       act(() => {
         enterFreeScrollingAwayFromEnd();
       });
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 30);
-        });
-      });
+      await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS + 30);
       expect(isJumpPillVisible()).toBe(true);
       // Parked at the top (scrollTop 0), the sent row (would-be index 20) is
       // nowhere near the mounted virtualization window.
@@ -1507,37 +1483,28 @@ describe("ChatMessages scroll policy", () => {
       });
       await settleLegendList();
 
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        rerenderWith({
-          scrollRequest: {
-            messageId: target.id,
-            blockId: null,
-            requestId: 41,
-          },
-        });
+      rerenderWith({
+        scrollRequest: {
+          messageId: target.id,
+          blockId: null,
+          requestId: 41,
+        },
+      });
 
-        const targetRow = document.querySelector<HTMLElement>(
-          `[data-message-id="${target.id}"]`,
-        );
-        expect(targetRow?.dataset.navigationHighlighted).toBe("true");
-        expect(activityGroupOpenIds.setOpenCalls).toHaveLength(0);
-        // The request shares navigateToMessage's suppression/settle choke
-        // point rather than creating an external raw-scroll side channel.
-        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      const targetRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${target.id}"]`,
+      );
+      expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+      expect(activityGroupOpenIds.setOpenCalls).toHaveLength(0);
+      // The request shares navigateToMessage's suppression/settle choke
+      // point rather than creating an external raw-scroll side channel.
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
-        act(() => {
-          vi.advanceTimersByTime(2_999);
-        });
-        expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+      await advanceLegendListTime(2_999);
+      expect(targetRow?.dataset.navigationHighlighted).toBe("true");
 
-        act(() => {
-          vi.advanceTimersByTime(1);
-        });
-        expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
-      } finally {
-        vi.useRealTimers();
-      }
+      await advanceLegendListTime(1);
+      expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
     });
 
     it("dismisses an external-jump highlight on transcript pointerdown", async () => {

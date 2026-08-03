@@ -22,6 +22,8 @@ import { type ActivityGroupOpenState } from "@/stores/chats/activity-group-open-
 import { type ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessageAt } from "./chat-message-fixtures";
 import {
+  advanceLegendListFrames,
+  advanceLegendListTime,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "./legend-list-test-environment";
@@ -856,16 +858,14 @@ describe("ChatMessages scroll policy", () => {
       };
       wrapper.addEventListener("scroll", observer, { capture: true });
       try {
-        await act(async () => {
+        act(() => {
           void list.scrollToOffset({
             offset: scrollNode.scrollTop + 40,
             animated: false,
           });
           fireEvent.scroll(scrollNode);
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
         });
+        await advanceLegendListFrames(1);
         expect(observedListStateAtCapture).toHaveLength(1);
         // Whatever position the (possibly clamped) call actually landed at,
         // the library's internal state must already equal it BEFORE this
@@ -1153,11 +1153,7 @@ describe("ChatMessages scroll policy", () => {
         await waitFor(() => {
           expect(dispatch.scrollToIndexCallCount()).toBeGreaterThan(0);
         });
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 2_500);
-          });
-        });
+        await advanceLegendListTime(2_500);
         expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
         // Classifier actually ran: at least one capture-phase sample from
         // the scrollToIndex wrap, all while still anchoring.

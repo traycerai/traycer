@@ -29,7 +29,11 @@ import { type SetupCardViewModel } from "@/components/chat/segments/setup-card-s
 import { type BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import { makeMessage, makeMessageAt } from "./chat-message-fixtures";
 import {
+  advanceLegendListFrames,
+  advanceLegendListTime,
   installLegendListViewportMetrics,
+  installLegendListTestClock,
+  restoreLegendListTestClock,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "./legend-list-test-environment";
@@ -356,17 +360,8 @@ export function appendOneStreamingChunk(
  * measurement/reveal cycle, like real per-token streaming would.
  */
 export async function waitForRevealPassTick(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
-    });
-  });
+  await advanceLegendListFrames(2);
+  await advanceLegendListTime(20);
 }
 
 /**
@@ -382,11 +377,7 @@ export async function waitForRevealPassTick(): Promise<void> {
  */
 export async function waitForAnchorEngineSettle(): Promise<void> {
   await settleLegendList();
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 250);
-    });
-  });
+  await advanceLegendListTime(250);
 }
 
 /**
@@ -403,16 +394,11 @@ export async function waitForAnchorEngineSettle(): Promise<void> {
  */
 export async function waitForNavigationSettle(): Promise<void> {
   await settleLegendList();
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      // With synthetic scrollend dispatched by the test environment,
-      // `awaitScrollSettle` resolves on the event within frames; its 750ms
-      // `CHAT_ANCHOR_SETTLE_FALLBACK_MS` fallback is the abnormal path. The
-      // budget covers one non-animated reissue (100ms library timer) with
-      // margin.
-      setTimeout(resolve, 250);
-    });
-  });
+  // With synthetic scrollend dispatched by the test environment,
+  // `awaitScrollSettle` resolves on the event within frames; its 750ms
+  // `CHAT_ANCHOR_SETTLE_FALLBACK_MS` fallback is the abnormal path. The
+  // budget covers one non-animated reissue (100ms library timer) with margin.
+  await advanceLegendListTime(250);
 }
 
 export function getScrollToEndPill(): HTMLButtonElement {
@@ -471,13 +457,11 @@ export function fireScrollToEnd(): void {
  */
 export async function fireScrollTopAndFlush(scrollTop: number): Promise<void> {
   const scrollNode = getScrollNode();
-  await act(async () => {
+  act(() => {
     scrollNode.scrollTop = scrollTop;
     fireEvent.scroll(scrollNode);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
   });
+  await advanceLegendListFrames(1);
 }
 
 /**
@@ -520,13 +504,11 @@ export async function fireLibraryOwnedScrollTo(offset: number): Promise<void> {
   const list = legendListRefHolder.current;
   if (!list) throw new Error("expected LegendListRef to be attached");
   const scrollNode = getScrollNode();
-  await act(async () => {
+  act(() => {
     void list.scrollToOffset({ offset, animated: false });
     fireEvent.scroll(scrollNode);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
   });
+  await advanceLegendListFrames(1);
 }
 
 /**
@@ -542,12 +524,10 @@ export async function fireLibraryOwnedScrollTo(offset: number): Promise<void> {
  */
 export async function fireCaptureScrollAfterLibraryWrite(): Promise<void> {
   const scrollNode = getScrollNode();
-  await act(async () => {
+  act(() => {
     fireEvent.scroll(scrollNode);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
   });
+  await advanceLegendListFrames(1);
 }
 
 /**
@@ -632,11 +612,7 @@ export function enterFreeScrollingAwayFromEnd(): void {
 export async function selectLastChatTurnMinimapItem(): Promise<void> {
   const minimapButton = screen.getByTestId("chat-turn-minimap-hit-strip");
   fireEvent.keyDown(minimapButton, { key: "End" });
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-  });
+  await advanceLegendListFrames(1);
   fireEvent.keyDown(minimapButton, { key: "Enter" });
 }
 
@@ -848,11 +824,7 @@ export function renderChatMessages(options: RenderChatMessagesOptions) {
 }
 
 export async function waitForPillVisible(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 40);
-    });
-  });
+  await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS + 40);
   await waitFor(() => {
     expect(isJumpPillVisible()).toBe(true);
   });
@@ -870,13 +842,13 @@ export function registerChatMessagesSuiteHooks(): void {
     platformMock.isMac = true;
     tileLiveness.live = false;
     installLegendListViewportMetrics();
-    vi.useRealTimers();
+    installLegendListTestClock();
     useSettingsStore.setState({ chatTurnMinimapSide: "right" });
   });
 
   afterEach(() => {
     cleanup();
-    vi.useRealTimers();
+    restoreLegendListTestClock();
     // Do not restoreAllMocks - it clears module mocks for isMac / activity store.
     platformMock.isMac = true;
     tileLiveness.live = false;
