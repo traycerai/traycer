@@ -41,22 +41,97 @@ function recoveryDbName(partition: string): string {
 }
 
 const BROWSER_TAB_PARTITION_KEY = persistKey("file-edit-recovery-tab");
+const BROWSER_TAB_CLAIM_CHANNEL = `${PERSIST_PREFIX}:file-edit-recovery-tab-claim:v1`;
+
+function generateBrowserTabId(): string {
+  // `crypto.randomUUID` throws in a non-secure (plain http) context rather
+  // than being merely absent, so a bare feature check is not enough - a tab
+  // on such an origin would otherwise always hit the catch below and
+  // collapse onto the shared "default" partition, the exact clobber this
+  // exists to prevent.
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      // Fall through to the non-crypto id below.
+    }
+  }
+  return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function readClaimedTabId(data: unknown): string | null {
+  if (data === null || typeof data !== "object") return null;
+  const id = (data as { readonly id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+let currentBrowserTabId: string | null = null;
+let tabClaimChannel: BroadcastChannel | null = null;
+
+function ensureTabClaimChannel(): BroadcastChannel | null {
+  if (typeof globalThis.BroadcastChannel !== "function") return null;
+  if (tabClaimChannel !== null) return tabClaimChannel;
+  try {
+    const channel = new globalThis.BroadcastChannel(BROWSER_TAB_CLAIM_CHANNEL);
+    channel.addEventListener("message", (event: MessageEvent<unknown>) => {
+      const claimedId = readClaimedTabId(event.data);
+      // Another tab is broadcasting the exact id this tab is currently
+      // using. Chrome and Firefox copy `sessionStorage` into a duplicated
+      // tab, so the cached id alone never disambiguates a duplicate from
+      // its origin - only a live collision like this one does. Regenerate
+      // and re-claim so the two tabs stop sharing one recovery partition.
+      if (claimedId !== null && claimedId === currentBrowserTabId) {
+        claimBrowserTabId(generateBrowserTabId());
+      }
+    });
+    tabClaimChannel = channel;
+  } catch {
+    return null;
+  }
+  return tabClaimChannel;
+}
+
+/** Returns `null` when `sessionStorage` itself is unavailable/denied. */
+function claimBrowserTabId(id: string): string | null {
+  try {
+    window.sessionStorage.setItem(BROWSER_TAB_PARTITION_KEY, id);
+  } catch {
+    return null;
+  }
+  currentBrowserTabId = id;
+  const channel = ensureTabClaimChannel();
+  try {
+    channel?.postMessage({ id });
+  } catch {
+    // Best-effort - a missed claim just means a duplicate tab isn't caught
+    // until its own next regeneration cycle.
+  }
+  return id;
+}
 
 // Every browser tab without a desktop `windowId` used to fall back to the same
 // "default" partition, so two tabs editing the same file shared one IndexedDB
 // database and one identity key - either tab's save (or delete-on-clean)
 // could silently clobber the other's still-unsaved draft. `sessionStorage` is
 // per-tab (unlike `localStorage`, which is shared across same-origin tabs),
-// so caching a random id there gives each tab a stable partition of its own
-// that a duplicated tab still gets a fresh copy of.
+// so caching an id there gives each tab a stable partition that survives a
+// reload. That alone is not sufficient: a *duplicated* tab inherits the same
+// sessionStorage entry, so `ensureTabClaimChannel`'s collision listener above
+// is what actually disambiguates that case, by having whichever tab observes
+// the live collision regenerate.
 function browserTabPartition(): string {
   if (typeof window === "undefined") return "default";
+  if (currentBrowserTabId !== null) return currentBrowserTabId;
   try {
     const existing = window.sessionStorage.getItem(BROWSER_TAB_PARTITION_KEY);
-    if (existing !== null && existing.length > 0) return existing;
-    const generated = crypto.randomUUID();
-    window.sessionStorage.setItem(BROWSER_TAB_PARTITION_KEY, generated);
-    return generated;
+    const resolved =
+      existing !== null && existing.length > 0
+        ? existing
+        : generateBrowserTabId();
+    return claimBrowserTabId(resolved) ?? "default";
   } catch {
     return "default";
   }
@@ -105,4 +180,7 @@ export const indexedDbFileEditRecoveryJournal: FileEditRecoveryJournal = {
 
 export function resetFileEditRecoveryStoreForTesting(): void {
   cachedStore = null;
+  currentBrowserTabId = null;
+  tabClaimChannel?.close();
+  tabClaimChannel = null;
 }
