@@ -25,15 +25,19 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 interface WorkspaceEditTestState {
   supportsWrite: boolean;
   truncated: boolean;
+  readContent: string;
   readonly writeFile: Mock;
   readonly refetch: Mock;
+  readonly rendererContent: Mock;
 }
 
 const state = vi.hoisted((): WorkspaceEditTestState => ({
   supportsWrite: true,
   truncated: false,
+  readContent: "const value = 1;\n",
   writeFile: vi.fn(),
   refetch: vi.fn(),
+  rendererContent: vi.fn(),
 }));
 
 const preloadState = vi.hoisted(() => ({
@@ -59,7 +63,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => ({
     data: {
-      content: "const value = 1;\n",
+      content: state.readContent,
       error: null,
       truncated: state.truncated,
     },
@@ -78,45 +82,49 @@ vi.mock(
   "@/components/epic-canvas/workspace-file/workspace-file-renderer",
   () => ({
     WorkspaceFileRenderer: (props: {
+      readonly content: string;
       readonly editing: boolean;
       readonly editAdapter: DiffClickToEditAdapter;
-    }): ReactNode => (
-      <div>
-        <button
-          type="button"
-          onClick={() => {
-            props.editAdapter.fileOptions.onLineClick?.({
-              type: "line",
-              lineNumber: 1,
-              lineElement: document.createElement("div"),
-              numberElement: document.createElement("div"),
-              numberColumn: false,
-              event: new PointerEvent("click", { button: 0 }),
-            });
-          }}
-        >
-          Click source
-        </button>
-        {props.editing ? (
+    }): ReactNode => {
+      state.rendererContent(props.content);
+      return (
+        <div>
           <button
             type="button"
             onClick={() => {
-              const file = {
-                name: "src/index.ts",
-                contents: "const value = 2;\n",
-              };
-              props.editAdapter.editorOptions.onChange?.(file, undefined, {
-                changes: [],
-                file,
+              props.editAdapter.fileOptions.onLineClick?.({
+                type: "line",
+                lineNumber: 1,
+                lineElement: document.createElement("div"),
+                numberElement: document.createElement("div"),
+                numberColumn: false,
+                event: new PointerEvent("click", { button: 0 }),
               });
-              props.editAdapter.editorOptions.onBlur?.();
             }}
           >
-            Change source
+            Click source
           </button>
-        ) : null}
-      </div>
-    ),
+          {props.editing ? (
+            <button
+              type="button"
+              onClick={() => {
+                const file = {
+                  name: "src/index.ts",
+                  contents: "const value = 2;\n",
+                };
+                props.editAdapter.editorOptions.onChange?.(file, undefined, {
+                  changes: [],
+                  file,
+                });
+                props.editAdapter.editorOptions.onBlur?.();
+              }}
+            >
+              Change source
+            </button>
+          ) : null}
+        </div>
+      );
+    },
   }),
 );
 
@@ -138,6 +146,8 @@ describe("<WorkspaceFileTile /> editing", () => {
     fileEditRuntimeRegistry.resetForTesting();
     state.supportsWrite = true;
     state.truncated = false;
+    state.readContent = "const value = 1;\n";
+    state.rendererContent.mockReset();
     state.writeFile.mockReset();
     state.writeFile.mockResolvedValue({
       workspacePath: "/work/repo",
@@ -361,6 +371,15 @@ describe("<WorkspaceFileTile /> editing", () => {
       draftContent: "const value = 2;\n",
       status: "conflict",
       isDirty: true,
+    });
+  });
+
+  it("seeds the editor with raw CRLF content instead of a normalized copy", async () => {
+    state.readContent = "const value = 1;\r\nconst other = 2;\r\n";
+    renderTile();
+
+    await waitFor(() => {
+      expect(state.rendererContent).toHaveBeenCalledWith(state.readContent);
     });
   });
 });

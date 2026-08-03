@@ -132,11 +132,6 @@ function WorkspaceFileTileLive(props: {
     node.filePath,
   );
   const rawContent = readFileContent(query.data);
-  const content = useMemo(
-    () =>
-      rawContent === null ? null : normalizeWorkspaceFileContent(rawContent),
-    [rawContent],
-  );
   const displayError = readFileDisplayError(
     readFilePayloadError(query.data),
     query.isError,
@@ -197,18 +192,20 @@ function WorkspaceFileTileLive(props: {
     onBlur: editSession.flush,
     onSaveShortcut: editSession.flush,
   });
-  // `editSession.state.draftContent` is raw (Diffs' live buffer, seeded from
-  // disk content) - unlike `content` above, which is already normalized.
-  // Normalize it too before rendering: find offsets are computed against this
-  // same string below, so a raw CRLF/lone-CR draft would make find target the
-  // wrong text relative to what's actually displayed. The write path stays
-  // untouched - `diskContent`, `activate`, and the CAS baseline above all use
-  // `rawContent` directly, never this normalized value.
-  const draftContent = editSession.state?.draftContent ?? null;
-  const renderedContent =
-    draftContent === null
-      ? content
-      : normalizeWorkspaceFileContent(draftContent);
+  // Stays byte-exact raw: this seeds the Diffs editor's own live buffer once
+  // it mounts editable, and onChange later submits that buffer's full
+  // content back for autosave. Normalizing it (or the fallback `rawContent`)
+  // here would make the very first edit silently rewrite every CRLF/lone-CR
+  // line ending in the file. Only a read-only projection (markdown preview,
+  // find) may normalize - never what's rendered/seeded.
+  const renderedContent = editSession.state?.draftContent ?? rawContent;
+  // Find offsets are computed against this normalized copy so CRLF/lone-CR
+  // don't throw off the match position, but it is never rendered or fed to
+  // Diffs - see `renderedContent` above.
+  const findContent =
+    renderedContent === null
+      ? null
+      : normalizeWorkspaceFileContent(renderedContent);
   const markdownPreviewRootRef = useRef<HTMLElement | null>(null);
   const findEnvironmentRef = useRef<WorkspaceFileFindEnvironment | null>(null);
   const [sourceFindTarget, setSourceFindTarget] =
@@ -235,14 +232,14 @@ function WorkspaceFileTileLive(props: {
   );
 
   // The preview content has loaded into a state the consume effect never runs
-  // from - a host/payload error, or an empty/failed read (`content === null`).
+  // from - a host/payload error, or an empty/failed read (`renderedContent === null`).
   // Neither mounts the Diffs source renderer, so evict any pending target here rather
   // than strand it on the channel (CL-5). The loading state is excluded: the
   // content may still resolve to code and consume the target normally.
   const settledUnconsumable = isSettledUnconsumableWorkspaceFile({
     isLoading: query.isLoading,
     hasError: displayError !== null,
-    hasContent: content !== null,
+    hasContent: renderedContent !== null,
   });
   useEffect(() => {
     if (settledUnconsumable && revealTarget !== null) {
@@ -251,7 +248,8 @@ function WorkspaceFileTileLive(props: {
   }, [settledUnconsumable, revealTarget, props.viewTabId, node.id]);
 
   const markdownPreviewDisabled =
-    content !== null && content.length > MAX_MARKDOWN_PREVIEW_CHARS;
+    renderedContent !== null &&
+    renderedContent.length > MAX_MARKDOWN_PREVIEW_CHARS;
   // A pending line target forces source view so the line is addressable -
   // rendered markdown has none (G5). Purely derived: the child consumes the
   // target right after the scroll (G4), so a markdown file the user had on
@@ -269,7 +267,7 @@ function WorkspaceFileTileLive(props: {
   // switches and remount, once the file content has loaded.
   const { scrollContainerRef, onScroll } = useNativeDivScrollRestoration(
     node.instanceId,
-    content !== null && !query.isLoading,
+    renderedContent !== null && !query.isLoading,
   );
 
   const publishFindEnvironment = useCallback((): void => {
@@ -348,7 +346,7 @@ function WorkspaceFileTileLive(props: {
   useLayoutEffect(() => {
     findEnvironmentRef.current = {
       viewMode: effectiveViewMode,
-      content: renderedContent,
+      content: findContent,
       isLoading: query.isLoading,
       displayError,
       truncated,
@@ -359,9 +357,9 @@ function WorkspaceFileTileLive(props: {
   }, [
     displayError,
     effectiveViewMode,
+    findContent,
     publishFindEnvironment,
     query.isLoading,
-    renderedContent,
     revealSourceMatch,
     truncated,
   ]);
@@ -517,30 +515,43 @@ function WorkspaceFilePreviewContent(props: {
     );
   }
 
-  if (props.displayError !== null) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground">
-        <p>{props.displayError}</p>
-        <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Workspace file could not be read",
-            message: "The workspace file preview could not be loaded.",
-            code: null,
-            source: "Workspace file",
-          })}
-          presentation="text"
-          className={undefined}
-        />
-      </div>
-    );
+  // A background refetch (e.g. the post-save `workspace.readFile`
+  // invalidation) can fail while TanStack Query still holds the last good
+  // `content` and only flips `isError`. Content availability wins over that
+  // stale error: an active editor keeps the runtime's ownership regardless,
+  // so hiding it behind an error screen here would strand the tile
+  // unrenderable while another surface for the same file still gets routed
+  // to this invisible owner via `focus-owner`. A genuine load failure never
+  // has content to fall back on, so this never masks it.
+  if (props.content === null) {
+    if (props.displayError !== null) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground">
+          <p>{props.displayError}</p>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Workspace file could not be read",
+              message: "The workspace file preview could not be loaded.",
+              code: null,
+              source: "Workspace file",
+            })}
+            presentation="text"
+            className={undefined}
+          />
+        </div>
+      );
+    }
+    return null;
   }
-
-  if (props.content === null) return null;
 
   if (props.viewMode === "preview") {
     return (
       <MarkdownFilePreview
-        markdown={props.content}
+        // `props.content` is raw (see workspace-file-tile.tsx's
+        // renderedContent) so the Diffs editor never receives normalized
+        // text; the read-only markdown renderer still gets a normalized
+        // copy, matching its prior behavior.
+        markdown={normalizeWorkspaceFileContent(props.content)}
         fileName={props.fileName}
         onRootChange={props.onMarkdownPreviewRootChange}
       />
