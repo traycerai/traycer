@@ -171,6 +171,7 @@ function layoutFromState(state: TabsStoreState): PersistedTabStripLayout {
     items: state.items,
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
+    activationHistory: state.activationHistory,
   };
   // Older consumers and existing tests may still seed Zustand directly with
   // `stripOrder`. Treat such a mismatch as an external v1 compatibility write
@@ -259,6 +260,9 @@ export function migrateTabsPersistedState(
       activeItemId:
         typeof value.activeItemId === "string" ? value.activeItemId : null,
       systemTabs,
+      activationHistory: Array.isArray(value.activationHistory)
+        ? value.activationHistory.flatMap(parseTabRef)
+        : undefined,
     });
   }
   const legacyRefs = Array.isArray(value.stripOrder)
@@ -412,6 +416,7 @@ export const useTabsStore = create<TabsStoreState>()(
           items: layout.items,
           activeItemId: layout.activeItemId,
           systemTabs: layout.systemTabs,
+          activationHistory: layout.activationHistory,
         });
       },
 
@@ -422,6 +427,7 @@ export const useTabsStore = create<TabsStoreState>()(
             items: state.items,
             activeItemId: state.activeItemId,
             systemTabs: state.systemTabs,
+            activationHistory: state.activationHistory,
           }),
         );
       },
@@ -610,7 +616,7 @@ export const useTabsStore = create<TabsStoreState>()(
  * The store's current state read as a `PersistedTabStripLayout`, for callers
  * that only need to ask the layout helpers a question.
  *
- * One exported reader rather than a literal per call site: the four fields ARE
+ * One exported reader rather than a literal per call site: these fields ARE
  * the layout contract, so a copy that misses a future field keeps compiling
  * while quietly answering against a shape the store no longer produces.
  *
@@ -626,6 +632,7 @@ export function readTabStripLayout(): PersistedTabStripLayout {
     items: state.items,
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
+    activationHistory: state.activationHistory,
   };
 }
 

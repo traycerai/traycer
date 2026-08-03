@@ -283,6 +283,7 @@ function currentLayout(): PersistedTabStripLayout {
     items: state.items,
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
+    activationHistory: state.activationHistory,
   };
 }
 

@@ -35,6 +35,11 @@ export interface PersistedTabStripLayout {
   readonly items: ReadonlyArray<StripItem>;
   readonly activeItemId: string | null;
   readonly systemTabs: SystemTabs;
+  /**
+   * Most-recently activated tab first. Optional only so persisted v2 layouts
+   * written before activation history was added remain valid inputs.
+   */
+  readonly activationHistory?: ReadonlyArray<TabRef>;
 }
 
 export interface SystemTabs {
@@ -111,7 +116,14 @@ export function emptyTabStripLayout(): PersistedTabStripLayout {
     items: [],
     activeItemId: null,
     systemTabs: emptySystemTabs(),
+    activationHistory: [],
   };
+}
+
+export function tabActivationHistory(
+  layout: PersistedTabStripLayout,
+): ReadonlyArray<TabRef> {
+  return layout.activationHistory ?? [];
 }
 
 export function flattenStripItemRefs(item: StripItem): ReadonlyArray<TabRef> {
@@ -144,11 +156,14 @@ export function createLayoutItem(
 ): PersistedTabStripLayout {
   if (findStripItemForRef(layout, ref) !== null) return layout;
   const item: TabStripItem = { kind: "tab", id: tabItemId(ref), ref };
-  return {
-    ...layout,
-    items: [...layout.items, item],
-    activeItemId: item.id,
-  };
+  return recordTabActivation(
+    {
+      ...layout,
+      items: [...layout.items, item],
+      activeItemId: item.id,
+    },
+    ref,
+  );
 }
 
 export function pairLayoutRefs(
@@ -241,7 +256,9 @@ export function focusLayoutRef(
 ): PersistedTabStripLayout {
   const item = findStripItemForRef(layout, ref);
   if (item === null) return layout;
-  if (item.kind === "tab") return { ...layout, activeItemId: item.id };
+  if (item.kind === "tab") {
+    return recordTabActivation({ ...layout, activeItemId: item.id }, ref);
+  }
   const side = refsEqual(item.left.kind === "tab" ? item.left.ref : null, ref)
     ? "left"
     : "right";
@@ -260,7 +277,8 @@ export function focusSplitSide(
     focusedSide: args.side,
     routeBackingSide: side.kind === "tab" ? args.side : item.routeBackingSide,
   };
-  return { ...replaceItem(layout, next), activeItemId: item.id };
+  const focused = { ...replaceItem(layout, next), activeItemId: item.id };
+  return side.kind === "tab" ? recordTabActivation(focused, side.ref) : focused;
 }
 
 export function resizeSplit(
@@ -334,15 +352,25 @@ export function replaceLayoutRef(
     };
     const activeItemId =
       layout.activeItemId === item.id ? next.id : layout.activeItemId;
-    return {
-      ...layout,
-      items: layout.items.map((entry) => (entry.id === item.id ? next : entry)),
-      activeItemId,
-    };
+    return remapTabActivation(
+      {
+        ...layout,
+        items: layout.items.map((entry) =>
+          entry.id === item.id ? next : entry,
+        ),
+        activeItemId,
+      },
+      args.previous,
+      args.next,
+    );
   }
   const left = replaceSideRef(item.left, args.previous, args.next);
   const right = replaceSideRef(item.right, args.previous, args.next);
-  return replaceItem(layout, { ...item, left, right });
+  return remapTabActivation(
+    replaceItem(layout, { ...item, left, right }),
+    args.previous,
+    args.next,
+  );
 }
 
 export function removeLayoutRef(
@@ -354,16 +382,21 @@ export function removeLayoutRef(
   );
   if (itemIndex === -1) return layout;
   const item = layout.items[itemIndex];
+  const activationHistory = tabActivationHistory(layout).filter(
+    (entry) => !refsEqual(entry, ref),
+  );
   if (item.kind === "tab") {
     const items = layout.items.filter((_entry, index) => index !== itemIndex);
     const activeItemId =
       layout.activeItemId === item.id
-        ? neighboringItemId(items, itemIndex)
+        ? (activationHistoryItemId(items, activationHistory) ??
+          neighboringItemId(items, itemIndex))
         : layout.activeItemId;
     return {
       ...layout,
       items,
       activeItemId,
+      activationHistory,
     };
   }
   const survivor = flattenStripItemRefs(item).find(
@@ -377,10 +410,64 @@ export function removeLayoutRef(
   if (layout.activeItemId === item.id) {
     nextActiveId =
       survivor === undefined
-        ? neighboringItemId(items, itemIndex)
+        ? (activationHistoryItemId(items, activationHistory) ??
+          neighboringItemId(items, itemIndex))
         : tabItemId(survivor);
   }
-  return { ...layout, items, activeItemId: nextActiveId };
+  return {
+    ...layout,
+    items,
+    activeItemId: nextActiveId,
+    activationHistory,
+  };
+}
+
+function recordTabActivation(
+  layout: PersistedTabStripLayout,
+  ref: TabRef,
+): PersistedTabStripLayout {
+  const history = tabActivationHistory(layout);
+  if (refsEqual(history[0] ?? null, ref)) return layout;
+  return {
+    ...layout,
+    activationHistory: [
+      ref,
+      ...history.filter((entry) => !refsEqual(entry, ref)),
+    ],
+  };
+}
+
+function remapTabActivation(
+  layout: PersistedTabStripLayout,
+  previous: TabRef,
+  next: TabRef,
+): PersistedTabStripLayout {
+  const remapped = tabActivationHistory(layout).map((entry) =>
+    refsEqual(entry, previous) ? next : entry,
+  );
+  const seen = new Set<string>();
+  return {
+    ...layout,
+    activationHistory: remapped.filter((entry) => {
+      const key = tabRefKey(entry);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }),
+  };
+}
+
+function activationHistoryItemId(
+  items: ReadonlyArray<StripItem>,
+  activationHistory: ReadonlyArray<TabRef>,
+): string | null {
+  for (const ref of activationHistory) {
+    const item = items.find((candidate) =>
+      flattenStripItemRefs(candidate).some((entry) => refsEqual(entry, ref)),
+    );
+    if (item !== undefined) return item.id;
+  }
+  return null;
 }
 
 export function reorderStripItem(
@@ -440,11 +527,30 @@ export function repairLayout(
     items.some((item) => item.id === remappedActiveItemId)
       ? remappedActiveItemId
       : firstItemId(items);
+  const availableRefs = new Map<string, TabRef>(
+    items
+      .flatMap(flattenStripItemRefs)
+      .map((ref) => [tabRefKey(ref), ref] as const),
+  );
+  const seenHistoryRefs = new Set<string>();
+  const repairedHistory = tabActivationHistory(layout).flatMap((ref) => {
+    const key = tabRefKey(ref);
+    const available = availableRefs.get(key);
+    if (available === undefined || seenHistoryRefs.has(key)) return [];
+    seenHistoryRefs.add(key);
+    return [available];
+  });
+  const activeRef = activeRefForItem(items, activeItemId);
+  const activationHistory =
+    layout.activationHistory === undefined && activeRef !== null
+      ? [activeRef]
+      : repairedHistory;
   const withSystemRefs: PersistedTabStripLayout = {
     version: 2,
     items,
     activeItemId,
     systemTabs,
+    activationHistory,
   };
   const missingSystemRefs = flattenLayoutRefs(withSystemRefs).filter(
     (ref) =>
@@ -462,6 +568,18 @@ export function repairLayout(
         ? null
         : withoutMissingSystemRefs.activeItemId,
   };
+}
+
+function activeRefForItem(
+  items: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+): TabRef | null {
+  const item = items.find((candidate) => candidate.id === activeItemId);
+  if (item === undefined) return null;
+  if (item.kind === "tab") return item.ref;
+  const focused = sideAt(item, item.focusedSide);
+  if (focused.kind === "tab") return focused.ref;
+  return backingRef(item);
 }
 
 interface RepairContext {
