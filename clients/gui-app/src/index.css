@@ -1120,10 +1120,8 @@
 }
 
 @layer base {
-  /* The chat transcript marks its real scroll owner with
-     `data-native-scrollbar`. Keep that element completely outside the app
-     scrollbar theme so the browser/OS owns its gutter, thumb, visibility,
-     hover behavior, and accessibility. */
+  /* Explicit opt-outs keep a scroll owner outside the compact app theme when
+     a platform-native gutter and thumb are part of that surface's contract. */
   [data-native-scrollbar] {
     scrollbar-width: auto;
     scrollbar-color: auto;

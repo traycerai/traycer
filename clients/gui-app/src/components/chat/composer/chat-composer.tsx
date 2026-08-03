@@ -523,8 +523,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     <>
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
-          <div className="bg-canvas px-4 pt-4">
-            <div className="mx-auto w-full max-w-3xl">
+          <div className="pointer-events-none px-4">
+            <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-4">
               {rateLimitPrompt.kind === "visible" ? (
                 <ProfileRateLimitSwitchBanner
                   key={rateLimitPrompt.warningKey}
@@ -550,14 +550,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
           </div>
         </ChatComposerBannerPortal>
       ) : null}
-      <div
-        data-chat-composer=""
-        className={cn(
-          "bg-canvas px-4 pb-4",
-          topSpacing === "normal" ? "pt-4" : "pt-0",
-        )}
-      >
-        <div className="mx-auto w-full max-w-3xl">
+      <div data-chat-composer="" className="pointer-events-none px-4">
+        <div
+          className={cn(
+            "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+            topSpacing === "normal" ? "pt-4" : "pt-0",
+          )}
+        >
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
