@@ -590,6 +590,51 @@ describe("Terminals opener sub-page", () => {
     ]);
   });
 
+  it("does not offer the folderless fallback when another host owns a workspace", () => {
+    const originalRows = terminalBindingsMock.active.data.rows;
+    terminalBindingsMock.active.data.rows = [
+      { ...originalRows[0], hostId: "other-host" },
+    ];
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+
+    const workspaces = renderItems(newTerminal.subpage.useItems);
+    expect(workspaces.map((item) => item.label)).not.toContain(
+      "/work/default-cwd",
+    );
+    terminalBindingsMock.active.data.rows = originalRows;
+  });
+
+  it("keeps an unresolved workspace visible as a non-actionable checking row", () => {
+    const originalRows = terminalBindingsMock.active.data.rows;
+    terminalBindingsMock.active.data.rows = [
+      {
+        ...originalRows[0],
+        disabledReason: "missing_worktree_path",
+        isGitResolvePending: true,
+      },
+    ];
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+
+    const checking = renderItems(newTerminal.subpage.useItems).find(
+      (item) => item.label === "/work/active-repo",
+    );
+    if (checking === undefined) {
+      throw new Error("expected checking workspace row");
+    }
+    expect(checking.description).toBe("Checking workspace…");
+    void checking.run(CTX);
+    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    terminalBindingsMock.active.data.rows = originalRows;
+  });
+
   it("opens an existing terminal into the target group, with no host badge", () => {
     const items = renderItems(useTerminalsOpenerItems);
     const existingItem = items.find((i) => i.id === "open:terminals:term-1");

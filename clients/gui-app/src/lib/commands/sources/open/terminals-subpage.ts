@@ -24,6 +24,7 @@ import { useHostBinding, useHostClient } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import {
@@ -66,32 +67,54 @@ function terminalWorkspaceLeaf(
   });
 }
 
+function terminalWorkspaceCheckingHint(
+  row: WorktreeBindingSelectorRowV12,
+): CommandItem {
+  return {
+    id: `open:terminals:new:${row.hostId}:${encodeURIComponent(row.runningDir)}:checking`,
+    label: row.runningDir,
+    description: "Checking workspace…",
+    keywords: [row.runningDir, "new", "terminal", "workspace", "checking"],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
 function terminalWorkspaceLeaves(
   ctx: CommandContext,
   hostId: string,
   rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
   folderlessCwd: string | null,
 ): ReadonlyArray<CommandItem> {
-  const visibleRows = withoutResolvedMissingRows(
-    rows.filter((row) => row.hostId === hostId),
-    null,
+  const rowsWithoutResolvedMissing = withoutResolvedMissingRows(rows, null);
+  const visibleRows = rowsWithoutResolvedMissing.filter(
+    (row) => row.hostId === hostId,
   );
   const selectableRows = visibleRows.filter(
     (row) => row.disabledReason === null,
   );
-  if (selectableRows.length > 0) {
-    return selectableRows.map((row) =>
-      terminalWorkspaceLeaf(
-        ctx,
-        { hostId: row.hostId, cwd: row.runningDir },
-        row.runningDir,
-      ),
-    );
+  const checkingRows = visibleRows.filter(
+    (row) => row.disabledReason !== null && isWorkspaceResolvePending(row),
+  );
+  const leaves = selectableRows.map((row) =>
+    terminalWorkspaceLeaf(
+      ctx,
+      { hostId: row.hostId, cwd: row.runningDir },
+      row.runningDir,
+    ),
+  );
+  const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
+  if (leaves.length > 0 || checkingHints.length > 0) {
+    return [...leaves, ...checkingHints];
   }
   // Match the sidebar picker: the host-owned fallback cwd is valid only when
-  // the Epic truly has no binding rows. Disabled bindings do not silently
-  // degrade to an unrelated default directory.
-  if (visibleRows.length === 0 && folderlessCwd !== null) {
+  // the Epic truly has no live binding rows on any host. Disabled bindings do
+  // not silently degrade to an unrelated default directory.
+  if (rowsWithoutResolvedMissing.length === 0 && folderlessCwd !== null) {
     return [
       terminalWorkspaceLeaf(ctx, { hostId, cwd: folderlessCwd }, folderlessCwd),
     ];
