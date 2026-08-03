@@ -320,6 +320,7 @@ function DelayedBranchValidationHarness() {
           actions.submit({
             draftId: null,
             editor: editorHandleForPrompt("Investigate the worktree race"),
+            slashCatalog: null,
             toolbar: {
               selection: {
                 harnessId: "codex",
@@ -329,7 +330,6 @@ function DelayedBranchValidationHarness() {
               reasoning: "high",
               serviceTier: "",
               permission: "supervised",
-              agentMode: "regular",
             },
           });
         }}
@@ -436,6 +436,11 @@ describe("landing workspace summary empty state", () => {
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
     expect(screen.getByTestId("composer-host-trigger")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("composer-host-local-chip-host-home")
+        .className.includes("[[data-slot=select-trigger]_&]:hidden"),
+    ).toBe(true);
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",
@@ -868,13 +873,16 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   };
   return {
     isReady: () => true,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,

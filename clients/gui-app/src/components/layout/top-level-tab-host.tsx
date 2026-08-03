@@ -1,18 +1,21 @@
 import {
   Suspense,
+  useCallback,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type FocusEvent,
+  type PointerEvent,
   type ReactNode,
 } from "react";
-import type { FocusEvent, PointerEvent } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import {
   flattenStripItemRefs,
+  tabRefKey,
   type SplitSide,
   type SplitSideName,
   type SplitStripItem,
@@ -45,16 +48,31 @@ import {
 } from "@/components/epic-canvas/dnd/dnd-store";
 import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
 import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
+import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
 import { TabSurfaceActivityProvider } from "./tab-surface-activity";
 import { SurfaceReadinessBoundary } from "./host-readiness-controller";
 import { SurfacePresentationBoundary } from "./surface-presentation-boundary";
 import {
-  activateTopLevelSurfaceFromFocus,
-  activateTopLevelSurfaceFromPointer,
+  type TopLevelSurfaceActivator,
   useTopLevelSurfaceActivator,
 } from "./top-level-surface-activation-context";
+import {
+  advanceTopLevelSurfaceRecency,
+  retainedTopLevelSurfaceKeys,
+} from "@/stores/tabs/top-level-surface-retention";
+import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
+import { STABLE_TILE_SURFACE_HOST_ENABLED } from "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch";
+import { renderHostedChatSurfaceBody } from "@/components/epic-canvas/surface-host/hosted-chat-surface-body";
+import {
+  activateHostedTopLevelSurface,
+  refIsFocused,
+  refsMatch,
+} from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 
-export const MAX_RETAINED_TOP_LEVEL_SURFACES = 5;
+export { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
 
 type SurfacePlacement =
   | { readonly kind: "hidden" }
@@ -133,52 +151,19 @@ export function TopLevelTabHost() {
     >
       <PhaseMigrationControllerHost />
       {mounts.map((mount) => (
-        <div
+        <TopLevelSurfaceMount
           key={tabRefKey(mount.tab)}
-          aria-hidden={!mount.activity.visible}
-          className={surfaceClassName(mount.placement)}
-          data-focused={mount.activity.focused ? "true" : "false"}
-          data-surface-kind={mount.tab.kind}
-          data-surface-ref={tabRefKey(mount.tab)}
-          data-testid={`top-level-surface-${mount.tab.kind}-${mount.tab.id}`}
-          data-visible={mount.activity.visible ? "true" : "false"}
-          onFocusCapture={(event: FocusEvent<HTMLDivElement>) => {
-            activateTopLevelSurfaceFromFocus(
-              event,
-              mount.activity.focused,
-              mount.tab,
-              activateSurface,
-            );
-          }}
-          onPointerDownCapture={(event: PointerEvent<HTMLDivElement>) => {
-            activateTopLevelSurfaceFromPointer(
-              event,
-              mount.activity.focused,
-              mount.tab,
-              activateSurface,
-            );
-          }}
-          style={surfaceStyle(mount.placement)}
-        >
-          <TabSurfaceActivityProvider activity={mount.activity}>
-            <SurfacePresentationBoundary
-              visible={mount.activity.visible}
-              focused={mount.activity.focused}
-            >
-              <SurfaceReadinessBoundary
-                scope={tabSurfaceDescriptor(mount.tab.kind).readinessScope}
-                // T11 supplies a durable per-Epic host id. Current top-level
-                // members deliberately use their descriptor's default/none key.
-                tabHostId={null}
-              >
-                <Suspense fallback={null}>
-                  <TabSurface tab={mount.tab} />
-                </Suspense>
-              </SurfaceReadinessBoundary>
-            </SurfacePresentationBoundary>
-          </TabSurfaceActivityProvider>
-        </div>
+          mount={mount}
+          activateSurface={activateSurface}
+        />
       ))}
+      {STABLE_TILE_SURFACE_HOST_ENABLED ? (
+        <HostedTileSurfaceHostMount
+          tabsByRefKey={tabsByRefKey}
+          activeItem={activeItem}
+          activateSurface={activateSurface}
+        />
+      ) : null}
       {renderedActiveItem?.kind === "tab" ? (
         <TopLevelEdgeSplitTargets targetRef={renderedActiveItem.ref} />
       ) : null}
@@ -197,6 +182,143 @@ export function TopLevelTabHost() {
   );
 }
 
+function HostedTileSurfaceHostMount(props: {
+  readonly tabsByRefKey: ReadonlyMap<string, HeaderTab>;
+  readonly activeItem: StripItem | null;
+  readonly activateSurface: TopLevelSurfaceActivator | null;
+}): ReactNode {
+  const { activateSurface, activeItem, tabsByRefKey } = props;
+  const pendingTabRef = useRef<HeaderTab | null>(null);
+  const activatePendingTab = useCallback(() => {
+    const tab = pendingTabRef.current;
+    if (tab === null) return;
+    activateSurface?.(tab);
+  }, [activateSurface]);
+  const activation = usePaneActivationOwnership({
+    active: false,
+    activate: activatePendingTab,
+  });
+  const {
+    claimFocus: claimActivationFocus,
+    claimPointerDown: claimActivationPointerDown,
+  } = activation;
+
+  const claimFocus = useCallback(
+    (event: FocusEvent<HTMLDivElement>): void => {
+      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+        tabsByRefKey,
+        activeItem,
+        activate:
+          activateSurface === null
+            ? null
+            : (tab) => {
+                pendingTabRef.current = tab;
+                claimActivationFocus({
+                  defaultPrevented: false,
+                  scope: event.target,
+                  target: event.target,
+                });
+              },
+      });
+    },
+    [activeItem, activateSurface, claimActivationFocus, tabsByRefKey],
+  );
+  const claimPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>): void => {
+      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+        tabsByRefKey,
+        activeItem,
+        activate:
+          activateSurface === null
+            ? null
+            : (tab) => {
+                pendingTabRef.current = tab;
+                claimActivationPointerDown({
+                  defaultPrevented: false,
+                  scope: event.target,
+                  target: event.target,
+                });
+              },
+      });
+    },
+    [activeItem, activateSurface, claimActivationPointerDown, tabsByRefKey],
+  );
+
+  return (
+    <PaneActivationFocusIntentContext.Provider value={activation.focusIntent}>
+      <div
+        className="contents"
+        onFocusCapture={claimFocus}
+        onPointerDownCapture={claimPointerDown}
+        onPointerCancelCapture={activation.onPointerCancelCapture}
+      >
+        <StableTileSurfaceHost renderRecordBody={renderHostedChatSurfaceBody} />
+      </div>
+    </PaneActivationFocusIntentContext.Provider>
+  );
+}
+
+interface MountedTopLevelSurface {
+  readonly tab: HeaderTab;
+  readonly placement: SurfacePlacement;
+  readonly activity: {
+    readonly visible: boolean;
+    readonly focused: boolean;
+  };
+}
+
+function TopLevelSurfaceMount(props: {
+  readonly mount: MountedTopLevelSurface;
+  readonly activateSurface: TopLevelSurfaceActivator | null;
+}): ReactNode {
+  const { mount, activateSurface } = props;
+  const activate = useCallback(() => {
+    activateSurface?.(mount.tab);
+  }, [activateSurface, mount.tab]);
+  const paneActivation = usePaneActivationOwnership({
+    active: mount.activity.focused,
+    activate,
+  });
+
+  return (
+    <PaneActivationFocusIntentContext.Provider
+      value={paneActivation.focusIntent}
+    >
+      <div
+        aria-hidden={!mount.activity.visible}
+        className={surfaceClassName(mount.placement)}
+        data-focused={mount.activity.focused ? "true" : "false"}
+        data-surface-kind={mount.tab.kind}
+        data-surface-ref={tabRefKey(mount.tab)}
+        data-testid={`top-level-surface-${mount.tab.kind}-${mount.tab.id}`}
+        data-visible={mount.activity.visible ? "true" : "false"}
+        onFocusCapture={paneActivation.onFocusCapture}
+        onPointerDownCapture={paneActivation.onPointerDownCapture}
+        onPointerCancelCapture={paneActivation.onPointerCancelCapture}
+        style={surfaceStyle(mount.placement)}
+      >
+        <TabSurfaceActivityProvider activity={mount.activity}>
+          <SurfacePresentationBoundary
+            visible={mount.activity.visible}
+            focused={mount.activity.focused}
+          >
+            <SurfaceReadinessBoundary
+              scope={tabSurfaceDescriptor(mount.tab.kind).readinessScope}
+              // T11 supplies a durable per-Epic host id. Current top-level
+              // members deliberately use their descriptor's default/none key.
+              tabHostId={null}
+            >
+              <Suspense fallback={null}>
+                <TabSurface tab={mount.tab} />
+              </Suspense>
+            </SurfaceReadinessBoundary>
+          </SurfacePresentationBoundary>
+        </TabSurfaceActivityProvider>
+      </div>
+    </PaneActivationFocusIntentContext.Provider>
+  );
+}
+
 function useMountedSurfaceKeys(
   availableRefKeys: ReadonlyArray<string>,
   activeRefKeys: ReadonlyArray<string>,
@@ -208,23 +330,15 @@ function useMountedSurfaceKeys(
 
   if (activeSignature !== seenActiveSignature) {
     setSeenActiveSignature(activeSignature);
-    setRecency((previous) => [
-      ...activeRefKeys,
-      ...previous.filter((key) => !activeRefKeys.includes(key)),
-    ]);
+    setRecency((previous) =>
+      advanceTopLevelSurfaceRecency(activeRefKeys, previous),
+    );
   }
 
-  return useMemo(() => {
-    const available = new Set(availableRefKeys);
-    const ordered = [
-      ...activeRefKeys,
-      ...recency.filter(
-        (key) => available.has(key) && !activeRefKeys.includes(key),
-      ),
-    ];
-    const retained = new Set(ordered.slice(0, MAX_RETAINED_TOP_LEVEL_SURFACES));
-    return availableRefKeys.filter((key) => retained.has(key));
-  }, [activeRefKeys, availableRefKeys, recency]);
+  return useMemo(
+    () => retainedTopLevelSurfaceKeys(availableRefKeys, activeRefKeys, recency),
+    [activeRefKeys, availableRefKeys, recency],
+  );
 }
 
 function FillableSplitSlots(props: {
@@ -481,25 +595,6 @@ function splitSidePlacement(
     left: leftWidth,
     width: `${(1 - item.leftRatio) * 100}%`,
   };
-}
-
-function refIsFocused(activeItem: StripItem | null, tab: HeaderTab): boolean {
-  if (activeItem === null) return false;
-  if (activeItem.kind === "tab") return refsMatch(activeItem.ref, tab);
-  const focused =
-    activeItem.focusedSide === "left" ? activeItem.left : activeItem.right;
-  return refsMatch(focused, tab);
-}
-
-function refsMatch(ref: TabRef | SplitSide, tab: HeaderTab): boolean {
-  const candidate = ref.kind === "tab" ? ref.ref : ref;
-  return (
-    candidate.kind === tab.kind && "id" in candidate && candidate.id === tab.id
-  );
-}
-
-function tabRefKey(ref: TabRef | HeaderTab): string {
-  return `${ref.kind}:${ref.id}`;
 }
 
 function surfaceClassName(placement: SurfacePlacement): string {

@@ -639,19 +639,30 @@ function InlineUserMessageEditor({
     [attachImageFiles],
   );
 
-  const onSnapshot = useCallback(
+  const scheduleVisibilityCheck = useCallback(() => {
+    if (visibilityFrameRef.current !== null) {
+      cancelAnimationFrame(visibilityFrameRef.current);
+    }
+    visibilityFrameRef.current = requestAnimationFrame(() => {
+      visibilityFrameRef.current = null;
+      scrollIntoViewOnlyIfNeeded(containerRef.current);
+    });
+  }, []);
+
+  const onDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       editing.onSnapshot(content, selection);
-      if (visibilityFrameRef.current !== null) {
-        cancelAnimationFrame(visibilityFrameRef.current);
-      }
-      visibilityFrameRef.current = requestAnimationFrame(() => {
-        visibilityFrameRef.current = null;
-        scrollIntoViewOnlyIfNeeded(containerRef.current);
-      });
+      scheduleVisibilityCheck();
     },
-    [editing],
+    [editing, scheduleVisibilityCheck],
   );
+
+  // Inline message editing tracks no persisted selection of its own (unlike
+  // the chat/landing/modal composer drafts) - a caret move only needs the
+  // same visibility nudge a real edit gets, never a content dispatch.
+  const onSelectionChange = useCallback(() => {
+    scheduleVisibilityCheck();
+  }, [scheduleVisibilityCheck]);
 
   useLayoutEffect(() => {
     const focusFrame = focusFrameRef;
@@ -704,7 +715,8 @@ function InlineUserMessageEditor({
         placeholder="Edit message"
         editorClassName="max-h-[min(60vh,18rem)] min-h-9 overflow-y-auto text-ui leading-7 text-foreground"
         stabilizeImageAttachmentCaret={false}
-        onSnapshot={onSnapshot}
+        onDocumentChange={onDocumentChange}
+        onSelectionChange={onSelectionChange}
         onSubmit={submit}
         onPaste={onPaste}
         onDragOver={onDragOver}
@@ -721,7 +733,8 @@ function InlineUserMessageEditor({
       onDragOver,
       onDrop,
       onPaste,
-      onSnapshot,
+      onDocumentChange,
+      onSelectionChange,
       pickerStore,
       hasPastedImageBytes,
       submit,
@@ -812,6 +825,8 @@ function InlineUserMessageEditor({
       <ComposerArea
         pickerStore={pickerStore}
         overlay={null}
+        utilityRail={null}
+        attachmentsStrip={null}
         editor={editorSlot}
         toolbar={toolbar}
       />

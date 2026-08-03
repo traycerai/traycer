@@ -3,10 +3,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorktreeOwnerSettingsHeader } from "@/components/worktree/worktree-owner-settings-header";
-import type {
-  AgentMode,
-  PermissionMode,
-} from "@/components/home/data/landing-options";
+import type { PermissionMode } from "@/components/home/data/landing-options";
 
 const chatSettings = vi.hoisted(() => ({
   current: null as ChatRunSettings | null,
@@ -16,7 +13,6 @@ const tuiAgent = vi.hoisted(() => ({
     readonly harnessId: "claude";
     readonly model: string | null;
     readonly reasoningEffort: string | null;
-    readonly agentMode: AgentMode;
     readonly profileId: string | null;
     readonly updatedAt: number;
   } | null,
@@ -130,14 +126,12 @@ function renderChatHeader(args: {
 function renderTuiHeader(args: {
   readonly profileId: string | null;
   readonly profiles: ReadonlyArray<ProviderProfile>;
-  readonly agentMode: AgentMode;
 }): void {
   chatSettings.current = null;
   tuiAgent.current = {
     harnessId: "claude",
     model: "sonnet-4.5",
     reasoningEffort: "high",
-    agentMode: args.agentMode,
     profileId: args.profileId,
     updatedAt: 1_700_000,
   };
@@ -315,11 +309,10 @@ describe("WorktreeOwnerSettingsHeader", () => {
     expect(screen.queryByText("Fast")).toBeNull();
   });
 
-  it("shows managed TUI profile badge, model, effort, and agent mode", () => {
+  it("shows managed TUI profile badge, model, and effort", () => {
     renderTuiHeader({
       profileId: "profile-1",
       profiles: TWO_PROFILES,
-      agentMode: "epic",
     });
 
     expect(
@@ -332,9 +325,6 @@ describe("WorktreeOwnerSettingsHeader", () => {
     expect(screen.getByTestId("owner-settings-reasoning").textContent).toBe(
       "High",
     );
-    expect(screen.getByTestId("owner-settings-agent-mode").textContent).toBe(
-      "Epic",
-    );
     expect(screen.queryByTestId("owner-settings-permissions")).toBeNull();
     expect(screen.queryByLabelText("Fast mode")).toBeNull();
   });
@@ -343,21 +333,16 @@ describe("WorktreeOwnerSettingsHeader", () => {
     renderTuiHeader({
       profileId: null,
       profiles: TWO_PROFILES,
-      agentMode: "regular",
     });
 
     expect(screen.getByRole("img", { name: "Claude Code" })).toBeTruthy();
     expect(accentDotText()).toBeNull();
-    expect(screen.getByTestId("owner-settings-agent-mode").textContent).toBe(
-      "Regular",
-    );
   });
 
   it("degrades a tombstoned TUI profile to bare harness without error text", () => {
     renderTuiHeader({
       profileId: "missing-profile",
       profiles: TWO_PROFILES,
-      agentMode: "regular",
     });
 
     expect(screen.getByRole("img", { name: "Claude Code" })).toBeTruthy();

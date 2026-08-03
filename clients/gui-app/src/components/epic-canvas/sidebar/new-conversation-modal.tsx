@@ -125,6 +125,12 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
+import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
+import {
+  useNewConversationPromptStashDestination,
+  useNewConversationPromptStashSource,
+} from "./use-new-conversation-prompt-stash-adapters";
 
 /**
  * Isolated subscriber for the live draft content. The editor rewrites content
@@ -164,6 +170,7 @@ interface NewConversationModalActionProps {
   readonly triggerLabel: string;
   readonly triggerTestId: string;
   readonly actionRevealClassName: string;
+  readonly onBeforeOpen: (() => void) | undefined;
 }
 
 /**
@@ -176,16 +183,18 @@ interface NewConversationModalActionProps {
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
 ) {
+  const { disabled, epicId, onBeforeOpen, parentId, tabId } = props;
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const handleOpen = useCallback((): void => {
-    if (props.disabled) return;
+    if (disabled) return;
+    onBeforeOpen?.();
     openModal({
-      epicId: props.epicId,
-      tabId: props.tabId,
+      epicId,
+      tabId,
       placement: ACTIVE_TILE_PLACEMENT,
-      parentId: props.parentId,
+      parentId,
     });
-  }, [openModal, props.disabled, props.epicId, props.parentId, props.tabId]);
+  }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
   // Activation while aria-disabled stays blocked via `handleOpen`'s early
   // return; see `disabled-presentation.ts` for why native `disabled` can't
   // carry the tooltip.
@@ -466,10 +475,11 @@ export function NewConversationModalBody(props: {
   const latestWorkspaceSeed = useModalWorkspaceSeed(epicId, parentId);
   const seed = useNewConversationModalSeed(epicId, latestWorkspaceSeed);
   // Subscribe to the NON-content draft fields only. `content` is rewritten on
-  // every keystroke (see `handleSnapshot`); subscribing to the whole patch here
-  // would re-render the entire modal body per character. Live content is routed
-  // to an isolated subscriber (`NewConversationModalAttachmentStrip`) plus a
-  // boolean submit gate, mirroring the landing composer's isolation.
+  // every keystroke (see `handleDocumentChange`); subscribing to the whole
+  // patch here would re-render the entire modal body per character. Live
+  // content is routed to an isolated subscriber
+  // (`NewConversationModalAttachmentStrip`) plus a boolean submit gate,
+  // mirroring the landing composer's isolation.
   const draftFields = useNewConversationModalStore(
     useShallow((state) => {
       const patch = state.draftPatchesByEpicId[epicId];
@@ -616,6 +626,45 @@ export function NewConversationModalBody(props: {
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const fetchEpicImage = useEpicImageFetcher();
+  const readPromptStashImage = useCallback(
+    async (hash: string) => {
+      if (hasPastedImageBytes?.(hash) !== true) return null;
+      // Capture deliberately survives composer unmount, so this read is not
+      // coupled to component-lifecycle cancellation.
+      const bytes = await fetchEpicImage(hash, new AbortController().signal);
+      return new Uint8Array(bytes);
+    },
+    [fetchEpicImage, hasPastedImageBytes],
+  );
+  const promptStashSource = useNewConversationPromptStashSource({
+    epicId,
+    seedContent: seed.content,
+    editorRef,
+  });
+  const promptStashDestination = useNewConversationPromptStashDestination({
+    epicId,
+    seedContent: seed.content,
+    editorRef,
+  });
+  const promptStash = usePromptStash({
+    // Registered for the modal's whole open lifetime, not just chat mode:
+    // unregistering on every chat<->terminal toggle would hand the top of
+    // the stack back to whatever composer sits beneath this modal (see
+    // `active-prompt-stash-registry.ts`), letting Cmd+S mutate a hidden
+    // draft. `disabled` below suppresses the action itself while the modal
+    // owns no stashable content, without giving up ownership of the slot.
+    active: true,
+    disabled: promptStashDisabled({
+      isSubmitting,
+      attachmentPending,
+      chatComposerActive,
+    }),
+    editorRef,
+    readHashImage: readPromptStashImage,
+    source: promptStashSource,
+    destination: promptStashDestination,
+  });
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -681,7 +730,6 @@ export function NewConversationModalBody(props: {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
-      agentMode: toolbar.agentMode,
     });
     if (settings.model.length === 0) return;
     // Global, single-selection billing context captured at create time; it
@@ -708,7 +756,10 @@ export function NewConversationModalBody(props: {
       );
       return;
     }
-    const content = buildSubmittedChatJSONContent(editor.getJSON());
+    const content = buildSubmittedChatJSONContent(
+      editor.getJSON(),
+      pickerStore.getState().knownSlashCommands,
+    );
     const chatId = uuidv4();
     const messageId = uuidv4();
     const clientActionId = uuidv4();
@@ -793,6 +844,7 @@ export function NewConversationModalBody(props: {
     canSubmit,
     cleanupAfterSubmit,
     createChat,
+    pickerStore,
     draftWorkspaceFolderCount,
     epicId,
     hostClient,
@@ -826,7 +878,6 @@ export function NewConversationModalBody(props: {
           harnessId: launch.harnessId,
           model: launch.model,
           reasoningEffort: launch.reasoningEffort,
-          agentMode: launch.agentMode,
           forkSourceHarnessSessionId: null,
           sourceTuiAgentId: null,
           sourceProfileId: null,
@@ -852,7 +903,7 @@ export function NewConversationModalBody(props: {
       workspaceCanStart,
     ],
   );
-  const handleSnapshot = useCallback(
+  const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       setContent(epicId, content);
       // Persist the caret alongside the bytes so a focus round-trip that
@@ -860,6 +911,13 @@ export function NewConversationModalBody(props: {
       setSelection(epicId, selection);
     },
     [epicId, setContent, setSelection],
+  );
+
+  const handleSelectionChange = useCallback(
+    (selection: { from: number; to: number }) => {
+      setSelection(epicId, selection);
+    },
+    [epicId, setSelection],
   );
   const handleRemoveImage = useCallback((id: string) => {
     editorRef.current?.removeImageAttachmentById(id);
@@ -880,6 +938,12 @@ export function NewConversationModalBody(props: {
       workspaceDisabledHint={composerDisabledHint}
       header={header}
       topBanner={null}
+      stashControl={
+        <PromptStashControl
+          controller={promptStash}
+          pickerStore={pickerStore}
+        />
+      }
       attachmentsStrip={
         <NewConversationModalAttachmentStrip
           epicId={epicId}
@@ -896,7 +960,8 @@ export function NewConversationModalBody(props: {
       onEditorReady={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
-      onSnapshot={handleSnapshot}
+      onDocumentChange={handleDocumentChange}
+      onSelectionChange={handleSelectionChange}
     />
   );
 }
@@ -1029,7 +1094,9 @@ function useLatestConversationSettingsSeed(): {
           defaults.defaultServiceTier.trim().length === 0
             ? null
             : defaults.defaultServiceTier,
-        agentMode: agent.agentMode,
+        // Epic Mode was removed: seed the one remaining mode rather than
+        // carrying a legacy value off the source agent.
+        agentMode: "regular",
         profileId: agent.profileId,
         // TUI agents carry no billing context; seed Personal (the store
         // default). The composer lets the user switch before sending.
@@ -1047,6 +1114,23 @@ function useGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
       folderInfoByPath: state.folderInfoByPath,
       primaryPath: state.primaryPath,
     })),
+  );
+}
+
+/**
+ * `usePromptStash`'s `disabled` flag stays true for the modal's whole
+ * terminal-mode span, not just while a save/paste is in flight - see the
+ * call site's comment on why `active` no longer tracks `chatComposerActive`.
+ * Extracted (rather than inlined at the call site) to keep
+ * `NewConversationModalBody` under the complexity lint threshold.
+ */
+function promptStashDisabled(args: {
+  readonly isSubmitting: boolean;
+  readonly attachmentPending: boolean;
+  readonly chatComposerActive: boolean;
+}): boolean {
+  return (
+    args.isSubmitting || args.attachmentPending || !args.chatComposerActive
   );
 }
 

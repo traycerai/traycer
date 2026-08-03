@@ -1,7 +1,6 @@
-import { Notification } from "electron";
+import { BrowserWindow, Notification } from "electron";
 import { log } from "./app/logger";
 
-export const NOTIFICATION_REPLACE_TTL_MS = 60_000;
 const MAX_REPLACEABLE_NOTIFICATIONS = 100;
 const MAX_DELIVERED_NOTIFICATION_KEYS = 5_000;
 const replaceableNotifications = new Map<string, Notification>();
@@ -13,12 +12,14 @@ export interface NativeNotificationOptions {
   readonly replaceKey: string | null;
   readonly deliveryKey: string | null;
   readonly onClick: (() => void) | null;
+  readonly onForegroundSuppressed: (() => void) | null;
 }
 
 /**
- * Shows a native notification. A replacement key groups notifications that
- * describe the same entity: a newer notification closes and re-alerts over
- * the prior one instead of leaving a stack in the OS notification center.
+ * Shows a native notification when every Traycer window is unfocused. A
+ * replacement key groups notifications that describe the same entity: a newer
+ * notification closes and re-alerts over the prior one instead of leaving a
+ * stack in the OS notification center.
  */
 export function showNativeNotification(
   options: NativeNotificationOptions,
@@ -27,6 +28,19 @@ export function showNativeNotification(
     options.deliveryKey !== null &&
     deliveredNotificationKeys.has(options.deliveryKey)
   ) {
+    return;
+  }
+  if (
+    BrowserWindow.getAllWindows().some(
+      (window) => !window.isDestroyed() && window.isFocused(),
+    )
+  ) {
+    closeReplacement(options.replaceKey);
+    options.onForegroundSuppressed?.();
+    // Foreground suppression is an intentional delivery outcome. Remember an
+    // exact key so another renderer cannot replay the same event after focus
+    // changes; the suppression callback relays it to the foreground renderer.
+    rememberDeliveredNotificationKey(options.deliveryKey);
     return;
   }
   if (!Notification.isSupported()) {
@@ -54,10 +68,6 @@ export function showNativeNotification(
     notification.on("click", () => {
       deleteReplacementIfCurrent(replaceKey, notification);
     });
-    setTimeout(() => {
-      if (replaceableNotifications.get(replaceKey) !== notification) return;
-      replaceableNotifications.delete(replaceKey);
-    }, NOTIFICATION_REPLACE_TTL_MS);
   }
 
   if (options.onClick !== null) {
@@ -65,6 +75,14 @@ export function showNativeNotification(
   }
   notification.show();
   rememberDeliveredNotificationKey(options.deliveryKey);
+}
+
+function closeReplacement(replaceKey: string | null): void {
+  if (replaceKey === null) return;
+  const priorNotification = replaceableNotifications.get(replaceKey);
+  if (priorNotification === undefined) return;
+  replaceableNotifications.delete(replaceKey);
+  priorNotification.close();
 }
 
 function rememberDeliveredNotificationKey(deliveryKey: string | null): void {
@@ -80,9 +98,10 @@ function rememberDeliveredNotificationKey(deliveryKey: string | null): void {
 }
 
 /**
- * Releases bookkeeping for platforms that do not report notification closes.
- * It deliberately does not dismiss native notifications; once an entry ages
- * out, a later same-key notification may stack rather than replace it.
+ * Bounds bookkeeping for platforms that do not report notification closes.
+ * It deliberately does not dismiss native notifications; once capacity is
+ * reached, a later same-key notification may stack rather than replace the
+ * oldest forgotten entry.
  */
 function evictReplaceableNotifications(): void {
   while (replaceableNotifications.size >= MAX_REPLACEABLE_NOTIFICATIONS) {
@@ -119,6 +138,7 @@ export function showSimpleNotification(
     replaceKey: null,
     deliveryKey: null,
     onClick,
+    onForegroundSuppressed: null,
   });
 }
 

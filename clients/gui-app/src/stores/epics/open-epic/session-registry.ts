@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import {
   getEpicAgentActivity,
   subscribeAgentActivity,
-} from "@/stores/notifications/notifications-store";
+} from "@/stores/agent-activity-store";
 
 /**
  * MRU registry for live Epic sessions. Keeps up to 5 open in the background
@@ -36,10 +36,10 @@ interface RegistryEntry {
    */
   unsubscribe: (() => void) | null;
   /**
-   * Unsubscribe from the cross-epic agent-activity presence signal that gates
+   * Unsubscribe from the cross-epic agent-activity signal that gates
    * this entry's prune eligibility.
    */
-  unsubscribeAwareness: (() => void) | null;
+  unsubscribeActivity: (() => void) | null;
   /**
    * Last-seen value of the only four store fields that affect prune
    * eligibility or the unsynced-edits projection. The zustand
@@ -171,7 +171,7 @@ export class OpenEpicSessionRegistry {
       lastUsedAt: this.tick(),
       mountedRefs,
       unsubscribe: null,
-      unsubscribeAwareness: null,
+      unsubscribeActivity: null,
       lastEligibilityKey: eligibilityKeyFor(epicId, handle),
     };
     const handleEligibilityChange = (): void => {
@@ -197,9 +197,7 @@ export class OpenEpicSessionRegistry {
     // guard re-evaluates off the per-user room instead. Same contract as
     // before: an epic whose agents just started working must stop being
     // prunable without waiting for an unrelated store write.
-    entry.unsubscribeAwareness = subscribeAgentActivity(
-      handleEligibilityChange,
-    );
+    entry.unsubscribeActivity = subscribeAgentActivity(handleEligibilityChange);
     this.entries.set(epicId, entry);
     this.prune();
     this.emit();
@@ -299,7 +297,7 @@ export class OpenEpicSessionRegistry {
 
   private disposeEntry(entry: RegistryEntry): void {
     if (entry.unsubscribe !== null) entry.unsubscribe();
-    if (entry.unsubscribeAwareness !== null) entry.unsubscribeAwareness();
+    if (entry.unsubscribeActivity !== null) entry.unsubscribeActivity();
     entry.handle.dispose();
     this.releaseListener?.(entry.epicId);
   }
@@ -313,11 +311,9 @@ export class OpenEpicSessionRegistry {
 /**
  * Prune guard: never evict a session whose epic has an agent working on it.
  *
- * Reads the per-user notification room's activity presence rather than the
- * epic's own collaboration awareness. Both answer the same question for a
- * session that is open (which is all this guard ever asks about), but the room
- * source needs no live epic subscription, so the guard keeps working through
- * the window where an epic session is still attaching.
+ * Reads the host-selected activity view rather than the epic's own
+ * collaboration awareness. The dedicated capability needs no live epic
+ * subscription, so the guard keeps working while an epic session attaches.
  */
 function hasActiveAgentWork(epicId: string): boolean {
   return getEpicAgentActivity(epicId).working.size > 0;

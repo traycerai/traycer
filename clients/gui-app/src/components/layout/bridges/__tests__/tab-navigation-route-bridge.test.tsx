@@ -1,11 +1,20 @@
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  NavigateOptions,
+  UseNavigateResult,
+} from "@tanstack/react-router";
 
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import {
   __resetTabNavigationControllerForTesting,
+  activateTabIntent,
+  historyTabIntent,
+  settingsTabIntent,
   tabNavigationController,
 } from "@/lib/tab-navigation";
+import { withOverlayCleared } from "@/lib/system-tab-overlay-search";
+import { useTabsStore } from "@/stores/tabs/store";
 import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence";
 
 interface HistoryObserverInput {
@@ -24,6 +33,19 @@ interface ReplaceCall {
   readonly ignoreBlocker: boolean;
 }
 
+function parseCanonicalSearch(rawSearch: string): Record<string, unknown> {
+  const parsed = Object.fromEntries(new URLSearchParams(rawSearch));
+  return Object.fromEntries(
+    Object.entries(parsed).map(([key, value]) => {
+      try {
+        return [key, JSON.parse(value)];
+      } catch {
+        return [key, value];
+      }
+    }),
+  );
+}
+
 // Only the history is faked, and only because the notification TIMING is the
 // subject under test: `@tanstack/history`'s `tryNavigation` is `async` and
 // reaches the notifying task without executing an `await` only when blockers
@@ -33,14 +55,23 @@ const testState = vi.hoisted(() => ({
   subscriber: null as ((input: HistoryObserverInput) => void) | null,
   replaceCalls: [] as Array<ReplaceCall>,
   blockerRegistered: false,
+  navigate: vi.fn<(options: NavigateOptions) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
+  parseSearch: vi.fn<(rawSearch: string) => Record<string, unknown>>(),
+  routerLocation: {
+    pathname: "/live",
+    search: {},
+    searchStr: "",
+    state: {},
+  },
 }));
 
 vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({
-    navigate: vi.fn(),
-    state: {
-      location: { pathname: "/live", search: {}, searchStr: "", state: {} },
-    },
+    navigate: testState.navigate,
+    options: { parseSearch: testState.parseSearch },
+    state: { location: testState.routerLocation },
     history: {
       subscribe: (listener: (input: HistoryObserverInput) => void) => {
         testState.subscriber = listener;
@@ -77,6 +108,22 @@ beforeEach(() => {
   testState.subscriber = null;
   testState.replaceCalls = [];
   testState.blockerRegistered = false;
+  testState.navigate.mockClear();
+  testState.parseSearch.mockReset();
+  testState.parseSearch.mockImplementation(parseCanonicalSearch);
+  testState.routerLocation = {
+    pathname: "/live",
+    search: {},
+    searchStr: "",
+    state: {},
+  };
+  useTabsStore.setState({
+    version: 2,
+    items: [],
+    activeItemId: null,
+    stripOrder: [],
+    systemTabs: { history: null, settings: null },
+  });
   __resetTabNavigationControllerForTesting();
 });
 
@@ -145,7 +192,7 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
     expect(observed.mock.calls[0][0]).toEqual({
       pathname: "/epics/e1",
       state: {},
-      search: { focusedAt: "7", tab: "b" },
+      search: { focusedAt: 7, tab: "b" },
     });
     expect(observed.mock.calls[0][1]).toBe("PUSH");
     // The persisted route keeps the RAW query string, leading `?` included.
@@ -159,5 +206,63 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
     await Promise.resolve();
 
     expect(testState.replaceCalls).toEqual([]);
+  });
+
+  it("restores canonical multi-repo and multi-ownership filters after leaving History", async () => {
+    seedRestoredRoute(null);
+    testState.routerLocation = {
+      pathname: "/epics",
+      search: {},
+      searchStr: "",
+      state: { __TSR_key: "history-start", __TSR_index: 0 },
+    };
+    render(<TabNavigationRouteBridge />);
+    await Promise.resolve();
+
+    const rawHistorySearch =
+      "?historyQuery=persistence" +
+      "&historyRepos=%5B%22traycerai%2Ftraycer%22%2C%22traycerai%2Ftraycer-internal%22%5D" +
+      "&historyOwnership=%5B%22mine%22%2C%22shared%22%5D";
+    act(() => {
+      testState.subscriber?.({
+        location: {
+          pathname: "/epics",
+          state: { __TSR_key: "history-filtered", __TSR_index: 1 },
+          search: rawHistorySearch,
+        },
+        action: { type: "PUSH" },
+      });
+    });
+    expect(testState.parseSearch).toHaveBeenLastCalledWith(rawHistorySearch);
+
+    const navigate = testState.navigate as UseNavigateResult<string>;
+    act(() => {
+      activateTabIntent(navigate, settingsTabIntent("general"), undefined);
+    });
+    act(() => {
+      testState.subscriber?.({
+        location: {
+          pathname: "/settings/general",
+          state: { __TSR_key: "settings", __TSR_index: 2 },
+          search: "",
+        },
+        action: { type: "PUSH" },
+      });
+    });
+
+    testState.navigate.mockClear();
+    act(() => {
+      activateTabIntent(navigate, historyTabIntent(), {
+        search: (previous) => withOverlayCleared(previous),
+      });
+    });
+
+    expect(testState.navigate).toHaveBeenCalledTimes(1);
+    const reactivation = testState.navigate.mock.calls[0]?.[0];
+    expect(reactivation.search).toEqual({
+      historyQuery: "persistence",
+      historyRepos: ["traycerai/traycer", "traycerai/traycer-internal"],
+      historyOwnership: ["mine", "shared"],
+    });
   });
 });

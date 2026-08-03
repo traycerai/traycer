@@ -48,6 +48,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
+import type { IStreamClient } from "./i-stream-client";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -171,7 +172,9 @@ function createInertStreamSession(closedReason: string): IStreamSession {
 /** Monotonic source for `WsStreamClient.instanceId` (log correlation only). */
 let nextStreamClientId = 1;
 
-export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
+export class WsStreamClient<
+  Registry extends VersionedStreamRpcRegistry,
+> implements IStreamClient<Registry> {
   /**
    * Stable per-instance tag (`stream-client-<n>`) carried in every lifecycle
    * log line so a "subscribe on a closed client" warning can be correlated
@@ -1580,8 +1583,13 @@ class StreamSession<
     const budget = new Promise<RevalidateOutcome>((resolve) => {
       timer = setTimeout(() => resolve("network-error"), REVALIDATE_TIMEOUT_MS);
     });
-    const revalidation = auth
-      .revalidateForReconnect()
+    // Invoke inside a promise chain, never bare — see the twin in
+    // `remote-session.ts`. A `revalidateForReconnect` that throws synchronously
+    // would otherwise skip this `.catch` and the `finally` that clears the
+    // budget timer, and surface as an unhandled rejection instead of the
+    // "network-error" this method promises for a thrown revalidation.
+    const revalidation = Promise.resolve()
+      .then(() => auth.revalidateForReconnect())
       .catch((): RevalidateOutcome => "network-error");
     try {
       return await Promise.race([revalidation, budget]);
@@ -1881,7 +1889,7 @@ interface PreparedStreamSubscribeRequest {
  * has no contract for). Cross-major skew never reaches here: streams have no
  * cross-major bridge, so `compat.ok` would already be `false`.
  */
-function prepareStreamSubscribeRequest(
+export function prepareStreamSubscribeRequest(
   registry: VersionedStreamRpcRegistry,
   method: string,
   myCanonical: SchemaVersion,

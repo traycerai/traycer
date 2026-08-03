@@ -71,6 +71,11 @@ describe("actionsSource", () => {
     expect(ids).not.toContain("action:app.palette.open");
   });
 
+  it("skips composer.stash (owned by the context-gated composer source)", () => {
+    const ids = captureItems().map((item) => item.id);
+    expect(ids).not.toContain("action:composer.stash");
+  });
+
   it("reads the live shortcut from the keybinding store", () => {
     useKeybindingStore.getState().setBinding("app.settings.open", "mod+alt+s");
     const item = captureItems().find(

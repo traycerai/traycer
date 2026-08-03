@@ -118,9 +118,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     logger.warn("Monitor missing epic id", {
       environment: config.environment,
     });
-    throw new Error(
-      "traycer monitor: epic id required — pass --epic-id or set TRAYCER_EPIC_ID.",
-    );
+    throw new Error("traycer monitor: epic id required — set TRAYCER_EPIC_ID.");
   }
   const auth = await resolveHostAuth();
   if (auth === null) {
@@ -425,7 +423,7 @@ function runInboxSubscription(
           // blaming the bearer.
           fail(
             new Error(
-              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id/--epic-id).`,
+              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
             ),
           );
           return;

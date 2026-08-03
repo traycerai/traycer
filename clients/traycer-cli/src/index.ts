@@ -10,6 +10,7 @@ import {
   Option,
   type Command as CommanderCommand,
 } from "commander";
+import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
@@ -1298,12 +1299,8 @@ function registerWorkspaceCommands(program: Command): void {
   withRunner(
     workspace
       .command("list")
-      .description("List workspace folders and Git worktrees for an epic")
-      .option("--epic-id <id>", "Epic to list (defaults to $TRAYCER_EPIC_ID)"),
-    (opts) =>
-      buildWorkspaceListCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-      }),
+      .description("List workspace folders and Git worktrees for an epic"),
+    () => buildWorkspaceListCommand({ epicId: null }),
   );
 }
 
@@ -1319,11 +1316,10 @@ function registerCommentsCommands(program: Command): void {
         "List artifact comment threads. Read them after reading an artifact, so human-authored feedback is visible before editing or responding. A thread may quote the artifact text it refers to: anchor=present means that quote is still located in the current artifact, while anchor=missing or anchor=unavailable means the quote is context only - verify it against the artifact before acting on it.",
       )
       .argument("[artifactPaths...]", "Absolute artifact paths")
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
       .option("--status <status>", "Thread status: all, open, or resolved"),
     (opts, args) =>
       buildCommentsListCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         status: typeof opts.status === "string" ? opts.status : null,
         artifactPaths: args.filter(
           (value): value is string => typeof value === "string",
@@ -1339,11 +1335,10 @@ function registerCommentsCommands(program: Command): void {
       )
       .requiredOption("--artifact <path>", "Absolute artifact path")
       .requiredOption("--status <status>", "Thread status: open or resolved")
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
       .argument("<threadIds...>", "Thread ids to update"),
     (opts, args) =>
       buildCommentsSetStatusCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         artifactPath: typeof opts.artifact === "string" ? opts.artifact : "",
         status: typeof opts.status === "string" ? opts.status : "",
         threadIds: args.filter(
@@ -1462,20 +1457,14 @@ function registerAgentCommands(
     agent
       .command("list")
       .description("List every agent in the epic")
-      .option("--epic-id <id>", "Epic to list (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--sender-agent-id <id>",
-        "Listing agent (defaults to $TRAYCER_AGENT_ID)",
-      )
       .option(
         "-a, --all",
         "List all agents in the epic, not just agents belonging to this user",
       ),
     (opts) =>
       buildAgentListCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        epicId: null,
+        senderAgentId: null,
         all: opts.all === true,
       }),
   );
@@ -1486,16 +1475,10 @@ function registerAgentCommands(
       .description(
         "Create a child agent. When some params are omitted, they are inherited from the sender or default values used.",
       )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--sender-agent-id <id>",
-        "Creating (parent) agent (defaults to $TRAYCER_AGENT_ID)",
-      )
       .option("--surface <surface>", "Child surface: 'gui' or 'tui'")
       .option("--name <name>", "Display name for the child agent")
       .option("--harness <id>", harnessHelp)
       .option("--model <id>", "Model id for the child agent")
-      .option("--agent-mode <mode>", "Agent mode: regular or epic")
       .option(
         "--reasoning-effort <effort>",
         "Reasoning effort for supported models",
@@ -1523,20 +1506,18 @@ function registerAgentCommands(
       )
       .option(
         "--permission-mode <mode>",
-        "GUI permission mode: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
+        `GUI permission mode. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
     (opts) =>
       buildAgentCreateCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         permissionMode:
           typeof opts.permissionMode === "string" ? opts.permissionMode : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        senderAgentId: null,
         name: typeof opts.name === "string" ? opts.name : null,
         surface: typeof opts.surface === "string" ? opts.surface : null,
         harness: typeof opts.harness === "string" ? opts.harness : null,
         model: typeof opts.model === "string" ? opts.model : null,
-        agentMode: typeof opts.agentMode === "string" ? opts.agentMode : null,
         reasoningEffort:
           typeof opts.reasoningEffort === "string"
             ? opts.reasoningEffort
@@ -1562,17 +1543,11 @@ function registerAgentCommands(
       .command("selection-guide", readonlyHidden)
       .description(
         "Get the instructions for the agent selection guide. Instructs which child agents to create for different kinds of tasks.",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--sender-agent-id <id>",
-        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
       ),
-    (opts) =>
+    () =>
       buildAgentSelectionGuideCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        epicId: null,
+        senderAgentId: null,
       }),
   );
 
@@ -1587,20 +1562,11 @@ function registerAgentCommands(
     agent
       .command("list-harness-models", readonlyHidden)
       .description("List available models (and params) for one harness.")
-      .argument("<harness>", harnessHelp)
-      .option(
-        "--epic-id <id>",
-        "Optional epic context (defaults to $TRAYCER_EPIC_ID)",
-      )
-      .option(
-        "--sender-agent-id <id>",
-        "Optional calling-agent context (defaults to $TRAYCER_AGENT_ID)",
-      ),
+      .argument("<harness>", harnessHelp),
     (opts, args) =>
       buildAgentListHarnessModelsCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        epicId: null,
+        senderAgentId: null,
         harnessId: expectRequiredPositional(args[0], "harness"),
       }),
   );
@@ -1611,17 +1577,11 @@ function registerAgentCommands(
       .description(
         "List the provider profiles available for one harness, with their cached rate-limit status.",
       )
-      .argument("<harness>", harnessHelp)
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--sender-agent-id <id>",
-        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
-      ),
+      .argument("<harness>", harnessHelp),
     (opts, args) =>
       buildAgentListProfilesCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        epicId: null,
+        senderAgentId: null,
         harnessId: expectRequiredPositional(args[0], "harness"),
       }),
   );
@@ -1633,17 +1593,11 @@ function registerAgentCommands(
         "Read fresh, detailed rate limits for one provider profile of a harness.",
       )
       .argument("<harness>", harnessHelp)
-      .requiredOption("--profile <ambient|id>", profileRequiredHelp)
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--sender-agent-id <id>",
-        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
-      ),
+      .requiredOption("--profile <ambient|id>", profileRequiredHelp),
     (opts, args) =>
       buildAgentProfileRateLimitsCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        epicId: null,
+        senderAgentId: null,
         harnessId: expectRequiredPositional(args[0], "harness"),
         profile: typeof opts.profile === "string" ? opts.profile : "",
       }),
@@ -1659,11 +1613,6 @@ function registerAgentCommands(
       .requiredOption("--harness <id>", harnessHelp)
       .requiredOption("--model <id>", "Model id for future turns")
       .requiredOption("--profile <ambient|id>", profileRequiredHelp)
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--sender-agent-id <id>",
-        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
-      )
       .option(
         "--reasoning-effort <effort>",
         "Reasoning effort for supported models. Omitting it sets no reasoning effort.",
@@ -1674,15 +1623,14 @@ function registerAgentCommands(
       )
       .option(
         "--permission-mode <mode>",
-        "Permission mode for future turns: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
+        `Permission mode for future turns. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
     (opts) =>
       buildAgentConfigureCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         permissionMode:
           typeof opts.permissionMode === "string" ? opts.permissionMode : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        senderAgentId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : "",
         harness: typeof opts.harness === "string" ? opts.harness : "",
         model: typeof opts.model === "string" ? opts.model : "",
@@ -1701,11 +1649,6 @@ function registerAgentCommands(
       .description("Send a prompt to another agent")
       .requiredOption("--to <agentId>", "Receiver agent id")
       .requiredOption("--message <text>", "Prompt to deliver")
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--sender-agent-id <id>",
-        "Sending agent (defaults to $TRAYCER_AGENT_ID)",
-      )
       .option(
         "--expect-reply",
         "Open or reuse a reply thread; the host returns a responseId. Without it the peer processes your message and never reports back.",
@@ -1716,9 +1659,8 @@ function registerAgentCommands(
       ),
     (opts) =>
       buildAgentSendCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        senderAgentId:
-          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        epicId: null,
+        senderAgentId: null,
         to: typeof opts.to === "string" ? opts.to : "",
         message: typeof opts.message === "string" ? opts.message : "",
         expectReply: opts.expectReply === true,
@@ -1731,11 +1673,10 @@ function registerAgentCommands(
     agent
       .command("transcript")
       .description("Print another agent's conversation transcript")
-      .requiredOption("--agent-id <id>", "Agent whose transcript to read")
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
+      .requiredOption("--agent-id <id>", "Agent whose transcript to read"),
     (opts) =>
       buildAgentTranscriptCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : "",
       }),
   );
@@ -1761,14 +1702,13 @@ function registerAgentCommands(
           "--scope <scope>",
           "Task-local scope of responsibility this role covers",
         )
-        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
         .option(
           "--agent-id <id>",
           "Claiming agent (defaults to $TRAYCER_AGENT_ID)",
         ),
       (opts) =>
         buildAgentRoleClaimCommand({
-          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+          epicId: null,
           agentId: typeof opts.agentId === "string" ? opts.agentId : null,
           role: typeof opts.role === "string" ? opts.role : null,
           scope: typeof opts.scope === "string" ? opts.scope : null,
@@ -1780,11 +1720,10 @@ function registerAgentCommands(
         .command("list")
         .description(
           "List the roles currently claimed in this Task (your account's live agents only)",
-        )
-        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
-      (opts) =>
+        ),
+      () =>
         buildAgentRoleListCommand({
-          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+          epicId: null,
         }),
     );
 
@@ -1796,14 +1735,13 @@ function registerAgentCommands(
           "--claim-id <id>",
           "Claim id to relinquish (see 'traycer agent role list')",
         )
-        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
         .option(
           "--agent-id <id>",
           "Relinquishing agent (defaults to $TRAYCER_AGENT_ID)",
         ),
       (opts) =>
         buildAgentRoleRelinquishCommand({
-          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+          epicId: null,
           agentId: typeof opts.agentId === "string" ? opts.agentId : null,
           claimId: typeof opts.claimId === "string" ? opts.claimId : null,
         }),
@@ -1819,11 +1757,10 @@ function registerAgentCommands(
       .option(
         "--agent-id <id>",
         "Agent whose inbox to read (defaults to $TRAYCER_AGENT_ID)",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
+      ),
     (opts) =>
       buildAgentInboxCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
       }),
   );
@@ -1839,10 +1776,6 @@ function registerAgentCommands(
         "Provider hook firing this call: 'claude', 'codex', or 'opencode'",
       )
       .option(
-        "--epic-id <id>",
-        "Epic the agent lives in (defaults to $TRAYCER_EPIC_ID)",
-      )
-      .option(
         "--agent-id <id>",
         "TUI agent id whose title to generate (defaults to $TRAYCER_AGENT_ID)",
       )
@@ -1853,7 +1786,7 @@ function registerAgentCommands(
     (opts) =>
       buildAgentTitleFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
         harnessSessionId:
           typeof opts.harnessSessionId === "string"
@@ -1879,10 +1812,6 @@ function registerAgentCommands(
       )
       .requiredOption("--event <event>", "Lifecycle event: 'start' or 'stop'")
       .option(
-        "--epic-id <id>",
-        "Epic the agent lives in (defaults to $TRAYCER_EPIC_ID)",
-      )
-      .option(
         "--agent-id <id>",
         "TUI agent id whose activity changed (defaults to $TRAYCER_AGENT_ID)",
       )
@@ -1894,7 +1823,7 @@ function registerAgentCommands(
       buildAgentActivityFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
         event: typeof opts.event === "string" ? opts.event : "",
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
         harnessSessionId:
           typeof opts.harnessSessionId === "string"
@@ -1914,17 +1843,13 @@ function registerAgentCommands(
         "Provider hook firing this call: 'claude', 'codex', or 'opencode'",
       )
       .option(
-        "--epic-id <id>",
-        "Epic the agent lives in (defaults to $TRAYCER_EPIC_ID)",
-      )
-      .option(
         "--agent-id <id>",
         "TUI agent id whose turn ended (defaults to $TRAYCER_AGENT_ID)",
       ),
     (opts) =>
       buildAgentTurnEndedFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
       }),
   );
@@ -1940,17 +1865,13 @@ function registerAgentCommands(
         "Provider hook firing this call: 'claude', 'codex', or 'opencode'",
       )
       .option(
-        "--epic-id <id>",
-        "Epic the agent lives in (defaults to $TRAYCER_EPIC_ID)",
-      )
-      .option(
         "--agent-id <id>",
         "TUI agent id whose session id to resync (defaults to $TRAYCER_AGENT_ID)",
       ),
     (opts) =>
       buildAgentSessionObservedFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
       }),
   );
@@ -1970,21 +1891,19 @@ function registerMonitorCommand(program: Command): void {
       .option(
         "--agent-id <id>",
         "Agent to monitor (defaults to $TRAYCER_AGENT_ID)",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
+      ),
   ).action(async (opts: Record<string, unknown>) => {
     const logger = createCliLogger(config.environment);
     logger.info("Monitor command invoked", {
       environment: config.environment,
       hasAgentIdArg: typeof opts.agentId === "string",
-      hasEpicIdArg: typeof opts.epicId === "string",
       hasAgentIdEnv: typeof process.env.TRAYCER_AGENT_ID === "string",
       hasEpicIdEnv: typeof process.env.TRAYCER_EPIC_ID === "string",
     });
     try {
       await runMonitor({
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        epicId: null,
       });
     } catch (err) {
       logger.error(

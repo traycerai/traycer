@@ -4,7 +4,6 @@ import type {
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
-import type { AgentMode } from "@/components/home/data/landing-options";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import {
@@ -16,7 +15,6 @@ export interface TerminalAgentLaunchSelection {
   readonly harnessId: TuiHarnessId;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
-  readonly agentMode: AgentMode;
   readonly terminalAgentArgs: string | null;
   // Which of the harness's logged-in profiles (subscriptions) to launch this
   // agent on. `null` = the ambient/host login.
@@ -66,7 +64,6 @@ export function useTerminalAgentWorktreeGate(
         harnessId: input.harnessId,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
-        agentMode: input.agentMode,
         forkSourceHarnessSessionId: null,
         sourceTuiAgentId: null,
         sourceProfileId: null,

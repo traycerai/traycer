@@ -2,17 +2,11 @@ import { memo, useCallback, useRef, type ChangeEvent } from "react";
 import { ImagePlus } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
-import type {
-  PermissionMode,
-  AgentMode,
-} from "@/components/home/data/landing-options";
-import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
+import type { PermissionMode } from "@/components/home/data/landing-options";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ComposerToolbarLeftProps {
   onAttachImages: (files: ReadonlyArray<File>) => void;
-  agentMode: AgentMode;
-  onAgentModeChange: (next: AgentMode) => void;
   permission: PermissionMode;
   onPermissionChange: (next: PermissionMode) => void;
   /**
@@ -29,21 +23,17 @@ interface ComposerToolbarLeftProps {
    */
   harnessLabel: string | null;
   showNextTurnPermissionNote: boolean;
-  showAgentModeTooltip: boolean;
   settingsLocked: boolean;
 }
 
 function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
   const {
     onAttachImages,
-    agentMode,
-    onAgentModeChange,
     permission,
     onPermissionChange,
     supportedPermissionModes,
     harnessLabel,
     showNextTurnPermissionNote,
-    showAgentModeTooltip,
     settingsLocked,
   } = props;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -96,12 +86,6 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         onChange={onPermissionChange}
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
-      />
-      <AgentModeToggle
-        value={agentMode}
-        disabled={settingsLocked}
-        showTooltip={showAgentModeTooltip}
-        onChange={onAgentModeChange}
       />
       {showNextTurnPermissionNote ? (
         <output

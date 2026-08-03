@@ -8,7 +8,7 @@ import type {
 import type { WorktreeHostEntry } from "@traycer/protocol/host/index";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import { WorktreeDeleteStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -675,7 +675,7 @@ function startWorktreeDeleteCommand(
     const client = openOwnedDurableStreamClient(
       input.openStreamTransport,
       input.hostId,
-      (wsStreamClient: WsStreamClient<HostStreamRpcRegistry>) =>
+      (wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>) =>
         new WorktreeDeleteBatchStreamClient({
           wsStreamClient,
           commandId,
@@ -910,7 +910,7 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
     const client = openOwnedDurableStreamClient(
       item.openStreamTransport,
       item.hostId,
-      (wsStreamClient: WsStreamClient<HostStreamRpcRegistry>) =>
+      (wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>) =>
         new WorktreeDeleteStreamClient({
           wsStreamClient,
           worktreePath: item.target.worktreePath,

@@ -4,9 +4,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import {
-  findAgentModeOption,
   findPermissionOption,
-  type AgentMode,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
 import { useCompactRelativeTime } from "@/lib/relative-time";
@@ -31,7 +29,6 @@ interface TuiHeaderFields {
   readonly tuiHarnessId: TuiAgentProjection["harnessId"] | null;
   readonly tuiModel: string | null;
   readonly tuiReasoningEffort: string | null;
-  readonly tuiAgentMode: AgentMode | null;
   readonly tuiProfileId: string | null;
 }
 
@@ -155,7 +152,6 @@ function tuiHeaderFields(tuiAgent: TuiAgentProjection | null): TuiHeaderFields {
       tuiHarnessId: null,
       tuiModel: null,
       tuiReasoningEffort: null,
-      tuiAgentMode: null,
       tuiProfileId: null,
     };
   }
@@ -163,7 +159,6 @@ function tuiHeaderFields(tuiAgent: TuiAgentProjection | null): TuiHeaderFields {
     tuiHarnessId: tuiAgent.harnessId,
     tuiModel: tuiAgent.model,
     tuiReasoningEffort: tuiAgent.reasoningEffort,
-    tuiAgentMode: tuiAgent.agentMode,
     tuiProfileId: tuiAgent.profileId,
   };
 }
@@ -274,12 +269,6 @@ function OwnerSettingsHeaderRows(props: {
           key: "permissions",
           node: <OwnerSettingsPermission mode={view.permissionMode} />,
         },
-    view.agentMode === null
-      ? null
-      : {
-          key: "agent-mode",
-          node: <OwnerSettingsAgentMode mode={view.agentMode} />,
-        },
   ];
   const segments = allSegments.filter(
     (segment): segment is SettingsSegment => segment !== null,
@@ -346,22 +335,6 @@ function OwnerSettingsHarnessMark(props: {
 }
 
 /** Terminal-agent mode in the same icon + label grammar as chat permission. */
-function OwnerSettingsAgentMode(props: {
-  readonly mode: AgentMode;
-}): ReactNode {
-  const option = findAgentModeOption(props.mode);
-  const Icon = option.icon;
-  return (
-    <span
-      className="flex shrink-0 items-center gap-1 text-muted-foreground"
-      data-testid="owner-settings-agent-mode"
-    >
-      <Icon aria-hidden className="size-3 shrink-0" />
-      <span>{option.shortLabel}</span>
-    </span>
-  );
-}
-
 /**
  * Permission mode with the icon the rest of the app already uses for it -
  * `ShieldCheck` / `FileCheck2` / `UnlockKeyhole`, resolved through the shared

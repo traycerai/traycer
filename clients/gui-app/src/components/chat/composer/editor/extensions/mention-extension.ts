@@ -109,10 +109,10 @@ function commitMentionInsertion(
   editor: Editor,
   range: { from: number; to: number },
   mention: MentionAttachment,
-): void {
+): boolean {
   const overrideSpace =
     editor.state.doc.textBetween(range.to, range.to + 1) === " ";
-  editor
+  return editor
     .chain()
     .focus()
     .insertContentAt(
@@ -123,4 +123,12 @@ function commitMentionInsertion(
       ],
     )
     .run();
+}
+
+export function insertMentionAttachmentCommand(
+  editor: Editor,
+  mention: MentionAttachment,
+): boolean {
+  const { from, to } = editor.state.selection;
+  return commitMentionInsertion(editor, { from, to }, mention);
 }

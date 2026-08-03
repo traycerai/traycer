@@ -9,6 +9,8 @@ import type {
   IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationForegroundDisplay,
+  NotificationForegroundAppLocal,
   IRunnerHost,
   ISecureStorage,
   ITokenStore,
@@ -55,6 +57,15 @@ import {
 } from "../../auth/auth-validation";
 import type { AuthIdentityValidationResult } from "../../auth/auth-validation-types";
 import type { HostDirectoryEntry } from "../host-directory";
+import {
+  fetchRegisteredHostsViaHttp,
+  type HostListFetchResult,
+} from "../remote-fetcher";
+import {
+  updateHostVersionPolicyViaHttp,
+  type UpdateHostVersionPolicyFetchResult,
+  type UpdateHostVersionPolicyInput,
+} from "../host-version-policy-fetcher";
 
 export interface MockRunnerHostOptions {
   readonly signInUrl: string;
@@ -77,6 +88,15 @@ export interface MockRunnerHostOptions {
    */
   readonly traycerCli: ITraycerCli | null | undefined;
   readonly hostManagement?: IHostManagement | null;
+  /**
+   * Mirrors `IRunnerHost.getLastKnownLocalHostId()` - the durable host id read
+   * from pid metadata, which still answers while the host is down. Omit it and
+   * the mock derives the id from `localHost`, which is what a machine with a
+   * running host reports. Set it explicitly (usually alongside
+   * `localHost: null`) to model the case the real bridge exists for: a host
+   * that has published metadata before but is not reachable right now.
+   */
+  readonly lastKnownLocalHostId?: string | null;
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
@@ -105,6 +125,10 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
 export class MockRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  // Fixed test-only value: no test constructs a real remote transport against
+  // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
+  // instead), so this never needs to vary per test the way `authnBaseUrl` does.
+  readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
@@ -113,6 +137,7 @@ export class MockRunnerHost implements IRunnerHost {
     readonly payload: unknown;
     readonly replaceKey: string | null;
     readonly deliveryKey: string | null;
+    readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
   readonly tokenStoreEntries: Map<string, StoredCredentials> = new Map();
@@ -133,8 +158,13 @@ export class MockRunnerHost implements IRunnerHost {
   private readonly notificationClickHandlers = new Set<
     (payload: unknown) => void
   >();
+  private readonly notificationForegroundDisplayHandlers = new Set<
+    (display: NotificationForegroundDisplay) => void
+  >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
+  /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
+  private readonly explicitLastKnownLocalHostId: string | null | undefined;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
   readonly tray: MockTrayState = new MockTrayState();
@@ -184,6 +214,7 @@ export class MockRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.authnBaseUrl;
     this.localHost = options.localHost;
+    this.explicitLastKnownLocalHostId = options.lastKnownLocalHostId;
     this.hosts = options.hosts;
     this.workspaceFolderPickerPaths =
       options.workspaceFolderPickerPaths === undefined
@@ -209,14 +240,19 @@ export class MockRunnerHost implements IRunnerHost {
     return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
   }
 
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    return fetchRegisteredHostsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
   listUserSessions(
     bearerToken: string,
     signal: AbortSignal,
   ): Promise<ListUserSessionsFetchResult> {
-    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
-    // helper directly (browser/dev parity with the auth validators above).
-    // Owning the request in-process, it can hand the caller's signal straight
-    // to `fetch` and abort the real request.
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above. Owning the
+    // request in-process, it can hand the caller's signal straight to `fetch`
+    // and abort the real request.
     return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken, signal);
   }
 
@@ -301,6 +337,20 @@ export class MockRunnerHost implements IRunnerHost {
       return null;
     }
     return this.retainedStepUpCredential.accessToken;
+  }
+
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return updateHostVersionPolicyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      hostId,
+      input,
+    );
   }
 
   async openExternalLink(url: string): Promise<void> {
@@ -495,6 +545,7 @@ export class MockRunnerHost implements IRunnerHost {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      foregroundAppLocal: NotificationForegroundAppLocal | null,
     ): Promise<void> => {
       this.notificationsSent.push({
         title,
@@ -502,6 +553,7 @@ export class MockRunnerHost implements IRunnerHost {
         payload,
         replaceKey,
         deliveryKey,
+        foregroundAppLocal,
       });
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
@@ -512,7 +564,25 @@ export class MockRunnerHost implements IRunnerHost {
         },
       };
     },
+    onForegroundDisplay: (
+      handler: (display: NotificationForegroundDisplay) => void,
+    ): Disposable => {
+      this.notificationForegroundDisplayHandlers.add(handler);
+      return {
+        dispose: () => {
+          this.notificationForegroundDisplayHandlers.delete(handler);
+        },
+      };
+    },
   };
+
+  emitForegroundNotificationDisplay(
+    display: NotificationForegroundDisplay,
+  ): void {
+    for (const handler of this.notificationForegroundDisplayHandlers) {
+      handler(display);
+    }
+  }
 
   onLocalHostChange(
     handler: (snapshot: LocalHostSnapshot | null) => void,
@@ -524,6 +594,14 @@ export class MockRunnerHost implements IRunnerHost {
         this.localHostHandlers.delete(handler);
       },
     };
+  }
+
+  getLastKnownLocalHostId(): Promise<string | null> {
+    if (this.explicitLastKnownLocalHostId !== undefined) {
+      return Promise.resolve(this.explicitLastKnownLocalHostId);
+    }
+    // A running host is exactly the case where pid metadata carries its id.
+    return Promise.resolve(this.localHost?.hostId ?? null);
   }
 
   onSystemResumed(handler: () => void): Disposable {

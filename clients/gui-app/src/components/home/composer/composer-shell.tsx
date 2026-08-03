@@ -32,12 +32,15 @@ const FILE_DROP_OVERLAY_CONTENT = {
   }
 >;
 
-function ComposerFileDropOverlay({
-  variant,
+export function ComposerDropOverlay({
+  Icon,
+  title,
+  subtitle,
 }: {
-  readonly variant: FileTransferDragOverlayVariant;
+  readonly Icon: typeof ImageIcon;
+  readonly title: string;
+  readonly subtitle: string;
 }) {
-  const { Icon, title, subtitle } = FILE_DROP_OVERLAY_CONTENT[variant];
   return (
     <div
       aria-hidden
@@ -53,6 +56,8 @@ function ComposerFileDropOverlay({
 export interface ComposerAreaProps {
   readonly pickerStore: ComposerPickerStore;
   readonly overlay: ReactNode;
+  readonly utilityRail: ReactNode;
+  readonly attachmentsStrip: ReactNode;
   readonly editor: ReactNode;
   readonly toolbar: ReactNode | null;
 }
@@ -60,6 +65,8 @@ export interface ComposerAreaProps {
 function ComposerAreaImpl({
   pickerStore,
   overlay,
+  utilityRail,
+  attachmentsStrip,
   editor,
   toolbar,
 }: ComposerAreaProps): ReactNode {
@@ -71,7 +78,21 @@ function ComposerAreaImpl({
         className="relative rounded-lg bg-muted/30 ring-1 ring-border ring-inset focus-within:ring-ring/30"
       >
         {overlay}
-        <div className="px-4 pt-4">{editor}</div>
+        <div
+          data-composer-utility-overlay=""
+          className="absolute right-3 top-0 z-40 -translate-y-1/2 empty:hidden"
+        >
+          {utilityRail}
+        </div>
+        <div data-composer-editor-frame="" className="px-4 pt-4">
+          <div
+            data-composer-attachment-rail=""
+            className="flex min-w-0 items-start gap-2 pb-2 empty:hidden"
+          >
+            {attachmentsStrip}
+          </div>
+          {editor}
+        </div>
         {toolbar}
       </div>
     </div>
@@ -87,6 +108,8 @@ interface ComposerShellProps {
   readonly onDragEnter: DragEventHandler<HTMLElement>;
   readonly onDragLeave: DragEventHandler<HTMLElement>;
   readonly dragOverlayVariant: FileTransferDragOverlayVariant | null;
+  /** Compact composer chrome anchored outside document flow. */
+  readonly utilityRail: ReactNode;
   /** Slot rendered just above the editor (e.g. image-attachment chips). */
   readonly attachmentsStrip: ReactNode;
   /** Slot for the editor surface. */
@@ -103,27 +126,21 @@ function ComposerShellImpl(props: ComposerShellProps) {
     onDragEnter,
     onDragLeave,
     dragOverlayVariant,
+    utilityRail,
     attachmentsStrip,
     editor,
     toolbar,
   } = props;
 
-  const { ref, isNarrow } = useComposerNarrowObserver();
-  const overlay =
-    dragOverlayVariant === null ? null : (
-      <ComposerFileDropOverlay variant={dragOverlayVariant} />
-    );
-  const editorSlot = (
-    <>
-      {attachmentsStrip}
-      {editor}
-    </>
-  );
-
+  const { ref: narrowRef, isNarrow } = useComposerNarrowObserver();
+  const overlayContent =
+    dragOverlayVariant === null
+      ? null
+      : FILE_DROP_OVERLAY_CONTENT[dragOverlayVariant];
   return (
     <ComposerNarrowProvider isNarrow={isNarrow}>
       <div
-        ref={ref}
+        ref={narrowRef}
         className="@container"
         onDragOver={onDragOver}
         onDrop={onDrop}
@@ -132,8 +149,14 @@ function ComposerShellImpl(props: ComposerShellProps) {
       >
         <ComposerArea
           pickerStore={pickerStore}
-          overlay={overlay}
-          editor={editorSlot}
+          overlay={
+            overlayContent === null ? null : (
+              <ComposerDropOverlay {...overlayContent} />
+            )
+          }
+          utilityRail={utilityRail}
+          attachmentsStrip={attachmentsStrip}
+          editor={editor}
           toolbar={toolbar}
         />
       </div>

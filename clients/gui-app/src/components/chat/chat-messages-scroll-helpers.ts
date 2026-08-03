@@ -1,3 +1,4 @@
+import type { LegendListRef } from "@legendapp/list/react";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 /**
@@ -13,6 +14,34 @@ export const CHAT_ARROW_SCROLL_STEP_PX = 40;
 export const CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX = 48;
 
 const CHAT_ANCHOR_MOVER_DEPARTURE_EPSILON_PX = 1;
+const CHAT_SCROLL_ONLY_INTENT_EPSILON_PX = 1;
+
+export function acceptExhaustedPersistedRestoreFallback<T>(
+  restorePersistencePendingRef: { current: boolean },
+  pendingMeasuredRestoreRef: { current: T | null },
+): void {
+  restorePersistencePendingRef.current = false;
+  pendingMeasuredRestoreRef.current = null;
+}
+
+export function scrollOnlyMovementCarriesReaderIntent(input: {
+  readonly previousScrollTop: number | null;
+  readonly currentScrollTop: number;
+  readonly libraryOwnedScrollTop: number | null;
+}): boolean {
+  if (input.previousScrollTop === null) return false;
+  if (
+    input.libraryOwnedScrollTop !== null &&
+    Math.abs(input.currentScrollTop - input.libraryOwnedScrollTop) <=
+      CHAT_SCROLL_ONLY_INTENT_EPSILON_PX
+  ) {
+    return false;
+  }
+  return (
+    input.currentScrollTop - input.previousScrollTop >
+    CHAT_SCROLL_ONLY_INTENT_EPSILON_PX
+  );
+}
 
 export function anchorMoverShouldYieldToReader(
   currentScrollTop: number,
@@ -29,7 +58,293 @@ export function anchorMoverShouldYieldToReader(
   );
 }
 
+/**
+ * Ticket 22 (painted-chat lifecycle audit, finding 3): the anchoring-new-turn
+ * drift re-assert, pulled out of the two-rAF reveal-pass effect so it can
+ * also be invoked from a geometry-only trigger (row remeasure / viewport
+ * resize under the SAME `messages` array - the effect only re-runs on a
+ * `messages` change). Pure math only; the caller owns reading/writing
+ * `scrollTop` and `expectedAnchorScrollTopRef`.
+ */
+export type ChatAnchorDriftRepairOutcome =
+  | { readonly kind: "yielded" }
+  | { readonly kind: "corrected"; readonly nextScrollTop: number }
+  | { readonly kind: "settled" };
+
+export function computeChatAnchorDriftRepair(input: {
+  readonly currentScrollTop: number;
+  readonly currentExpectedScrollTop: number;
+  readonly previousExpectedScrollTop: number | null;
+}): ChatAnchorDriftRepairOutcome {
+  const {
+    currentScrollTop,
+    currentExpectedScrollTop,
+    previousExpectedScrollTop,
+  } = input;
+  if (
+    anchorMoverShouldYieldToReader(
+      currentScrollTop,
+      previousExpectedScrollTop,
+      currentExpectedScrollTop,
+    )
+  ) {
+    return { kind: "yielded" };
+  }
+  const anchorPositionDrift = currentExpectedScrollTop - currentScrollTop;
+  if (Math.abs(anchorPositionDrift) > 1) {
+    return {
+      kind: "corrected",
+      nextScrollTop: currentScrollTop + anchorPositionDrift,
+    };
+  }
+  return { kind: "settled" };
+}
+
+/**
+ * Imperative wrapper around `computeChatAnchorDriftRepair`: reads the live
+ * scroll position + anchor metrics, applies the correction (if any), and
+ * keeps `expectedAnchorScrollTopRef` in sync exactly as the reveal pass
+ * always has (updated on both "corrected" and "settled", left untouched on
+ * "yielded" - a departed reader's baseline must not be overwritten by the
+ * drift it declined).
+ */
+export function applyChatAnchorDriftRepair(input: {
+  readonly list: Pick<LegendListRef, "getScrollableNode" | "scrollToOffset">;
+  readonly anchorTop: number;
+  readonly listTopOffsetAdjustment: number;
+  readonly anchorOffset: number;
+  readonly expectedAnchorScrollTopRef: {
+    current: number | null;
+  };
+}): ChatAnchorDriftRepairOutcome["kind"] {
+  const {
+    list,
+    anchorTop,
+    listTopOffsetAdjustment,
+    anchorOffset,
+    expectedAnchorScrollTopRef,
+  } = input;
+  const currentScrollTop = list.getScrollableNode().scrollTop;
+  const currentExpectedScrollTop =
+    anchorTop + listTopOffsetAdjustment - anchorOffset;
+  const outcome = computeChatAnchorDriftRepair({
+    currentScrollTop,
+    currentExpectedScrollTop,
+    previousExpectedScrollTop: expectedAnchorScrollTopRef.current,
+  });
+  if (outcome.kind === "yielded") {
+    return "yielded";
+  }
+  expectedAnchorScrollTopRef.current = currentExpectedScrollTop;
+  if (outcome.kind === "corrected") {
+    void list.scrollToOffset({
+      offset: outcome.nextScrollTop,
+      animated: false,
+    });
+    return "corrected";
+  }
+  return "settled";
+}
+
+/**
+ * Ticket 19 (adversarially-reviewed design, decision #31): the capture-
+ * provenance classifier for the anchoring-scrollbar-departure gap. A native
+ * OS scrollbar-thumb drag fires ONLY `scroll` events - no wheel/touchmove/
+ * pointerdown - so none of the intent listeners above ever see it, and a
+ * reader parked deep in history via a thumb drag leaves a settled
+ * `anchoring-new-turn` session live with full generation ownership.
+ * `resolveOwnedAtEndReport`'s `following-end` departure branch cannot be
+ * widened to cover this: `isAtEnd=false` is anchoring's NORMAL parked state
+ * (the anchor row sits near the viewport top with reserved space below), so
+ * widening would self-cancel every anchoring session on its own first
+ * report.
+ *
+ * The caller (`chat-messages.tsx`) installs ONE native CAPTURE-phase
+ * `scroll` listener on the stable transcript wrapper - an ancestor of
+ * LegendList's own scroll node. A capture listener on an ancestor runs
+ * BEFORE any listener on the target, for every event type, regardless of
+ * whether that event type bubbles (`scroll` does not bubble, but capturing
+ * phase does not depend on bubbling - only on reaching the target from the
+ * root). Verified against installed `@legendapp/list@3.2.0`
+ * (`react.mjs:5663-5671`): the web adapter installs its own consuming
+ * listener with `target.addEventListener("scroll", handleScroll, {
+ * passive: true })` - directly on the scroll node, no capture flag - so an
+ * ancestor capture listener always observes the raw DOM state first.
+ *
+ * At that moment `domScrollTop` may already reflect the move, while
+ * `listStateScroll` (`list.getState().scroll`) reflects the PREVIOUS
+ * position UNLESS a library-owned write already advanced it ahead of the
+ * DOM event. Three writer sites matter, all verified against the installed
+ * 3.2.0 source:
+ *
+ * | Writer | Site | Pre-writes before DOM event? |
+ * | --- | --- | --- |
+ * | Non-animated imperative `scrollToOffset`/`scrollToIndex` | `updateScroll` call at `react.mjs:2107`, inside the same synchronous call that later invokes `doScrollTo` at `:2110` | Yes - `state.scroll` is set before `scroller.scrollTo()` is even called |
+ * | MVCP data/size/inset adjustment | `requestAdjust` at `react.mjs:1611-1629` - `state.scroll += positionDiff` at `:1622`, before the deferred `scrollAdjustHandler.requestAdjust` call (`:1626`) that eventually issues a DOM `scrollBy` | Yes |
+ * | Direct DOM `scrollTop` write (native thumb, or anything else that never went through the library's own API) | none - nothing in the library ever runs | No - this is exactly the signal this classifier exists to catch |
+ *
+ * Governing invariant (decision #31, binding): a scroll-only reader
+ * departure cancels anchoring ownership, but no browser-, library-,
+ * geometry-, hydration-, or app-owned scroll may ever be classified as
+ * reader intent. `chatAnchorScrollCaptureShouldCancel` is biased toward
+ * CANCEL when unrecognized (review finding 4, binding): every case this
+ * classifier cannot positively explain as library/app/browser-owned falls
+ * through to `true`. A false cancel only costs an extra following-end/
+ * free-scrolling transition; a false silence can strand a departed reader
+ * under live anchor ownership, or worse let the next reveal pass snap them
+ * back (design-review finding 2) - never the acceptable direction.
+ *
+ * These are LegendList 3.2.0 dependency contracts, not browser folklore. A
+ * future `@legendapp/list` bump that reorders listener installation or stops
+ * pre-writing `state.scroll` for either writer above must FAIL this
+ * module's dedicated library-contract pins (`chat-messages.test.tsx`) - that
+ * failure is the safety net working, not a regression to chase: on this
+ * classifier's fail-safe bias, losing the pre-write proof only pushes
+ * legitimate library-owned corrections into more false cancels (degrades
+ * anchoring UX), it can never turn a real departure invisible again. Do not
+ * "fix" a red library-contract pin by loosening the classifier itself -
+ * re-audit the dependency contract instead.
+ */
+export interface ChatAnchorScrollCapturePhysicalSnapshot {
+  readonly scrollTop: number;
+  readonly maxScrollTop: number;
+}
+
+const CHAT_ANCHOR_CAPTURE_STATE_EQUALITY_EPSILON_PX = 1;
+const CHAT_ANCHOR_CAPTURE_CLAMP_EPSILON_PX = 1;
+
+export function chatScrollCaptureLibraryOwnedTop(
+  domScrollTop: number,
+  listStateScroll: number,
+): number | null {
+  return Math.abs(domScrollTop - listStateScroll) <=
+    CHAT_ANCHOR_CAPTURE_STATE_EQUALITY_EPSILON_PX
+    ? domScrollTop
+    : null;
+}
+
+/**
+ * Design-review finding 3 (PLAUSIBLE MEDIUM, decision #31 binding condition
+ * b): the exact browser-clamp signature - not a guessed distance or timing
+ * window. A content/reserve/viewport shrink can pull an anchored reader's
+ * `scrollTop` DOWN to the new (smaller) maximum with no app scroll call at
+ * all, producing the exact same DOM shape as a thumb drag landing near the
+ * max. This three-part signature is the tightest predicate that separates
+ * them without a grace window - a grace window would recreate the exact
+ * clamp-vs-intent ambiguity this ticket exists to resolve (design's
+ * "failure policy": do not add one).
+ *
+ * Accepted ambiguity envelope (irreducible - not a bug, do not try to widen
+ * the epsilon to close it):
+ *
+ * | Case | Result |
+ * | --- | --- |
+ * | Pure content/viewport shrink clamps a fractional prior top to the new max | Silent (expected) |
+ * | Real thumb movement of at most 1px from list state | Silent (blind zone) |
+ * | User move + MVCP/app correction net to list state within 1px | Silent (false negative) |
+ * | User thumb ends at the new max in the same delivery window as a max shrink | Indistinguishable from clamp; silent |
+ * | Browser emits an intermediate event before the new max is observable | Possible false cancel |
+ * | User ends merely near the max without prior-over-max evidence | Cancel (expected - not a guessed clamp) |
+ */
+export function chatAnchorScrollCaptureIsExactBrowserClamp(
+  previous: ChatAnchorScrollCapturePhysicalSnapshot,
+  current: ChatAnchorScrollCapturePhysicalSnapshot,
+): boolean {
+  return (
+    previous.scrollTop >
+      current.maxScrollTop + CHAT_ANCHOR_CAPTURE_CLAMP_EPSILON_PX &&
+    current.maxScrollTop < previous.maxScrollTop &&
+    Math.abs(current.scrollTop - current.maxScrollTop) <=
+      CHAT_ANCHOR_CAPTURE_CLAMP_EPSILON_PX
+  );
+}
+
+export interface ChatAnchorScrollCaptureInput {
+  /** `mode === "anchoring-new-turn"` AND the live-follow generation still
+   *  matches the current user-scroll generation - the caller's own
+   *  ownership gate (same shape `resolveOwnedAtEndReport` uses). `false`
+   *  means this capture is not this classifier's session to police at all
+   *  (following-end, free-scrolling, or an already-departed generation). */
+  readonly isAnchoringSessionOwned: boolean;
+  /**
+   * Ticket 18's settle lifecycle owns THIS generation's animated anchor
+   * `scrollToIndex` issue/reissue window right now (armed immediately
+   * before the command is issued, cleared on valid/invalid/cancel - see
+   * `chat-messages.tsx`'s `positionAnchor`).
+   *
+   * Design-review finding 1 (CONFIRMED HIGH, binding condition a): this
+   * exemption is DELIBERATELY BROADER than what ticket 18's own
+   * `anchorMoverShouldYieldToReader` can actually protect - that predicate
+   * only detects an UPWARD departure. A downward or intermediate thumb
+   * drag arriving during this exact window is silently deferred here (not
+   * classified as departure) even though ticket 18's settle loop will not
+   * yield to it either - the settle loop can re-issue/snap back once this
+   * window closes (review finding 2). This is an ACCEPTED, EXPLICITLY-
+   * TRACKED residual, not a claimed fix: jsdom cannot express the real-time
+   * race between an in-flight animated scroll and a native thumb drag, so
+   * BOTH directions during active motion are live-checklist-only items,
+   * never simulated as a passing jsdom pin.
+   */
+  readonly activeAnchorMotionOwnsGeneration: boolean;
+  /** The scroll node's live `scrollTop`, read synchronously inside the
+   *  capture-phase handler - i.e. AFTER the DOM already moved but BEFORE
+   *  LegendList's own target listener has run. */
+  readonly domScrollTop: number;
+  /** `list.getState().scroll` read at the SAME synchronous moment - still
+   *  describes the PREVIOUS position unless a library-owned write already
+   *  advanced it ahead of the DOM event (see the module doc comment above
+   *  for the three writer sites this depends on). */
+  readonly listStateScroll: number;
+  /** The physical snapshot captured on the PREVIOUS captured event (or
+   *  `null` when no scroll has been observed yet this session - in which
+   *  case the clamp predicate cannot fire, since there is nothing to
+   *  compare against, and an otherwise-unexplained event still cancels). */
+  readonly previousSnapshot: ChatAnchorScrollCapturePhysicalSnapshot | null;
+  readonly currentMaxScrollTop: number;
+}
+
+/**
+ * Top-level classifier (design's numbered steps 3-7; steps 1-2 - "read
+ * fresh, refresh the snapshot regardless of outcome" - are the caller's own
+ * imperative bookkeeping around this pure decision, not part of it).
+ * Returns `true` only for the one case this ticket exists to catch: a
+ * settled `anchoring-new-turn` session's `scrollTop` moved by a route this
+ * classifier cannot explain as library-, app-, or browser-owned. See the
+ * module doc comment above for the unsure-cancels fail-safe bias.
+ */
+export function chatAnchorScrollCaptureShouldCancel(
+  input: ChatAnchorScrollCaptureInput,
+): boolean {
+  if (!input.isAnchoringSessionOwned) return false;
+  if (input.activeAnchorMotionOwnsGeneration) return false;
+  if (
+    chatScrollCaptureLibraryOwnedTop(
+      input.domScrollTop,
+      input.listStateScroll,
+    ) !== null
+  ) {
+    // Library/app-owned correction: non-animated imperative scrollTo*/
+    // scrollToOffset and MVCP requestAdjust both advance `state.scroll`
+    // before their DOM write reaches this capture listener - see the
+    // module doc comment's writer table.
+    return false;
+  }
+  if (
+    input.previousSnapshot !== null &&
+    chatAnchorScrollCaptureIsExactBrowserClamp(input.previousSnapshot, {
+      scrollTop: input.domScrollTop,
+      maxScrollTop: input.currentMaxScrollTop,
+    })
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export type ChatWheelVerticalDirection = "down" | "up" | "ambiguous";
+
+export type ChatWheelFollowIntent =
+  "preserve-follow" | "depart" | "approach-live-edge";
 
 /**
  * `WheelEvent.deltaY`'s SIGN convention (positive = scrolling toward the
@@ -70,6 +385,11 @@ export function chatWheelVerticalDirection(
  * every other non-following mode. Only `following-end` - where "at the live
  * edge" and "at the true content end" coincide - gets the exemption.
  *
+ * The result is an intent transition rather than a cancellation boolean:
+ * a downward gesture away from the edge arms a later strict-edge resume,
+ * while upward/ambiguous input explicitly disarms it. This keeps physical
+ * edge geometry from silently recreating reader intent after departure.
+ *
  * `isAtLiveEdge` and `isFollowingEnd` are both expected to be FRESH reads
  * taken at the moment the wheel fires (LegendList's own small-epsilon
  * `getState().isAtEnd`, the same strict signal ticket 11 uses for "did the
@@ -83,14 +403,34 @@ export function chatWheelVerticalDirection(
  * momentary elastic overshoot past the clamped edge still reads as "at the
  * edge", so it does not cancel either.
  */
-export function chatWheelShouldCancelLiveFollow(
+export function resolveChatWheelFollowIntent(
   deltaY: number,
   isAtLiveEdge: boolean,
   isFollowingEnd: boolean,
-): boolean {
+): ChatWheelFollowIntent {
   const direction = chatWheelVerticalDirection(deltaY);
-  if (direction === "down" && isFollowingEnd) return !isAtLiveEdge;
-  return true;
+  if (direction !== "down") return "depart";
+  if (isFollowingEnd && isAtLiveEdge) return "preserve-follow";
+  return "approach-live-edge";
+}
+
+/**
+ * Touch content moves opposite the finger: decreasing clientY scrolls toward
+ * the transcript end, while increasing/unchanged clientY is departure or
+ * ambiguous and therefore cannot authorize follow reacquisition.
+ */
+export function resolveChatTouchFollowIntent(
+  previousClientY: number | null,
+  currentClientY: number | null,
+): Exclude<ChatWheelFollowIntent, "preserve-follow"> {
+  if (
+    previousClientY !== null &&
+    currentClientY !== null &&
+    currentClientY < previousClientY
+  ) {
+    return "approach-live-edge";
+  }
+  return "depart";
 }
 
 export function buildMessageIdToIndex(
@@ -435,6 +775,25 @@ export function viewportActiveUserMessageId(
     selectActiveUserMessageId(messages, viewportRowMessageId, false) ??
     viewportRowMessageId
   );
+}
+
+/**
+ * Resolves the actual measured transcript row at the viewport reading line.
+ * Unlike `viewportActiveUserMessageId`, this deliberately does not collapse
+ * an assistant/tool/A2A row back to the preceding human query. Scroll
+ * restoration needs the physical row the reader was inside so its saved
+ * pixel offset remains local to that row, including for very tall replies.
+ */
+export function viewportAnchorMessageId(
+  state: ChatViewportAnchorListState,
+  messages: ReadonlyArray<ChatMessageModel>,
+): string | null {
+  const rowIndex = chatViewportAnchorRowIndex(
+    state,
+    messages.length,
+    VIEWPORT_ACTIVE_ANCHOR_OFFSET_PX,
+  );
+  return rowIndex === null ? null : (messages[rowIndex]?.id ?? null);
 }
 
 // --- Edge-mutation classification -------------------------------------------

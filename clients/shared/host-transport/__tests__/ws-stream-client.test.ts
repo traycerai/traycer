@@ -1997,6 +1997,50 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     session.close();
   });
 
+  it("treats a SYNCHRONOUSLY thrown revalidation as transient, not an unhandled rejection", async () => {
+    // `revalidateForReconnect` is typed to RETURN a promise, but nothing stops
+    // an implementation throwing before it returns one. Called bare, that throw
+    // skips the `.catch` that maps a failed revalidation to "network-error" and
+    // the `finally` that clears the budget timer, then escapes the
+    // `void`-discarded recovery task: an unhandled rejection, and a session left
+    // in backoff with no re-dial armed.
+    const { factory, sockets } = makeFactory();
+    const calls = { count: 0 };
+    const auth: StreamAuthRevalidator = {
+      revalidateForReconnect: (): Promise<RevalidateOutcome> => {
+        calls.count += 1;
+        throw new Error("revalidation threw before returning a promise");
+      },
+    };
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    const client = makeAuthClient(factory, auth, 5);
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    try {
+      await flush();
+      sockets[0].socket.fireOpen();
+      sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+
+      await wait(50);
+      expect(calls.count).toBe(1);
+      // Degrades exactly like a rejected promise: transient → re-dial, never
+      // terminal, and nothing escapes.
+      expect(sockets).toHaveLength(2);
+      expect(statuses).not.toContain("closed");
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      session.close();
+    }
+  });
+
   it("goes terminal on an UNAUTHORIZED rejection when revalidation is rejected", async () => {
     const { factory, sockets } = makeFactory();
     const revalidator = makeAuthRevalidator(["rejected"]);

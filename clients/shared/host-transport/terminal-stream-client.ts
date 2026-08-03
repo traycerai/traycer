@@ -1,9 +1,11 @@
 import {
   terminalSubscribeServerFrameSchema,
   terminalSubscribeServerFrameSchemaV14,
+  terminalSubscribeServerFrameSchemaV15,
   type TerminalSubscribeClientFrame,
   type TerminalSubscribeServerFrame,
   type TerminalSubscribeServerFrameV14,
+  type TerminalSubscribeServerFrameV15,
 } from "@traycer/protocol/host/terminal/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -12,7 +14,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IHostStreamClient } from "./host-stream-client";
 
 /**
  * Typed handlers for a `terminal.subscribe` session. The renderer's terminal
@@ -27,7 +29,9 @@ import type { WsStreamClient } from "./ws-stream-client";
  * minor negotiated.
  */
 type TerminalSubscribeServerFrameOnWire =
-  TerminalSubscribeServerFrame | TerminalSubscribeServerFrameV14;
+  | TerminalSubscribeServerFrame
+  | TerminalSubscribeServerFrameV14
+  | TerminalSubscribeServerFrameV15;
 
 export interface TerminalStreamCallbacks {
   readonly onSnapshot: (
@@ -75,7 +79,7 @@ export interface TerminalStreamCallbacks {
 }
 
 export interface TerminalStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly sessionId: string;
   readonly cols: number;
   readonly rows: number;
@@ -90,7 +94,7 @@ export interface TerminalStreamClientOptions {
  */
 export class TerminalStreamClient {
   private readonly session: IStreamSession;
-  private readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  private readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   private readonly callbacks: TerminalStreamCallbacks;
   private closed: boolean;
 
@@ -129,9 +133,11 @@ export class TerminalStreamClient {
     const version =
       this.wsStreamClient.getMethodSchemaVersion("terminal.subscribe");
     const parsed =
-      version !== null && version.major === 1 && version.minor >= 4
-        ? terminalSubscribeServerFrameSchemaV14.safeParse(envelope)
-        : terminalSubscribeServerFrameSchema.safeParse(envelope);
+      version !== null && version.major === 1 && version.minor >= 5
+        ? terminalSubscribeServerFrameSchemaV15.safeParse(envelope)
+        : version !== null && version.major === 1 && version.minor >= 4
+          ? terminalSubscribeServerFrameSchemaV14.safeParse(envelope)
+          : terminalSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       // Schema mismatch: a version-skewed host/client or a genuine wire bug.
       // Log the envelope kind and issue paths only - never `parsed.error` or

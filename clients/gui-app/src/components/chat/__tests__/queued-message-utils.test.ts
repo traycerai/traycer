@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatQueuedItem,
+  ChatQueuedPromptItem,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import { queueItemCanPauseFromQueueHeader } from "@/components/chat/queued-message-utils";
 
 const TEST_SETTINGS = {
@@ -106,14 +109,32 @@ describe("queueItemCanPauseFromQueueHeader", () => {
 
     expect(queueItemCanPauseFromQueueHeader(item)).toBe(true);
   });
+
+  // The header's pause button holds the user's own backlog; a managed-command
+  // digest is system-owned and is not a "human queued message".
+  it("rejects managed-command queued items", () => {
+    const item: ChatQueuedItem = {
+      kind: "managed-command",
+      queueItemId: "queue-managed-1",
+      commandId: "command-1",
+      description: "bun test --watch",
+      commandKind: "monitor",
+      status: "pending",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    expect(queueItemCanPauseFromQueueHeader(item)).toBe(false);
+  });
 });
 
 function queuedItem(input: {
-  readonly sender: ChatQueuedItem["sender"];
-  readonly status: ChatQueuedItem["status"];
-  readonly steerRequest: ChatQueuedItem["steerRequest"];
-}): ChatQueuedItem {
+  readonly sender: ChatQueuedPromptItem["sender"];
+  readonly status: ChatQueuedPromptItem["status"];
+  readonly steerRequest: ChatQueuedPromptItem["steerRequest"];
+}): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId: "queue-1",
     messageId: "message-1",
     message: {
@@ -141,7 +162,9 @@ function queuedItem(input: {
   };
 }
 
-function safePointSteerRequest(): NonNullable<ChatQueuedItem["steerRequest"]> {
+function safePointSteerRequest(): NonNullable<
+  ChatQueuedPromptItem["steerRequest"]
+> {
   return {
     mode: "safe_point",
     targetTurnId: "turn-1",

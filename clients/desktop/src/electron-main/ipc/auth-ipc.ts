@@ -12,6 +12,8 @@ import {
   verifyStepUpChallengeViaHttp,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import { validateAuthTokenIdentityAccessOnly } from "@traycer-clients/shared/auth/auth-validation";
+import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { updateHostVersionPolicyViaHttp } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
 import {
   assertString,
@@ -20,6 +22,7 @@ import {
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
+  parseUpdateHostVersionPolicyInput,
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
@@ -132,6 +135,35 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     (_event, legacy: unknown) => {
       return bridge.authTokenStore.migrateLegacyCredentials(
         parseStoredAuthTokens(legacy),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.listRegisteredHosts,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "listRegisteredHosts.bearerToken");
+      // Run in main so renderer-origin CORS does not block authn-v3's
+      // `GET /api/v3/hosts` (Remote Host Support §7).
+      return fetchRegisteredHostsViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.updateHostVersionPolicy,
+    async (_event, bearerToken: unknown, hostId: unknown, input: unknown) => {
+      assertString(bearerToken, "updateHostVersionPolicy.bearerToken");
+      assertString(hostId, "updateHostVersionPolicy.hostId");
+      // Run in main so renderer-origin CORS does not block authn-v3's
+      // `PATCH /api/v3/hosts/:hostId` (Remote Host Support §13, T16).
+      return updateHostVersionPolicyViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        hostId,
+        parseUpdateHostVersionPolicyInput(input),
       );
     },
   );

@@ -9,16 +9,15 @@ import {
   useComposerPasteEvents,
   IMAGE_MIME_PREFIX,
   MAX_IMAGE_BYTES,
+  type ComposerImageConversionResult,
   type ComposerImageIngest,
   type ComposerPasteEditorHandle,
   type PathInsertionCommit,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import { putImage } from "@/lib/composer/landing-image-store";
-import {
-  reserveLandingImageBudget,
-  scheduleLandingImageReconcile,
-} from "@/lib/composer/landing-image-gc";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+import { reserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
@@ -38,12 +37,21 @@ import {
  * Drag/drop/paste event handling and the `image/*` + 5MB cap are reused from the
  * shared core (`useComposerPasteEvents` + `collectImages`); only the ingest
  * differs. Chat / new-conversation keep using `useComposerPaste` (base64).
+ *
+ * The returned reservation (when present) is deliberately NOT released here:
+ * `runImageIngest` releases it only after `insertAttrs` has run, so a
+ * concurrent admission check during the conversion-to-insertion handoff still
+ * sees this batch's bytes charged. On a write failure, every started
+ * read/write is awaited (`Promise.allSettled`, not `Promise.all`) before this
+ * function releases and re-throws - a `Promise.all`-style short-circuit would
+ * release while a slower sibling `putImage` is still landing bytes nothing
+ * will ever reference.
  */
 async function landingImageAttrsFromFiles(
   draftId: string | null,
   files: ReadonlyArray<File>,
   signal: AbortSignal,
-): Promise<ImageAttachmentAttrs[]> {
+): Promise<ComposerImageConversionResult> {
   const accepted = collectImages(files, () => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
@@ -51,22 +59,31 @@ async function landingImageAttrsFromFiles(
       blocker: "invalid_input",
     });
   });
-  if (accepted.length === 0) return [];
-  // Reserve against this draft's roots before storing bytes. A capacity miss
-  // rejects only this attachment; GC never discards another draft to make room.
-  const incomingBytes = accepted.reduce(
-    (sum, file) => sum + (file.size > 0 ? file.size : 0),
-    0,
+  if (accepted.length === 0) return { attrs: [] };
+  // Reserve against this draft's roots (plus every other outstanding
+  // reservation, landing paste or stash import) before storing bytes. A
+  // capacity miss rejects only this attachment; GC never discards another
+  // draft to make room. The hash isn't known until `putImage` hashes the
+  // bytes below, so each candidate reserves anonymously (see
+  // `landing-image-budget.ts`).
+  const reservation = reserveLandingImageBudget(
+    draftId,
+    accepted.map((file) => ({
+      hash: null,
+      bytes: file.size > 0 ? file.size : 0,
+    })),
   );
-  if (!reserveLandingImageBudget(draftId, incomingBytes)) {
+  if (reservation === null) {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
       surface: "draft",
       blocker: "rate_limit",
     });
-    return [];
+    scheduleLandingImageReconcile();
+    return { attrs: [] };
   }
-  return Promise.all(
+
+  const settled = await Promise.allSettled(
     accepted.map(async (file) => {
       signal.throwIfAborted();
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -82,6 +99,22 @@ async function landingImageAttrsFromFiles(
       } satisfies ImageAttachmentAttrs;
     }),
   );
+
+  const rejected = settled.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (rejected !== undefined) {
+    // Every started read/write above has now settled - only then release, so
+    // a slower sibling write can never land after this reservation is gone.
+    reservation.release();
+    throw rejected.reason;
+  }
+
+  const attrs: ImageAttachmentAttrs[] = [];
+  for (const result of settled) {
+    if (result.status === "fulfilled") attrs.push(result.value);
+  }
+  return { attrs, release: () => reservation.release() };
 }
 
 export function useLandingComposerPaste(params: {
@@ -118,7 +151,7 @@ export function useLandingComposerPaste(params: {
       convert: (files, signal) => {
         // Disabled (e.g. mid-submit) skips ingest entirely - no hashing,
         // storing, or budget reservation - the same as a no-op paste.
-        if (disabled) return Promise.resolve([]);
+        if (disabled) return Promise.resolve({ attrs: [] });
         return landingImageAttrsFromFiles(draftId, files, signal);
       },
       onSettled: (accepted) => {

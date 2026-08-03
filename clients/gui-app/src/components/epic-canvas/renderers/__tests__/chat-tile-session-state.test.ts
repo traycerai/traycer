@@ -256,6 +256,7 @@ function expectToastAction(
 }
 
 const ACTIVE_TURN: ChatActiveTurn = {
+  agentMode: "regular",
   sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
@@ -263,7 +264,6 @@ const ACTIVE_TURN: ChatActiveTurn = {
   model: "codex-test",
   reasoningEffort: null,
   serviceTier: null,
-  agentMode: "epic",
   profileId: null,
   userMessageId: "message-1",
   startedAt: 0,
@@ -276,6 +276,7 @@ function runnableQueue(itemCount: number): ChatQueueState {
   return {
     status: "running",
     items: Array.from({ length: itemCount }, (_, index) => ({
+      kind: "prompt" as const,
       queueItemId: `item-${index}`,
       messageId: `message-${index}`,
       message: { kind: "user" as const, content: CONTENT },

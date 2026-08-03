@@ -440,6 +440,15 @@ export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
  * callers always send a concrete mode. Making the field required keeps the
  * released v2.0 wire immutable.
  */
+/**
+ * `agentMode` is RETAINED here even though Epic Mode was removed from the
+ * product. v3.0 is itself released (it shipped in the v1.1.8 tags), so a
+ * current client and a v1.1.8 host both negotiate 3.0 and NO bridge runs
+ * between them - dropping the key would simply be rejected by that host, which
+ * still requires it. Callers state the one remaining mode; the field goes when
+ * the released client/host floor passes this version, together with the
+ * equally-blocked `prepareTuiLaunch` / `createTuiAgent` request shapes.
+ */
 export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
   permissionMode: permissionModeSchema.nullable(),
 });

@@ -14,8 +14,9 @@
 //      from BOTH localStorage and sessionStorage. Auth (`traycer.`) and any
 //      non-`traycer-gui-app:` key survive.
 //   3. Drop renderer dbs       — delete every per-window IndexedDB partition
-//      for pasted image bytes and file-edit recovery drafts. Enumeration is
-//      Chromium-only; absent → no-op.
+//      for pasted image bytes and file-edit recovery drafts, plus the
+//      app-global prompt-stash database, so wiped state doesn't leak stash or
+//      draft bytes. Enumeration is Chromium-only; absent → no-op.
 //   4. Reload last             — re-hydrate from the now-cleared storage / host
 //      state without racing a pending write.
 
@@ -25,6 +26,8 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger, describeLogError } from "@/lib/logger";
 import { FILE_EDIT_RECOVERY_DB_SUFFIX } from "@/lib/workspace/file-edit-recovery-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import { PROMPT_STASH_DB_NAME } from "@/lib/composer/prompt-stash-repository";
+import { publishPromptStashReset } from "@/lib/composer/prompt-stash-channel";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -37,9 +40,11 @@ const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 // suffix below pins the db namespace so the wipe only drops image partitions,
 // never any other future `traycer-gui-app:`-prefixed db.
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";
+const PROMPT_STASH_DB_SUFFIX = ":prompt-stash";
 const RENDERER_DB_SUFFIXES = [
   LANDING_IMAGE_DB_SUFFIX,
   FILE_EDIT_RECOVERY_DB_SUFFIX,
+  PROMPT_STASH_DB_SUFFIX,
 ] as const;
 
 function sweepStorage(storage: Storage): number {
@@ -88,19 +93,28 @@ function indexedDBFactory(): IDBFactory | undefined {
   return globalThis.indexedDB;
 }
 
-// Drop every app-owned per-window IndexedDB partition. `indexedDB.databases()` is
-// Chromium-only (the Electron/Chrome target); when it (or `indexedDB` itself)
-// is absent we no-op so the wipe still reaches the reload. Browser engines
-// without it keep their IndexedDB data — a platform limitation, not a reason
-// to block the rest of the wipe and reload.
-async function deleteRendererDatabases(): Promise<void> {
-  const factory = indexedDBFactory();
-  if (typeof factory?.databases !== "function") {
+// Renderer db partition names (landing-image, file-edit-recovery) are
+// per-window/runtime and only discoverable through enumeration;
+// `indexedDB.databases()` is Chromium-only, so on an engine without it those
+// names simply can't be found - an accepted leak (the bytes are re-pasteable
+// or re-derivable from disk), not a wipe failure.
+async function enumeratedRendererDatabaseNames(
+  factory: IDBFactory,
+): Promise<readonly string[]> {
+  if (typeof factory.databases !== "function") {
     appLogger.info("[persist] renderer database enumeration unavailable", {});
-    return;
+    return [];
   }
-  const databases = await factory.databases();
-  const names = databases
+  let databases: readonly IDBDatabaseInfo[];
+  try {
+    databases = await factory.databases();
+  } catch (error: unknown) {
+    appLogger.warn("[persist] renderer database enumeration failed", {
+      error: describeLogError(error),
+    });
+    return [];
+  }
+  return databases
     .map((db) => db.name)
     .filter(
       (name): name is string =>
@@ -108,14 +122,39 @@ async function deleteRendererDatabases(): Promise<void> {
         name.startsWith(PERSIST_KEY_BOUNDARY) &&
         RENDERER_DB_SUFFIXES.some((suffix) => name.endsWith(suffix)),
     );
-  // Best-effort per partition: a single db whose delete errors must not abort the
-  // rest of the wipe or — critically — the reload (step 4), which is the real
-  // recovery and tears down every connection anyway. The bytes are re-pasteable.
+}
+
+// Drop every landing-image and file-edit-recovery partition this run can
+// enumerate, plus the prompt-stash database unconditionally by its exact,
+// fixed name - unlike the per-window partitions, the stash has exactly one
+// name known ahead of time, so its deletion never depends on `databases()`
+// support. `indexedDB` itself absent (e.g. a non-browser runtime) still
+// no-ops the whole thing so the wipe reaches the reload.
+async function deleteRendererDatabases(): Promise<boolean> {
+  const factory = indexedDBFactory();
+  if (factory === undefined) {
+    appLogger.info("[persist] renderer database delete unavailable", {
+      reason: "no IndexedDB in this runtime",
+    });
+    return false;
+  }
+  const enumerated = await enumeratedRendererDatabaseNames(factory);
+  const names = new Set(enumerated);
+  names.add(PROMPT_STASH_DB_NAME);
+  // Best-effort per partition: a single db whose delete errors must not abort
+  // the rest of the wipe or - critically - the reload (step 4), which is the
+  // real recovery and tears down every connection anyway. The bytes are
+  // re-pasteable (landing), recoverable from disk (file-edit), or already
+  // gone from the user's perspective (stash, whose entries the localStorage
+  // sweep never touched but whose db this same step is the only thing that
+  // reclaims).
   let failedCount = 0;
+  let promptStashDeleted = true;
   await Promise.all(
-    names.map((name) =>
+    Array.from(names).map((name) =>
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
         failedCount += 1;
+        if (name === PROMPT_STASH_DB_NAME) promptStashDeleted = false;
         appLogger.warn("[persist] renderer database delete failed", {
           error: describeLogError(error),
         });
@@ -123,9 +162,10 @@ async function deleteRendererDatabases(): Promise<void> {
     ),
   );
   appLogger.info("[persist] renderer database delete complete", {
-    databaseCount: names.length,
+    databaseCount: names.size,
     failedCount,
   });
+  return promptStashDeleted;
 }
 
 export async function clearAllPersistedStores(args: {
@@ -173,8 +213,12 @@ export async function clearAllPersistedStores(args: {
     sessionStorageCount,
   });
 
-  // 3. Drop every renderer IndexedDB partition (one per runtime window).
-  await deleteRendererDatabases();
+  // 3. Drop every renderer-owned IndexedDB partition.
+  //    The localStorage sweep above already removed the draft keys that point
+  //    at some of these bytes; this reclaims the bytes themselves so nothing
+  //    leaks past the wipe.
+  const promptStashDeleted = await deleteRendererDatabases();
+  if (promptStashDeleted) publishPromptStashReset();
 
   // 4. Reload last.
   appLogger.info("[persist] local GUI state clear complete - reloading", {});

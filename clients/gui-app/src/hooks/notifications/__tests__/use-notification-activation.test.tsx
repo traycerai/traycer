@@ -589,6 +589,51 @@ describe("useNotificationActivation", () => {
     );
   });
 
+  it("routes TUI agent notifications to the exact open terminal-agent tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedTabId = store.openEpicTab("epic-tui", "TUI task");
+    store.openTileInTab(notifiedTabId, {
+      id: "tui-notified",
+      instanceId: "tui-notified-instance",
+      type: "terminal-agent",
+      name: "Notified terminal agent",
+      hostId: "host-1",
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[notifiedTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected notified TUI agent canvas");
+    }
+    const paneId = canvas.activePaneId;
+    store.openEpicTab("epic-tui", "Other task view");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-tui",
+          chatId: "tui-notified",
+        },
+        receivedAt: 904,
+        feedId: "host:tui",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-tui", tabId: notifiedTabId },
+      search: {
+        focusedAt: 904,
+        focusArtifactId: "tui-notified",
+        focusPaneId: paneId,
+        focusTileInstanceId: "tui-notified-instance",
+      },
+    });
+  });
+
   it("reopens a closed Task at its exact open chat tile", () => {
     const store = useEpicCanvasStore.getState();
     const notifiedChatTabId = store.openEpicTab("epic-hidden", "Hidden task");

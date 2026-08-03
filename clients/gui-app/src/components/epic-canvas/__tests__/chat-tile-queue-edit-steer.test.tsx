@@ -308,12 +308,12 @@ function emitChatSnapshot(
       queue: { status: "idle", items: [...queueItems] },
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: true,
         turnId: "turn-1",
         status: "running",
         harnessId: QUEUED_SETTINGS.harnessId,
         model: QUEUED_SETTINGS.model,
-        agentMode: QUEUED_SETTINGS.agentMode,
         profileId: null,
         userMessageId: "message-active",
         startedAt: 1,
@@ -391,6 +391,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt",
         queueItemId: "queue-steer-edit",
         messageId: "message-queue-steer-edit",
         message: {
@@ -467,6 +468,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt",
         queueItemId: "queue-edit",
         messageId: "message-queue-edit",
         message: {

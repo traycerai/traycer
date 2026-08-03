@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   parsePersistedLandingTerminalState,
   terminalSessionKey,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
-import { reconcileLandingTerminalTabs } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
+import {
+  reconcileLandingTerminalTabs,
+  resolveLandingTerminalSyncedTitle,
+  resolveLandingTerminalTitleCwd,
+} from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { resolveLandingTerminalAvailability } from "@/components/home/terminal-panel/landing-terminal-availability";
 import {
   resolveLandingTerminalLaunchCwd,
@@ -51,6 +58,18 @@ function session(input: {
     createdAt: 1,
     title: null,
     activeProcessName: null,
+  };
+}
+
+function liveSession(input: {
+  readonly sessionId: string;
+  readonly currentCwd: string;
+  readonly activeProcessName: string | null;
+}): CanonicalTerminalSessionInfoWithCurrentCwd {
+  return {
+    ...session({ sessionId: input.sessionId, status: "running" }),
+    currentCwd: input.currentCwd,
+    activeProcessName: input.activeProcessName,
   };
 }
 
@@ -109,11 +128,14 @@ describe("landing terminal lifecycle", () => {
     });
 
     expect(result.tabs).toEqual([
-      tab({
-        instanceId: "adopted-instance",
-        sessionId: "orphan",
-        hostId: HOST_A,
-      }),
+      {
+        ...tab({
+          instanceId: "adopted-instance",
+          sessionId: "orphan",
+          hostId: HOST_A,
+        }),
+        name: "project · New Terminal",
+      },
     ]);
     expect(result.adoptedTabs).toHaveLength(1);
     // The panel uses this non-empty result to skip its final auto-spawn step.
@@ -202,6 +224,138 @@ describe("landing terminal lifecycle", () => {
       "active",
     ]);
     expect(result.activeInstanceId).toBe("dead-host");
+  });
+
+  it("refreshes default titles from live metadata without overwriting manual names", () => {
+    const defaultTab = tab({
+      instanceId: "default",
+      sessionId: "default-session",
+      hostId: HOST_A,
+    });
+    const manualTab = {
+      ...tab({
+        instanceId: "manual",
+        sessionId: "manual-session",
+        hostId: HOST_A,
+      }),
+      name: "Pinned name",
+      titleSource: "manual" as const,
+    };
+    useLandingTerminalStore.getState().addTab(defaultTab);
+    useLandingTerminalStore.getState().addTab(manualTab);
+
+    useLandingTerminalStore.getState().syncDefaultTitle("default", "gui · vim");
+    useLandingTerminalStore.getState().syncDefaultTitle("manual", "gui · vim");
+
+    expect(useLandingTerminalStore.getState().tabs).toEqual([
+      { ...defaultTab, name: "gui · vim" },
+      manualTab,
+    ]);
+  });
+
+  it("falls back only until the live cwd field has been reported", () => {
+    expect(
+      resolveLandingTerminalTitleCwd({
+        currentCwd: null,
+        currentCwdReported: false,
+        launchCwd: "/workspace/project",
+      }),
+    ).toBe("/workspace/project");
+    expect(
+      resolveLandingTerminalTitleCwd({
+        currentCwd: null,
+        currentCwdReported: true,
+        launchCwd: "/workspace/project",
+      }),
+    ).toBeNull();
+  });
+
+  it("waits for the first stream snapshot before syncing a default title", () => {
+    const streamState = {
+      title: null,
+      activeProcessName: "vim",
+      currentCwd: "/workspace/project/packages/gui",
+      currentCwdReported: true,
+      launchCwd: "/workspace/project",
+    };
+
+    expect(
+      resolveLandingTerminalSyncedTitle({
+        ...streamState,
+        snapshotLoaded: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveLandingTerminalSyncedTitle({
+        ...streamState,
+        snapshotLoaded: true,
+      }),
+    ).toBe("gui · vim");
+  });
+
+  it("reconciles default titles from the latest cwd and active process", () => {
+    const defaultTab = tab({
+      instanceId: "default",
+      sessionId: "default-session",
+      hostId: HOST_A,
+    });
+    const manualTab = {
+      ...tab({
+        instanceId: "manual",
+        sessionId: "manual-session",
+        hostId: HOST_A,
+      }),
+      name: "Pinned name",
+      titleSource: "manual" as const,
+    };
+    const result = reconcileLandingTerminalTabs({
+      tabs: [defaultTab, manualTab],
+      activeInstanceId: "default",
+      activeHostId: HOST_A,
+      sessions: [
+        liveSession({
+          sessionId: "default-session",
+          currentCwd: "/workspace/project/packages/gui",
+          activeProcessName: "vim",
+        }),
+        liveSession({
+          sessionId: "manual-session",
+          currentCwd: "/workspace/project/packages/host",
+          activeProcessName: "bun",
+        }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    expect(result.tabs).toEqual([
+      { ...defaultTab, name: "gui · vim" },
+      manualTab,
+    ]);
+  });
+
+  it("does not restore a launch-directory prefix for an explicit empty cwd", () => {
+    const defaultTab = tab({
+      instanceId: "default",
+      sessionId: "default-session",
+      hostId: HOST_A,
+    });
+    const result = reconcileLandingTerminalTabs({
+      tabs: [defaultTab],
+      activeInstanceId: "default",
+      activeHostId: HOST_A,
+      sessions: [
+        liveSession({
+          sessionId: "default-session",
+          currentCwd: "",
+          activeProcessName: "vim",
+        }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    expect(result.tabs).toEqual([{ ...defaultTab, name: "vim" }]);
   });
 });
 

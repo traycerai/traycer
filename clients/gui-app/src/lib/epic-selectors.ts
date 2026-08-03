@@ -40,6 +40,8 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
+import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommand } from "@/stores/managed-commands/managed-command-list-registry";
 import {
   deriveEpicSyncPillState,
   type EpicHostDirtyState,
@@ -48,8 +50,8 @@ import {
 import {
   agentActivityTiers,
   type AgentActivityTier,
-} from "@/lib/notifications/agent-activity-presence";
-import { useEpicAgentActivity } from "@/stores/notifications/notifications-store";
+} from "@/lib/agent-activity";
+import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -74,6 +76,7 @@ import type {
   OpenEpicStoreHandle,
   SnapshotFetchError,
 } from "@/stores/epics/open-epic/store";
+import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -551,6 +554,39 @@ export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
   );
 }
 
+/**
+ * Ids of every chat + terminal agent this epic's projection currently holds.
+ *
+ * PRESENCE, not liveness or visibility: an archived or idle node is still here;
+ * only a DELETED one is absent. Callers use it to drop references to nodes that
+ * no longer exist - host-side records that outlive their node (a PR's owner set
+ * is one: worktree bindings cascade on epic delete but not on chat delete) name
+ * ids this epic can no longer resolve to a title or a tile.
+ *
+ * Two plain reads plus a memo, NOT one `useShallow` selector that rebuilds the
+ * combined array. `useShallow` bails the subscriber's re-render but not the
+ * selector RUN: zustand executes it once per subscriber on every notification,
+ * and the PR panel mounts one subscriber per row, so combining in there costs
+ * O(rows x agents) on every projection tick - including the title/`updatedAt`
+ * churn this membership list does not care about.
+ *
+ * Memoising on array IDENTITY is safe because the projector guarantees it:
+ * `pickStableIds` hands back the PREVIOUS array whenever the ids are
+ * shallow-equal, so these references change only when a node is really added or
+ * removed. Unordered, because every caller asks it membership questions.
+ */
+export function useEpicAgentNodeIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  const chatIds = useStore(handle.store, (s) => s.chats.allIds);
+  const terminalAgentIds = useStore(handle.store, (s) => s.tuiAgents.allIds);
+  return useMemo(() => {
+    if (chatIds.length === 0 && terminalAgentIds.length === 0) {
+      return EMPTY_TREE_ID_ARRAY;
+    }
+    return [...chatIds, ...terminalAgentIds];
+  }, [chatIds, terminalAgentIds]);
+}
+
 export function useEpicTerminalAgentRecords(): ReadonlyArray<TuiAgentProjection> {
   const handle = useOpenEpicHandle();
   return useStore(
@@ -626,6 +662,85 @@ export function useRegisteredEpicLiveArtifactTitle(
   );
 }
 
+export interface RegisteredEpicArtifactTitleRef {
+  readonly epicId: string;
+  readonly artifactId: string | null;
+}
+
+/**
+ * Reactive live titles for a dynamic collection of artifacts. Global list
+ * surfaces cannot call the single-artifact hook in a data-dependent loop, so
+ * this subscribes once to the registry and every currently referenced epic.
+ */
+export function useRegisteredEpicLiveArtifactTitles(
+  refs: readonly RegisteredEpicArtifactTitleRef[],
+): readonly (string | null)[] {
+  const registry = getOpenEpicRegistry();
+  const encodedTitles = useSyncExternalStore(
+    (listener) => {
+      const unsubscribeByHandle = new Map<object, () => void>();
+      const reconcileHandleSubscriptions = () => {
+        const currentHandles = new Set<object>();
+        for (const ref of refs) {
+          const handle = registry.peek(ref.epicId);
+          if (handle === null || currentHandles.has(handle)) continue;
+          currentHandles.add(handle);
+          if (!unsubscribeByHandle.has(handle)) {
+            unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+          }
+        }
+        for (const [handle, unsubscribe] of unsubscribeByHandle) {
+          if (currentHandles.has(handle)) continue;
+          unsubscribe();
+          unsubscribeByHandle.delete(handle);
+        }
+      };
+      reconcileHandleSubscriptions();
+      const unsubscribeRegistry = registry.subscribe(() => {
+        reconcileHandleSubscriptions();
+        listener();
+      });
+      return () => {
+        unsubscribeRegistry();
+        for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
+      };
+    },
+    () => registeredArtifactTitlesSnapshot(registry, refs),
+    () => JSON.stringify(refs.map(() => [0, null])),
+  );
+  return useMemo(
+    () => decodeRegisteredArtifactTitles(encodedTitles),
+    [encodedTitles],
+  );
+}
+
+function registeredArtifactTitlesSnapshot(
+  registry: OpenEpicSessionRegistry,
+  refs: readonly RegisteredEpicArtifactTitleRef[],
+): string {
+  return JSON.stringify(
+    refs.map((ref) => {
+      const handle = registry.peek(ref.epicId);
+      return [
+        handle === null ? 0 : 1,
+        liveArtifactTitleFromHandle(handle, ref.artifactId),
+      ];
+    }),
+  );
+}
+
+function decodeRegisteredArtifactTitles(
+  encodedTitles: string,
+): readonly (string | null)[] {
+  const decoded: unknown = JSON.parse(encodedTitles);
+  if (!Array.isArray(decoded)) return [];
+  return decoded.map((entry) => {
+    if (!Array.isArray(entry)) return null;
+    const title: unknown = entry[1];
+    return typeof title === "string" ? title : null;
+  });
+}
+
 function liveArtifactTitleFromHandle(
   handle: OpenEpicStoreHandle | null,
   artifactId: string | null,
@@ -681,7 +796,21 @@ export function useEpicTabDisplayTitle(
     epicId: isTerminal ? epicId : null,
     sessionId: isTerminal ? node.id : null,
   });
-  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
+  // An output window's tile carries no label at all (its persisted shape is
+  // just the command pointer), so the kind-explicit title comes from the live
+  // list stream - and follows a rename the agent makes.
+  const managedCommand = useManagedCommand(
+    epicId,
+    node.type === "managed-command-output" ? node.id : "",
+  );
+  const liveManagedCommandTitle =
+    managedCommand === null ? null : managedCommandTitle(managedCommand);
+  return (
+    liveArtifactTitle ??
+    liveTerminalTitle ??
+    liveManagedCommandTitle ??
+    node.name
+  );
 }
 
 export function useEpicLiveArtifactTitleGenerating(

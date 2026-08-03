@@ -579,8 +579,8 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     expect(store.getState().knownSlashCommands).toBeNull();
     const commands = new Map([
-      ["plan", "plan"],
-      ["commit", "commit"],
+      ["plan", slashCommand("plan")],
+      ["commit", slashCommand("commit")],
     ]);
     store.getState().setKnownSlashCommands(commands);
     expect(store.getState().knownSlashCommands).toBe(commands);

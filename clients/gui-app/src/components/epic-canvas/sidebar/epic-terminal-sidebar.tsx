@@ -25,7 +25,10 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -74,8 +77,12 @@ import { cn } from "@/lib/utils";
 import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
-  useIsActiveEpicArtifact,
+  useIsActiveTile,
 } from "@/stores/epics/canvas/store";
+import {
+  useEpicLeftPanelStore,
+  useLeftPanelSectionCollapsed,
+} from "@/stores/epics/left-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
@@ -192,7 +199,20 @@ function TerminalsPanelBodyLive(props: {
  * every host list update.
  */
 export function TerminalsPanelActions(props: LeftPanelSlotProps) {
-  return <NewTerminalPicker epicId={props.epicId} tabId={props.tabId} />;
+  const collapsed = useLeftPanelSectionCollapsed("terminals");
+  const setPanelSectionCollapsed = useEpicLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
+  const expandBeforeOpen = useCallback(() => {
+    if (collapsed) setPanelSectionCollapsed("terminals", false);
+  }, [collapsed, setPanelSectionCollapsed]);
+  return (
+    <NewTerminalPicker
+      epicId={props.epicId}
+      tabId={props.tabId}
+      onBeforeOpen={expandBeforeOpen}
+    />
+  );
 }
 
 interface TerminalSidebarBodyProps {
@@ -304,7 +324,7 @@ function TerminalRow(props: TerminalRowProps) {
   const { hostId, epicId, tabId, session, onOpen } = props;
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
-  const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
+  const isActive = useIsActiveTile(tabId, session.sessionId);
   const kill = useTerminalKill();
   const rename = useTerminalRename();
   const navigateNested = useEpicNestedFocusNavigation();
@@ -528,6 +548,7 @@ function terminalRowMenuEntries(
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
       disabled: false,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-terminal-sidebar-rename-${props.sessionId}`,
@@ -542,6 +563,7 @@ function terminalRowMenuEntries(
       label: "Close",
       icon: <Trash2 className="size-3.5" />,
       disabled: props.closePending,
+      disabledTooltip: null,
       variant: "destructive",
       testIds: {
         dropdown: `epic-terminal-sidebar-kill-menu-${props.sessionId}`,
@@ -552,10 +574,14 @@ function terminalRowMenuEntries(
   ];
 }
 
-function deriveTerminalLabel(session: CanonicalTerminalSessionInfo): string {
+function deriveTerminalLabel(
+  session:
+    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+): string {
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
+    currentCwd: "currentCwd" in session ? session.currentCwd : session.cwd,
   });
 }
 

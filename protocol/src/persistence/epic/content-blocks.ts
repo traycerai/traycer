@@ -123,7 +123,10 @@ export const providerNoticeMetadataSchema = z
     metadata: providerNoticeNormalizedMetadataSchema.nullable(),
   })
   .superRefine((notice, ctx) => {
-    if (notice.metadata !== null && notice.noticeKind !== notice.metadata.type) {
+    if (
+      notice.metadata !== null &&
+      notice.noticeKind !== notice.metadata.type
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "noticeKind must match metadata.type",
@@ -131,7 +134,9 @@ export const providerNoticeMetadataSchema = z
       });
     }
   });
-export type ProviderNoticeMetadata = z.infer<typeof providerNoticeMetadataSchema>;
+export type ProviderNoticeMetadata = z.infer<
+  typeof providerNoticeMetadataSchema
+>;
 
 export const textBlockSchema = z.object({
   ...baseBlockFields,
@@ -351,6 +356,25 @@ export const commandBlockSchema = z.object({
   // (e.g. grep over a large tree) and there is no durable store to lazy-fetch
   // them from. The card shows command + cwd + exit code + status, which is the
   // load-bearing signal.
+  // Persistent marker with the same three-state meaning as
+  // `toolCallBlockSchema.backgroundTask`: true once this command has been
+  // promoted to a backgrounded one (Codex yields a long-running exec to the
+  // background and keeps it alive past the turn that started it). The marker
+  // survives EVERY terminal path and reload, so the GUI keeps rendering it as a
+  // standalone background card once it settles instead of collapsing back into
+  // the generic activity group. `null` means "not yet known" - the promotion is
+  // only decided at the parent turn's end, so a command that is still running
+  // has no confirmed answer yet. Defaulted to `false` (not `null`) for blocks
+  // persisted before this field existed, since backgrounding didn't exist as a
+  // concept then.
+  backgroundTask: z.boolean().nullable().default(false),
+  // Set when the terminal outcome was an explicit stop - the host asked the
+  // provider to terminate a backgrounded command, or a teardown killed it -
+  // rather than the command failing on its own. The provider reports its own
+  // kill with a synthetic exit code, and rendering that as a failure would
+  // blame the command for something we did. Mirrors
+  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse.
+  stopped: z.boolean().default(false),
 });
 export type CommandBlock = z.infer<typeof commandBlockSchema>;
 
@@ -576,6 +600,28 @@ export const autonomousResumeTriggerSchema = z.object({
     .object({ serverName: z.string(), toolName: z.string() })
     .nullable()
     .default(null),
+  // The producer was STILL RUNNING when this digest was rendered - a monitor
+  // that keeps watching, or a backgrounded shell streaming mid-run output. It
+  // is a separate defaulted key rather than a `status` value for the same
+  // reason `mcp` and `wakeTriggers` are: `status` is a persisted enum, and an
+  // unknown enum value fails the WHOLE chat's `safeParse` on an older host,
+  // whereas an unknown defaulted key is silently stripped. `status` therefore
+  // still carries the command's terminal outcome; renderers that understand
+  // `live` must prefer it, because a running command has no terminal outcome
+  // and `status` is reporting the least-wrong of three wrong answers.
+  live: z.boolean().default(false),
+  // Structured identity of the managed command whose delivery woke this turn.
+  // Exactly the `mcp` pattern above and for the same reason: `kind` is a
+  // PERSISTED enum, and an unknown value in it fails the WHOLE chat's
+  // `safeParse` on an older host, whereas an unknown defaulted key is silently
+  // stripped. So `kind` stays `"monitor"` for both a Monitor and a Shell, and
+  // the real kind rides here - along with the id the divider needs to open the
+  // command's output window on click. Renderers prefer this when present and
+  // fall back to the generic Monitor presentation when absent/stripped.
+  managedCommand: z
+    .object({ commandId: z.string(), kind: z.enum(["monitor", "shell"]) })
+    .nullable()
+    .default(null),
 });
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
@@ -663,13 +709,16 @@ export function decodeAutonomousResumeBlock(
     ...rest,
     triggers: [
       ...rest.triggers,
-      ...wakeTriggers.map(
-        (wake): AutonomousResumeTrigger => ({
-          ...wake,
-          kind: "wakeup",
-          mcp: null,
-        }),
-      ),
+      ...wakeTriggers.map((wake): AutonomousResumeTrigger => ({
+        ...wake,
+        kind: "wakeup",
+        mcp: null,
+        // A fired schedule is not a managed command and never had one.
+        managedCommand: null,
+        // A fired wake is terminal by construction: it happened, then it was
+        // over. Nothing about a schedule keeps producing.
+        live: false,
+      })),
     ],
   };
 }
@@ -688,12 +737,19 @@ function isWakeupTrigger(
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
-  const triggers = domain.triggers.filter((trigger) => !isWakeupTrigger(trigger));
+  const triggers = domain.triggers.filter(
+    (trigger) => !isWakeupTrigger(trigger),
+  );
   const wakeTriggers = domain.triggers
     .filter(isWakeupTrigger)
     .map(
-      ({ kind: _kind, mcp: _mcp, ...wake }): AutonomousResumeWakeTrigger =>
-        wake,
+      ({
+        kind: _kind,
+        mcp: _mcp,
+        live: _live,
+        managedCommand: _managedCommand,
+        ...wake
+      }): AutonomousResumeWakeTrigger => wake,
     );
   return { ...domain, triggers, wakeTriggers };
 }
@@ -710,7 +766,9 @@ export const autonomousResumeBlockSchema = z.codec(
     // typed against the concrete, fully-defaulted `AutonomousResumeBlock` - the
     // shape every real caller (e.g. the host storage write funnel) has.
     encode: (domain) =>
-      encodeAutonomousResumeBlock(domainAutonomousResumeBlockSchema.parse(domain)),
+      encodeAutonomousResumeBlock(
+        domainAutonomousResumeBlockSchema.parse(domain),
+      ),
   },
 );
 
@@ -868,5 +926,4 @@ export type ContentBlock = z.infer<typeof contentBlockSchema>;
 // different on-disk representation - every other member's persisted shape is
 // its normal (fully-defaulted) domain shape.
 export type PersistedContentBlock =
-  | Exclude<ContentBlock, AutonomousResumeBlock>
-  | PersistedAutonomousResumeBlock;
+  Exclude<ContentBlock, AutonomousResumeBlock> | PersistedAutonomousResumeBlock;

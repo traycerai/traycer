@@ -9,7 +9,20 @@ import {
 import { StrictMode, act } from "react";
 import { syntaxTree } from "@codemirror/language";
 import { EditorView } from "@uiw/react-codemirror";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+
+type GuideData = {
+  readonly content: string;
+  readonly generatedDefaultContent: string;
+};
 
 type Deferred<T> = {
   readonly promise: Promise<T>;
@@ -17,39 +30,151 @@ type Deferred<T> = {
   readonly reject: (error: Error) => void;
 };
 
-const guideMocks = vi.hoisted(() => ({
-  queryData: {
-    content: "claude guide",
-    generatedDefaultContent: "claude guide",
-  },
-  setGlobalMutateAsync: vi.fn(),
-  resetGlobalMutateAsync: vi.fn(),
-}));
+const guideMocks = vi.hoisted(
+  (): {
+    activeHostId: string;
+    scopedHostId: string;
+    queryData: GuideData | undefined;
+    queryDataByHost: Record<string, GuideData>;
+    queryIsError: boolean;
+    setGlobalMutateAsync: Mock<
+      (input: { readonly content: string }) => Promise<GuideData>
+    >;
+    resetGlobalMutateAsync: Mock<
+      (input: Record<string, never>) => Promise<GuideData>
+    >;
+    setGlobalHostIds: string[];
+    resetGlobalHostIds: string[];
+    lastTransientTarget: { readonly hostId: string } | null;
+    directoryEntries: ReadonlyArray<{
+      readonly hostId: string;
+      readonly label: string;
+      readonly status: string;
+      readonly websocketUrl: string;
+    }>;
+  } => ({
+    activeHostId: "local",
+    scopedHostId: "local",
+    queryData: {
+      content: "claude guide",
+      generatedDefaultContent: "claude guide",
+    },
+    queryDataByHost: {},
+    queryIsError: false,
+    setGlobalMutateAsync: vi.fn(),
+    resetGlobalMutateAsync: vi.fn(),
+    setGlobalHostIds: [],
+    resetGlobalHostIds: [],
+    lastTransientTarget: null,
+    directoryEntries: [
+      {
+        hostId: "local",
+        label: "Local host",
+        status: "available",
+        websocketUrl: "ws://local.invalid",
+      },
+      {
+        hostId: "remote",
+        label: "Remote host",
+        status: "available",
+        websocketUrl: "ws://remote.invalid",
+      },
+    ],
+  }),
+);
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+  useReactiveActiveHostId: () => guideMocks.activeHostId,
 }));
 
-vi.mock("@/hooks/agent/use-agent-selection-guide-global-query", () => ({
-  useAgentSelectionGuideGlobalQuery: () => ({
-    data: guideMocks.queryData,
-    isError: false,
-  }),
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: guideMocks.directoryEntries }),
 }));
 
-vi.mock("@/hooks/agent/use-agent-selection-guide-set-global-mutation", () => ({
-  useAgentSelectionGuideSetGlobalMutation: () => ({
-    mutateAsync: guideMocks.setGlobalMutateAsync,
-  }),
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: (target: { readonly hostId: string } | null) => {
+    guideMocks.lastTransientTarget = target;
+    guideMocks.scopedHostId =
+      target === null ? guideMocks.activeHostId : target.hostId;
+    if (target === null) return null;
+    return {
+      getActiveHostId: () => target.hostId,
+    };
+  },
 }));
+
+function requireHostId(hostId: string | null): string {
+  if (hostId === null) {
+    throw new Error("expected host id");
+  }
+  return hostId;
+}
+
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const react = await import("react");
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  const defaultBinding = {
+    hostClient: {
+      getActiveHostId: () => guideMocks.activeHostId,
+    },
+    directory: { refresh: () => Promise.resolve([]) },
+  };
+  const useHostBinding = () =>
+    react.useContext(actual.HostRuntimeContext) ?? defaultBinding;
+  return {
+    ...actual,
+    useHostBinding,
+    useHostClient: () => useHostBinding().hostClient,
+  };
+});
+
+vi.mock("@/hooks/agent/use-agent-selection-guide-global-query", async () => {
+  const runtime = await import("@/lib/host/runtime");
+  return {
+    useAgentSelectionGuideGlobalQuery: () => {
+      const hostId = requireHostId(runtime.useHostClient().getActiveHostId());
+      return {
+        data: guideMocks.queryDataByHost[hostId] ?? guideMocks.queryData,
+        isError: guideMocks.queryIsError,
+      };
+    },
+  };
+});
+
+vi.mock(
+  "@/hooks/agent/use-agent-selection-guide-set-global-mutation",
+  async () => {
+    const runtime = await import("@/lib/host/runtime");
+    return {
+      useAgentSelectionGuideSetGlobalMutation: () => {
+        const hostId = requireHostId(runtime.useHostClient().getActiveHostId());
+        return {
+          mutateAsync: (input: { readonly content: string }) => {
+            guideMocks.setGlobalHostIds.push(hostId);
+            return guideMocks.setGlobalMutateAsync(input);
+          },
+        };
+      },
+    };
+  },
+);
 
 vi.mock(
   "@/hooks/agent/use-agent-selection-guide-reset-global-mutation",
-  () => ({
-    useAgentSelectionGuideResetGlobalMutation: () => ({
-      mutateAsync: guideMocks.resetGlobalMutateAsync,
-    }),
-  }),
+  async () => {
+    const runtime = await import("@/lib/host/runtime");
+    return {
+      useAgentSelectionGuideResetGlobalMutation: () => {
+        const hostId = requireHostId(runtime.useHostClient().getActiveHostId());
+        return {
+          mutateAsync: (input: Record<string, never>) => {
+            guideMocks.resetGlobalHostIds.push(hostId);
+            return guideMocks.resetGlobalMutateAsync(input);
+          },
+        };
+      },
+    };
+  },
 );
 
 import { AgentSelectionGuideSection } from "@/components/settings/panels/agent-selection-guide-section";
@@ -58,6 +183,11 @@ import { AgentsSettingsPanel } from "@/components/settings/panels/agents-setting
 function renderPanel() {
   return render(
     <StrictMode>
+      <span
+        aria-hidden
+        data-testid="active-host-probe"
+        data-bound-host-id={guideMocks.activeHostId}
+      />
       <AgentSelectionGuideSection />
     </StrictMode>,
   );
@@ -66,6 +196,11 @@ function renderPanel() {
 function strictPanel() {
   return (
     <StrictMode>
+      <span
+        aria-hidden
+        data-testid="active-host-probe"
+        data-bound-host-id={guideMocks.activeHostId}
+      />
       <AgentSelectionGuideSection />
     </StrictMode>
   );
@@ -104,6 +239,27 @@ describe("AgentSelectionGuideSection", () => {
       content: "claude guide",
       generatedDefaultContent: "claude guide",
     };
+    guideMocks.queryDataByHost = {};
+    guideMocks.queryIsError = false;
+    guideMocks.activeHostId = "local";
+    guideMocks.scopedHostId = "local";
+    guideMocks.lastTransientTarget = null;
+    guideMocks.setGlobalHostIds = [];
+    guideMocks.resetGlobalHostIds = [];
+    guideMocks.directoryEntries = [
+      {
+        hostId: "local",
+        label: "Local host",
+        status: "available",
+        websocketUrl: "ws://local.invalid",
+      },
+      {
+        hostId: "remote",
+        label: "Remote host",
+        status: "available",
+        websocketUrl: "ws://remote.invalid",
+      },
+    ];
     guideMocks.setGlobalMutateAsync.mockReset();
     guideMocks.setGlobalMutateAsync.mockResolvedValue({
       content: "claude guide",
@@ -144,6 +300,107 @@ describe("AgentSelectionGuideSection", () => {
     });
     expect(guideMocks.setGlobalMutateAsync).not.toHaveBeenCalled();
     expect(guideMocks.resetGlobalMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("shows the load failure instead of a skeleton when the first guide fetch fails", () => {
+    guideMocks.queryData = undefined;
+    guideMocks.queryIsError = true;
+
+    renderPanel();
+
+    expect(
+      screen.getByText("Couldn't load agent instructions for this host."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("agents-selection-guide-input")).toBeNull();
+  });
+
+  it("switches the guide editor host without changing the app-wide active host", async () => {
+    guideMocks.queryDataByHost = {
+      local: {
+        content: "local guide",
+        generatedDefaultContent: "local guide",
+      },
+      remote: {
+        content: "remote guide",
+        generatedDefaultContent: "remote guide",
+      },
+    };
+    renderPanel();
+
+    expect(
+      screen
+        .getByTestId("active-host-probe")
+        .getAttribute("data-bound-host-id"),
+    ).toBe("local");
+    expect(
+      readMarkdown(screen.getByTestId("agents-selection-guide-input")),
+    ).toBe("local guide");
+
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Agent instructions host" }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
+
+    await waitFor(() => {
+      expect(guideMocks.lastTransientTarget?.hostId).toBe("remote");
+      expect(
+        readMarkdown(screen.getByTestId("agents-selection-guide-input")),
+      ).toBe("remote guide");
+    });
+    expect(
+      screen
+        .getByTestId("active-host-probe")
+        .getAttribute("data-bound-host-id"),
+    ).toBe("local");
+
+    replaceMarkdown(
+      screen.getByTestId("agents-selection-guide-input"),
+      "remote edit",
+    );
+    blurCodeMirror(screen.getByTestId("agents-selection-guide-input"));
+
+    await waitFor(() => {
+      expect(guideMocks.setGlobalMutateAsync).toHaveBeenCalledWith({
+        content: "remote edit",
+      });
+    });
+    expect(guideMocks.setGlobalHostIds[0]).toBe("remote");
+  });
+
+  it("shows an unavailable notice and stops reading through the active host once the picked host vanishes", async () => {
+    guideMocks.queryDataByHost = {
+      local: { content: "local guide", generatedDefaultContent: "local guide" },
+      remote: {
+        content: "remote guide",
+        generatedDefaultContent: "remote guide",
+      },
+    };
+    const { rerender } = renderPanel();
+
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Agent instructions host" }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
+
+    await waitFor(() => {
+      expect(guideMocks.lastTransientTarget?.hostId).toBe("remote");
+    });
+
+    // The picked host is deregistered - it drops out of the directory
+    // entirely, not merely marked unavailable while still listed.
+    guideMocks.directoryEntries = [guideMocks.directoryEntries[0]];
+    rerender(strictPanel());
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "remote is no longer available. Pick a different host above.",
+        ),
+      ).toBeTruthy();
+    });
+    // The stale local-scoped editor from before the pick must not remain
+    // mounted, silently reading/writing through the active host's client.
+    expect(screen.queryByTestId("agents-selection-guide-input")).toBeNull();
   });
 
   it("renders Markdown source with line numbers at full height", () => {

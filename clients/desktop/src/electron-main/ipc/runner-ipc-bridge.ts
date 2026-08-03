@@ -36,6 +36,7 @@ import type {
   SupportSubmitReportResult,
   WindowSummary,
 } from "../../ipc-contracts/window-types";
+import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 import type {
   CredentialsMigrationOutcome,
   StoredAuthTokens,
@@ -304,6 +305,12 @@ export interface IpcHostLifecycle {
    * source of truth.
    */
   readonly pidMetadataFile: string;
+  /**
+   * The host's durable enrollment record. `pid.json` is unlinked on graceful
+   * shutdown, so this is the only path that still identifies this machine's
+   * host while it is stopped.
+   */
+  readonly identityEnrollmentFile: string;
   /**
    * Whether the lifecycle has been torn down. The respawn handler reads
    * this between awaits so it doesn't drive SMAppService mutations
@@ -597,6 +604,31 @@ export class RunnerIpcBridge {
       RunnerHostEvent.notificationClick,
       payload,
     );
+  }
+
+  /**
+   * Relays a renderer-owned notification to the focused renderer when the
+   * emitter lives in another window. The originating renderer already drew
+   * its own toast, so same-window focus needs no duplicate delivery.
+   */
+  deliverForegroundNotificationDisplay(
+    senderWebContentsId: number | null,
+    display: DesktopNotificationForegroundDisplay,
+  ): boolean {
+    const focused = this.findFocusedLiveRecord();
+    if (focused === null) return false;
+    if (focused.webContentsId === senderWebContentsId) return true;
+    const delivered = this.safeSendToWindow(
+      focused.windowId,
+      RunnerHostEvent.notificationForegroundDisplay,
+      display,
+    );
+    if (!delivered) {
+      log.warn("[runner-ipc] foreground notification relay failed", {
+        windowId: focused.windowId,
+      });
+    }
+    return delivered;
   }
 
   /**
@@ -1033,18 +1065,24 @@ export class RunnerIpcBridge {
   private resolveRendererHostedCommandTarget(
     command: MenuCommandId,
   ): IpcWindowRecord | null {
-    const focused = this.windowRegistry
-      .records()
-      .find(
-        (record) => record.window.isFocused() && !record.window.isDestroyed(),
-      );
-    if (focused !== undefined) {
+    const focused = this.findFocusedLiveRecord();
+    if (focused !== null) {
       return focused;
     }
     if (isMruFallbackMenuCommand(command)) {
       return this.windowRegistry.getMruRecord();
     }
     return null;
+  }
+
+  private findFocusedLiveRecord(): IpcWindowRecord | null {
+    return (
+      this.windowRegistry
+        .records()
+        .find(
+          (record) => !record.window.isDestroyed() && record.window.isFocused(),
+        ) ?? null
+    );
   }
 
   pruneClosedWindowState(): void {

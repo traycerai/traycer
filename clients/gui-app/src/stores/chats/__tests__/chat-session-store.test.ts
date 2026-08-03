@@ -1492,6 +1492,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: frame.messageId,
             message: {
@@ -1611,12 +1612,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -1644,6 +1645,7 @@ describe("createChatSessionStore", () => {
     expect(state.queue.items).toHaveLength(1);
     const item = state.queue.items[0];
     expect(isOptimisticQueuedItem(item)).toBe(true);
+    if (item.kind !== "prompt") throw new Error("expected prompt item");
     expect(item.messageId).toBe(frame.messageId);
     expect(item.message.content).toEqual(IMAGE_CONTENT);
     expect(item.sender).toEqual({ type: "user", userId: OWNER_ID });
@@ -1709,12 +1711,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -1744,6 +1746,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "reminted-message",
             message: {
@@ -1783,12 +1786,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -1827,6 +1830,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: frame.messageId,
             message: {
@@ -1877,12 +1881,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -1912,6 +1916,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "reminted-message",
             message: {
@@ -2343,6 +2348,7 @@ describe("createChatSessionStore", () => {
       settings: ChatRunSettings,
       status: "pending" | "steering",
     ) => ({
+      kind: "prompt" as const,
       queueItemId,
       messageId: `m-${queueItemId}`,
       message: {
@@ -3139,6 +3145,7 @@ describe("createChatSessionStore", () => {
         status: "paused",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "message-queue-1",
             message: {
@@ -3182,12 +3189,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3349,6 +3356,161 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
+  // The codex analogue of the detached tool_call terminal above: codex
+  // backgrounds a plain `command` block, and its terminal lands as
+  // `command.completed` minutes after the row settled (live-repro: the card
+  // ticked forever and only "cleared" when the next send re-derived state).
+  it("routes a detached background command's terminal to the settled row that owns it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "assistant",
+          messageId: "assistant-settled",
+          sender: {
+            type: "agent",
+            harnessId: "codex",
+            agentId: "codex",
+            displayName: "Codex",
+            reply: { expectsReply: false },
+            inReplyTo: null,
+          },
+          blocks: [
+            {
+              type: "command",
+              blockId: "bg-command",
+              status: "streaming",
+              timestamp: 2,
+              command: "sleep 20 && echo done",
+              cwd: "/tmp",
+              exitCode: null,
+              backgroundTask: true,
+              stopped: false,
+            },
+          ],
+          startedAt: 2,
+          timestamp: 2,
+          turnId: "turn-settled",
+          usage: null,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    // A NEXT turn is live (raised directly - `startRunningTurn` would emit its
+    // own snapshot and wipe the settled row above).
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-1",
+        status: "running",
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        profileId: null,
+        userMessageId: "message-1",
+        startedAt: 3,
+        updatedAt: 3,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "active-text",
+        timestamp: 4,
+        delta: "Active turn",
+      },
+    });
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "command.completed",
+        blockId: "bg-command",
+        timestamp: 30,
+        command: "sleep 20 && echo done",
+        exitCode: 0,
+        backgroundTask: true,
+      },
+    });
+
+    const state = harness.handle.store.getState();
+    const settled = state.messages.find(
+      (message) => message.messageId === "assistant-settled",
+    );
+    if (settled?.role !== "assistant") {
+      throw new Error("Expected the settled assistant row");
+    }
+    expect(settled.blocks).toEqual([
+      expect.objectContaining({
+        type: "command",
+        blockId: "bg-command",
+        status: "completed",
+        exitCode: 0,
+      }),
+    ]);
+    expect(state.liveAssistantMessage?.blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  it("does not apply an ownerless detached background command terminal to the active turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "active-text",
+        timestamp: 4,
+        delta: "Active turn",
+      },
+    });
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "command.completed",
+        blockId: "detached-command",
+        timestamp: 5,
+        command: "sleep 20 && echo done",
+        exitCode: 0,
+        backgroundTask: true,
+      },
+    });
+
+    const blocks = harness.handle.store.getState().liveAssistantMessage?.blocks;
+    expect(blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
   it("keeps a completed live assistant visible when the next turn starts", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -3361,12 +3523,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5.4",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3433,12 +3595,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-2",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-2",
         startedAt: 6,
@@ -3471,12 +3633,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-local",
         status: "starting",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3535,12 +3697,12 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-local",
           status: "starting",
           harnessId: "claude",
           model: "claude-sonnet",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 3,
@@ -3563,12 +3725,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-provider",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3699,12 +3861,12 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
           sameTurnSteeringSupported: false,
           turnId: "turn-split",
           status: "running",
           harnessId: "claude",
           model: "claude-sonnet",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-split-run",
           startedAt: 3,
@@ -3843,12 +4005,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet-4",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 1,
@@ -4695,12 +4857,12 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
     chatId: CHAT_ID,
     runStatus: "running",
     activeTurn: {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
       model: "gpt-5-codex",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "message-1",
       startedAt: 3,
@@ -4935,12 +5097,12 @@ describe("in-flight block finalization on stop / steer", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId,
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -5447,12 +5609,12 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: false,
         turnId: "turn-live-auth-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-live-1",
         startedAt: 3,

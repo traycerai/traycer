@@ -78,6 +78,14 @@ import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
+import {
+  useChatPromptStashDestination,
+  useChatPromptStashSource,
+} from "./use-chat-prompt-stash-adapters";
+import { PromptStashControl } from "./prompt-stash-control";
+import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -169,6 +177,30 @@ export interface ChatComposerSubmitInput {
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
 }
 
+function composerUtilityNeedsClearance(args: {
+  readonly rowCount: number;
+  readonly saving: boolean;
+  readonly connectedUpperSurface: boolean;
+}): boolean {
+  const triggerVisible = args.rowCount > 0 || args.saving;
+  return triggerVisible && args.connectedUpperSurface;
+}
+
+function ComposerUtilityClearanceFill(props: {
+  readonly visible: boolean;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <div
+      aria-hidden
+      data-composer-utility-clearance-fill=""
+      className="pointer-events-none absolute inset-x-3 top-0 h-3 border-x border-border bg-muted/30"
+    >
+      <div className="size-full bg-muted/30" />
+    </div>
+  );
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -207,6 +239,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const openEpicHandle = useOpenEpicHandle();
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
@@ -217,7 +250,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     [],
   );
   const [pickerStore] = useState(() => createComposerPickerStore());
-
   // The mention/slash menu renders through a body portal. It belongs to the
   // one focused canvas tile, not merely every visible split member, so close
   // its logical picker state whenever the exact focused owner changes. All
@@ -236,7 +268,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftContent,
     draftHasText,
     draftHasImages,
-    handleSnapshot,
+    handleDocumentChange,
+    handleSelectionChange,
   } = useChatComposerDraft({
     taskId,
     editorRef,
@@ -369,6 +402,37 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isResolvingFilePaths,
   });
 
+  const readPromptStashImage = useCallback(
+    async (hash: string) => {
+      const state = openEpicHandle.store.getState();
+      if (!state.hasAttachmentBytes(hash)) return null;
+      // Capture deliberately survives composer unmount, so this read is not
+      // coupled to component-lifecycle cancellation.
+      const bytes = await state.readAttachmentBytes(
+        hash,
+        new AbortController().signal,
+      );
+      return bytes === null ? null : new Uint8Array(bytes);
+    },
+    [openEpicHandle],
+  );
+  const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
+  // Chat writes the draft store, but restore still requires the exact ready
+  // editor generation that started the restore - a remount under the same
+  // taskId must not consume the stash into a different editor instance.
+  const promptStashDestination = useChatPromptStashDestination(
+    taskId,
+    editorRef,
+  );
+  const promptStash = usePromptStash({
+    active: focused,
+    disabled: attachmentPending,
+    editorRef,
+    readHashImage: readPromptStashImage,
+    source: promptStashSource,
+    destination: promptStashDestination,
+  });
+
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
   const { submitDraft, steerConflict } = useChatComposerSubmit({
     taskId,
@@ -449,13 +513,18 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
+  const utilityClearanceVisible = composerUtilityNeedsClearance({
+    rowCount: promptStash.rows.length,
+    saving: promptStash.saving,
+    connectedUpperSurface: topSpacing === "connected",
+  });
 
   return (
     <>
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
-          <div className="bg-canvas px-4 pt-4">
-            <div className="mx-auto w-full max-w-3xl">
+          <div className="pointer-events-none px-4">
+            <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-4">
               {rateLimitPrompt.kind === "visible" ? (
                 <ProfileRateLimitSwitchBanner
                   key={rateLimitPrompt.warningKey}
@@ -481,14 +550,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
           </div>
         </ChatComposerBannerPortal>
       ) : null}
-      <div
-        data-chat-composer=""
-        className={cn(
-          "bg-canvas px-4 pb-4",
-          topSpacing === "normal" ? "pt-4" : "pt-0",
-        )}
-      >
-        <div className="mx-auto w-full max-w-3xl">
+      <div data-chat-composer="" className="pointer-events-none px-4">
+        <div
+          className={cn(
+            "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+            topSpacing === "normal" ? "pt-4" : "pt-0",
+          )}
+        >
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
@@ -514,61 +582,83 @@ function ChatComposerImpl(props: ChatComposerProps) {
             />
           ) : null}
           {topSlot}
-          <div className="flex flex-col gap-3">
-            <ComposerShell
-              pickerStore={pickerStore}
-              onDragOver={onDragOver}
-              onDrop={onDrop}
-              onDragEnter={onDragEnter}
-              onDragLeave={onDragLeave}
-              dragOverlayVariant={dragOverlayVariant}
-              attachmentsStrip={
-                <ChatComposerAttachmentsStrip
-                  content={draftContent}
-                  editingQueueItemId={editingQueueItemId}
-                  onCancelQueueEdit={onCancelQueueEdit}
-                  onRemoveImage={removeImage}
-                />
-              }
-              editor={
-                <ChatComposerEditorSlot
-                  ref={editorRef}
-                  pickerStore={pickerStore}
-                  initialContent={initialContent}
-                  initialSelection={initialSelection}
-                  slashProviderId={harnessId}
-                  hasPastedImageBytes={hasPastedImageBytes}
-                  ingestPastedComposerImages={null}
-                  isActive={focused}
-                  onSnapshot={handleSnapshot}
-                  onSubmit={handleSubmitDraft}
-                  steerHintActive={steerHintActive}
-                  onPaste={onPaste}
-                  onDragOver={onDragOver}
-                  onDrop={onDrop}
-                  onEditorReady={handleEditorReady}
-                />
-              }
-              toolbar={
-                <ChatComposerToolbarSlot
-                  store={toolbarStore}
-                  onAttachImages={attachImageFiles}
-                  canSubmit={canSubmit}
-                  attachmentPending={attachmentPending}
-                  onSubmit={handleSubmitFromButton}
-                  activeTurnStatus={activeTurnStatus}
-                  hasPendingApprovals={hasPendingApprovals}
-                  stopDisabled={stopDisabled}
-                  onStopTurn={onStopTurn}
-                  composerDisabledHint={sendBlockedHint}
-                  dictation={dictationControl}
-                  dictationPreparing={dictationPreparing}
-                  settingsLocked={false}
-                  createProfileHostId={tabHostId}
-                  runTargetHostId={tabHostId}
-                />
-              }
-            />
+          <div
+            data-composer-utility-clearance={
+              utilityClearanceVisible ? "" : undefined
+            }
+            className={cn(
+              "relative flex flex-col gap-3",
+              utilityClearanceVisible && "pt-3",
+            )}
+          >
+            <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
+            <ComposerAttachmentDropZone
+              viewTabId={viewTabId}
+              hostId={tabHostId}
+              editorRef={editorRef}
+            >
+              <ComposerShell
+                pickerStore={pickerStore}
+                onDragOver={onDragOver}
+                onDrop={onDrop}
+                onDragEnter={onDragEnter}
+                onDragLeave={onDragLeave}
+                dragOverlayVariant={dragOverlayVariant}
+                utilityRail={
+                  <PromptStashControl
+                    controller={promptStash}
+                    pickerStore={pickerStore}
+                  />
+                }
+                attachmentsStrip={
+                  <ChatComposerAttachmentsStrip
+                    content={draftContent}
+                    editingQueueItemId={editingQueueItemId}
+                    onCancelQueueEdit={onCancelQueueEdit}
+                    onRemoveImage={removeImage}
+                  />
+                }
+                editor={
+                  <ChatComposerEditorSlot
+                    ref={editorRef}
+                    pickerStore={pickerStore}
+                    initialContent={initialContent}
+                    initialSelection={initialSelection}
+                    slashProviderId={harnessId}
+                    hasPastedImageBytes={hasPastedImageBytes}
+                    ingestPastedComposerImages={null}
+                    isActive={focused}
+                    onDocumentChange={handleDocumentChange}
+                    onSelectionChange={handleSelectionChange}
+                    onSubmit={handleSubmitDraft}
+                    steerHintActive={steerHintActive}
+                    onPaste={onPaste}
+                    onDragOver={onDragOver}
+                    onDrop={onDrop}
+                    onEditorReady={handleEditorReady}
+                  />
+                }
+                toolbar={
+                  <ChatComposerToolbarSlot
+                    store={toolbarStore}
+                    onAttachImages={attachImageFiles}
+                    canSubmit={canSubmit}
+                    attachmentPending={attachmentPending}
+                    onSubmit={handleSubmitFromButton}
+                    activeTurnStatus={activeTurnStatus}
+                    hasPendingApprovals={hasPendingApprovals}
+                    stopDisabled={stopDisabled}
+                    onStopTurn={onStopTurn}
+                    composerDisabledHint={sendBlockedHint}
+                    dictation={dictationControl}
+                    dictationPreparing={dictationPreparing}
+                    settingsLocked={false}
+                    createProfileHostId={tabHostId}
+                    runTargetHostId={tabHostId}
+                  />
+                }
+              />
+            </ComposerAttachmentDropZone>
             {workspaceControls !== null ? (
               <ComposerWorkspaceRow workspaceControls={workspaceControls} />
             ) : null}

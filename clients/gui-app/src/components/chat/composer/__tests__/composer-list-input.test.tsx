@@ -145,7 +145,7 @@ describe("composer list input", () => {
     expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
     expect(submitCalls.count).toBe(1);
 
-    const submitted = buildSubmittedChatJSONContent(editor.getJSON());
+    const submitted = buildSubmittedChatJSONContent(editor.getJSON(), null);
     expect(serializeForAgent(submitted)).toBe("2. Hello");
 
     const rendered = renderSubmittedContent(submitted);
@@ -163,7 +163,7 @@ describe("composer list input", () => {
     expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
     expect(submitCalls.count).toBe(1);
 
-    const submitted = buildSubmittedChatJSONContent(editor.getJSON());
+    const submitted = buildSubmittedChatJSONContent(editor.getJSON(), null);
     expect(serializeForAgent(submitted)).toBe("2. First\n3. Second");
 
     const rendered = renderSubmittedContent(submitted);
@@ -192,7 +192,7 @@ describe("composer list input", () => {
     expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
     expect(submitCalls.count).toBe(1);
 
-    const submitted = buildSubmittedChatJSONContent(editor.getJSON());
+    const submitted = buildSubmittedChatJSONContent(editor.getJSON(), null);
     expect(serializeForAgent(submitted)).toBe("2. Second\n\n1. First");
     const rendered = renderSubmittedContent(submitted);
     expect(

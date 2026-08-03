@@ -11,6 +11,7 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 
 /**
@@ -79,6 +80,7 @@ function AgentStopRow(props: {
 }) {
   const { epicId, viewTabId, agent, self, compact, onOpen } = props;
   const occurrenceId = useId();
+  const harnessId = useMaybeEpicTuiAgentHarnessId(agent.id);
   const dragData = useMemo<EpicCanvasActiveAgentDragData>(
     () => ({
       kind: ACTIVE_AGENT_DND_TYPE,
@@ -89,9 +91,18 @@ function AgentStopRow(props: {
         type: nodeKindForSurface(agent.surface),
         name: agent.title,
         hostId: agent.hostId,
+        harnessId,
       },
     }),
-    [agent.hostId, agent.id, agent.surface, agent.title, epicId, viewTabId],
+    [
+      agent.hostId,
+      agent.id,
+      agent.surface,
+      agent.title,
+      epicId,
+      harnessId,
+      viewTabId,
+    ],
   );
   const {
     attributes,

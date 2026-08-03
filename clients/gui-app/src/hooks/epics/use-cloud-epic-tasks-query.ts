@@ -1,5 +1,9 @@
-import { useCallback, useMemo } from "react";
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo } from "react";
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type {
   ListTasksResponse,
   ListTaskLight,
@@ -17,6 +21,7 @@ import {
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
+  cloudEpicTasksLastKnownQueryKey,
   cloudEpicTasksQueryKey,
   registerCloudEpicTasksClient,
   type ListCloudTasksRequest,
@@ -57,6 +62,7 @@ export function useCloudEpicTasksQuery(
   options: { readonly enabled: boolean },
 ): CloudEpicTasksQueryResult {
   const effectiveRequest = request ?? LIST_CLOUD_TASKS_REQUEST;
+  const queryClient = useQueryClient();
   const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
   const hostId = readiness.hostId;
@@ -84,18 +90,44 @@ export function useCloudEpicTasksQuery(
             effectiveRequest,
           ),
           enabled: true,
-          placeholderData: (previousData, previousQuery) =>
-            hasSameCloudTasksPlaceholderIdentity(
-              previousQuery?.queryKey,
-              cloudEpicTasksQueryKey(hostId, userId, effectiveRequest),
-            )
-              ? previousData
-              : undefined,
+          placeholderData: (previousData, previousQuery) => {
+            if (
+              previousData !== undefined &&
+              hasSameCloudTasksPlaceholderIdentity(
+                previousQuery?.queryKey,
+                cloudEpicTasksQueryKey(hostId, userId, effectiveRequest),
+              )
+            ) {
+              return previousData;
+            }
+            // No usable state on *this* observer (e.g. it just mounted fresh,
+            // as a promoted History tab does in place of the modal's
+            // observer). Fall back to the last page that settled anywhere
+            // for this host/user, so rows already known to be current don't
+            // disappear across that remount.
+            return queryClient.getQueryData<ListTasksResponse>(
+              cloudEpicTasksLastKnownQueryKey(hostId, userId),
+            );
+          },
         },
   );
   const queryData = query.data;
   const queryRefetch = query.refetch;
   const isPlaceholderData = query.isPlaceholderData;
+
+  // Record settled (non-placeholder) first pages as the shared last-known
+  // fallback read above. Written from every observer that settles real data
+  // for this host/user, regardless of which request produced it - the same
+  // scope `hasSameCloudTasksPlaceholderIdentity` already treats as
+  // placeholder-eligible.
+  useEffect(() => {
+    if (hostId === null || userId === null) return;
+    if (queryData === undefined || isPlaceholderData) return;
+    queryClient.setQueryData<ListTasksResponse>(
+      cloudEpicTasksLastKnownQueryKey(hostId, userId),
+      queryData,
+    );
+  }, [hostId, userId, queryClient, queryData, isPlaceholderData]);
 
   // Identity (host | user | request scope) keys the accumulated "Show more"
   // pages in the ambient store. Holding them there (instead of this hook's own

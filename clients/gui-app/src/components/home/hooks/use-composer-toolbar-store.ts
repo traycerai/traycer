@@ -10,7 +10,6 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 
 import type {
   PermissionMode,
-  AgentMode,
   HarnessModelSelection,
   ModelOption,
   ProviderId,
@@ -36,7 +35,6 @@ import type { FocusedComposerKind } from "@/lib/commands/types";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   permissionFromChatRunSettings,
-  agentModeFromChatRunSettings,
   reasoningFromChatRunSettings,
   selectionFromChatRunSettings,
   serviceTierFromChatRunSettings,
@@ -94,7 +92,6 @@ export function useComposerToolbarStore(
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
   const defaultReasoning = useSettingsStore((s) => s.defaultReasoning);
   const defaultServiceTier = useSettingsStore((s) => s.defaultServiceTier);
-  const defaultAgentMode = useSettingsStore((s) => s.defaultAgentMode);
   const settingsSeed = seedSource.kind === "none" ? null : seedSource.settings;
   const seedIsAuthoritative = seedSource.kind === "authoritative";
   const seedClient = seedSource.kind === "fallback" ? seedSource.client : null;
@@ -122,11 +119,9 @@ export function useComposerToolbarStore(
         selection: defaultSelection,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
-        agentMode: defaultAgentMode,
       }),
     [
       defaultPermission,
-      defaultAgentMode,
       defaultReasoning,
       defaultServiceTier,
       defaultSelection,
@@ -245,7 +240,6 @@ interface ComposerToolbarDefaults {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
-  readonly agentMode: AgentMode;
 }
 
 function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
@@ -256,7 +250,6 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.permissionMode,
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
-    settingsSeed.agentMode,
     settingsSeed.profileId ?? "",
   ].join("\u0000");
 }
@@ -271,6 +264,5 @@ function valuesFromSettingsSeed(
     selection: selectionFromChatRunSettings(settingsSeed),
     reasoning: reasoningFromChatRunSettings(settingsSeed),
     serviceTier: serviceTierFromChatRunSettings(settingsSeed),
-    agentMode: agentModeFromChatRunSettings(settingsSeed),
   };
 }

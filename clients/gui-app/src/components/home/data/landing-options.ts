@@ -1,6 +1,4 @@
 import {
-  DEFAULT_AGENT_MODE as PROTOCOL_DEFAULT_AGENT_MODE,
-  agentModeSchema,
   guiHarnessIdSchema,
   modelsForHarness,
   readableModelMatch,
@@ -11,13 +9,10 @@ import {
   type GuiHarnessOption,
   type AgentReasoningEffortOption,
   type AgentServiceTierOption,
-  type AgentMode as ProtocolAgentMode,
 } from "@traycer/protocol/host/index";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import {
-  Code2,
   FileCheck2,
-  Layers,
   ShieldCheck,
   UnlockKeyhole,
   type LucideIcon,
@@ -52,7 +47,6 @@ export function nextComposerMode(mode: ComposerMode): ComposerMode {
 // Gate for the terminal-launch flow: a harness picked in the (shared) model
 // picker that isn't TUI-capable can't start a terminal agent. Derived from the
 // protocol schema (the single source of truth) rather than a re-listed literal,
-// mirroring how `isAgentMode` validates against `agentModeSchema`.
 export function isTuiHarnessId(value: string): value is TuiHarnessId {
   return tuiHarnessIdSchema.safeParse(value).success;
 }
@@ -173,60 +167,6 @@ export type ServiceTierOption = AgentServiceTierOption;
  */
 export function isFastModeEnabled(serviceTier: string | null): boolean {
   return serviceTier !== null && serviceTier.trim().length > 0;
-}
-
-export type AgentMode = ProtocolAgentMode;
-
-export interface AgentModeOption {
-  readonly id: AgentMode;
-  readonly label: string;
-  readonly shortLabel: string;
-  readonly description: string;
-  readonly icon: LucideIcon;
-}
-
-const REGULAR_AGENT_MODE_OPTION = {
-  id: "regular",
-  label: "Regular Mode",
-  shortLabel: "Regular",
-  description: "Native coding agent experience with Traycer flavour.",
-  icon: Code2,
-} satisfies AgentModeOption;
-
-const EPIC_AGENT_MODE_OPTION = {
-  id: "epic",
-  label: "Epic Mode",
-  shortLabel: "Epic",
-  description: "Traycer Planning experience",
-  icon: Layers,
-} satisfies AgentModeOption;
-
-export const AGENT_MODE_OPTIONS: ReadonlyArray<AgentModeOption> = [
-  REGULAR_AGENT_MODE_OPTION,
-  EPIC_AGENT_MODE_OPTION,
-];
-
-const AGENT_MODE_OPTIONS_BY_ID: Readonly<Record<AgentMode, AgentModeOption>> = {
-  [REGULAR_AGENT_MODE_OPTION.id]: REGULAR_AGENT_MODE_OPTION,
-  [EPIC_AGENT_MODE_OPTION.id]: EPIC_AGENT_MODE_OPTION,
-};
-const NEXT_AGENT_MODE_BY_ID: Readonly<Record<AgentMode, AgentMode>> = {
-  [REGULAR_AGENT_MODE_OPTION.id]: EPIC_AGENT_MODE_OPTION.id,
-  [EPIC_AGENT_MODE_OPTION.id]: REGULAR_AGENT_MODE_OPTION.id,
-};
-
-export const DEFAULT_AGENT_MODE: AgentMode = PROTOCOL_DEFAULT_AGENT_MODE;
-
-export function isAgentMode(value: string): value is AgentMode {
-  return agentModeSchema.safeParse(value).success;
-}
-
-export function findAgentModeOption(mode: AgentMode): AgentModeOption {
-  return AGENT_MODE_OPTIONS_BY_ID[mode];
-}
-
-export function nextAgentMode(mode: AgentMode): AgentMode {
-  return NEXT_AGENT_MODE_BY_ID[mode];
 }
 
 export interface HarnessModelSelection {

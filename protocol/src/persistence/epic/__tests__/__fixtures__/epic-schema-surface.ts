@@ -3262,6 +3262,21 @@ export const epicSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                backgroundTask: {
+                                  default: false,
+                                  anyOf: [
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
+                                stopped: {
+                                  default: false,
+                                  type: "boolean",
+                                },
                               },
                               required: [
                                 "blockId",
@@ -4268,6 +4283,31 @@ export const epicSchemaSurfaceBaseline = {
                                               "serverName",
                                               "toolName",
                                             ],
+                                          },
+                                          {
+                                            type: "null",
+                                          },
+                                        ],
+                                      },
+                                      live: {
+                                        default: false,
+                                        type: "boolean",
+                                      },
+                                      managedCommand: {
+                                        default: null,
+                                        anyOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              commandId: {
+                                                type: "string",
+                                              },
+                                              kind: {
+                                                type: "string",
+                                                enum: ["monitor", "shell"],
+                                              },
+                                            },
+                                            required: ["commandId", "kind"],
                                           },
                                           {
                                             type: "null",
@@ -9903,6 +9943,21 @@ export const epicSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                backgroundTask: {
+                                  default: false,
+                                  anyOf: [
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
+                                stopped: {
+                                  default: false,
+                                  type: "boolean",
+                                },
                               },
                               required: [
                                 "blockId",
@@ -9912,6 +9967,8 @@ export const epicSchemaSurfaceBaseline = {
                                 "command",
                                 "cwd",
                                 "exitCode",
+                                "backgroundTask",
+                                "stopped",
                               ],
                               additionalProperties: false,
                             },
@@ -10961,6 +11018,32 @@ export const epicSchemaSurfaceBaseline = {
                                           },
                                         ],
                                       },
+                                      live: {
+                                        default: false,
+                                        type: "boolean",
+                                      },
+                                      managedCommand: {
+                                        default: null,
+                                        anyOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              commandId: {
+                                                type: "string",
+                                              },
+                                              kind: {
+                                                type: "string",
+                                                enum: ["monitor", "shell"],
+                                              },
+                                            },
+                                            required: ["commandId", "kind"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "null",
+                                          },
+                                        ],
+                                      },
                                     },
                                     required: [
                                       "kind",
@@ -10970,6 +11053,8 @@ export const epicSchemaSurfaceBaseline = {
                                       "blockId",
                                       "outputFile",
                                       "mcp",
+                                      "live",
+                                      "managedCommand",
                                     ],
                                     additionalProperties: false,
                                   },

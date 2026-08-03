@@ -19,7 +19,6 @@ interface TuiAgentFixture {
   readonly harnessId: "claude";
   readonly model: string;
   readonly reasoningEffort: string;
-  readonly agentMode: "regular" | "epic";
   readonly profileId: string | null;
   readonly updatedAt: number;
 }
@@ -29,7 +28,6 @@ const tuiAgent = vi.hoisted<{ current: TuiAgentFixture }>(() => ({
     harnessId: "claude" as const,
     model: "sonnet-4.5",
     reasoningEffort: "high",
-    agentMode: "epic",
     profileId: "profile-1",
     updatedAt: 1_700_000,
   },
@@ -173,7 +171,6 @@ describe("TUI agent hover card identity (real HoverCard)", () => {
       harnessId: "claude",
       model: "sonnet-4.5",
       reasoningEffort: "high",
-      agentMode: "epic",
       profileId: "profile-1",
       updatedAt: 1_700_000,
     };
@@ -184,7 +181,7 @@ describe("TUI agent hover card identity (real HoverCard)", () => {
     vi.useRealTimers();
   });
 
-  it("shows profile-badged harness a11y label, model, effort, and agent mode for a managed profile", () => {
+  it("shows profile-badged harness a11y label, model, and effort for a managed profile", () => {
     openTuiHoverCard();
 
     // Real Radix content is in the tree (not a mocked hover surface).
@@ -200,9 +197,6 @@ describe("TUI agent hover card identity (real HoverCard)", () => {
     expect(screen.getByTestId("owner-settings-reasoning").textContent).toBe(
       "High",
     );
-    expect(screen.getByTestId("owner-settings-agent-mode").textContent).toBe(
-      "Epic",
-    );
     // TUI records have no serviceTier / fast mode field.
     expect(screen.queryByLabelText("Fast mode")).toBeNull();
     expect(screen.queryByText("Fast")).toBeNull();
@@ -212,23 +206,18 @@ describe("TUI agent hover card identity (real HoverCard)", () => {
     tuiAgent.current = {
       ...tuiAgent.current,
       profileId: null,
-      agentMode: "regular",
     };
     openTuiHoverCard();
 
     expect(screen.getByRole("img", { name: "Claude Code" })).toBeTruthy();
     const mark = screen.getByTestId("owner-settings-harness-mark");
     expect(mark.querySelector('span[style*="background-color"]')).toBeNull();
-    expect(screen.getByTestId("owner-settings-agent-mode").textContent).toBe(
-      "Regular",
-    );
   });
 
   it("degrades tombstoned TUI profile to bare harness without error chrome", () => {
     tuiAgent.current = {
       ...tuiAgent.current,
       profileId: "gone-profile",
-      agentMode: "regular",
     };
     openTuiHoverCard();
 

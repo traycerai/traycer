@@ -36,9 +36,6 @@ export interface CommGraphAgentDetailPanelProps {
   /** Created-row jump to the child's transcript start - see `CommGraphJump`. */
   readonly canJumpToCreated: (event: CommGraphEvent) => boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  /** Notice-row jump to the idle agent's tail - see `CommGraphJump`. */
-  readonly canJumpToNoticed: (event: CommGraphEvent) => boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   /** Opens an agent's tile with no scroll - an anchor-less heading link. */
   readonly onOpenAgentId: (agentId: string) => void;
   readonly onOpenAgent: (agent: CommGraphAgentNode) => void;
@@ -53,14 +50,12 @@ export function CommGraphAgentDetailPanel(
     agentNames,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     epicId,
     events,
     onClose,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgent,
     onOpenAgentId,
@@ -119,8 +114,6 @@ export function CommGraphAgentDetailPanel(
       onJumpToSender={onJumpToSender}
       canJumpToCreated={canJumpToCreated}
       onJumpToCreated={onJumpToCreated}
-      canJumpToNoticed={canJumpToNoticed}
-      onJumpToNoticed={onJumpToNoticed}
       onOpenAgentId={onOpenAgentId}
       onClose={onClose}
     />

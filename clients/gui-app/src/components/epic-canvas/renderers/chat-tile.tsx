@@ -24,6 +24,7 @@ import type {
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   BackgroundItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -125,7 +126,10 @@ import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-termi
 import { emitChatStreamErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { type InitialChatHandoffScope } from "@/stores/epics/initial-chat-handoff-store";
 import { contentBlocksText } from "@/lib/chat/content-block-text";
-import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  buildSubmittedChatJSONContent,
+  type SlashCommandCatalog,
+} from "@/lib/composer/tiptap-json-content";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
@@ -734,9 +738,6 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
       if (target.kind === "first-message") {
         return view.messages[0]?.id ?? null;
       }
-      if (target.kind === "last-message") {
-        return view.messages.at(-1)?.id ?? null;
-      }
       return messageIdForBlock(view.messages, target.blockId);
     };
     const messageId = resolveTargetMessageId();
@@ -893,14 +894,16 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * Absolutely overlays the transcript (decision log #3) instead of
              * pushing its height via flex, so streamed replies flow visually
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset.
+             * transcript's bottom content inset. The full-width positioning
+             * layer stays pointer-transparent; centered lower surfaces opt
+             * back in so their invisible gutters cannot cover the scrollbar.
              */}
             {view.snapshotLoaded ? (
               <div
                 ref={setLowerSurfacesElement}
                 className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
               >
-                <div className="pointer-events-auto">
+                <div className="pointer-events-none">
                   <SurfaceActivityProvider active={view.surfaceFocused}>
                     <ChatLowerInteractionSurfaces
                       epicId={view.currentEpicId}
@@ -1009,7 +1012,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const defaultServiceTier = useSettingsStore(
     (state) => state.defaultServiceTier,
   );
-  const defaultAgentMode = useSettingsStore((state) => state.defaultAgentMode);
   const defaultRunSettings = useMemo(
     () =>
       buildChatRunSettings({
@@ -1017,15 +1019,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         permission: defaultPermission,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
-        agentMode: defaultAgentMode,
       }),
-    [
-      defaultAgentMode,
-      defaultPermission,
-      defaultReasoning,
-      defaultServiceTier,
-      defaultSelection,
-    ],
+    [defaultPermission, defaultReasoning, defaultServiceTier, defaultSelection],
   );
   const profile = useAuthStore((state) => state.profile);
   const activeHostId = useTabHostId();
@@ -1278,9 +1273,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     renderedDisplayContext,
   );
+  // Only a prompt item can be loaded into the composer for editing, so narrow
+  // here rather than at each consumer: this feeds the composer's settings seed
+  // and its remount key, neither of which a content-free managed-command item
+  // could supply.
   const editingQueueItem =
     state.queue.items.find(
-      (item) => item.queueItemId === uiState.editingQueueItemId,
+      (item): item is ChatQueuedPromptItem =>
+        item.kind === "prompt" &&
+        item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
   const chatSettingsSeed = state.chat?.settings ?? null;
@@ -1430,6 +1431,47 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const nextStepSettings = currentComposerSettings;
   const editSettings = nextStepSettings;
+  // The tile's own send paths - next steps, compact, inline edit - never touch
+  // the composer, so they cannot read the catalog off its picker store. Subscribe
+  // to the same query under the SAME `surfaceFocused` predicate the composer uses
+  // (`chatComposerFocused` → `chatTileCatalogActivity`): identical gating means an
+  // off-screen tile still adds no `agent.gui.listCommands` subscription, and when
+  // both are on, TanStack Query dedupes the two subscribers into one fetch.
+  const tabHostClient = useTabHostClient();
+  const {
+    data: slashCommands,
+    isLoading: slashCommandsLoading,
+    error: slashCommandsError,
+  } = useSlashCommands("", {
+    hostClient: tabHostClient,
+    harnessId: currentComposerSettings.harnessId,
+    // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
+    // context-usage chip above uses it: on a folder-fallback chat the two differ,
+    // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
+    // and resolving against a catalog the composer never saw.
+    workingDirectories: resolvedComposerMentionRoots,
+    enabled: surfaceFocused,
+  });
+  // Null until loaded, which makes a `$` prompt stay plain text rather than
+  // chip against a catalog we have not seen yet.
+  // `error` is part of the gate, not a detail. A failed `listCommands` leaves
+  // TanStack at `isLoading === false` with `data === []`, which would otherwise
+  // read as a legitimately EMPTY catalog - "loaded, this workspace has no
+  // commands" - and chip nothing while looking resolved. An unanswered query is
+  // unresolved, not empty. The `$` then stays prose, which the host still
+  // resolves lexically; the cost is the pill, never the skill.
+  const slashCatalog = useMemo<SlashCommandCatalog | null>(
+    () =>
+      surfaceFocused && !slashCommandsLoading && slashCommandsError === null
+        ? new Map(
+            slashCommands.map((command) => [
+              command.name.toLowerCase(),
+              command,
+            ]),
+          )
+        : null,
+    [surfaceFocused, slashCommands, slashCommandsLoading, slashCommandsError],
+  );
   const canModifyMessages = canModifyChatMessages({ canAct, state });
   const activeInlineEdit = normalizeInlineEditForSession(
     uiState.inlineEdit,
@@ -1534,6 +1576,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       canAct,
       currentComposerSettings,
       editSettings,
+      slashCatalog,
       mentionRoots: composerMentionRoots,
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
@@ -1637,13 +1680,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       if (sender === null) return false;
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(option.prompt),
+        slashCatalog,
       );
       return (
         chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
         null
       );
     },
-    [canSendNextStep, chatActions, nextStepSettings, profile],
+    [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
   );
   // Runs the harness's own compaction from the context-usage chip. Never
   // interrupts: with a turn running (or work already queued) the compact
@@ -1685,6 +1729,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       if (sender === null) return;
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(`/${commandName}`),
+        slashCatalog,
       );
       // A cheap re-entrancy guard against a double-click firing two real
       // compactions: the optimistic-queue dedupe only suppresses the second
@@ -1722,6 +1767,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       handle.store,
       nextStepSettings,
       profile,
+      slashCatalog,
     ],
   );
   const nextStepActions = useMemo(
@@ -1737,12 +1783,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     if (sender === null) return false;
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
+      slashCatalog,
     );
     return (
       chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
       null
     );
-  }, [canAct, chatActions, nextStepSettings, profile]);
+  }, [canAct, chatActions, nextStepSettings, profile, slashCatalog]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
     () => ({
       epicId: currentEpicId,

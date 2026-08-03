@@ -60,6 +60,11 @@ export function useAuthRevokeAllSessions(): UseMutationResult<
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.userSessions(context.auth, context.userId),
       });
+      // Sign-out-everywhere also revokes host sessions server-side, so the
+      // Remote Host registry list must refetch to reflect it.
+      void queryClient.invalidateQueries({
+        queryKey: authQueryKeys.registeredHosts(context.auth),
+      });
     },
   });
 }
