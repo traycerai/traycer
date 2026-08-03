@@ -7,7 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { type ReactNode, StrictMode } from "react";
-import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -92,23 +92,11 @@ export class ControllableGlobalResizeObserver implements ResizeObserver {
   disconnect(): void {}
 }
 
-const defaultResizeObserver = globalThis.ResizeObserver;
-
-function installControllableResizeObserver(): void {
-  Object.defineProperty(globalThis, "ResizeObserver", {
-    configurable: true,
-    writable: true,
-    value: ControllableGlobalResizeObserver,
-  });
-}
-
-function restoreDefaultResizeObserver(): void {
-  Object.defineProperty(globalThis, "ResizeObserver", {
-    configurable: true,
-    writable: true,
-    value: defaultResizeObserver,
-  });
-}
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  writable: true,
+  value: ControllableGlobalResizeObserver,
+});
 
 export function triggerLegendListResizeObserverEntry(
   target: Element,
@@ -876,15 +864,7 @@ export async function waitForPillVisible(): Promise<void> {
  * ran. Call inside the root describe of every split file.
  */
 export function registerChatMessagesSuiteHooks(): void {
-  // Vitest reuses fork processes across files. The split suite needs a
-  // controllable observer, but leaving it installed leaks into whichever
-  // unrelated file is assigned to this worker next (notably the provider
-  // settings suite on CI shard 2). Install it while this file runs and put the
-  // shared test-browser-apis default back afterwards.
-  installControllableResizeObserver();
-
   beforeEach(() => {
-    capturedResizeObserverCallbacks.length = 0;
     activityGroupOpenIds.lastOpenIds = new Set();
     activityGroupOpenIds.setOpenCalls = [];
     platformMock.isMac = true;
@@ -906,10 +886,5 @@ export function registerChatMessagesSuiteHooks(): void {
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
     evictChatTabPersistenceForEpic("epic-1");
-  });
-
-  afterAll(() => {
-    capturedResizeObserverCallbacks.length = 0;
-    restoreDefaultResizeObserver();
   });
 }
