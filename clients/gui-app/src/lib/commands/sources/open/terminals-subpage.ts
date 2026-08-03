@@ -46,17 +46,23 @@ function terminalWorkspaceLeaf(
   target: { readonly hostId: string; readonly cwd: string },
   label: string,
 ): CommandItem {
+  // Cmdk can invoke a selected row twice before its view rerenders. Keep this
+  // synchronous per-leaf latch so one workspace selection creates one terminal.
+  let hasLaunched = false;
   return openerActionLeaf({
     id: `open:terminals:new:${target.hostId}:${encodeURIComponent(target.cwd)}`,
     label,
     keywords: [target.cwd, "new", "terminal", "workspace"],
-    run: () =>
+    run: () => {
+      if (hasLaunched) return;
+      hasLaunched = true;
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
         ref: buildTerminalTileRef(target),
         navigateNestedFocus: ctx.router.navigateNestedFocus,
-      }),
+      });
+    },
   });
 }
 

@@ -486,6 +486,8 @@ describe("Terminals opener sub-page", () => {
     );
     expect(activeWorkspace?.subpage).toBeNull();
     runById(workspaces, activeWorkspace?.id ?? "missing");
+    runById(workspaces, activeWorkspace?.id ?? "missing");
+    expect(spies.openTileIntoTargetGroup).toHaveBeenCalledTimes(1);
 
     const opened = lastTileOpen();
     expect(opened.tabId).toBe("tab-1");
