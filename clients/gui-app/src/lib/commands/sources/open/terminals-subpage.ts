@@ -14,12 +14,13 @@ import { buildTerminalTileRef } from "@/components/epic-canvas/sidebar/new-termi
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import {
   useWorktreeListBindingsForEpic,
   useWorktreeListBindingsForEpicForClient,
 } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
-import { useHostClient } from "@/lib/host";
+import { useHostBinding, useHostClient } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
@@ -133,6 +134,10 @@ function useNewTerminalWorkspaceItems(
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
   });
+  const binding = useHostBinding();
+  // Command subpages mount only when selected, so this refresh gives the
+  // workspace chooser the same freshly-reachable host list as the old dialog.
+  useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
   return useMemo(() => {
     if (activeHostId === null) return [];

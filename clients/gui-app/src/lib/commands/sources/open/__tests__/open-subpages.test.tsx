@@ -20,6 +20,7 @@ const spies = vi.hoisted(() => ({
   openTileIntoTargetGroup: vi.fn<(args: OpenTileIntoTargetGroupArgs) => void>(),
   createChatMutate: vi.fn(),
   createTuiAgent: vi.fn(),
+  refreshHostDirectory: vi.fn(() => Promise.resolve([])),
 }));
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
   current: "default-host",
@@ -197,6 +198,9 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
 // terminals-subpage reads the host client (passed to the mocked useTerminalList
 // below); stub it so the hook does not require a <HostRuntimeProvider>.
 vi.mock("@/lib/host", () => ({
+  useHostBinding: () => ({
+    directory: { refresh: spies.refreshHostDirectory },
+  }),
   useHostClient: () => ({
     request: () => new Promise(() => {}),
     getActiveHostId: () => "default-host",
@@ -476,6 +480,7 @@ describe("Terminals opener sub-page", () => {
     }
 
     const workspaces = renderItems(newTerminal.subpage.useItems);
+    expect(spies.refreshHostDirectory).toHaveBeenCalledTimes(1);
     const activeWorkspace = workspaces.find(
       (item) => item.label === "/work/active-repo",
     );
