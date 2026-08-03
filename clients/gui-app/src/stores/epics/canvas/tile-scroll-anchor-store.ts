@@ -20,19 +20,7 @@ import type { StateSnapshot } from "react-virtuoso";
  * Per-tile scroll snapshot. A discriminated union so each tile kind narrows to
  * exactly the fields it can restore from.
  */
-export type TileScrollAnchor =
-  ChatScrollAnchor | NativeScrollAnchor | BundleDiffScrollAnchor;
-
-/**
- * Chat transcript anchor. `followingBottom` is the reader's pin intent: when
- * true the restore snaps to the newest message (which may have grown while the
- * tile was hidden); when false the saved `scrollTop` offset is restored.
- */
-export interface ChatScrollAnchor {
-  readonly kind: "chat";
-  readonly followingBottom: boolean;
-  readonly scrollTop: number;
-}
+export type TileScrollAnchor = NativeScrollAnchor | BundleDiffScrollAnchor;
 
 /**
  * Native overflow-scroll container anchor (artifact editors, single-file diffs,

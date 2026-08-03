@@ -63,6 +63,29 @@ vi.mock("@/components/chat/chat-message", async (importOriginal) => {
 });
 
 const VIEWPORT_HEIGHT_PX = 700;
+
+/** Captures the static LegendList scroll-policy props ChatTimeline must pin. */
+const legendListPolicyProps = vi.hoisted(() => ({
+  last: null as null | {
+    maintainScrollAtEnd: unknown;
+    maintainScrollAtEndThreshold: unknown;
+    maintainVisibleContentPosition: unknown;
+  },
+}));
+
+vi.mock("@legendapp/list/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@legendapp/list/react")>();
+  const CapturingLegendList: typeof actual.LegendList = (props) => {
+    legendListPolicyProps.last = {
+      maintainScrollAtEnd: props.maintainScrollAtEnd,
+      maintainScrollAtEndThreshold: props.maintainScrollAtEndThreshold,
+      maintainVisibleContentPosition: props.maintainVisibleContentPosition,
+    };
+    return <actual.LegendList {...props} />;
+  };
+  return { ...actual, LegendList: CapturingLegendList };
+});
+
 const VIEWPORT_WIDTH_PX = 800;
 
 function mountedMessageRows(container: HTMLElement): NodeListOf<Element> {
@@ -118,10 +141,7 @@ interface RenderTimelineOptions {
   readonly listRef?: RefObject<LegendListRef | null>;
   readonly className?: string;
   readonly "data-testid"?: string;
-  readonly followEnabled?: boolean;
   readonly onItemSizeChanged?: () => void;
-  /** Ticket 22: forwarded to LegendList for viewport-length changes. */
-  readonly onLayout?: () => void;
   readonly navigationHighlightedMessageId?: string | null;
 }
 
@@ -152,9 +172,7 @@ function renderTimeline(options: RenderTimelineOptions) {
         listRef={listRef}
         className={options.className ?? "h-full"}
         data-testid={options["data-testid"]}
-        followEnabled={options.followEnabled}
         onItemSizeChanged={options.onItemSizeChanged}
-        onLayout={options.onLayout}
         navigationHighlightedMessageId={navigationHighlightedMessageId}
       />
     </div>
@@ -453,26 +471,6 @@ describe("ChatTimeline", () => {
     });
 
     expect(onItemSizeChanged).toHaveBeenCalled();
-  });
-
-  // Ticket 22: ChatTimeline forwards `onLayout` to LegendList so a
-  // viewport-length change (divider/pane resize) can schedule geometry
-  // repair under the same messages array. Lower-level than the
-  // chat-messages integration pins - just the prop wiring + library
-  // callback. Initial mount layout is enough; no controllable
-  // ResizeObserver needed here.
-  it("onLayout fires when LegendList reports a layout change", async () => {
-    const messages: ChatMessageModel[] = [
-      makeMessage(0, "user"),
-      makeMessage(1, "assistant"),
-    ];
-    const onLayout = vi.fn();
-    renderTimeline({ messages, onLayout });
-
-    await settleLegendList();
-    await waitFor(() => {
-      expect(onLayout).toHaveBeenCalled();
-    });
   });
 
   it("keeps Legend List as the sole scroll owner on the app-wide compact scrollbar theme", () => {
@@ -1190,5 +1188,34 @@ describe("ChatTimeline", () => {
       expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe("true");
       stop();
     });
+  });
+});
+
+describe("ChatTimeline LegendList strict-edge policy config", () => {
+  beforeEach(() => {
+    legendListPolicyProps.last = null;
+    installLegendListViewportMetrics();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("pins maintainScrollAtEndThreshold=0, MVCP maintenance, and the library's own maintainScrollAtEnd permanently disabled", async () => {
+    // Fixup (callback-synchronous-follow): the library's own
+    // `maintainScrollAtEnd` is NEVER passed at all anymore - not even
+    // conditionally - since every one of its call sites (data/item/footer/
+    // layout) already no-ops when this prop is falsy. Bottom-follow is
+    // reimplemented in `chat-timeline-follow-latch.ts` and driven
+    // imperatively; see that module's own real-LegendList integration
+    // coverage for the actual follow/detach behavior this enables.
+    renderTimeline({ messages: makeMessages(6) });
+    await settleLegendList();
+    expect(legendListPolicyProps.last).not.toBeNull();
+    expect(legendListPolicyProps.last?.maintainScrollAtEndThreshold).toBe(0);
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toBe(
+      true,
+    );
+    expect(legendListPolicyProps.last?.maintainScrollAtEnd).toBeUndefined();
   });
 });

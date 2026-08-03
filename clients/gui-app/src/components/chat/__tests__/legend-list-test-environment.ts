@@ -37,6 +37,15 @@ export function setLegendListSyntheticScrollEventsEnabled(
   });
 }
 
+/**
+ * Opt-in browser-faithful mode: when true, programmatic `scrollTop` /
+ * `scrollTo` writes also dispatch a bubbling native `scroll` event.
+ * Default stays false so existing suites that park geometry during setup
+ * without wanting `onIsAtEndChange` to run are unaffected. Enable per test
+ * via `enableLegendListBrowserScrollEvents()`.
+ */
+let dispatchBrowserScrollEventsOnProgrammaticScroll = false;
+
 export function setLegendListScrollContainerScrollHeightOverride(
   heightPx: number | null,
 ): void {
@@ -55,6 +64,24 @@ export function setLegendListMessageRowHeightOverrides(
   onTestFinished(() => {
     messageRowHeightOverrides = new Map();
   });
+}
+
+/**
+ * Makes subsequent `scrollTop` / `scrollTo` writes on HTMLElements fire a
+ * browser-like `scroll` event (bubbling). Auto-resets when the current test
+ * finishes. Use only when a regression must exercise production's
+ * `onScroll` → `onIsAtEndChange` chain after a programmatic restore/land.
+ */
+export function enableLegendListBrowserScrollEvents(): void {
+  dispatchBrowserScrollEventsOnProgrammaticScroll = true;
+  onTestFinished(() => {
+    dispatchBrowserScrollEventsOnProgrammaticScroll = false;
+  });
+}
+
+function maybeDispatchBrowserScrollEvent(element: HTMLElement): void {
+  if (!dispatchBrowserScrollEventsOnProgrammaticScroll) return;
+  element.dispatchEvent(new Event("scroll", { bubbles: true }));
 }
 
 function rectOf(x: number, y: number, width: number, height: number): DOMRect {
@@ -175,7 +202,14 @@ export function installLegendListViewportMetrics(): void {
   const scrollTopSetSpy = vi
     .spyOn(HTMLElement.prototype, "scrollTop", "set")
     .mockImplementation(function (this: HTMLElement, value: number) {
+      const previous = scrollTopByElement.get(this) ?? 0;
       scrollTopByElement.set(this, value);
+      // Mirror browsers: only fire when the stored offset actually changed.
+      // Re-entrancy guard via the previous comparison avoids infinite loops if
+      // a scroll listener itself re-writes the same top.
+      if (previous !== value) {
+        maybeDispatchBrowserScrollEvent(this);
+      }
     });
   const scrollLeftGetSpy = vi
     .spyOn(HTMLElement.prototype, "scrollLeft", "get")
@@ -265,6 +299,8 @@ export function installLegendListViewportMetrics(): void {
       if (typeof first === "number") {
         const second = args[1];
         this.scrollLeft = first;
+        // Assigning scrollTop goes through the setter above, which optionally
+        // dispatches a browser-like scroll event under the opt-in flag.
         this.scrollTop = typeof second === "number" ? second : 0;
         dispatchSyntheticScrollEnd(this);
         return;

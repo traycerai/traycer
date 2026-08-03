@@ -23,8 +23,6 @@ import {
 } from "@/components/chat/chat-collapsible-key";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key";
-import type { RequestChatMeasuredItemChange } from "@/components/chat/chat-measured-item-change-context";
-import type { ChatViewportAnchorListState } from "@/components/chat/chat-messages-scroll-helpers";
 import { makeMessage } from "./chat-message-fixtures";
 
 const TILE_INSTANCE_ID = "find-controller-tile";
@@ -50,14 +48,9 @@ vi.mock(
   },
 );
 
-describe("useChatFindController - measured chain-open on reveal", () => {
+describe("useChatFindController - chain-open on reveal", () => {
   let registeredAdapter: ChatFindAdapter | null;
   let scroller: HTMLElement;
-  let anchorRow: HTMLElement;
-  let requestMeasuredItemChange: Mock<RequestChatMeasuredItemChange>;
-  let getViewportAnchorListState: Mock<
-    () => ChatViewportAnchorListState | null
-  >;
   let scrollToLocation: Mock;
   let cancelManualNavigation: Mock;
   let setScrolledActiveUserMessageIdIfChanged: Mock;
@@ -66,26 +59,17 @@ describe("useChatFindController - measured chain-open on reveal", () => {
   beforeEach(() => {
     registeredAdapter = null;
     setFindForcedOpen.mockReset();
-    requestMeasuredItemChange = vi.fn((_anchor, mutate) => {
-      mutate();
-    });
     scrollToLocation = vi.fn();
     cancelManualNavigation = vi.fn();
     setScrolledActiveUserMessageIdIfChanged = vi.fn();
 
     scroller = document.createElement("div");
-    anchorRow = document.createElement("div");
+    const anchorRow = document.createElement("div");
     anchorRow.dataset.messageId = "msg-user";
     const targetRow = document.createElement("div");
     targetRow.dataset.messageId = "msg-assistant";
     scroller.append(anchorRow, targetRow);
     document.body.append(scroller);
-
-    // Row 0 sits at the viewport top (scroll=0, tops at 0 and 100).
-    getViewportAnchorListState = vi.fn(() => ({
-      scroll: 0,
-      positionAtIndex: (index: number) => index * 100,
-    }));
 
     restoreFrames = installFrameQueue();
   });
@@ -146,11 +130,9 @@ describe("useChatFindController - measured chain-open on reveal", () => {
           backgroundToolBlockIdsRef,
           messageIndexByIdRef,
           getScroller: () => scroller,
-          getViewportAnchorListState,
           scrollToLocation,
           cancelManualNavigation,
           setScrolledActiveUserMessageIdIfChanged,
-          requestMeasuredItemChange,
         });
       },
       { wrapper: Wrapper },
@@ -166,7 +148,7 @@ describe("useChatFindController - measured chain-open on reveal", () => {
     };
   }
 
-  it("routes a genuine find reveal's chain-open through requestMeasuredItemChange with the viewport-top anchor", () => {
+  it("force-opens the owning chain on a genuine find reveal", () => {
     const messages = makeTranscriptWithSubagentBodyNeedle();
     const { getAdapter } = renderController(messages);
     const adapter = getAdapter();
@@ -179,13 +161,6 @@ describe("useChatFindController - measured chain-open on reveal", () => {
       });
     });
 
-    expect(requestMeasuredItemChange).toHaveBeenCalledTimes(1);
-    const [anchorElement, mutate] =
-      requestMeasuredItemChange.mock.calls[0] ?? [];
-    expect(anchorElement).toBe(anchorRow);
-    expect(typeof mutate).toBe("function");
-
-    // Mock already invoked mutate: force-open runs for the subagent body chain.
     const expectedKey = createChatCollapsibleKey(
       TILE_INSTANCE_ID,
       "subagent",
@@ -201,38 +176,7 @@ describe("useChatFindController - measured chain-open on reveal", () => {
     ).toBe(true);
   });
 
-  it("resolves the viewport-top anchor correctly when a header offset is present (decision #18)", () => {
-    // Row 0 ("msg-user") is short (content-relative position 0), row 1
-    // ("msg-assistant") starts right after it at position 10 - both fall
-    // within an 80px header. scroll=80 means the viewport's own top edge
-    // sits at content-relative position 0 (row 0's own top) - an unadjusted
-    // comparison against raw scroll would spuriously anchor on row 1
-    // instead, measuring a row whose position moves with row 0's own growth
-    // and reintroducing the self-growth yank the viewport-top anchor exists
-    // to prevent.
-    getViewportAnchorListState.mockReturnValue({
-      scroll: 80,
-      positionAtIndex: (index: number) => [0, 10][index],
-      topOffsetAdjustment: 80,
-    });
-    const messages = makeTranscriptWithSubagentBodyNeedle();
-    const { getAdapter } = renderController(messages);
-    const adapter = getAdapter();
-
-    act(() => {
-      void adapter.search({
-        requestId: 3,
-        query: UNIQUE_NEEDLE,
-        matchCase: false,
-      });
-    });
-
-    expect(requestMeasuredItemChange).toHaveBeenCalledTimes(1);
-    const [anchorElement] = requestMeasuredItemChange.mock.calls[0] ?? [];
-    expect(anchorElement).toBe(anchorRow);
-  });
-
-  it("does not route a passive reconcile through requestMeasuredItemChange", () => {
+  it("does not re-force-open on a passive reconcile of the same target", () => {
     const messages = makeTranscriptWithSubagentBodyNeedle();
     const { getAdapter } = renderController(messages);
     const adapter = getAdapter();
@@ -244,8 +188,7 @@ describe("useChatFindController - measured chain-open on reveal", () => {
         matchCase: false,
       });
     });
-    expect(requestMeasuredItemChange).toHaveBeenCalledTimes(1);
-    requestMeasuredItemChange.mockClear();
+    expect(setFindForcedOpen.mock.calls.length).toBeGreaterThan(0);
     setFindForcedOpen.mockClear();
 
     // Streaming resync of the same active target (navigate: false path).
@@ -253,7 +196,7 @@ describe("useChatFindController - measured chain-open on reveal", () => {
       adapter.notifyRowsChanged();
     });
 
-    expect(requestMeasuredItemChange).not.toHaveBeenCalled();
+    expect(setFindForcedOpen).not.toHaveBeenCalled();
   });
 });
 

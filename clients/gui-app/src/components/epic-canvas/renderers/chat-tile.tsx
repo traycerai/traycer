@@ -86,7 +86,6 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { isChatRunInProgress } from "@/stores/chats/chat-session-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
@@ -871,13 +870,10 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
               tabHostId={view.tabHostId}
               workspaceRoots={view.linkResolutionRoots}
               messages={view.messages}
-              localProvenanceMessageIds={view.localProvenanceMessageIds}
-              consumeLocalProvenance={view.consumeLocalProvenance}
               backgroundItems={view.lower.backgroundItems}
               scrollRequest={backgroundScrollRequest}
               surfaceVisible={view.surfaceVisible}
               systemOverlayActive={systemOverlayActive}
-              isChatStreaming={view.isChatStreaming}
               getMessageActions={view.getMessageActions}
               nextStepActions={view.nextStepActions}
               planActions={view.planActions}
@@ -1097,7 +1093,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
       pendingUserMessages: s.pendingUserMessages,
-      localProvenanceMessageIds: s.localProvenanceMessageIds,
       currentComposerSettings: s.currentComposerSettings,
       liveAssistantMessage: s.liveAssistantMessage,
       worktreeBinding: s.worktreeBinding,
@@ -2114,13 +2109,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
-    localProvenanceMessageIds: state.localProvenanceMessageIds,
-    consumeLocalProvenance: handle.store.getState().consumeLocalProvenance,
     surfaceVisible,
     surfaceFocused,
-    // Ticket 15 (decision #29): the sanctioned host-owned streaming signal
-    // for the fresh-open policy - NOT the trailing-assistant heuristic.
-    isChatStreaming: isChatRunInProgress(state.runStatus),
     getMessageActions: messageActionsFor,
     nextStepActions,
     planActions,
@@ -2161,15 +2151,10 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
-  readonly localProvenanceMessageIds: ReadonlySet<string>;
-  readonly consumeLocalProvenance: (messageId: string) => void;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
-  /** Ticket 15 (decision #29): host-owned streaming signal for the fresh-open
-   *  policy - NOT the trailing-assistant heuristic. */
-  readonly isChatStreaming: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
@@ -2284,8 +2269,6 @@ function ChatSessionMessagesSurface(
               taskId={props.node.id}
               epicId={props.epicId}
               messages={props.messages}
-              localProvenanceMessageIds={props.localProvenanceMessageIds}
-              consumeLocalProvenance={props.consumeLocalProvenance}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}
@@ -2293,7 +2276,6 @@ function ChatSessionMessagesSurface(
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
               systemOverlayActive={props.systemOverlayActive}
-              isChatStreaming={props.isChatStreaming}
               composerOverlayHeight={props.composerOverlayHeight}
             />
           </ChatMarkdownLinkProvider>

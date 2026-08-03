@@ -1,5 +1,4 @@
 import { Shimmer } from "@/components/ui/shimmer";
-import { useChatMeasuredBooleanToggle } from "@/components/chat/chat-measured-item-change-context";
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
@@ -77,8 +76,10 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   // preview while thinking, or the collapsed "Thought for Xs" line once done. A
   // click toggles and sticks for the segment's lifetime.
   const [expanded, setExpanded] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const toggle = useChatMeasuredBooleanToggle(setExpanded, triggerRef);
+  const toggle = useCallback(
+    (): void => setExpanded((current) => !current),
+    [],
+  );
   const bodyId = useId();
 
   // Make the body itself a click target so clicking anywhere on the block (not
@@ -149,7 +150,6 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   return (
     <div className="text-ui-sm text-muted-foreground">
       <button
-        ref={triggerRef}
         type="button"
         data-find-include="true"
         data-chat-find-unit={findUnitId ?? undefined}
