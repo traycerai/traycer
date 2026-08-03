@@ -582,14 +582,18 @@ function ComposerSlotShell(props: {
   readonly bottomSpacing: ComposerSlotBottomSpacing;
 }) {
   return (
-    <div
-      className={cn(
-        "bg-canvas px-4",
-        props.topSpacing === "normal" ? "pt-4" : "pt-0",
-        props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
-      )}
-    >
-      <div className="mx-auto w-full max-w-3xl">{props.children}</div>
+    <div className="pointer-events-none px-4">
+      <div
+        className={cn(
+          "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas",
+          props.topSpacing === "normal" ? "pt-4" : "pt-0",
+          props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
+          props.bottomSpacing === "normal" &&
+            "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+        )}
+      >
+        {props.children}
+      </div>
     </div>
   );
 }

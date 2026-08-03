@@ -893,14 +893,16 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * Absolutely overlays the transcript (decision log #3) instead of
              * pushing its height via flex, so streamed replies flow visually
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset.
+             * transcript's bottom content inset. The full-width positioning
+             * layer stays pointer-transparent; centered lower surfaces opt
+             * back in so their invisible gutters cannot cover the scrollbar.
              */}
             {view.snapshotLoaded ? (
               <div
                 ref={setLowerSurfacesElement}
                 className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
               >
-                <div className="pointer-events-auto">
+                <div className="pointer-events-none">
                   <SurfaceActivityProvider active={view.surfaceFocused}>
                     <ChatLowerInteractionSurfaces
                       epicId={view.currentEpicId}

@@ -12,11 +12,11 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { FoldVertical, UnfoldVertical } from "lucide-react";
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
-  CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
+  CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
   CHAT_TURN_MINIMAP_MIN_ITEMS,
   resolveChatTurnMinimapHeightStyle,
+  resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapIndexFromPointer,
-  resolveChatTurnMinimapInteractiveWidth,
   resolveChatTurnMinimapRowViewportDistance,
   resolveChatTurnMinimapTopStyle,
   type ChatTurnMinimapListState,
@@ -28,7 +28,10 @@ import {
   saveChatTurnMinimapActiveEntry,
 } from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
-import type { ChatTurnMinimapSide } from "@/stores/settings/settings-store";
+import {
+  useSettingsStore,
+  type ChatTurnMinimapSide,
+} from "@/stores/settings/settings-store";
 import { Button } from "@/components/ui/button";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import {
@@ -129,11 +132,151 @@ function deriveChatTurnMinimapItems(
   return items;
 }
 
-function chatTurnMinimapEventTargetsPreview(target: EventTarget): boolean {
+function chatTurnMinimapEventTargetsPreview(
+  target: EventTarget | null,
+): boolean {
   return (
     target instanceof Element &&
     target.closest("[data-chat-turn-minimap-preview]") !== null
   );
+}
+
+function chatTurnMinimapHasActiveTextSelection(): boolean {
+  return window.getSelection()?.isCollapsed === false;
+}
+
+interface ChatTurnMinimapPassiveHoverState {
+  readonly active: boolean;
+  readonly horizontalProximity: number;
+}
+
+function resolveChatTurnMinimapPassiveHoverState(input: {
+  readonly hitStripWidth: number | null;
+  readonly previewVisible: boolean;
+  readonly uiFontSize: number;
+}): ChatTurnMinimapPassiveHoverState {
+  if (input.previewVisible) {
+    return { active: true, horizontalProximity: input.uiFontSize * 2 };
+  }
+  return {
+    active:
+      input.hitStripWidth !== null &&
+      input.hitStripWidth <
+        input.uiFontSize * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
+    horizontalProximity: input.uiFontSize,
+  };
+}
+
+function useChatTurnMinimapPassiveHover(input: {
+  readonly active: boolean;
+  readonly closeInteraction: () => void;
+  readonly horizontalProximity: number;
+  readonly interactionRegionRef: RefObject<HTMLDivElement | null>;
+  readonly onPointerGeometry: (
+    pointerY: number,
+    railTop: number,
+    railHeight: number,
+  ) => void;
+  readonly side: ChatTurnMinimapSide;
+  readonly viewportRef: RefObject<HTMLElement | null>;
+}): void {
+  const {
+    active,
+    closeInteraction,
+    horizontalProximity,
+    interactionRegionRef,
+    onPointerGeometry,
+    side,
+    viewportRef,
+  } = input;
+
+  useEffect(() => {
+    if (!active) return;
+    const viewport = viewportRef.current;
+    if (viewport === null) return;
+    let moveFrame: number | null = null;
+    let pendingPoint: { readonly x: number; readonly y: number } | null = null;
+    let pointerUpFrame: number | null = null;
+
+    const cancelMoveFrame = (): void => {
+      pendingPoint = null;
+      if (moveFrame === null) return;
+      cancelAnimationFrame(moveFrame);
+      moveFrame = null;
+    };
+
+    const handlePointerMove = (event: PointerEvent): void => {
+      if (event.buttons !== 0 || chatTurnMinimapHasActiveTextSelection()) {
+        cancelMoveFrame();
+        closeInteraction();
+        return;
+      }
+      if (chatTurnMinimapEventTargetsPreview(event.target)) {
+        cancelMoveFrame();
+        return;
+      }
+      pendingPoint = { x: event.clientX, y: event.clientY };
+      if (moveFrame !== null) return;
+      moveFrame = requestAnimationFrame(() => {
+        moveFrame = null;
+        const point = pendingPoint;
+        pendingPoint = null;
+        const interactionRegion = interactionRegionRef.current;
+        if (point === null || interactionRegion === null) return;
+        const rect = interactionRegion.getBoundingClientRect();
+        const edgeX = side === "left" ? rect.left : rect.right;
+        const withinHorizontalProximity =
+          Math.abs(point.x - edgeX) <= horizontalProximity;
+        const withinVerticalRail =
+          point.y >= rect.top && point.y <= rect.bottom;
+        if (!withinHorizontalProximity || !withinVerticalRail) {
+          closeInteraction();
+          return;
+        }
+        onPointerGeometry(point.y, rect.top, rect.height);
+      });
+    };
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!chatTurnMinimapEventTargetsPreview(event.target)) {
+        cancelMoveFrame();
+        closeInteraction();
+      }
+    };
+    const handlePointerUp = (): void => {
+      if (pointerUpFrame !== null) cancelAnimationFrame(pointerUpFrame);
+      pointerUpFrame = requestAnimationFrame(() => {
+        pointerUpFrame = null;
+        if (chatTurnMinimapHasActiveTextSelection()) {
+          closeInteraction();
+        }
+      });
+    };
+    const handlePointerLeave = (): void => {
+      cancelMoveFrame();
+      closeInteraction();
+    };
+
+    viewport.addEventListener("pointermove", handlePointerMove);
+    viewport.addEventListener("pointerdown", handlePointerDown);
+    viewport.addEventListener("pointerup", handlePointerUp);
+    viewport.addEventListener("pointerleave", handlePointerLeave);
+    return () => {
+      cancelMoveFrame();
+      if (pointerUpFrame !== null) cancelAnimationFrame(pointerUpFrame);
+      viewport.removeEventListener("pointermove", handlePointerMove);
+      viewport.removeEventListener("pointerdown", handlePointerDown);
+      viewport.removeEventListener("pointerup", handlePointerUp);
+      viewport.removeEventListener("pointerleave", handlePointerLeave);
+    };
+  }, [
+    active,
+    closeInteraction,
+    horizontalProximity,
+    interactionRegionRef,
+    onPointerGeometry,
+    side,
+    viewportRef,
+  ]);
 }
 
 /** The preview anchors to the active strip's own top edge, except at the
@@ -251,6 +394,7 @@ interface ChatTurnMinimapPreviewProps {
   readonly activeItem: ChatTurnMinimapItem;
   readonly activeItemIndex: number;
   readonly activeTooltipTranslate: string;
+  readonly edgeOffset: number;
   readonly expanded: boolean;
   readonly items: ReadonlyArray<ChatTurnMinimapItem>;
   readonly onSelect: (messageId: string) => void;
@@ -293,6 +437,7 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
     activeItem,
     activeItemIndex,
     activeTooltipTranslate,
+    edgeOffset,
     expanded,
     items,
     onSelect,
@@ -301,13 +446,12 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
   } = props;
   return (
     <div
-      className={cn(
-        "pointer-events-auto absolute w-[min(20rem,calc(100vw-3rem))] select-none text-left text-popover-foreground",
-        side === "left" ? "left-8" : "right-8",
-      )}
+      className="pointer-events-auto absolute w-[min(20rem,calc(100vw-3rem))] select-none text-left text-popover-foreground"
       data-chat-turn-minimap-preview=""
       onMouseMove={(event) => event.stopPropagation()}
       style={{
+        left: side === "left" ? edgeOffset : undefined,
+        right: side === "right" ? edgeOffset : undefined,
         top: expanded
           ? "50%"
           : resolveChatTurnMinimapTopStyle(activeItemIndex, items.length),
@@ -316,25 +460,6 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
     >
       {expanded ? (
         <div className="relative flex max-h-[min(60vh,calc(100cqh_-_1rem))] flex-col overflow-hidden rounded-xl border border-border/60 bg-popover shadow-lg">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Collapse message list"
-                className="absolute top-2 right-2 z-10 text-muted-foreground/60 hover:text-foreground active:bg-muted/80 active:text-foreground"
-                onClick={() => {
-                  onToggleExpanded();
-                }}
-                size="icon-sm"
-                type="button"
-                variant="ghost"
-              >
-                <FoldVertical aria-hidden="true" className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>
-              Collapse message list
-            </TooltipContent>
-          </Tooltip>
           <div
             className="min-h-0 overflow-y-auto p-2"
             data-chat-turn-minimap-list-scroll=""
@@ -378,27 +503,33 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
           >
             <ChatTurnMinimapItemText item={activeItem} mode="preview" />
           </button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Expand all messages"
-                className="absolute top-2 right-2 text-muted-foreground/60 hover:text-foreground active:bg-muted/80 active:text-foreground"
-                onClick={() => {
-                  onToggleExpanded();
-                }}
-                size="icon-sm"
-                type="button"
-                variant="ghost"
-              >
-                <UnfoldVertical aria-hidden="true" className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>
-              Expand all messages
-            </TooltipContent>
-          </Tooltip>
         </div>
       )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            aria-label={
+              expanded ? "Collapse message list" : "Expand all messages"
+            }
+            className="absolute top-2 right-2 z-10 text-muted-foreground/60 hover:text-foreground active:bg-muted/80 active:text-foreground"
+            onClick={() => {
+              onToggleExpanded();
+            }}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            {expanded ? (
+              <FoldVertical aria-hidden="true" className="size-3.5" />
+            ) : (
+              <UnfoldVertical aria-hidden="true" className="size-3.5" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={4}>
+          {expanded ? "Collapse message list" : "Expand all messages"}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -408,8 +539,9 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
  * One evenly spaced strip per HUMAN user turn; hover/focus opens a 20rem
  * viewport-capped preview (user text + the turn's last assistant text); a
  * single hit-target control maps pointer Y / arrow keys to the nearest turn.
- * Fine-pointer only; the compact edge target stays visible and interactive
- * at every pane width, including tiled epic-canvas layouts.
+ * Fine-pointer only; markers remain visible at every pane width, while the
+ * transparent hit target is capped to the real side gutter and becomes inert
+ * where a narrow or tiled pane leaves no room outside selectable content.
  */
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const {
@@ -433,19 +565,47 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   });
   const [expanded, setExpanded] = useState(false);
   const [interactionStarted, setInteractionStarted] = useState(false);
+  const [hitStripWidth, setHitStripWidth] = useState<number | null>(null);
+  const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const interactionRegionRef = useRef<HTMLDivElement | null>(null);
   const hitStripRef = useRef<HTMLButtonElement | null>(null);
   const proximityMessageIdRef = useRef<string | null>(null);
 
-  // In-view highlighting is refreshed on mount and whenever the pane's own
-  // box changes (zoom or split resize). A
+  const closeInteraction = useCallback((): void => {
+    setExpanded(false);
+    setInteractionStarted(false);
+    setActiveIndex(null);
+  }, []);
+
+  useEffect(() => {
+    const handleSelectionChange = (): void => {
+      if (chatTurnMinimapHasActiveTextSelection()) closeInteraction();
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+    };
+  }, [closeInteraction]);
+
+  // Hit-target geometry and in-view highlighting are refreshed on mount and
+  // whenever the pane's own box or the rem-defining UI font size changes. A
   // height-only resize changes LegendList's scrollLength without necessarily
-  // producing either a scroll event or a row remeasurement.
+  // producing either a scroll event or a row remeasurement; a font-size
+  // change alters max-w-3xl and right-3 without changing the viewport box.
   useEffect(() => {
     const viewportElement = viewportRef.current;
     if (viewportElement === null) return;
 
     const measure = (): void => {
+      const nextHitStripWidth = resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: uiFontSize,
+        viewportWidth: viewportElement.getBoundingClientRect().width,
+      });
+      setHitStripWidth(nextHitStripWidth);
+      if (nextHitStripWidth === 0) {
+        closeInteraction();
+        hitStripRef.current?.blur();
+      }
       inViewRefreshRef.current();
     };
 
@@ -456,7 +616,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [inViewRefreshRef, viewportRef]);
+  }, [closeInteraction, inViewRefreshRef, uiFontSize, viewportRef]);
 
   // In-view strip highlighting from LegendList's own measured positions - no
   // DOM rect probing (jsdom/perf lesson; the old reading-line probe died on
@@ -538,6 +698,20 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     resolvedActiveIndex,
     items.length,
   );
+  const resolvedHitStripWidth = hitStripWidth ?? 0;
+  const isInert = resolvedHitStripWidth <= 0;
+  const previewVisible = interactionStarted && activeItem !== null;
+  // The original card position leaves a 2rem visual gap from the rail. Once
+  // a preview is open, the same non-blocking viewport observer bridges that
+  // gap without widening the hit strip over selectable transcript text.
+  const {
+    active: passiveHoverActive,
+    horizontalProximity: passiveHorizontalProximity,
+  } = resolveChatTurnMinimapPassiveHoverState({
+    hitStripWidth,
+    previewVisible,
+    uiFontSize,
+  });
 
   // Ticket 15 (decision #29): mirror the active entry into the tab-key
   // registry on every genuine change - keyed off the resolved item's id
@@ -555,26 +729,52 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     saveChatTurnMinimapActiveEntry(identity, activeItemId);
   }, [identity, activeItemId]);
 
-  const resolveActiveIndexFromPointer = useCallback(
-    (event: ReactMouseEvent<HTMLElement>): number | null => {
-      const rect = event.currentTarget.getBoundingClientRect();
+  const resolveActiveIndexFromPointerY = useCallback(
+    (pointerY: number): number | null => {
+      const rect = interactionRegionRef.current?.getBoundingClientRect();
+      if (rect === undefined) return null;
       return resolveChatTurnMinimapIndexFromPointer({
         itemCount: items.length,
         railTop: rect.top,
         railHeight: rect.height,
-        pointerY: event.clientY,
+        pointerY,
       });
     },
     [items.length],
   );
 
-  const updateActiveIndexFromPointer = useCallback(
-    (event: ReactMouseEvent<HTMLElement>): void => {
+  const updateActiveIndexFromPointerY = useCallback(
+    (pointerY: number): void => {
       setInteractionStarted(true);
-      setActiveIndex(resolveActiveIndexFromPointer(event));
+      setActiveIndex(resolveActiveIndexFromPointerY(pointerY));
     },
-    [resolveActiveIndexFromPointer],
+    [resolveActiveIndexFromPointerY],
   );
+
+  const updateActiveIndexFromPointerGeometry = useCallback(
+    (pointerY: number, railTop: number, railHeight: number): void => {
+      setInteractionStarted(true);
+      setActiveIndex(
+        resolveChatTurnMinimapIndexFromPointer({
+          itemCount: items.length,
+          railTop,
+          railHeight,
+          pointerY,
+        }),
+      );
+    },
+    [items.length],
+  );
+
+  useChatTurnMinimapPassiveHover({
+    active: passiveHoverActive,
+    closeInteraction,
+    horizontalProximity: passiveHorizontalProximity,
+    interactionRegionRef,
+    onPointerGeometry: updateActiveIndexFromPointerGeometry,
+    side,
+    viewportRef,
+  });
 
   const moveActiveIndex = useCallback(
     (delta: number): void => {
@@ -588,20 +788,36 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   const handleHitStripClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>): void => {
+      if (isInert) return;
+      if (chatTurnMinimapHasActiveTextSelection()) {
+        closeInteraction();
+        return;
+      }
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
       setInteractionStarted(true);
-      const nextIndex = resolveActiveIndexFromPointer(event);
+      const nextIndex = resolveActiveIndexFromPointerY(event.clientY);
       const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
       if (nextItem) {
         onSelect(nextItem.id);
       }
       event.currentTarget.blur();
     },
-    [items, onSelect, resolveActiveIndexFromPointer],
+    [
+      closeInteraction,
+      isInert,
+      items,
+      onSelect,
+      resolveActiveIndexFromPointerY,
+    ],
   );
 
   const handleHitStripKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+      if (isInert) return;
+      if (chatTurnMinimapHasActiveTextSelection()) {
+        closeInteraction();
+        return;
+      }
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
       setInteractionStarted(true);
       if (event.key === "ArrowDown") {
@@ -631,22 +847,27 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
         }
       }
     },
-    [activeItem, items.length, moveActiveIndex, onSelect],
+    [
+      activeItem,
+      closeInteraction,
+      isInert,
+      items.length,
+      moveActiveIndex,
+      onSelect,
+    ],
   );
 
   const handleHitStripMouseDown = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>): void => {
+      if (isInert) return;
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
       event.preventDefault();
+      if (chatTurnMinimapHasActiveTextSelection()) {
+        closeInteraction();
+      }
     },
-    [],
+    [closeInteraction, isInert],
   );
-
-  const closeInteraction = useCallback((): void => {
-    setExpanded(false);
-    setInteractionStarted(false);
-    setActiveIndex(null);
-  }, []);
 
   const handleInteractionBlur = useCallback(
     (event: FocusEvent): void => {
@@ -677,21 +898,35 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     [closeInteraction, expanded],
   );
 
+  const handleInteractionMouseLeave = useCallback((): void => {
+    if (!passiveHoverActive) closeInteraction();
+  }, [closeInteraction, passiveHoverActive]);
+
   useEffect(() => {
     const interactionRegion = interactionRegionRef.current;
     if (interactionRegion === null) return;
     interactionRegion.addEventListener("focusout", handleInteractionBlur);
     interactionRegion.addEventListener("keydown", handleInteractionKeyDown);
-    interactionRegion.addEventListener("mouseleave", closeInteraction);
+    interactionRegion.addEventListener(
+      "mouseleave",
+      handleInteractionMouseLeave,
+    );
     return () => {
       interactionRegion.removeEventListener("focusout", handleInteractionBlur);
       interactionRegion.removeEventListener(
         "keydown",
         handleInteractionKeyDown,
       );
-      interactionRegion.removeEventListener("mouseleave", closeInteraction);
+      interactionRegion.removeEventListener(
+        "mouseleave",
+        handleInteractionMouseLeave,
+      );
     };
-  }, [closeInteraction, handleInteractionBlur, handleInteractionKeyDown]);
+  }, [
+    handleInteractionBlur,
+    handleInteractionKeyDown,
+    handleInteractionMouseLeave,
+  ]);
 
   const handlePreviewSelect = useCallback(
     (messageId: string): void => {
@@ -712,11 +947,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   }
 
   const safeBottomInset = Math.max(0, Math.ceil(bottomInset));
-  const previewVisible = interactionStarted && activeItem !== null;
-  const interactiveWidth = resolveChatTurnMinimapInteractiveWidth(
-    CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-    previewVisible || expanded,
-  );
+  const interactionRegionIsInert = isInert && !previewVisible;
 
   return (
     <div
@@ -731,36 +962,60 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       <div className="relative h-full w-full select-none">
         <div
           className={cn(
-            "pointer-events-auto absolute top-1/2 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            "absolute top-1/2 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            interactionRegionIsInert
+              ? "pointer-events-none"
+              : "pointer-events-auto",
             side === "left" ? "left-3" : "right-3",
           )}
+          aria-hidden={interactionRegionIsInert}
           aria-label="Message minimap controls"
           data-chat-turn-minimap-interaction-region=""
           {...paneActivationDeferProps}
+          inert={interactionRegionIsInert}
           ref={interactionRegionRef}
           role="group"
           style={{ height: resolveChatTurnMinimapHeightStyle(items.length) }}
         >
           <button
+            aria-hidden={isInert ? "true" : undefined}
             aria-label="Message minimap"
-            className="pointer-events-auto relative block h-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-            data-chat-turn-minimap-interactive-width={interactiveWidth}
+            className={cn(
+              "relative block h-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+              isInert ? "pointer-events-none" : "pointer-events-auto",
+            )}
+            data-chat-turn-minimap-interactive-width={resolvedHitStripWidth}
             data-testid="chat-turn-minimap-hit-strip"
             {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
+            inert={isInert}
             onClick={handleHitStripClick}
             onFocus={() => {
+              if (isInert) return;
+              if (chatTurnMinimapHasActiveTextSelection()) {
+                closeInteraction();
+                return;
+              }
               setInteractionStarted(true);
               setActiveIndex((current) => current ?? 0);
             }}
             onKeyDown={handleHitStripKeyDown}
             onMouseDown={handleHitStripMouseDown}
             onMouseMove={(event) => {
-              if (!expanded) updateActiveIndexFromPointer(event);
+              if (expanded || isInert) return;
+              if (
+                event.buttons !== 0 ||
+                chatTurnMinimapHasActiveTextSelection()
+              ) {
+                closeInteraction();
+                return;
+              }
+              updateActiveIndexFromPointerY(event.clientY);
             }}
             ref={hitStripRef}
             style={{
-              width: interactiveWidth,
+              width: resolvedHitStripWidth,
             }}
+            tabIndex={isInert ? -1 : 0}
             type="button"
           >
             {items.map((item, index) => {
@@ -799,6 +1054,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
               activeItem={activeItem}
               activeItemIndex={resolvedActiveIndex ?? 0}
               activeTooltipTranslate={activeTooltipTranslate}
+              edgeOffset={uiFontSize * 2}
               expanded={expanded}
               items={items}
               onSelect={handlePreviewSelect}

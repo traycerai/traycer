@@ -839,7 +839,7 @@ function ResizableSectionRun(props: {
               direction="vertical"
               sizes={fractions}
               minChildPx={SECTION_MIN_PX}
-              className="bg-border/60"
+              className="bg-background before:bg-border/60"
               onCommitSizes={handleCommitSizes}
             />
           ) : null}
