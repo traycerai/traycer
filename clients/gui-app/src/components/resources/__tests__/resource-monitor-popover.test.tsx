@@ -576,6 +576,69 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
   });
 
+  it("retains the search query after an outside click closes the popover", async () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Alpha" } },
+    );
+    expect(await screen.findByText("Terminal Alpha")).not.toBeNull();
+
+    fireEvent.pointerDown(document.body, {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.mouseDown(document.body, { button: 0 });
+    fireEvent.pointerUp(document.body, {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.click(document.body);
+
+    expect(screen.queryByRole("dialog", { name: "Resources" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(
+      screen.getByRole<HTMLInputElement>("searchbox", {
+        name: "Search resources",
+      }).value,
+    ).toBe("Alpha");
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  it("retains the search query after opening a matching resource", async () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Alpha" } },
+    );
+    fireEvent.click(await screen.findByText("Terminal Alpha"));
+
+    expect(screen.queryByRole("dialog", { name: "Resources" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(
+      screen.getByRole<HTMLInputElement>("searchbox", {
+        name: "Search resources",
+      }).value,
+    ).toBe("Alpha");
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
   it("reveals matching nested processes and reports an empty search", () => {
     const stub = installStubFactory();
     renderPopover();

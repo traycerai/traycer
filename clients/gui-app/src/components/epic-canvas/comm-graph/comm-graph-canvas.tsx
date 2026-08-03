@@ -15,7 +15,6 @@ import {
   Background,
   Controls,
   ReactFlow,
-  ReactFlowProvider,
   type NodeMouseHandler,
   type Viewport,
 } from "@xyflow/react";
@@ -60,11 +59,14 @@ import type {
   CommGraphPulseKind,
 } from "@/lib/comm-graph/comm-graph-timeline";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
+import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 
 const NODE_TYPES = { [COMM_GRAPH_AGENT_NODE_TYPE]: CommGraphAgentNodeView };
 const EDGE_TYPES = { [COMM_GRAPH_EDGE_TYPE]: CommGraphEdgeView };
 // React Flow's attribution link is not part of this surface.
 const PRO_OPTIONS = { hideAttribution: true };
+// React Flow defaults to 0.5, which is too close for a wide agent graph to fit.
+const COMM_GRAPH_MIN_ZOOM = 0.1;
 
 /** Which detail surface the canvas has open, if any. */
 type CommGraphSelectedDetail =
@@ -127,10 +129,17 @@ function nodeHostStatus(
 }
 
 export function CommGraphCanvas(props: CommGraphCanvasProps) {
+  // ReactFlow must create its own provider from the computed nodes below. An
+  // empty outer provider would make it reuse a store initialized before those
+  // nodes exist, so the first fit-to-view would have no graph to frame.
+  return <CommGraphCanvasBody {...props} />;
+}
+
+function isDefaultView(view: CommGraphTileViewState): boolean {
   return (
-    <ReactFlowProvider>
-      <CommGraphCanvasBody {...props} />
-    </ReactFlowProvider>
+    view.x === DEFAULT_COMM_GRAPH_VIEW.x &&
+    view.y === DEFAULT_COMM_GRAPH_VIEW.y &&
+    view.zoom === DEFAULT_COMM_GRAPH_VIEW.zoom
   );
 }
 
@@ -344,6 +353,11 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
           defaultViewport={view}
+          // A neutral schema viewport means this graph has never been framed by
+          // the user. Let React Flow derive its first viewport from every node;
+          // a persisted pan/zoom still restores exactly as the user left it.
+          fitView={isDefaultView(view)}
+          minZoom={COMM_GRAPH_MIN_ZOOM}
           onMoveEnd={handleMoveEnd}
           // REQUIRED, and not merely as a tidier click path. React Flow's
           // `NodeWrapper` computes
