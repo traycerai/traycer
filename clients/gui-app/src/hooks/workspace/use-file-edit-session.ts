@@ -106,6 +106,25 @@ export function useFileEditSession(props: {
     };
   }, [identityKey]);
 
+  // A surface that auto-attached (e.g. a workspace-file tab) can become
+  // ineligible to edit while still mounted - an LRU keep-alive tab hides an
+  // inactive body instead of unmounting it. Without this, an attachment (and
+  // any ownership it claimed) would linger on the hidden surface forever, so a
+  // freshly opened visible tab for the same file would keep hitting
+  // `focus-owner` against a body the user can no longer see or release. Only
+  // fires for THIS effect's own auto-attach path: `identityKey` gates it to
+  // the attachment this hook created, so it never touches an attachment an
+  // explicit `activate()` call owns (the Git-diff path always passes
+  // `autoAttach: false` and never changes it, so this never re-runs there).
+  useEffect(() => {
+    if (props.autoAttach) return;
+    const current = attachmentRef.current;
+    if (current?.identityKey !== identityKey) return;
+    current.detach();
+    attachmentRef.current = null;
+    setAttachment(null);
+  }, [identityKey, props.autoAttach]);
+
   useEffect(() => {
     if (!props.autoAttach || props.diskContent === null) return;
     const diskContent = props.diskContent;

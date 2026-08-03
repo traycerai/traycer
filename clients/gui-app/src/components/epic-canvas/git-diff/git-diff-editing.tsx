@@ -15,7 +15,10 @@ import type {
   GitGetFileDiffResponse,
   HostRpcRegistry,
 } from "@traycer/protocol/host";
-import { DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET } from "@traycer/protocol/host";
+import {
+  DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+  WORKSPACE_WRITE_FILE_MAX_CHARS,
+} from "@traycer/protocol/host";
 import { toast } from "sonner";
 import { preloadDiffEditProvider } from "@/components/diff/diff-edit-provider-loader";
 import {
@@ -227,22 +230,20 @@ export function useGitDiffEditing(
     void contentsQuery.refetch().then((result) => {
       if (cancelled) return;
       const latestContent = result.data?.worktreeFile?.contents;
-      if (
+      const matchesBaseline =
         latestContent !== undefined &&
-        latestContent === fileSession.runtime?.store.getState().baselineContent
-      ) {
-        setHydration((current) =>
-          current === null
-            ? null
-            : {
-                ...current,
-                comparisonIdentity: args.currentComparisonIdentity,
-              },
-        );
-        setStaleIdentity(null);
-        return;
-      }
-      setStaleIdentity(args.currentComparisonIdentity);
+        latestContent === fileSession.runtime?.store.getState().baselineContent;
+      // Mark this comparison identity checked either way. Leaving it unmarked
+      // on a genuine mismatch would keep `hydration.comparisonIdentity` stale
+      // forever, and since this effect's own `refetch()` changes `contentsQuery`
+      // identity, that would re-fire this effect (and re-hit the host) on
+      // every render for as long as the file stays flagged stale.
+      setHydration((current) =>
+        current === null
+          ? null
+          : { ...current, comparisonIdentity: args.currentComparisonIdentity },
+      );
+      setStaleIdentity(matchesBaseline ? null : args.currentComparisonIdentity);
     });
     return () => {
       cancelled = true;
@@ -557,6 +558,12 @@ function validateGitEditContents(result: {
       kind: "error",
       message:
         "The worktree has changed beyond this diff. Refresh before editing.",
+    };
+  }
+  if (contents.worktreeFile.contents.length > WORKSPACE_WRITE_FILE_MAX_CHARS) {
+    return {
+      kind: "error",
+      message: "This file is too large to edit.",
     };
   }
   return {

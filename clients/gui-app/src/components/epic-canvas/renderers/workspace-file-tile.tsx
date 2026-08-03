@@ -45,7 +45,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { fileEditIdentityKey } from "@/lib/workspace/file-edit-runtime";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useAuthStore } from "@/stores/auth/auth-store";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
@@ -182,7 +182,16 @@ function WorkspaceFileTileLive(props: {
       return editSession.activate(request, rawContent ?? "");
     },
     onActivationError: () => {
-      toast.error("Couldn’t start editing this file.");
+      reportableErrorToast(
+        "Couldn’t start editing this file.",
+        undefined,
+        createReportIssueContext({
+          title: "Could not start editing this file",
+          message: null,
+          code: null,
+          source: "Workspace file edit",
+        }),
+      );
     },
     onChange: editSession.setDraft,
     onBlur: editSession.flush,
