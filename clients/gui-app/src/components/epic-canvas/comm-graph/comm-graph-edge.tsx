@@ -145,10 +145,11 @@ export const CommGraphEdgeView = memo(function CommGraphEdgeView(
       : commGraphEdgeEndpoints(sourceBox, targetBox);
   const [path, labelX, labelY] = getBezierPath(endpoints);
   if (data === undefined) return <BaseEdge id={props.id} path={path} />;
-  // The ONLY thing that ever varies on the base stroke. Activity does not
+  // The ONLY thing that ever varies on the base stroke here. Activity does not
   // recolor, thicken or pulse it - see the header: the traveling circle IS the
   // activity treatment, and a stroke that also reacted would be a second,
-  // redundant channel that breaks the uniform-line contract.
+  // redundant channel that breaks the uniform-line contract. (Keyboard focus
+  // does recolor it, from `index.css` - transient user state, not activity.)
   const style = data.hasOpenThread ? { strokeDasharray: "4 3" } : props.style;
   return (
     <>

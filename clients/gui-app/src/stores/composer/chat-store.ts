@@ -193,6 +193,17 @@ export interface CommandSegment {
   // Wall-clock start of the command (block timestamp; stays anchored while
   // streaming). Drives the elapsed heartbeat shown while it runs.
   startedAt: number;
+  // Persistent: true once the harness promoted this command to a backgrounded
+  // one (Codex yields a long-running exec to the background at the parent
+  // turn's end). Drives standalone-card promotion across the whole lifecycle -
+  // running -> completed/stopped -> reload - exactly like
+  // `ToolSegment.backgroundTask`. `null` means "not yet known" and is treated
+  // like `false` without being a confirmed negative.
+  backgroundTask: boolean | null;
+  // True when the terminal outcome was an explicit stop (the host terminated
+  // the backgrounded command) rather than a real non-zero exit. Drives a
+  // neutral "Stopped" badge in place of the destructive exit-code treatment.
+  stopped: boolean;
   // Owning subagent block id when this command was run by a subagent (nests
   // under that subagent block). Null for top-level / main-agent commands.
   parentId: string | null;

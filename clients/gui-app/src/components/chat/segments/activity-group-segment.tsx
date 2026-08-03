@@ -212,6 +212,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           exitCode={segment.exitCode}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="row"

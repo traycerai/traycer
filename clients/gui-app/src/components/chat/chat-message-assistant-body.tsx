@@ -844,20 +844,26 @@ function AssistantSegment({
           findUnitId={findUnitId}
         />
       );
-    case "command":
+    case "command": {
+      // Same treatment as a promoted tool call: while the host still lists the
+      // command as running background work, the card keeps reading "running"
+      // even though the turn that spawned it already finalized its blocks.
+      const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
         <CommandSegment
           command={segment.command}
           cwd={segment.cwd}
           exitCode={segment.exitCode}
-          isStreaming={segment.isStreaming}
-          endState={segment.endState}
+          isStreaming={segment.isStreaming || isBackgroundRunning}
+          endState={isBackgroundRunning ? null : segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="card"
           headerFindUnitId={findUnitId}
         />
       );
+    }
     case "subagent":
       return (
         <SubagentSegment
