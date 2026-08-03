@@ -365,7 +365,8 @@ export const ChatTimeline = memo(function ChatTimeline({
         //
         // The explicit zero still narrows `isWithinMaintainScrollAtEndThreshold`
         // (used internally by the library's own content-inset compensation)
-        // to the strict 1px edge rather than its 10%-of-viewport default.
+        // to `distanceFromEnd <= 0` rather than its 10%-of-viewport default.
+        // The separate `isAtEnd` calculation owns the 1px edge tolerance.
         maintainScrollAtEndThreshold={0}
         maintainVisibleContentPosition
         onItemSizeChanged={handleItemSizeChanged}

@@ -218,6 +218,26 @@ describe("useChatTimelineFollowLatch", () => {
     document.body.innerHTML = "";
   });
 
+  it("synchronizes permission when the parent follow mode changes", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const { result, rerender } = renderHook(
+      ({ initialScrollAtEnd }) =>
+        useChatTimelineFollowLatch(listRef, initialScrollAtEnd),
+      { initialProps: { initialScrollAtEnd: true } },
+    );
+
+    rerender({ initialScrollAtEnd: false });
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
   it("review regression: downward scroll that remains non-bottom cannot reacquire", () => {
     const node = shim.makeNode({
       scrollTop: 1000,

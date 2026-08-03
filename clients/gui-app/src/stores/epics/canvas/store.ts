@@ -43,6 +43,7 @@ import type {
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
 import { evictChatTabState } from "@/stores/chats/chat-tab-state-cache";
+import { evictPendingHydrationRestores } from "@/stores/chats/chat-tab-pending-hydration-restore";
 import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
 import { evictActivityGroupOpenStores } from "@/stores/chats/activity-group-open-store-core";
 import { evictA2AOpenStores } from "@/stores/chats/a2a-open-store-context";
@@ -3057,6 +3058,7 @@ useEpicCanvasStore.subscribe((state) => {
     // exact same tile instanceId, so one `removed` list covers all of them;
     // tool/subagent are global stores namespaced by that id via `reset`.
     evictChatTabState(removed);
+    evictPendingHydrationRestores(removed);
     evictActivityGroupOpenStores(removed);
     evictA2AOpenStores(removed);
     // F4 (ticket 5 review): tile-find serves every tile kind, not just chat -

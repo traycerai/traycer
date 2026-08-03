@@ -221,12 +221,21 @@ function measureFreeRestoreGeometry(
     };
   }
   const scrollNode = list.getScrollableNode();
+  const rowPosition =
+    index === undefined ? null : list.getState().positionAtIndex(index);
+  if (!scrollNode) {
+    return {
+      scrollTop: null,
+      scrollHeight: null,
+      clientHeight: null,
+      rowPosition,
+    };
+  }
   return {
     scrollTop: scrollNode.scrollTop,
     scrollHeight: scrollNode.scrollHeight,
     clientHeight: scrollNode.clientHeight,
-    rowPosition:
-      index === undefined ? null : list.getState().positionAtIndex(index),
+    rowPosition,
   };
 }
 
@@ -1106,9 +1115,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           pendingHydrationRestoreAnchorIdRef.current === null,
         );
       } else {
-        timelineScrollModeRef.current = "free-scrolling";
-        isAtEndRef.current = false;
-        setScrollMode("free-scrolling");
+        setTimelineMode("free-scrolling", false);
       }
       // A real gesture (or a fresh navigation, which calls this first) wins
       // immediately over a still-in-flight programmatic-scroll operation,

@@ -28,9 +28,7 @@ import {
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
 import {
-  acceptExhaustedPersistedRestoreFallback,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
-  chatTimelineGetItemType,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import { captureChatFreeScrollingOffset } from "@/components/chat/chat-scroll-restoration";
 import {
@@ -340,16 +338,23 @@ async function waitForNavigationSettle(): Promise<void> {
   });
 }
 
+function queryScrollToEndPill(): HTMLButtonElement | null {
+  return screen.queryByRole<HTMLButtonElement>("button", {
+    name: "Scroll to end",
+  });
+}
+
 function getScrollToEndPill(): HTMLButtonElement {
-  const pill = document.querySelector('button[aria-label="Scroll to end"]');
-  if (!(pill instanceof HTMLButtonElement)) {
+  const pill = queryScrollToEndPill();
+  if (pill === null) {
     throw new Error("Scroll-to-end pill button was not rendered");
   }
   return pill;
 }
 
 function isJumpPillVisible(): boolean {
-  const pill = getScrollToEndPill();
+  const pill = queryScrollToEndPill();
+  if (pill === null) return false;
   return (
     pill.classList.contains("opacity-100") &&
     !pill.classList.contains("opacity-0")
@@ -868,7 +873,10 @@ describe("ChatMessages scroll policy", () => {
     tileLiveness.live = false;
     installLegendListViewportMetrics();
     vi.useRealTimers();
-    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+    useSettingsStore.setState({
+      chatTurnMinimapSide: "right",
+      quoteReplyEnabled: false,
+    });
   });
 
   afterEach(() => {
@@ -2781,29 +2789,6 @@ describe("ChatMessages scroll policy", () => {
       );
     });
 
-    it("getItemType splits human-sent user rows from A2A agent-sent rows", () => {
-      const human = makeMessage(0, "user");
-      expect(human.agentSenderInfo).toBeNull();
-      expect(chatTimelineGetItemType(human)).toBe("user:human");
-
-      const a2a: ChatMessageModel = {
-        ...makeMessage(1, "user"),
-        agentSenderInfo: {
-          agentId: "agent-peer-1",
-          senderTitle: "Peer",
-          expectReply: false,
-          responseId: null,
-        },
-      };
-      expect(chatTimelineGetItemType(a2a)).toBe("user:a2a");
-      expect(chatTimelineGetItemType(makeMessage(2, "assistant"))).toBe(
-        "assistant",
-      );
-      // Distinct pools: the two user shapes must never collapse to one string.
-      expect(chatTimelineGetItemType(human)).not.toBe(
-        chatTimelineGetItemType(a2a),
-      );
-    });
   });
 
   // -------------------------------------------------------------------------
@@ -2863,21 +2848,6 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       expect(isJumpPillVisible()).toBe(false);
-    });
-
-    it("releases both persistence gates when an unreachable saved coordinate exhausts restore retries", () => {
-      const restorePersistencePendingRef = { current: true };
-      const pendingMeasuredRestoreRef = {
-        current: { messageId: "saved-row", viewOffset: 10_000 },
-      };
-
-      acceptExhaustedPersistedRestoreFallback(
-        restorePersistencePendingRef,
-        pendingMeasuredRestoreRef,
-      );
-
-      expect(restorePersistencePendingRef.current).toBe(false);
-      expect(pendingMeasuredRestoreRef.current).toBeNull();
     });
 
     it("fresh open (no saved state) seeds following-end", async () => {

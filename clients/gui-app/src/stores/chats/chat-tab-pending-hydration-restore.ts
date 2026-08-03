@@ -52,6 +52,17 @@ export function forgetPendingHydrationRestore(
   pendingHydrationRestoreByTabKey.delete(chatTabPersistenceTabKey(identity));
 }
 
+export function evictPendingHydrationRestores(
+  tileInstanceIds: readonly string[],
+): void {
+  const removed = new Set(tileInstanceIds);
+  for (const key of pendingHydrationRestoreByTabKey.keys()) {
+    if (removed.has(key)) {
+      pendingHydrationRestoreByTabKey.delete(key);
+    }
+  }
+}
+
 /** Test-only: the registry is module-scope, so a matrix/suite that reuses
  *  fixed tile instance ids across rows/tests needs a way to clear it between
  *  them - otherwise a later row's mount can inherit an earlier row's pending

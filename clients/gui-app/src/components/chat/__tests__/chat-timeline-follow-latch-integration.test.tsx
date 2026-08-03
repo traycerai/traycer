@@ -345,6 +345,31 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
   // -----------------------------------------------------------------------
 
   describe("silent detach then layout callbacks with no ChatTimeline rerender", () => {
+    it("attaches the latch when an initially empty transcript receives its first rows", async () => {
+      const rowCount = 40;
+      const messages = makeMessages(rowCount);
+      const { listRef, rerenderMessages } = renderTimeline({ messages: [] });
+      await settleLegendList();
+
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      rerenderMessages(messages, undefined);
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const parked = detachReader(node, 180);
+      const next = appendAssistantRows(messages, 1, "after-empty");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, parked);
+    });
+
     it("setItemSize alone does not yank a detached reader (no preparatory rerender)", async () => {
       const rowCount = 40;
       setLegendListScrollContainerScrollHeightOverride(
@@ -558,9 +583,6 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         }
         case "short-height": {
           // Near-end short content growth: only a few px of height change.
-          setLegendListScrollContainerScrollHeightOverride(
-            contentHeightForRowCount(rowCount) + 6,
-          );
           const next = appendAssistantRows(messages, 1, `short-${rowCount}`);
           // Keep the same scrollHeight delta tiny even with one more row so
           // the case stays "short-height" rather than a full append.

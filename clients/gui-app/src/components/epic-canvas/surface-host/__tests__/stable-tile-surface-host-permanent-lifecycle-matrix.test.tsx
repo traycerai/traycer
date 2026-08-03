@@ -12,6 +12,7 @@ import {
   fireEvent,
   render,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
@@ -869,8 +870,10 @@ function isScrollToEndPillVisible(
 ): boolean {
   const record = queryHostedRecord(container, instanceId);
   if (record === null) return false;
-  const pill = record.querySelector('button[aria-label="Scroll to end"]');
-  if (!(pill instanceof HTMLButtonElement)) return false;
+  const pill = within(record).queryByRole<HTMLButtonElement>("button", {
+    name: "Scroll to end",
+  });
+  if (pill === null) return false;
   return (
     pill.classList.contains("opacity-100") &&
     !pill.classList.contains("opacity-0")
@@ -1796,6 +1799,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     });
     await settleLegendList();
     expect(trackedScroll.dataset.scrollMode).toBe("following-end");
+    const bottomTop = trackedScroll.scrollTop;
+    expect(bottomTop).toBeGreaterThan(0);
 
     act(() => {
       useEpicCanvasStore
@@ -1816,7 +1821,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
 
     const restoredScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
     expect(restoredScroll.dataset.scrollMode).toBe("following-end");
-    expect(restoredScroll.scrollTop).toBe(trackedScroll.scrollTop);
+    expect(restoredScroll.scrollTop).toBe(bottomTop);
   });
 
   it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
@@ -2396,6 +2401,6 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
         epicId: EPIC_ID,
         chatId: CHAT_TRACKED.id,
       })?.mode,
-    ).not.toBe("free-scrolling");
+    ).toBe("following-end");
   });
 });

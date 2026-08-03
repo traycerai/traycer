@@ -1,4 +1,11 @@
-import { useCallback, useLayoutEffect, useRef, type RefObject } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 
 /** Matches the library's own strict-edge tolerance (`EDGE_POSITION_EPSILON`
@@ -115,6 +122,11 @@ export function useChatTimelineFollowLatch(
   initialScrollAtEnd: boolean,
 ): ChatTimelineFollowLatch {
   const permissionRef = useRef(initialScrollAtEnd);
+  const [scrollNode, setScrollNode] = useState<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    permissionRef.current = initialScrollAtEnd;
+  }, [initialScrollAtEnd]);
 
   const followEndIfPermitted = useCallback((): void => {
     if (!permissionRef.current) return;
@@ -138,8 +150,16 @@ export function useChatTimelineFollowLatch(
     void listRef.current?.scrollToEnd({ animated: false });
   }, [listRef]);
 
+  // The empty state does not mount LegendList. Re-resolve after every commit
+  // so the subscription follows the node when the first row appears, and is
+  // cleaned up when the list is replaced or removed.
   useLayoutEffect(() => {
-    const node = listRef.current?.getScrollableNode();
+    const current = listRef.current?.getScrollableNode() ?? null;
+    setScrollNode((previous) => (previous === current ? previous : current));
+  });
+
+  useLayoutEffect(() => {
+    const node = scrollNode;
     if (!node) return;
 
     const refreshPermissionFromLiveGeometry = (): void => {
@@ -169,7 +189,10 @@ export function useChatTimelineFollowLatch(
       node.removeEventListener("scroll", refreshPermissionFromLiveGeometry);
       resizeObserver.disconnect();
     };
-  }, [listRef, followEndIfPermitted]);
+  }, [scrollNode, followEndIfPermitted]);
 
-  return { followEndIfPermitted };
+  return useMemo(
+    () => ({ followEndIfPermitted }),
+    [followEndIfPermitted],
+  );
 }
