@@ -43,11 +43,29 @@ const ACTIVE_ROWS = vi.hoisted<WorktreeBindingSelectorRowV12[]>(() => [
     isGitResolvePending: false,
   },
 ]);
-const terminalBindingsMock = vi.hoisted(() => ({
+type TerminalBindingsFixture = {
+  active: {
+    data: {
+      rows: WorktreeBindingSelectorRowV12[];
+      folderlessCwd: string | null;
+    };
+    isPending: boolean;
+    isError: boolean;
+  };
+  remote: {
+    data: {
+      rows: WorktreeBindingSelectorRowV12[];
+      folderlessCwd: string | null;
+    };
+    isPending: boolean;
+    isError: boolean;
+  };
+};
+const terminalBindingsMock = vi.hoisted<TerminalBindingsFixture>(() => ({
   active: {
     data: {
       rows: ACTIVE_ROWS,
-      folderlessCwd: "/work/default-cwd" as string | null,
+      folderlessCwd: "/work/default-cwd",
     },
     isPending: false,
     isError: false,
