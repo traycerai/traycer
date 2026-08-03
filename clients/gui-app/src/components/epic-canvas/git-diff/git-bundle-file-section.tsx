@@ -292,10 +292,11 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
       }
       editAdapter={editing.editAdapter}
       editSession={
-        editing.active && editing.hydrated
+        editing.active && editing.hydrated && editing.editableFiles !== null
           ? {
               editorOptions: editing.editAdapter.editorOptions,
-              loadDiffFiles: editing.loadDiffFiles,
+              oldFile: editing.editableFiles.oldFile,
+              newFile: editing.editableFiles.newFile,
             }
           : undefined
       }

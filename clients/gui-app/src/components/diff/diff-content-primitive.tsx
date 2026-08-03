@@ -6,7 +6,13 @@ import {
   type UIEvent,
 } from "react";
 import { FileDiff } from "@pierre/diffs/react";
-import { parsePatchFiles, type FileDiffContentsLoader } from "@pierre/diffs";
+import {
+  hydratePartialDiff,
+  parseDiffFromFile,
+  parsePatchFiles,
+  type FileContents,
+  type FileDiffMetadata,
+} from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import {
@@ -45,7 +51,18 @@ export interface DiffContentPrimitiveProps {
   readonly editAdapter?: DiffClickToEditAdapter;
   readonly editSession?: {
     readonly editorOptions: EditorOptions<undefined>;
-    readonly loadDiffFiles: FileDiffContentsLoader;
+    /**
+     * Full baseline file contents, already fetched before this prop is ever
+     * set. Hydrated into the parsed diff synchronously (see
+     * `hydrateFileDiffForEdit`) so `<FileDiff>` never receives a partial
+     * `FileDiffMetadata` while `edit` is true - `@pierre/diffs` treats a
+     * fresh partial object for the same file as an unrelated render model
+     * and never re-attempts hydration for it (see FileDiffMetadata.isPartial
+     * in @pierre/diffs' types), which otherwise permanently strands the
+     * editor without ever attaching a contentEditable surface.
+     */
+    readonly oldFile: FileContents | null;
+    readonly newFile: FileContents;
   };
 }
 
@@ -109,10 +126,18 @@ export function DiffContentPrimitive(
     );
     return parsePatchFiles(props.patch, cacheKey);
   }, [resolvedTheme, props.patch, props.cacheScope]);
-  const fileDiffs = useMemo(
+  const parsedFileDiffs = useMemo(
     () => parsed.flatMap((patchGroup) => patchGroup.files),
     [parsed],
   );
+  const editOldFile = props.editSession?.oldFile;
+  const editNewFile = props.editSession?.newFile;
+  const fileDiffs = useMemo(() => {
+    if (editNewFile === undefined) return parsedFileDiffs;
+    return parsedFileDiffs.map((fileDiff) =>
+      hydrateFileDiffForEdit(fileDiff, editOldFile ?? null, editNewFile),
+    );
+  }, [parsedFileDiffs, editOldFile, editNewFile]);
   const themeName = resolveDiffThemeName(resolvedTheme);
   const highlightReady = useDiffsDiffHighlightReady({
     fileDiffs,
@@ -144,7 +169,6 @@ export function DiffContentPrimitive(
               theme: themeName,
               themeType: resolvedTheme,
               unsafeCSS: DIFF_PANEL_WITH_FIND_UNSAFE_CSS,
-              loadDiffFiles: props.editSession?.loadDiffFiles,
               ...props.editAdapter?.diffOptions,
             }}
           />
@@ -158,4 +182,38 @@ export function DiffContentPrimitive(
 
 function resolvePierreOverflow(wordWrap: boolean): "wrap" | "scroll" {
   return wordWrap ? "wrap" : "scroll";
+}
+
+/**
+ * Synchronously upgrades a patch-parsed (always partial) `FileDiffMetadata`
+ * to a fully loaded one before it ever reaches `<FileDiff edit={true}>`.
+ *
+ * `@pierre/diffs` only attempts to hydrate a partial diff once, at the
+ * moment an editor first attaches to it (`FileDiff.attachEditor` ->
+ * `loadFilesIfNecessary`), and only for `change`/`rename-changed`/
+ * `rename-pure` types. A later render that hands it a *different* partial
+ * `FileDiffMetadata` object for the same file - which is exactly what a
+ * fresh `parsePatchFiles()` call produces - is "treated as a new partial
+ * render model" per the library's own `FileDiffMetadata.isPartial` docs,
+ * permanently stranding the editor without a hydration attempt. Doing the
+ * hydration ourselves, before `edit` ever flips true, sidesteps that
+ * async race entirely.
+ */
+function hydrateFileDiffForEdit(
+  fileDiff: FileDiffMetadata,
+  oldFile: FileContents | null,
+  newFile: FileContents,
+): FileDiffMetadata {
+  if (!fileDiff.isPartial) return fileDiff;
+  if (fileDiff.type === "rename-pure") {
+    return hydratePartialDiff("clone", fileDiff, { oldFile: null, newFile });
+  }
+  if (fileDiff.type === "change" || fileDiff.type === "rename-changed") {
+    if (oldFile === null) return fileDiff;
+    return hydratePartialDiff("clone", fileDiff, { oldFile, newFile });
+  }
+  // "new" / "deleted": hydratePartialDiff has no case for these (they carry
+  // their full content in the patch already) - build a full, non-partial
+  // diff straight from file contents instead.
+  return parseDiffFromFile(oldFile, newFile);
 }

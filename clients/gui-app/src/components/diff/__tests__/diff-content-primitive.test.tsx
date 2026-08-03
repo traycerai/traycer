@@ -168,11 +168,8 @@ describe("<DiffContentPrimitive />", () => {
         editAdapter={editAdapter}
         editSession={{
           editorOptions: editAdapter.editorOptions,
-          loadDiffFiles: () =>
-            Promise.resolve({
-              oldFile: { name: "src/app.ts", contents: "old\n" },
-              newFile: { name: "src/app.ts", contents: "new\n" },
-            }),
+          oldFile: { name: "src/app.ts", contents: "old\n" },
+          newFile: { name: "src/app.ts", contents: "new\n" },
         }}
       />,
     );

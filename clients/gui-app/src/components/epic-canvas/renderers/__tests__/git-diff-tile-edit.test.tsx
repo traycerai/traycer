@@ -18,7 +18,7 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
+import type { FileContents } from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
 import type { GitChangedFile, GitStage } from "@traycer/protocol/host";
 import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
@@ -55,13 +55,13 @@ const state = vi.hoisted((): EditTestState => ({
 interface DiffSurfaceTestState {
   mountCount: number;
   unmountCount: number;
-  readonly loaders: FileDiffContentsLoader[];
+  readonly editableNewFiles: FileContents[];
 }
 
 const diffSurfaceState = vi.hoisted((): DiffSurfaceTestState => ({
   mountCount: 0,
   unmountCount: 0,
-  loaders: [],
+  editableNewFiles: [],
 }));
 
 const preloadState = vi.hoisted(() => ({
@@ -166,14 +166,15 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
     readonly editAdapter?: DiffClickToEditAdapter;
     readonly editSession?: {
       readonly editorOptions: EditorOptions<undefined>;
-      readonly loadDiffFiles: FileDiffContentsLoader;
+      readonly oldFile: FileContents | null;
+      readonly newFile: FileContents;
     };
   }): ReactNode {
     const [editorDocument, setEditorDocument] = useState(
       () => state.worktreeContent,
     );
     const [editorCaret, setEditorCaret] = useState(0);
-    const loader = props.editSession?.loadDiffFiles;
+    const newFile = props.editSession?.newFile;
 
     useEffect(() => {
       diffSurfaceState.mountCount += 1;
@@ -183,10 +184,13 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
     }, []);
 
     useEffect(() => {
-      if (loader !== undefined && diffSurfaceState.loaders.at(-1) !== loader) {
-        diffSurfaceState.loaders.push(loader);
+      if (
+        newFile !== undefined &&
+        diffSurfaceState.editableNewFiles.at(-1) !== newFile
+      ) {
+        diffSurfaceState.editableNewFiles.push(newFile);
       }
-    }, [loader]);
+    }, [newFile]);
 
     const changeEditorDocument = (
       content: string,
@@ -267,17 +271,6 @@ const NODE = makeGitFileDiffTile({
   repositoryContext: null,
 });
 
-const EDITABLE_FILE_DIFF: FileDiffMetadata = {
-  name: "src/app.ts",
-  type: "change",
-  hunks: [],
-  splitLineCount: 0,
-  unifiedLineCount: 0,
-  isPartial: true,
-  deletionLines: [],
-  additionLines: [],
-};
-
 describe("<GitDiffTile /> editing", () => {
   beforeEach(() => {
     fileEditRuntimeRegistry.resetForTesting();
@@ -296,7 +289,7 @@ describe("<GitDiffTile /> editing", () => {
     state.nextDraftCaret = 16;
     diffSurfaceState.mountCount = 0;
     diffSurfaceState.unmountCount = 0;
-    diffSurfaceState.loaders.length = 0;
+    diffSurfaceState.editableNewFiles.length = 0;
     state.refetchContents.mockImplementation(() =>
       Promise.resolve({
         error: null,
@@ -483,18 +476,21 @@ describe("<GitDiffTile /> editing", () => {
     expect(staleStatus).toBeTruthy();
   });
 
-  it("keeps the editor document, caret, runtime draft, and loader stable through a pending OID rollover", async () => {
+  it("keeps the editor document, caret, runtime draft, and editSession identity stable through a pending OID rollover", async () => {
     const rendered = renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
     await screen.findByRole("button", { name: "Type draft" });
     await waitFor(() => {
-      expect(diffSurfaceState.loaders).toHaveLength(1);
+      expect(diffSurfaceState.editableNewFiles).toHaveLength(1);
     });
 
     const editorBeforeRollover = screen.getByTestId("git-diff-editor-surface");
     const mountsBeforeRollover = diffSurfaceState.mountCount;
     const unmountsBeforeRollover = diffSurfaceState.unmountCount;
-    const initialLoader = diffSurfaceState.loaders[0];
+    // Stable oldFile/newFile identity is what DiffContentPrimitive keys its
+    // hydration memo on - a new object per render would re-derive the diff
+    // and reintroduce the partial-diff attach bug.
+    const initialNewFile = diffSurfaceState.editableNewFiles[0];
 
     fireEvent.click(screen.getByRole("button", { name: "Type draft" }));
     expect(editorBeforeRollover.getAttribute("data-editor-document")).toBe(
@@ -502,10 +498,7 @@ describe("<GitDiffTile /> editing", () => {
     );
     expect(editorBeforeRollover.getAttribute("data-editor-caret")).toBe("16");
     expect(currentRuntimeDraft()).toBe("const value = 2;\n");
-    expect((await initialLoader(EDITABLE_FILE_DIFF)).newFile.contents).toBe(
-      "const value = 2;\n",
-    );
-    expect(diffSurfaceState.loaders).toEqual([initialLoader]);
+    expect(diffSurfaceState.editableNewFiles).toEqual([initialNewFile]);
 
     state.worktreeOid = "worktree-2";
     state.diffPending = true;
@@ -520,7 +513,7 @@ describe("<GitDiffTile /> editing", () => {
     expect(editorBeforeRollover.getAttribute("data-editor-caret")).toBe("16");
     expect(diffSurfaceState.mountCount).toBe(mountsBeforeRollover);
     expect(diffSurfaceState.unmountCount).toBe(unmountsBeforeRollover);
-    expect(diffSurfaceState.loaders).toEqual([initialLoader]);
+    expect(diffSurfaceState.editableNewFiles).toEqual([initialNewFile]);
 
     state.nextDraftContent = "const value = 23;\n";
     state.nextDraftCaret = 17;
@@ -530,10 +523,7 @@ describe("<GitDiffTile /> editing", () => {
     );
     expect(editorBeforeRollover.getAttribute("data-editor-caret")).toBe("17");
     expect(currentRuntimeDraft()).toBe("const value = 23;\n");
-    expect((await initialLoader(EDITABLE_FILE_DIFF)).newFile.contents).toBe(
-      "const value = 23;\n",
-    );
-    expect(diffSurfaceState.loaders).toEqual([initialLoader]);
+    expect(diffSurfaceState.editableNewFiles).toEqual([initialNewFile]);
 
     state.diffPending = false;
     rendered.rerender(tileElement(NODE, true));
@@ -545,12 +535,9 @@ describe("<GitDiffTile /> editing", () => {
     );
     expect(editorBeforeRollover.getAttribute("data-editor-caret")).toBe("17");
     expect(currentRuntimeDraft()).toBe("const value = 23;\n");
-    expect((await initialLoader(EDITABLE_FILE_DIFF)).newFile.contents).toBe(
-      "const value = 23;\n",
-    );
     expect(diffSurfaceState.mountCount).toBe(mountsBeforeRollover);
     expect(diffSurfaceState.unmountCount).toBe(unmountsBeforeRollover);
-    expect(diffSurfaceState.loaders).toEqual([initialLoader]);
+    expect(diffSurfaceState.editableNewFiles).toEqual([initialNewFile]);
   });
 
   it("starts Git hydration and editor preload in parallel and only activates after both settle", async () => {

@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { FileContents, FileDiffContentsLoader } from "@pierre/diffs";
+import type { FileContents } from "@pierre/diffs";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -50,6 +50,17 @@ interface GitDiffHydration {
   readonly pinnedDiff: GitGetFileDiffResponse;
 }
 
+/**
+ * Full baseline file contents for the active edit session, stable for as
+ * long as `hydration` doesn't change. Passed to `DiffContentPrimitive` so it
+ * can hydrate the parsed diff synchronously instead of relying on
+ * `@pierre/diffs`' own async (and single-attempt) `loadDiffFiles` path.
+ */
+export interface EditableDiffFiles {
+  readonly oldFile: FileContents | null;
+  readonly newFile: FileContents;
+}
+
 export interface GitDiffEditingModel {
   readonly canOfferEdit: boolean;
   readonly active: boolean;
@@ -60,7 +71,7 @@ export interface GitDiffEditingModel {
   readonly loading: boolean;
   readonly editAdapter: DiffClickToEditAdapter;
   readonly state: FileEditRuntimeState | null;
-  readonly loadDiffFiles: FileDiffContentsLoader;
+  readonly editableFiles: EditableDiffFiles | null;
   readonly retry: () => void;
   readonly keepMine: () => void;
   readonly useDisk: () => void;
@@ -388,26 +399,18 @@ export function useGitDiffEditing(
   const hydratedOldFile = hydration?.oldFile;
   const hydratedNewFile = hydration?.newFile;
   const editRuntime = fileSession.runtime;
-  const loadDiffFiles = useCallback<FileDiffContentsLoader>(
-    (fileDiff) => {
-      if (hydratedNewFile === undefined) {
-        return Promise.reject(
-          new Error("The edit session ended before the diff was hydrated."),
-        );
-      }
-      const newFile = {
+  const editableFiles = useMemo<EditableDiffFiles | null>(() => {
+    if (hydratedNewFile === undefined) return null;
+    return {
+      oldFile: hydratedOldFile ?? null,
+      newFile: {
         ...hydratedNewFile,
         contents:
           editRuntime?.store.getState().draftContent ??
           hydratedNewFile.contents,
-      };
-      if (fileDiff.type === "rename-pure") {
-        return Promise.resolve({ oldFile: null, newFile });
-      }
-      return Promise.resolve({ oldFile: hydratedOldFile ?? null, newFile });
-    },
-    [editRuntime, hydratedNewFile, hydratedOldFile],
-  );
+      },
+    };
+  }, [editRuntime, hydratedNewFile, hydratedOldFile]);
 
   const conflictDiskContent = fileSession.state?.conflict?.diskContent ?? null;
   const readLatestDisk = useCallback(async (): Promise<string> => {
@@ -456,7 +459,7 @@ export function useGitDiffEditing(
     loading: contentsQuery.isFetching,
     editAdapter,
     state: fileSession.state,
-    loadDiffFiles,
+    editableFiles,
     retry: fileSession.retry,
     keepMine,
     useDisk,

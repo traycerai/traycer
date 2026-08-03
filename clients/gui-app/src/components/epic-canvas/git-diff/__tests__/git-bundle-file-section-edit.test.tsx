@@ -18,7 +18,7 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
+import type { FileContents } from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
@@ -59,13 +59,13 @@ const state = vi.hoisted((): BundleEditTestState => ({
 interface BundleDiffSurfaceTestState {
   mountCount: number;
   unmountCount: number;
-  readonly loaders: FileDiffContentsLoader[];
+  readonly editableNewFiles: FileContents[];
 }
 
 const diffSurfaceState = vi.hoisted((): BundleDiffSurfaceTestState => ({
   mountCount: 0,
   unmountCount: 0,
-  loaders: [],
+  editableNewFiles: [],
 }));
 
 const preloadState = vi.hoisted(() => ({
@@ -123,14 +123,15 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
     readonly editAdapter?: DiffClickToEditAdapter;
     readonly editSession?: {
       readonly editorOptions: EditorOptions<undefined>;
-      readonly loadDiffFiles: FileDiffContentsLoader;
+      readonly oldFile: FileContents | null;
+      readonly newFile: FileContents;
     };
   }): ReactNode {
     const [editorDocument, setEditorDocument] = useState(
       () => state.worktreeContent,
     );
     const [editorCaret, setEditorCaret] = useState(0);
-    const loader = props.editSession?.loadDiffFiles;
+    const newFile = props.editSession?.newFile;
 
     useEffect(() => {
       diffSurfaceState.mountCount += 1;
@@ -140,18 +141,12 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
     }, []);
 
     useEffect(() => {
-      if (loader === undefined) return;
-      if (diffSurfaceState.loaders.at(-1) !== loader) {
-        diffSurfaceState.loaders.push(loader);
+      if (newFile === undefined) return;
+      if (diffSurfaceState.editableNewFiles.at(-1) !== newFile) {
+        diffSurfaceState.editableNewFiles.push(newFile);
       }
-      let cancelled = false;
-      void loader(EDITABLE_FILE_DIFF).then((files) => {
-        if (!cancelled) setEditorDocument(files.newFile.contents);
-      });
-      return () => {
-        cancelled = true;
-      };
-    }, [loader]);
+      setEditorDocument(newFile.contents);
+    }, [newFile]);
 
     return (
       <div
@@ -201,17 +196,6 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
     );
   },
 }));
-
-const EDITABLE_FILE_DIFF: FileDiffMetadata = {
-  name: "src/app.ts",
-  type: "change",
-  hunks: [],
-  splitLineCount: 0,
-  unifiedLineCount: 0,
-  isPartial: true,
-  deletionLines: [],
-  additionLines: [],
-};
 
 function bundleNode(): GitBundleDiffTileRef {
   const node = makeGitBundleDiffTile({
@@ -288,7 +272,7 @@ describe("<BundleFileSection /> editing", () => {
     preloadState.preload.mockImplementation(() => Promise.resolve());
     diffSurfaceState.mountCount = 0;
     diffSurfaceState.unmountCount = 0;
-    diffSurfaceState.loaders.length = 0;
+    diffSurfaceState.editableNewFiles.length = 0;
   });
 
   afterEach(() => {
@@ -306,11 +290,11 @@ describe("<BundleFileSection /> editing", () => {
       name: "Type bundle draft",
     });
     await waitFor(() => {
-      expect(diffSurfaceState.loaders).toHaveLength(1);
+      expect(diffSurfaceState.editableNewFiles).toHaveLength(1);
     });
 
     const surface = screen.getByTestId("bundle-diff-editor-surface");
-    const loader = diffSurfaceState.loaders[0];
+    const editableNewFile = diffSurfaceState.editableNewFiles[0];
     const mounts = diffSurfaceState.mountCount;
     const unmounts = diffSurfaceState.unmountCount;
     const autosaveStatus = screen.getByTestId("file-autosave-status");
@@ -334,12 +318,12 @@ describe("<BundleFileSection /> editing", () => {
     );
     expect(surface.getAttribute("data-editor-caret")).toBe("16");
     expect(currentRuntimeDraft()).toBe("const value = 2;\n");
-    expect((await loader(EDITABLE_FILE_DIFF)).newFile.contents).toBe(
-      "const value = 2;\n",
-    );
     expect(diffSurfaceState.mountCount).toBe(mounts);
     expect(diffSurfaceState.unmountCount).toBe(unmounts);
-    expect(diffSurfaceState.loaders).toEqual([loader]);
+    // Stable oldFile/newFile identity is what DiffContentPrimitive keys its
+    // hydration memo on - a new object per render would re-derive the diff
+    // and reintroduce the partial-diff attach bug.
+    expect(diffSurfaceState.editableNewFiles).toEqual([editableNewFile]);
   });
 
   it("restores a retained draft when virtualization remounts the file section", async () => {
@@ -381,11 +365,11 @@ describe("<BundleFileSection /> editing", () => {
       await screen.findByRole("button", { name: "Type bundle draft" }),
     );
     await waitFor(() => {
-      expect(diffSurfaceState.loaders).toHaveLength(1);
+      expect(diffSurfaceState.editableNewFiles).toHaveLength(1);
     });
 
     const surface = screen.getByTestId("bundle-diff-editor-surface");
-    const loader = diffSurfaceState.loaders[0];
+    const editableNewFile = diffSurfaceState.editableNewFiles[0];
     const mounts = diffSurfaceState.mountCount;
     const unmounts = diffSurfaceState.unmountCount;
 
@@ -399,12 +383,9 @@ describe("<BundleFileSection /> editing", () => {
     );
     expect(surface.getAttribute("data-editor-caret")).toBe("16");
     expect(currentRuntimeDraft()).toBe("const value = 2;\n");
-    expect((await loader(EDITABLE_FILE_DIFF)).newFile.contents).toBe(
-      "const value = 2;\n",
-    );
     expect(diffSurfaceState.mountCount).toBe(mounts);
     expect(diffSurfaceState.unmountCount).toBe(unmounts);
-    expect(diffSurfaceState.loaders).toEqual([loader]);
+    expect(diffSurfaceState.editableNewFiles).toEqual([editableNewFile]);
   });
 });
 
