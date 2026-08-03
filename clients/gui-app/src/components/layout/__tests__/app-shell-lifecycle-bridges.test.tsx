@@ -1,6 +1,9 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -81,8 +84,61 @@ vi.mock("@/components/home/terminal-panel/landing-terminal-host", () => ({
 }));
 
 import { AppShell } from "@/components/layout/app-shell";
+import {
+  hostRpcRegistry,
+  HostRuntimeProvider,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+
+function renderAppShell(): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+
+  render(
+    <RunnerHostProvider runnerHost={runnerHost}>
+      <QueryClientProvider client={queryClient}>
+        <HostRuntimeProvider
+          registry={hostRpcRegistry}
+          messengerFactory={(args: { registry: HostRpcRegistry }) =>
+            new MockHostMessenger<HostRpcRegistry>({
+              registry: args.registry,
+              requestId: () => "app-shell-lifecycle-request",
+              handlers: {},
+            })
+          }
+          invalidator={null}
+          requestId={null}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+          fallback={<div data-testid="runtime-fallback" />}
+        >
+          <AppShell>
+            <div data-testid="app-shell-child" />
+          </AppShell>
+        </HostRuntimeProvider>
+      </QueryClientProvider>
+    </RunnerHostProvider>,
+  );
+
+  return queryClient;
+}
 
 describe("<AppShell />", () => {
+  let queryClient: QueryClient;
+
   beforeEach(() => {
     windowHost.runnerHost = {};
     useAuthStore
@@ -97,17 +153,16 @@ describe("<AppShell />", () => {
 
   afterEach(() => {
     cleanup();
+    queryClient.clear();
     delete windowHost.runnerHost;
     useAuthStore.getState().setSignedOut();
     useSettingsStore.setState({ showGlobalResourceMonitor: true });
   });
 
-  it("renders the signed-in app shell around routed children", () => {
-    render(
-      <AppShell>
-        <div data-testid="app-shell-child" />
-      </AppShell>,
-    );
+  it("renders the signed-in app shell around routed children", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
 
     expect(screen.getByTestId("user-menu")).not.toBeNull();
     expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
@@ -125,12 +180,10 @@ describe("<AppShell />", () => {
     expect(screen.queryByTestId("host-status-footer")).toBeNull();
   });
 
-  it("clips the surface row that hosts the landing terminal panel", () => {
-    render(
-      <AppShell>
-        <div data-testid="app-shell-child" />
-      </AppShell>,
-    );
+  it("clips the surface row that hosts the landing terminal panel", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
 
     // The terminal panel sits in this row as a sibling of the tab host, and its
     // 1px resize handle carries a 10px `::after` hit area centred on it. With
@@ -149,26 +202,22 @@ describe("<AppShell />", () => {
     expect(surfaceRow?.className).toContain("overflow-hidden");
   });
 
-  it("makes the capped tab strip leftover a desktop drag region", () => {
-    render(
-      <AppShell>
-        <div data-testid="app-shell-child" />
-      </AppShell>,
-    );
+  it("makes the capped tab strip leftover a desktop drag region", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
 
     const tabRegion = screen.getByTestId("tab-strip").parentElement;
     expect(tabRegion).not.toBeNull();
     expect(tabRegion?.className).toContain("[-webkit-app-region:drag]");
   });
 
-  it("hides the global resource monitor button when the preference is off", () => {
+  it("hides the global resource monitor button when the preference is off", async () => {
     useSettingsStore.setState({ showGlobalResourceMonitor: false });
 
-    render(
-      <AppShell>
-        <div data-testid="app-shell-child" />
-      </AppShell>,
-    );
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
 
     expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
   });
