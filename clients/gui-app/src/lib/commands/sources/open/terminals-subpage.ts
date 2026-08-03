@@ -120,21 +120,25 @@ function terminalWorkspaceStatusHint(
   };
 }
 
+interface TerminalWorkspaceQueryState {
+  readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12> | undefined;
+  readonly folderlessCwd: string | null | undefined;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+}
+
 function terminalWorkspaceQueryItems(
   ctx: CommandContext,
   hostId: string,
-  rows: ReadonlyArray<WorktreeBindingSelectorRowV12> | undefined,
-  folderlessCwd: string | null | undefined,
-  isPending: boolean,
-  isError: boolean,
+  query: TerminalWorkspaceQueryState,
 ): ReadonlyArray<CommandItem> {
-  if (isPending) return [terminalWorkspaceStatusHint(hostId, "loading")];
-  if (isError) return [terminalWorkspaceStatusHint(hostId, "error")];
+  if (query.isPending) return [terminalWorkspaceStatusHint(hostId, "loading")];
+  if (query.isError) return [terminalWorkspaceStatusHint(hostId, "error")];
   return terminalWorkspaceLeaves(
     ctx,
     hostId,
-    rows ?? [],
-    folderlessCwd ?? null,
+    query.rows ?? [],
+    query.folderlessCwd ?? null,
   );
 }
 
@@ -150,14 +154,12 @@ function useHostTerminalWorkspaceItems(
   });
   return useMemo(
     () =>
-      terminalWorkspaceQueryItems(
-        ctx,
-        hostId,
-        bindings.data?.rows,
-        bindings.data?.folderlessCwd,
-        bindings.isPending,
-        bindings.isError,
-      ),
+      terminalWorkspaceQueryItems(ctx, hostId, {
+        rows: bindings.data?.rows,
+        folderlessCwd: bindings.data?.folderlessCwd,
+        isPending: bindings.isPending,
+        isError: bindings.isError,
+      }),
     [bindings.data, bindings.isError, bindings.isPending, ctx, hostId],
   );
 }
@@ -190,14 +192,12 @@ function useNewTerminalWorkspaceItems(
     const localLeaves =
       activeHostId === null
         ? []
-        : terminalWorkspaceQueryItems(
-            ctx,
-            activeHostId,
-            bindings.data?.rows,
-            bindings.data?.folderlessCwd,
-            bindings.isPending,
-            bindings.isError,
-          );
+        : terminalWorkspaceQueryItems(ctx, activeHostId, {
+            rows: bindings.data?.rows,
+            folderlessCwd: bindings.data?.folderlessCwd,
+            isPending: bindings.isPending,
+            isError: bindings.isError,
+          });
     const otherHosts = (directory.data ?? [])
       .filter(
         (entry) =>
