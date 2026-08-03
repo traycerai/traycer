@@ -319,6 +319,27 @@ function dispatchViewportPointer(
   return event;
 }
 
+function dispatchViewportClick(
+  viewport: HTMLElement,
+  init: {
+    clientX: number;
+    clientY: number;
+    target?: HTMLElement;
+  },
+): MouseEvent {
+  const target = init.target ?? document.createElement("span");
+  if (!target.isConnected) viewport.append(target);
+  const event = new MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    clientX: init.clientX,
+    clientY: init.clientY,
+    button: 0,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
 /** Synchronous document selectionchange (jsdom's real one is often delayed). */
 function dispatchDocumentSelectionChange(): void {
   document.dispatchEvent(new Event("selectionchange"));
@@ -3060,6 +3081,77 @@ describe("ChatTurnMinimap passive hover (hit narrower than widest marker)", () =
     expectZeroWidthHitStripInert();
   });
 
+  it("navigates from a clean click on painted zero-gutter markers", async () => {
+    const { viewport, onSelect } = await renderZeroGutterPassive({});
+    openPassiveAtY(viewport, {
+      clientY: RAIL_TOP + RAIL_HEIGHT / 2,
+      edgeX: RIGHT_EDGE_X,
+    });
+    expect(await screen.findByText("Turn beta")).toBeTruthy();
+
+    let event: MouseEvent | undefined;
+    act(() => {
+      event = dispatchViewportClick(viewport, {
+        clientX:
+          RIGHT_EDGE_X -
+          DEFAULT_UI_FONT_SIZE * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
+        clientY: RAIL_TOP + RAIL_HEIGHT / 2,
+      });
+    });
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith("message-2");
+    expect(event?.defaultPrevented).toBe(true);
+    expectZeroWidthHitStripInert();
+  });
+
+  it("leaves a zero-gutter click with the transcript when text is selected", async () => {
+    const { viewport, onSelect } = await renderZeroGutterPassive({});
+    mockZeroWidthRailGeometry({
+      top: RAIL_TOP,
+      height: RAIL_HEIGHT,
+      edgeX: RIGHT_EDGE_X,
+    });
+    const clearSelection = installNonCollapsedSelection(
+      "selected transcript text",
+    );
+    onTestFinished(clearSelection);
+
+    let event: MouseEvent | undefined;
+    act(() => {
+      event = dispatchViewportClick(viewport, {
+        clientX: RIGHT_EDGE_X - 1,
+        clientY: RAIL_TOP + RAIL_HEIGHT / 2,
+      });
+    });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(event?.defaultPrevented).toBe(false);
+  });
+
+  it("does not claim clicks outside the painted zero-gutter marker width", async () => {
+    const { viewport, onSelect } = await renderZeroGutterPassive({});
+    mockZeroWidthRailGeometry({
+      top: RAIL_TOP,
+      height: RAIL_HEIGHT,
+      edgeX: RIGHT_EDGE_X,
+    });
+
+    let event: MouseEvent | undefined;
+    act(() => {
+      event = dispatchViewportClick(viewport, {
+        clientX:
+          RIGHT_EDGE_X -
+          DEFAULT_UI_FONT_SIZE * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM -
+          1,
+        clientY: RAIL_TOP + RAIL_HEIGHT / 2,
+      });
+    });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(event?.defaultPrevented).toBe(false);
+  });
+
   it("supports expand and collapse in passive mode", async () => {
     const { viewport, onSelect } = await renderZeroGutterPassive({});
     openPassiveAtY(viewport, {
@@ -3356,6 +3448,50 @@ describe("ChatTurnMinimap passive hover (hit narrower than widest marker)", () =
     expect(await screen.findByText("Turn beta")).toBeTruthy();
     expectPositiveSafeHitStrip(hitWidth);
   });
+
+  it.each([
+    { caseIndex: 0, edgeX: RIGHT_EDGE_X, side: "right" as const },
+    { caseIndex: 1, edgeX: LEFT_EDGE_X, side: "left" as const },
+  ])(
+    "partial-positive $side: a clean click on painted overflow outside the button navigates",
+    async ({ caseIndex, edgeX, side }) => {
+      const partialCase = PARTIAL_POSITIVE_PASSIVE_CASES[caseIndex];
+      const { viewport, onSelect, hitWidth } =
+        await renderPartialPositivePassive({
+          uiFontSize: partialCase.uiFontSize,
+          viewportWidth: partialCase.viewportWidth,
+          hitWidth: partialCase.hitWidth,
+          side,
+        });
+      const overflowX = overflowClientXOutsideButton({
+        edgeX,
+        hitWidth,
+        side,
+      });
+      openPassiveAtY(viewport, {
+        clientY: RAIL_TOP + RAIL_HEIGHT / 2,
+        edgeX,
+        clientX: overflowX,
+        uiFontSize: partialCase.uiFontSize,
+        hitWidth,
+        side,
+      });
+      expect(await screen.findByText("Turn beta")).toBeTruthy();
+
+      let event: MouseEvent | undefined;
+      act(() => {
+        event = dispatchViewportClick(viewport, {
+          clientX: overflowX,
+          clientY: RAIL_TOP + RAIL_HEIGHT / 2,
+        });
+      });
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(onSelect).toHaveBeenCalledWith("message-2");
+      expect(event?.defaultPrevented).toBe(true);
+      expectPositiveSafeHitStrip(hitWidth);
+    },
+  );
 
   it("partial-positive font15/750 right: retain, dismiss, card click; button stays positive", async () => {
     const partialCase = PARTIAL_POSITIVE_PASSIVE_CASES[2];
