@@ -98,13 +98,14 @@ export function installMockLocalStorage(): Storage {
   return storage;
 }
 
-if (typeof globalThis.ResizeObserver === "undefined") {
-  Object.defineProperty(globalThis, "ResizeObserver", {
-    configurable: true,
-    writable: true,
-    value: MockResizeObserver,
-  });
-}
+// Vitest reruns setup files for each test file while reusing fork processes.
+// Reset this global every time so a suite with a controllable observer cannot
+// leak it into the unrelated test file that happens to run next in the worker.
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  writable: true,
+  value: MockResizeObserver,
+});
 
 if (typeof globalThis.IntersectionObserver === "undefined") {
   class MockIntersectionObserver implements IntersectionObserver {
