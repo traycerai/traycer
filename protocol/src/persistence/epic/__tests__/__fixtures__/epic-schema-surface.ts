@@ -3262,6 +3262,21 @@ export const epicSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                backgroundTask: {
+                                  default: false,
+                                  anyOf: [
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
+                                stopped: {
+                                  default: false,
+                                  type: "boolean",
+                                },
                               },
                               required: [
                                 "blockId",
@@ -9903,6 +9918,21 @@ export const epicSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                backgroundTask: {
+                                  default: false,
+                                  anyOf: [
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
+                                stopped: {
+                                  default: false,
+                                  type: "boolean",
+                                },
                               },
                               required: [
                                 "blockId",
@@ -9912,6 +9942,8 @@ export const epicSchemaSurfaceBaseline = {
                                 "command",
                                 "cwd",
                                 "exitCode",
+                                "backgroundTask",
+                                "stopped",
                               ],
                               additionalProperties: false,
                             },
