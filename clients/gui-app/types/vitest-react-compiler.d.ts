@@ -1,9 +1,9 @@
 declare module "@rolldown/plugin-babel" {
-  import type { PluginOption } from "vite";
+  import type { Plugin } from "vite";
 
   export default function babel(options: {
     readonly presets: ReadonlyArray<unknown>;
-  }): Promise<PluginOption>;
+  }): Promise<Plugin>;
 }
 
 declare module "@vitejs/plugin-react" {
