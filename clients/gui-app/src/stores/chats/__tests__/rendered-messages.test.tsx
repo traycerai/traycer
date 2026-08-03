@@ -1438,6 +1438,8 @@ describe("useRenderedMessages", () => {
           exitCode: null,
           status: "streaming",
           timestamp: 2002,
+          backgroundTask: null,
+          stopped: false,
         },
       ],
     };
@@ -1688,6 +1690,8 @@ describe("useRenderedMessages", () => {
           exitCode: 0,
           status: "completed",
           timestamp: 2003,
+          backgroundTask: null,
+          stopped: false,
         },
       ],
     };
@@ -2369,6 +2373,8 @@ describe("useRenderedMessages", () => {
           exitCode: 0,
           status: "completed",
           timestamp: 2002,
+          backgroundTask: null,
+          stopped: false,
           parentBlockId: "agent-1",
         },
       ],
