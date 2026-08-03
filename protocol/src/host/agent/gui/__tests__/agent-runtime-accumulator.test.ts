@@ -1873,7 +1873,6 @@ describe("accumulateEvent", () => {
       timestamp: 2,
       command: "npm test",
       exitCode: 0,
-      terminationReason: "error",
     });
 
     expect(blocks).toHaveLength(1);

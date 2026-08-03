@@ -3442,7 +3442,6 @@ describe("createChatSessionStore", () => {
         timestamp: 30,
         command: "sleep 20 && echo done",
         exitCode: 0,
-        terminationReason: "error",
         backgroundTask: true,
       },
     });
@@ -3495,7 +3494,6 @@ describe("createChatSessionStore", () => {
         timestamp: 5,
         command: "sleep 20 && echo done",
         exitCode: 0,
-        terminationReason: "error",
         backgroundTask: true,
       },
     });
