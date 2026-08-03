@@ -67,11 +67,13 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   const topPadding = props.topSpacing === "compact" ? "pt-2" : "pt-4";
 
   return (
-    <div
-      className={cn("bg-canvas px-4", topPadding)}
-      data-testid="chat-lower-dock"
-    >
-      <div className="mx-auto w-full max-w-3xl">
+    <div className="pointer-events-none px-4" data-testid="chat-lower-dock">
+      <div
+        className={cn(
+          "pointer-events-auto mx-auto w-full max-w-3xl bg-canvas",
+          topPadding,
+        )}
+      >
         <div className="@container mx-3 -mb-px overflow-hidden rounded-t-lg border border-b-0 border-border bg-muted/30">
           <QueueSection visible={queueVisible} dock={props} />
           <PinnedSection

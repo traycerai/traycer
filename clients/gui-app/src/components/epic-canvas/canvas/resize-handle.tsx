@@ -170,7 +170,7 @@ export function SplitResizeHandle(props: SplitResizeHandleProps) {
       data-resize-group-id={groupId}
       data-handle-index={index}
       className={cn(
-        "relative z-10 shrink-0 bg-border ring-offset-background focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden",
+        "relative z-10 shrink-0 bg-canvas ring-offset-background focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden",
         inFlowPointerDragHandleAxisClassName(direction),
         props.className,
       )}
