@@ -4,6 +4,7 @@ import type {
   EpicArtifactRef,
   EpicTerminalRef,
   GitDiffTileRef,
+  ManagedCommandOutputTileRef,
   PrDetailTileRef,
   PrDiffTileRef,
   SnapshotDiffTileRef,
@@ -30,6 +31,7 @@ export interface TileKindToRefMap {
   readonly "workspace-file": WorkspaceFileRef;
   readonly "git-diff": GitDiffTileRef;
   readonly "snapshot-diff": SnapshotDiffTileRef;
+  readonly "managed-command-output": ManagedCommandOutputTileRef;
   readonly "comm-graph": CommGraphTileRef;
   readonly "pr-detail": PrDetailTileRef;
   readonly "pr-diff": PrDiffTileRef;

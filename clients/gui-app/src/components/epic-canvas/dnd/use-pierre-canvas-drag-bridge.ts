@@ -44,8 +44,8 @@ export interface PierreCanvasDragBridgeInput {
   /**
    * Resolves the dnd-kit source payload for the Pierre row under the
    * activating pointer event, or `null` when the press is not on a draggable
-   * file row (directory rows, empty space, panel chrome). Returning `null`
-   * vetoes the canvas drag and leaves the gesture to Pierre.
+   * file or directory row (empty space and panel chrome stay non-draggable).
+   * Returning `null` vetoes the canvas drag and leaves the gesture to Pierre.
    */
   readonly resolveSourceData: (
     event: PointerEvent,
