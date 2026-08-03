@@ -20,7 +20,9 @@ import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
+  installLegendListTestClock,
   installLegendListViewportMetrics,
+  restoreLegendListTestClock,
   settleLegendList,
 } from "./legend-list-test-environment";
 
@@ -206,10 +208,12 @@ describe("ChatTimeline", () => {
   beforeEach(() => {
     renderCounts.clear();
     installLegendListViewportMetrics();
+    installLegendListTestClock();
   });
 
   afterEach(() => {
     cleanup();
+    restoreLegendListTestClock();
     vi.restoreAllMocks();
   });
 

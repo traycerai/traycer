@@ -11,7 +11,9 @@ import {
   within,
 } from "@testing-library/react";
 import {
+  installLegendListTestClock,
   installLegendListViewportMetrics,
+  restoreLegendListTestClock,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 
@@ -886,6 +888,7 @@ function registerWaitingChatHandoff(): void {
 describe("<ChatTile />", () => {
   beforeEach(() => {
     installLegendListViewportMetrics();
+    installLegendListTestClock();
     window.localStorage.clear();
     useAuthStore.setState({
       status: "signed-in",
@@ -928,6 +931,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    restoreLegendListTestClock();
     vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });

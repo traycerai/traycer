@@ -18,6 +18,7 @@ const BROWSER_FRAME_MS = 16;
 let scrollContainerScrollHeightOverridePx: number | null = null;
 let messageRowHeightOverrides = new Map<string, number>();
 let syntheticScrollEventsEnabled = true;
+let legendListTestClockInstalled = false;
 
 /**
  * Real browsers fire `scroll` (and, where supported, `scrollend`) for
@@ -308,6 +309,10 @@ export function installLegendListViewportMetrics(): void {
  * integrated.
  */
 export function installLegendListTestClock(): void {
+  if (legendListTestClockInstalled) {
+    restoreLegendListTestClock();
+  }
+
   // DOM Testing Library only recognizes fake timers when a Jest-compatible
   // clock is present. Vitest uses the same Sinon clock but does not expose the
   // `jest` facade, so bridge the one method waitFor needs. Without this,
@@ -344,12 +349,22 @@ export function installLegendListTestClock(): void {
       "cancelAnimationFrame",
     ],
   });
+  legendListTestClockInstalled = true;
+
+  // Keep the fake browser scheduler test-scoped even when another teardown
+  // hook throws before it reaches its normal restoration path. Vitest reuses
+  // forks between files, so leaking it would contaminate an unrelated suite.
+  onTestFinished(() => {
+    restoreLegendListTestClock();
+  });
 }
 
 /** Discard scheduled work from the unmounted list and restore wall time. */
 export function restoreLegendListTestClock(): void {
+  if (!legendListTestClockInstalled) return;
   vi.clearAllTimers();
   vi.useRealTimers();
+  legendListTestClockInstalled = false;
 }
 
 /** Advance browser time inside React's update boundary. */
