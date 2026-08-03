@@ -1,4 +1,5 @@
 import {
+  GitFork,
   MessageSquareCheck,
   MessageSquareWarning,
   MessageSquareX,
@@ -12,11 +13,11 @@ import type { NotificationIndicatorState } from "@/stores/notifications/notifica
  * per-row `NotificationIndicatorIcon` and the chat tree's descendant-status
  * rollup badge derive their glyph and color from these, so the two surfaces
  * cannot drift apart. `attentionTone` also encodes the attention-tier
- * precedence (failure > interview > approval); the running and unread-done
+ * precedence (failure > fork > interview > approval); the running and unread-done
  * tiers slot in below it at each consumer per its activity signal.
  */
 export interface IndicatorTone {
-  readonly testId: "failure" | "interview" | "approval" | "done";
+  readonly testId: "failure" | "fork" | "interview" | "approval" | "done";
   readonly title: string;
   readonly className: string;
   readonly Icon: LucideIcon;
@@ -38,6 +39,13 @@ export const FAILURE_TONE: IndicatorTone = {
   Icon: MessageSquareX,
 };
 
+export const FORK_TONE: IndicatorTone = {
+  testId: "fork",
+  title: "Chat publishing paused — choose which history to keep",
+  className: "text-warning-foreground",
+  Icon: GitFork,
+};
+
 export const INTERVIEW_TONE: IndicatorTone = {
   testId: "interview",
   title: "Task waiting for your interview response",
@@ -56,6 +64,7 @@ export function attentionTone(
   state: NotificationIndicatorState,
 ): IndicatorTone | null {
   if (state.unreadFailure) return FAILURE_TONE;
+  if (state.pendingFork) return FORK_TONE;
   if (state.pendingInterview) return INTERVIEW_TONE;
   if (state.pendingApproval) return APPROVAL_TONE;
   return null;

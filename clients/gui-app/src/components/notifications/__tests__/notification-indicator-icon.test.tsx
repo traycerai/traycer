@@ -16,6 +16,7 @@ import {
 
 const DEFAULT_STATE = {
   unreadFailure: false,
+  pendingFork: false,
   pendingApproval: false,
   pendingInterview: false,
   unreadDone: false,
@@ -28,6 +29,7 @@ describe("<NotificationIndicatorIcon />", () => {
     const { rerender } = renderIcon(
       {
         unreadFailure: true,
+        pendingFork: true,
         pendingApproval: true,
         pendingInterview: true,
         unreadDone: true,
@@ -48,6 +50,31 @@ describe("<NotificationIndicatorIcon />", () => {
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: true,
+          pendingApproval: true,
+          pendingInterview: true,
+          unreadDone: true,
+        },
+        "turn",
+      ),
+    );
+    expect(
+      screen.getByTestId("indicator-fork-subject-1").getAttribute("class"),
+    ).toContain("text-warning-foreground");
+    expect(
+      screen.getByTestId("indicator-fork-subject-1").getAttribute("class"),
+    ).toContain("lucide-git-fork");
+    expect(
+      screen
+        .getByTestId("indicator-fork-subject-1")
+        .parentElement?.getAttribute("data-notification-indicator-action"),
+    ).toBe("chat-fork");
+
+    rerender(
+      renderIconContent(
+        {
+          unreadFailure: false,
+          pendingFork: false,
           pendingApproval: true,
           pendingInterview: true,
           unreadDone: true,
@@ -57,15 +84,13 @@ describe("<NotificationIndicatorIcon />", () => {
     );
     expect(
       screen.getByTestId("indicator-interview-subject-1").getAttribute("class"),
-    ).toContain("text-warning-foreground");
-    expect(
-      screen.getByTestId("indicator-interview-subject-1").getAttribute("class"),
     ).toContain("lucide-message-square-question-mark");
 
     rerender(
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: true,
           pendingInterview: false,
           unreadDone: true,
@@ -84,6 +109,7 @@ describe("<NotificationIndicatorIcon />", () => {
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
@@ -98,6 +124,7 @@ describe("<NotificationIndicatorIcon />", () => {
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
@@ -202,6 +229,7 @@ describe("<NotificationIndicatorIcon />", () => {
 function renderIcon(
   state: {
     readonly unreadFailure: boolean;
+    readonly pendingFork: boolean;
     readonly pendingApproval: boolean;
     readonly pendingInterview: boolean;
     readonly unreadDone: boolean;
@@ -214,6 +242,7 @@ function renderIcon(
 function renderIconContent(
   state: {
     readonly unreadFailure: boolean;
+    readonly pendingFork: boolean;
     readonly pendingApproval: boolean;
     readonly pendingInterview: boolean;
     readonly unreadDone: boolean;

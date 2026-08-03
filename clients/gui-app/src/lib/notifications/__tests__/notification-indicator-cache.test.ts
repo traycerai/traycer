@@ -191,6 +191,7 @@ describe("notification indicator cache invalidation", () => {
         epics: {
           "epic-a": {
             unreadFailure: false,
+            pendingFork: false,
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
@@ -202,6 +203,7 @@ describe("notification indicator cache invalidation", () => {
         epics: {
           "epic-a": {
             unreadFailure: true,
+            pendingFork: false,
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
@@ -216,6 +218,7 @@ describe("notification indicator cache invalidation", () => {
         epics: {
           "epic-a": {
             unreadFailure: true,
+            pendingFork: false,
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
