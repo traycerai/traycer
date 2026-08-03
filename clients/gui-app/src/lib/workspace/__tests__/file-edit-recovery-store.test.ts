@@ -48,16 +48,10 @@ describe("file-edit-recovery-store", () => {
 
   afterEach(() => {
     Reflect.deleteProperty(globalThis, "runnerHost");
+    window.sessionStorage.clear();
   });
 
   it("uses a distinct IndexedDB database for each desktop window", async () => {
-    expect(fileEditRecoveryPartition()).toBe("default");
-    await indexedDbFileEditRecoveryJournal.save("browser-file", ENTRY);
-    expect(createStore).toHaveBeenLastCalledWith(
-      "traycer-gui-app:default:file-edit-recovery",
-      "drafts",
-    );
-
     Reflect.set(globalThis, "runnerHost", {
       windows: { windowId: "window-7" },
     });
@@ -66,7 +60,23 @@ describe("file-edit-recovery-store", () => {
       "traycer-gui-app:window-7:file-edit-recovery",
       "drafts",
     );
-    expect(idbSet).toHaveBeenCalledTimes(2);
+    expect(idbSet).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives each browser tab its own stable, distinct partition", async () => {
+    const partition = fileEditRecoveryPartition();
+    expect(partition).not.toBe("default");
+    expect(fileEditRecoveryPartition()).toBe(partition);
+
+    await indexedDbFileEditRecoveryJournal.save("browser-file", ENTRY);
+    expect(createStore).toHaveBeenLastCalledWith(
+      `traycer-gui-app:${partition}:file-edit-recovery`,
+      "drafts",
+    );
+
+    window.sessionStorage.clear();
+    resetFileEditRecoveryStoreForTesting();
+    expect(fileEditRecoveryPartition()).not.toBe(partition);
   });
 
   it("round-trips valid entries and ignores malformed stored values", async () => {
