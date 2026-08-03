@@ -40,6 +40,8 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
+import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommand } from "@/stores/managed-commands/managed-command-list-registry";
 import {
   deriveEpicSyncPillState,
   type EpicHostDirtyState,
@@ -794,7 +796,21 @@ export function useEpicTabDisplayTitle(
     epicId: isTerminal ? epicId : null,
     sessionId: isTerminal ? node.id : null,
   });
-  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
+  // An output window's tile carries no label at all (its persisted shape is
+  // just the command pointer), so the kind-explicit title comes from the live
+  // list stream - and follows a rename the agent makes.
+  const managedCommand = useManagedCommand(
+    epicId,
+    node.type === "managed-command-output" ? node.id : "",
+  );
+  const liveManagedCommandTitle =
+    managedCommand === null ? null : managedCommandTitle(managedCommand);
+  return (
+    liveArtifactTitle ??
+    liveTerminalTitle ??
+    liveManagedCommandTitle ??
+    node.name
+  );
 }
 
 export function useEpicLiveArtifactTitleGenerating(

@@ -122,6 +122,7 @@ function makeEditorHandle(
     setContent: () => undefined,
     syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,

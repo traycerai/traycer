@@ -24,6 +24,7 @@ import type {
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   BackgroundItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -893,14 +894,16 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * Absolutely overlays the transcript (decision log #3) instead of
              * pushing its height via flex, so streamed replies flow visually
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset.
+             * transcript's bottom content inset. The full-width positioning
+             * layer stays pointer-transparent; centered lower surfaces opt
+             * back in so their invisible gutters cannot cover the scrollbar.
              */}
             {view.snapshotLoaded ? (
               <div
                 ref={setLowerSurfacesElement}
                 className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
               >
-                <div className="pointer-events-auto">
+                <div className="pointer-events-none">
                   <SurfaceActivityProvider active={view.surfaceFocused}>
                     <ChatLowerInteractionSurfaces
                       epicId={view.currentEpicId}
@@ -1270,9 +1273,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     renderedDisplayContext,
   );
+  // Only a prompt item can be loaded into the composer for editing, so narrow
+  // here rather than at each consumer: this feeds the composer's settings seed
+  // and its remount key, neither of which a content-free managed-command item
+  // could supply.
   const editingQueueItem =
     state.queue.items.find(
-      (item) => item.queueItemId === uiState.editingQueueItemId,
+      (item): item is ChatQueuedPromptItem =>
+        item.kind === "prompt" &&
+        item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
   const chatSettingsSeed = state.chat?.settings ?? null;

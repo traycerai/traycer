@@ -8,6 +8,8 @@ import type {
 } from "@dnd-kit/core";
 import type {
   ChatQueuedItem,
+  ChatQueuedManagedCommandItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -194,6 +196,52 @@ describe("useQueuedMessageReorderDnd pointer source", () => {
   });
 });
 
+describe("useQueuedMessageReorderDnd managed-command drags", () => {
+  it("commits a reorder for a dragged managed-command item", () => {
+    const items: ReadonlyArray<ChatQueuedItem> = [
+      makeQueuedItem("queue-1"),
+      makeQueuedItem("queue-2"),
+      makeManagedCommandItem("queue-managed"),
+    ];
+    const onReorder = vi.fn();
+    const hook = renderHook(() =>
+      useQueuedMessageReorderDnd({ items, onReorder }),
+    );
+    const orderKey = hook.result.current.orderKey;
+    const sourceData = queuedDndData("queue-managed", 2, orderKey);
+
+    act(() => {
+      hook.result.current.handleDragStart(
+        makeDragStartEvent(makeActive("queue-managed", sourceData)),
+      );
+    });
+    // Pointer above queue-1's midline (100 + 40/2), so the chip lands at the
+    // head of the queue.
+    act(() => {
+      hook.result.current.collisionDetection(
+        makeCollisionArgs(makeActive("queue-managed", sourceData), {
+          x: 0,
+          y: 101,
+        }),
+      );
+    });
+    act(() => {
+      hook.result.current.handleDragEnd(
+        makeDragEndEvent({
+          active: makeActive("queue-managed", sourceData),
+          overData: queuedDndData("queue-1", 0, orderKey),
+          overRect: makeClientRect(100, 40),
+          activatorClientY: 120,
+          deltaY: 25,
+        }),
+      );
+    });
+
+    expect(onReorder).toHaveBeenCalledTimes(1);
+    expect(onReorder).toHaveBeenCalledWith(items[2], "queue-1");
+  });
+});
+
 const TEST_SETTINGS: ChatRunSettings = {
   harnessId: "codex",
   model: "codex-test",
@@ -204,8 +252,9 @@ const TEST_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
-function makeQueuedItem(queueItemId: string): ChatQueuedItem {
+function makeQueuedItem(queueItemId: string): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId: `${queueItemId}-message`,
     message: {
@@ -228,6 +277,21 @@ function makeQueuedItem(queueItemId: string): ChatQueuedItem {
     targetTurnId: null,
     steerRequest: null,
     fallbackReason: null,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function makeManagedCommandItem(
+  queueItemId: string,
+): ChatQueuedManagedCommandItem {
+  return {
+    kind: "managed-command",
+    queueItemId,
+    commandId: `${queueItemId}-command`,
+    description: "bun test --watch",
+    commandKind: "monitor",
+    status: "pending",
     createdAt: 1,
     updatedAt: 1,
   };

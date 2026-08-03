@@ -86,6 +86,7 @@ const SPLIT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats"] },
   { panelIds: ["artifacts"] },
   { panelIds: ["terminals"] },
+  { panelIds: ["managed-commands"] },
   { panelIds: ["git-diff"] },
   { panelIds: ["pull-requests"] },
   { panelIds: ["file-tree"] },
@@ -172,6 +173,7 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -357,6 +359,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -370,6 +373,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -383,6 +387,7 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -400,6 +405,7 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -434,6 +440,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["pull-requests"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["sharing"] },
     ]);
   });
@@ -458,6 +465,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["file-tree"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["sharing"] },
     ]);
   });
@@ -474,6 +482,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts", "chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -495,6 +504,7 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -528,6 +538,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
@@ -548,6 +559,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -565,6 +577,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -586,6 +599,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -603,6 +617,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -621,6 +636,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -691,6 +707,7 @@ describe("useLeftPanelStore", () => {
 
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       ...PRE_PULL_REQUESTS_PANEL_GROUPS,
+      { panelIds: ["managed-commands"] },
       { panelIds: ["pull-requests"] },
     ]);
   });
@@ -707,6 +724,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["managed-commands"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },

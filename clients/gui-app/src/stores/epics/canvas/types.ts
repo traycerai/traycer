@@ -13,6 +13,7 @@ import {
   TILE_KIND_BLANK,
   TILE_KIND_COMM_GRAPH,
   TILE_KIND_GIT_DIFF,
+  TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
@@ -278,6 +279,25 @@ export interface SnapshotDiffTileRef {
 }
 
 /**
+ * Read-only window on one managed command's log timeline.
+ *
+ * A pointer, not a copy: `id` IS the command id (so opening the same command
+ * twice focuses the one window, via the canvas's content-id dedup) and
+ * `hostId` is the host that owns it. Kind, description and status are
+ * deliberately absent - they are live state the list stream answers, and a
+ * window restored days later must not render a description the agent renamed
+ * or a status the command left. `name` is the kind-free fallback the tab strip
+ * shows only until the stream answers.
+ */
+export interface ManagedCommandOutputTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_MANAGED_COMMAND_OUTPUT;
+  readonly name: string;
+  readonly hostId: string;
+}
+
+/**
  * Persisted view state of a comm-graph tile: the canvas viewport ONLY.
  *
  * Node positions are deliberately NOT persisted - the graph is auto-laid-out
@@ -382,6 +402,7 @@ export type EpicCanvasTileRef =
   | EpicNodeRef
   | GitDiffTileRef
   | SnapshotDiffTileRef
+  | ManagedCommandOutputTileRef
   | CommGraphTileRef
   | PrDetailTileRef
   | PrDiffTileRef
@@ -391,6 +412,12 @@ export function isBlankTileRef(
   value: EpicCanvasTileRef,
 ): value is BlankTileRef {
   return value.type === TILE_KIND_BLANK;
+}
+
+export function isManagedCommandOutputTileRef(
+  value: EpicCanvasTileRef,
+): value is ManagedCommandOutputTileRef {
+  return value.type === TILE_KIND_MANAGED_COMMAND_OUTPUT;
 }
 
 export function isCommGraphTileRef(

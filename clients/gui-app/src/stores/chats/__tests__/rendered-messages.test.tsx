@@ -11,7 +11,7 @@ import type {
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
   ChatActiveTurn,
-  ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatQueueSteerMode,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -130,8 +130,9 @@ function steerRequestedQueueItem(
   queueItemId: string,
   messageId: string,
   mode: ChatQueueSteerMode,
-): ChatQueuedItem {
+): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId,
     message: {
@@ -155,7 +156,7 @@ function steerRequestedQueueItem(
   };
 }
 
-function fallbackQueueItem(item: ChatQueuedItem): ChatQueuedItem {
+function fallbackQueueItem(item: ChatQueuedPromptItem): ChatQueuedPromptItem {
   return {
     ...item,
     delivery: "next_turn",
@@ -1751,6 +1752,8 @@ describe("useRenderedMessages", () => {
               blockId: "tool-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -1823,6 +1826,8 @@ describe("useRenderedMessages", () => {
               blockId: "wake-tool",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -1892,6 +1897,8 @@ describe("useRenderedMessages", () => {
               blockId: "tool-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -1974,6 +1981,8 @@ describe("useRenderedMessages", () => {
               blockId: "agent-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
