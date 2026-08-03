@@ -15,7 +15,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { type ReactElement, useCallback } from "react";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type StoreApi } from "zustand/vanilla";
 import { CHAT_ANCHOR_SETTLE_FALLBACK_MS } from "@/components/chat/chat-messages";
 import {
@@ -1492,33 +1492,33 @@ describe("ChatMessages scroll policy", () => {
         scrollNode,
         "removeEventListener",
       );
-      onTestFinished(() => {
+      try {
+        rerenderWith({
+          scrollRequest: {
+            requestId: 10_002,
+            messageId: targetId,
+            blockId: "",
+          },
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        const clearCountBeforeUnmount = clearTimeoutSpy.mock.calls.length;
+
+        unmount();
+
+        expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(
+          clearCountBeforeUnmount,
+        );
+        expect(removeEventListenerSpy).toHaveBeenCalledWith(
+          "scrollend",
+          expect.any(Function),
+        );
+      } finally {
         removeEventListenerSpy.mockRestore();
         clearTimeoutSpy.mockRestore();
-      });
-
-      rerenderWith({
-        scrollRequest: {
-          requestId: 10_002,
-          messageId: targetId,
-          blockId: "",
-        },
-      });
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      const clearCountBeforeUnmount = clearTimeoutSpy.mock.calls.length;
-
-      unmount();
-
-      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(
-        clearCountBeforeUnmount,
-      );
-      expect(removeEventListenerSpy).toHaveBeenCalledWith(
-        "scrollend",
-        expect.any(Function),
-      );
+      }
     });
 
     it("getItemType splits human-sent user rows from A2A agent-sent rows", () => {
