@@ -309,6 +309,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -365,6 +366,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -413,6 +415,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -461,6 +464,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -537,6 +541,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -597,6 +602,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -649,6 +655,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -703,6 +710,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -754,6 +762,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -804,6 +813,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),

@@ -69,6 +69,13 @@ export const RunnerHostInvoke = {
     "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
   requestHostRespawn: "runnerHost:host:requestRespawn",
+  // The `hostId` in `pid.json`, read as a pure structural parse with no
+  // reachability requirement. `localHostChange` only ever emits a snapshot
+  // for a host that is actually dialable, so while the host is down the
+  // renderer has no way to recognise this machine's own registry entry.
+  // This is that durable identity, and the renderer needs it precisely when
+  // no snapshot exists.
+  lastKnownLocalHostId: "runnerHost:host:lastKnownLocalHostId",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).

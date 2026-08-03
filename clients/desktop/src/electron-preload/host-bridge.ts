@@ -45,6 +45,7 @@ export interface HostBridgeSurface {
   ): Disposable;
   onSystemResumed(handler: () => void): Disposable;
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+  getLastKnownLocalHostId(): Promise<string | null>;
   hostPicker: {
     requestOpen(): Promise<void>;
     requestClose(): Promise<void>;
@@ -66,6 +67,11 @@ export function buildHostBridge(): HostBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.requestHostRespawn,
       ) as Promise<HostRestartRequestResult>,
+
+    getLastKnownLocalHostId: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.lastKnownLocalHostId) as Promise<
+        string | null
+      >,
 
     hostPicker: {
       requestOpen: () =>

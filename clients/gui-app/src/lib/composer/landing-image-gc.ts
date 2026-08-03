@@ -1,8 +1,10 @@
 /**
  * Garbage collection for the landing / new-epic composer's content-addressed
  * image bytes (`landing-image-store`). Reclaims IndexedDB bytes + session
- * entries that no draft references, runs the ready-gated startup orphan sweep,
- * and enforces a per-partition byte budget on paste.
+ * entries that no draft references and runs the ready-gated startup orphan
+ * sweep. Byte-budget ownership (the 64 MB cap, live-root/referenced-byte
+ * accounting, and in-flight reservations) lives in `landing-image-budget.ts`;
+ * this module only imports its live-root helper for the reconcile sweep below.
  *
  * This module runs OUTSIDE React render (store ops + GC), so it reads stores
  * imperatively via `getState()` at call time. It is consumer-driven: the draft
@@ -23,30 +25,14 @@
  *   delete every restored image's bytes moments before the drafts arrive.
  */
 
-import type { JsonContent } from "@traycer/protocol/common/registry";
-
-import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import {
   deleteImage,
   imageHashKeys,
   releaseSession,
   sessionHashKeys,
 } from "@/lib/composer/landing-image-store";
-import {
-  useLandingDraftStore,
-  type LandingDraftTab,
-} from "@/stores/home/landing-draft-store";
-import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
-
-/**
- * Per-partition byte budget for stored landing images. Flagged TUNABLE — shipped
- * at 64 MB (≈ 12× the 5 MB per-image cap). Per-runtime partitioning already
- * isolates this to the current window, so the budget is scoped to this window's
- * drafts; there is no cross-window accounting.
- */
-export const LANDING_IMAGE_BUDGET_BYTES = 64 * 1024 * 1024;
 
 const RECONCILE_DEBOUNCE_MS = 250;
 
@@ -141,28 +127,6 @@ export function landingDraftsReady(): boolean {
   return draftsReady;
 }
 
-function imageHashesOf(content: JsonContent): Set<string> {
-  const hashes = new Set<string>();
-  for (const atom of collectImageAtoms(content)) {
-    if (atom.hash !== null) hashes.add(atom.hash);
-  }
-  return hashes;
-}
-
-/**
- * Every hash that must NOT be collected: union of all persisted drafts'
- * content and every keyed runtime mirror. The session cache is handled
- * separately to protect the normal paste-to-insert window.
- */
-function computeLiveRoots(): Set<string> {
-  const roots = new Set<string>();
-  for (const draft of useLandingDraftStore.getState().drafts) {
-    for (const hash of imageHashesOf(draft.content)) roots.add(hash);
-  }
-  for (const hash of draftRuntimeRegistry.liveImageRoots()) roots.add(hash);
-  return roots;
-}
-
 /**
  * Reclaim image bytes/session entries no longer referenced. No-op until ready
  * [C1]. IDB orphans exclude both the live roots and the current session keys —
@@ -180,7 +144,7 @@ export async function reconcile(): Promise<void> {
   // session before that write — is reflected in `liveRoots`/`sessionKeys` and is
   // not mistaken for an orphan and deleted. [C2: the paste↔reconcile-await race]
   const stored = await imageHashKeys();
-  const liveRoots = computeLiveRoots();
+  const liveRoots = landingLiveImageRootHashes();
   const sessionKeys = sessionHashKeys();
   const protectedFromDelete = new Set(sessionKeys);
   const orphans = stored.filter(
@@ -222,64 +186,6 @@ export function scheduleLandingImageReconcile(): void {
     reconcileTimer = null;
     void reconcile();
   }, RECONCILE_DEBOUNCE_MS);
-}
-
-function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
-  // Bytes are content-addressed: a hash present in N drafts occupies the store
-  // ONCE, so dedupe by hash before summing — counting it per-draft would evict or
-  // block too eagerly. Base64-only atoms (no hash) aren't in the store; skip them.
-  // A node with no `size` attr — only a 0-byte file yields that — counts as 0; the
-  // per-image 5 MB paste cap bounds the untracked slack, so the soft budget stays
-  // meaningful.
-  const sizeByHash = new Map<string, number>();
-  for (const draft of drafts) {
-    for (const atom of collectImageAtoms(draft.content)) {
-      if (atom.hash === null) continue;
-      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
-    }
-  }
-  for (const content of draftRuntimeRegistry.liveContents()) {
-    for (const atom of collectImageAtoms(content)) {
-      if (atom.hash === null) continue;
-      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
-    }
-  }
-  let total = 0;
-  for (const size of sizeByHash.values()) total += size;
-  return total;
-}
-
-/**
- * Reserve budget for a paste of `incomingBytes` in the exact draft. Existing
- * roots are never victims: cleanup deletes only unreferenced blobs, so a
- * capacity miss rejects just the new attachment and never closes a draft.
- */
-export function reserveLandingImageBudget(
-  draftId: string | null,
-  incomingBytes: number,
-): boolean {
-  const { drafts } = useLandingDraftStore.getState();
-  const referenced = referencedImageBytes(drafts);
-  if (referenced + incomingBytes <= LANDING_IMAGE_BUDGET_BYTES) return true;
-
-  scheduleLandingImageReconcile();
-
-  reportableErrorToast(
-    "Couldn't add the image.",
-    {
-      description:
-        draftId === null
-          ? "Create a draft or remove images before trying again."
-          : "Remove images or close a draft yourself, then try again.",
-    },
-    {
-      title: "Could not add image",
-      message: "The image storage budget was exceeded.",
-      code: null,
-      source: "Chat composer",
-    },
-  );
-  return false;
 }
 
 // Browser becomes ready once the draft store has hydrated synchronously from

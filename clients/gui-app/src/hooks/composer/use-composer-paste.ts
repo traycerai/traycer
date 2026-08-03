@@ -163,7 +163,7 @@ export function collectImages(
 async function filesToImageAttrs(
   files: ReadonlyArray<File>,
   signal: AbortSignal,
-): Promise<ImageAttachmentAttrs[]> {
+): Promise<ComposerImageConversionResult> {
   // This base64 ingest serves only chat / new-conversation surfaces.
   const accepted = collectImages(files, () => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
@@ -172,7 +172,7 @@ async function filesToImageAttrs(
       blocker: "invalid_input",
     });
   });
-  if (accepted.length === 0) return [];
+  if (accepted.length === 0) return { attrs: [] };
   const results = await Promise.all(
     accepted.map(async (file) => {
       const dataUrl = await readFileAsDataUrl(file, signal);
@@ -185,12 +185,27 @@ async function filesToImageAttrs(
       } satisfies ImageAttachmentAttrs;
     }),
   );
-  return results;
+  // No reserved capacity to hand off - this surface has no landing-style
+  // budget, so there is nothing for `runImageIngest` to release.
+  return { attrs: results };
 }
 
 function base64PayloadFromDataUrl(dataUrl: string): string {
   const commaIndex = dataUrl.indexOf(",");
   return commaIndex < 0 ? dataUrl : dataUrl.slice(commaIndex + 1);
+}
+
+/**
+ * Result of converting raw files to image attachment attrs, before insertion.
+ * `release` (when supplied) is capacity a surface reserved across the
+ * conversion writes above (landing's hash-only ingest) - `runImageIngest`
+ * below calls it exactly once, only AFTER `insertAttrs` has run (or thrown),
+ * never earlier. A surface with no such reservation (chat / new-conversation,
+ * whose base64 ingest owns no budget) simply omits it.
+ */
+export interface ComposerImageConversionResult {
+  readonly attrs: ReadonlyArray<ImageAttachmentAttrs>;
+  readonly release?: () => void;
 }
 
 /**
@@ -205,7 +220,7 @@ export interface ComposerImageIngest {
   readonly convert: (
     files: ReadonlyArray<File>,
     signal: AbortSignal,
-  ) => Promise<ReadonlyArray<ImageAttachmentAttrs>>;
+  ) => Promise<ComposerImageConversionResult>;
   readonly onSettled: (
     accepted: ReadonlyArray<ImageAttachmentAttrs>,
     converted: ReadonlyArray<ImageAttachmentAttrs>,
@@ -219,8 +234,11 @@ async function runImageIngest(
   imageIngest: ComposerImageIngest,
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
 ): Promise<void> {
+  let release: (() => void) | undefined;
   try {
-    const converted = await imageIngest.convert(files, signal);
+    const result = await imageIngest.convert(files, signal);
+    release = result.release;
+    const converted = result.attrs;
     if (converted.length === 0) return;
     const acceptedCount = Math.min(
       converted.length,
@@ -229,6 +247,12 @@ async function runImageIngest(
     imageIngest.onSettled(converted.slice(0, acceptedCount), converted);
   } catch (error) {
     imageIngest.onRejected(error, signal.aborted);
+  } finally {
+    // Fires after insertion decides the reserved bytes' fate (accepted,
+    // not-inserted, or thrown) - never before, and never from inside
+    // `convert` itself, so a concurrent admission check during the
+    // conversion-to-insertion handoff still sees this reservation charged.
+    release?.();
   }
 }
 

@@ -12,7 +12,7 @@ export function QueueEditDraftPill(props: QueueEditDraftPillProps) {
 
   return (
     <div
-      className="mb-2 inline-flex max-w-full items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-ui-xs text-primary"
+      className="inline-flex max-w-full items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-ui-xs text-primary"
       data-queue-item-id={props.editingQueueItemId}
       data-testid="queue-edit-draft-pill"
     >

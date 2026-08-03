@@ -12,10 +12,11 @@ import {
   type HostDirectoryServiceOptions,
 } from "@/lib/host/host-directory-service";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { lastSelectedHostKey } from "@/lib/persist";
+import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
 
 const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
+const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
 
 const localSnapshot: LocalHostSnapshot = {
   hostId: "desktop-pid-123",
@@ -101,6 +102,7 @@ async function flushPromises(): Promise<void> {
 
 beforeEach(() => {
   window.localStorage.removeItem(LAST_SELECTED_HOST_STORAGE_KEY);
+  window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
 });
 
 afterEach(() => {
@@ -108,6 +110,7 @@ afterEach(() => {
     directory.dispose();
   }
   window.localStorage.removeItem(LAST_SELECTED_HOST_STORAGE_KEY);
+  window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
   if (restoreDocumentHidden !== null) {
     restoreDocumentHidden();
     restoreDocumentHidden = null;
@@ -142,6 +145,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -162,6 +166,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(renamedSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -175,6 +180,7 @@ describe("HostDirectoryService", () => {
       Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] });
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher,
     });
     await directory.start();
@@ -200,6 +206,7 @@ describe("HostDirectoryService", () => {
       });
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher,
     });
     await directory.start();
@@ -217,6 +224,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -228,6 +236,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -242,6 +251,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -268,6 +278,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({
           kind: "hosts",
@@ -285,6 +296,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -297,6 +309,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -319,6 +332,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -340,6 +354,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({
           kind: "hosts",
@@ -367,10 +382,16 @@ describe("HostDirectoryService", () => {
       });
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
     const startPromise = directory.start();
+    // `start()` first settles the shell's durable local-host-id seed, so the
+    // initial fetch is dispatched one hop in rather than synchronously. The
+    // property under test is unchanged: a remote fetch still in flight must
+    // not hold back the local default.
+    await flushPromises();
     expect(directory.getSelected()).toBeNull();
 
     pending.resolve?.({ kind: "hosts", entries: [] });
@@ -388,6 +409,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -417,6 +439,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -454,6 +477,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -479,6 +503,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -507,6 +532,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -546,6 +572,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -578,6 +605,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -596,6 +624,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -611,6 +640,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -633,6 +663,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -669,6 +700,7 @@ describe("HostDirectoryService", () => {
 
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -690,6 +722,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -713,6 +746,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -738,6 +772,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -764,6 +799,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -797,6 +833,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: null,
     });
     await directory.start();
@@ -825,6 +862,7 @@ describe("HostDirectoryService", () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: () =>
         Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
     });
@@ -846,6 +884,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -872,6 +911,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -903,6 +943,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -937,6 +978,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -962,6 +1004,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -987,6 +1030,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -1013,6 +1057,7 @@ describe("HostDirectoryService", () => {
     ]);
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
     await directory.start();
@@ -1044,6 +1089,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -1078,6 +1124,7 @@ describe("HostDirectoryService", () => {
     };
     const directory = makeDirectory({
       runnerHost: host,
+      localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
 
@@ -1107,6 +1154,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
       });
@@ -1133,6 +1181,7 @@ describe("HostDirectoryService", () => {
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: remotes }),
       });
@@ -1165,6 +1214,7 @@ describe("HostDirectoryService", () => {
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: remotes }),
       });
@@ -1181,6 +1231,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: null,
       });
       await directory.start();
@@ -1202,6 +1253,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         runnerHost: host,
+        localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
       });
@@ -1223,6 +1275,421 @@ describe("HostDirectoryService", () => {
           AnalyticsEvent.HostSelected,
           { source: "direct_ui", host_kind: "local" },
         ],
+      ]);
+    });
+  });
+
+  describe("machine-owned host id vs the registry twin", () => {
+    /**
+     * The registry also lists this machine's own host. During a local restart
+     * (reinstall/update) the local snapshot is null, so the registry's
+     * remote-kind twin - "available" by presence lease, dialable on paper, but
+     * reached through the relay - is the only entry carrying that id. Binding
+     * it renders the dead-end unavailable card and disables the local
+     * provisioning lifecycle.
+     */
+    const ownRegistryTwin: HostDirectoryEntry = {
+      hostId: localSnapshot.hostId,
+      label: "hardiks-macbook",
+      kind: "remote",
+      websocketUrl: "wss://relay.traycer.invalid/attach",
+      version: "1.2.2",
+      status: "available",
+    };
+
+    it("presents the machine's own registry twin as a non-dialable local entry", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [ownRegistryTwin, secondRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      const entries = await directory.list();
+      expect(entries).toHaveLength(2);
+      // `kind: local` keeps `localTarget` true so the provisioning/Retry card
+      // stays reachable; `websocketUrl: null` is what refuses the relay.
+      expect(entries[0]).toEqual({
+        hostId: localSnapshot.hostId,
+        label: "hardiks-macbook",
+        kind: "local",
+        websocketUrl: null,
+        version: "1.2.2",
+        // Not the twin's presence lease: `unavailable` is the truth, and it is
+        // what leaves an `unavailable -> available` edge for status-transition
+        // subscribers (e.g. landing-terminal tombstone recovery) when the real
+        // host finally publishes.
+        status: "unavailable",
+      });
+      expect(entries[1]).toEqual(secondRemoteHostEntry);
+    });
+
+    it("restores the remembered local selection onto the booting entry rather than dropping it", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      rememberHostSelection(localSnapshot.hostId);
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await directory.start();
+
+      const selected = directory.getSelected();
+      expect(selected?.hostId).toBe(localSnapshot.hostId);
+      expect(selected?.kind).toBe("local");
+      expect(selected?.websocketUrl).toBeNull();
+    });
+
+    /**
+     * Regression (Codex P1 on OSS #913): when the twin was DROPPED instead of
+     * coerced, the remembered local id resolved to nothing at startup, so a
+     * registry holding exactly one other machine had that remote auto-promoted
+     * as the default - and `reconcileSelection()` returns early while the
+     * current selection is still present, so the app stayed bound to the wrong
+     * machine even after the local host came back.
+     */
+    it("never promotes a lone remote over this machine's booting host", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      rememberHostSelection(localSnapshot.hostId);
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [ownRegistryTwin, secondRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+      // ...and once the local host publishes, the selection follows it to the
+      // real dialable endpoint instead of being stranded on the remote.
+      host.setLocalHost(localSnapshot);
+
+      const selected = directory.getSelected();
+      expect(selected?.hostId).toBe(localSnapshot.hostId);
+      expect(selected?.kind).toBe("local");
+      expect(selected?.websocketUrl).toBe(localSnapshot.websocketUrl);
+    });
+
+    it("re-covers the id through the local arm the moment the host publishes", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await directory.start();
+      expect((await directory.list())[0].websocketUrl).toBeNull();
+
+      host.setLocalHost(localSnapshot);
+
+      const entries = await directory.list();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        hostId: localSnapshot.hostId,
+        kind: "local",
+        websocketUrl: localSnapshot.websocketUrl,
+      });
+    });
+
+    it("learns the machine's host id from the live snapshot and persists it across launches", async () => {
+      const firstLaunchHost = makeHost(localSnapshot);
+      const firstLaunch = makeDirectory({
+        runnerHost: firstLaunchHost,
+        localHostIdSeeder: null,
+        remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+      });
+      await firstLaunch.start();
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        localSnapshot.hostId,
+      );
+
+      // Next launch: the host is still restarting (no snapshot), but the
+      // learned id already neutralises the registry twin.
+      const secondLaunchHost = makeHost(null);
+      const secondLaunch = makeDirectory({
+        runnerHost: secondLaunchHost,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await secondLaunch.start();
+      expect((await secondLaunch.list())[0]).toMatchObject({
+        kind: "local",
+        websocketUrl: null,
+      });
+    });
+
+    /**
+     * Regression (Codex P1 on OSS #913): the FIRST launch of the build that
+     * introduced the persisted key has nothing stored, and that launch is
+     * exactly the reinstall this guard exists for - the host is down, so no
+     * snapshot seeds it either. Without the shell's durable pid metadata the
+     * twin would go unrecognised on the one launch that needed it most.
+     */
+    it("seeds the id from the shell's pid metadata when nothing is persisted yet", async () => {
+      expect(
+        window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY),
+      ).toBeNull();
+      const host = new MockRunnerHost({
+        signInUrl: "https://auth.traycer.invalid/sign-in",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        lastKnownLocalHostId: localSnapshot.hostId,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+      });
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
+      });
+      await directory.start();
+
+      expect((await directory.list())[0]).toMatchObject({
+        hostId: localSnapshot.hostId,
+        kind: "local",
+        websocketUrl: null,
+      });
+      // Seeding also persists, so the next launch needs no shell round-trip.
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        localSnapshot.hostId,
+      );
+    });
+
+    /**
+     * Regression (Codex P2 on OSS #913): seeding introduced an await BEFORE
+     * the local-host subscription is installed, so a provider unmounting or
+     * swapping its runner mid-flight can `dispose()` while nothing is
+     * registered. Resuming past that point would install a listener no
+     * `dispose()` can remove - an orphan dispatching stale callbacks for the
+     * life of the page.
+     */
+    it("abandons startup when disposed while the shell seed is in flight", async () => {
+      let releaseSeed: () => void = () => undefined;
+      const host = new MockRunnerHost({
+        signInUrl: "https://auth.traycer.invalid/sign-in",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+      });
+      const seedGate = new Promise<void>((resolve) => {
+        releaseSeed = resolve;
+      });
+      vi.spyOn(host, "getLastKnownLocalHostId").mockImplementation(async () => {
+        await seedGate;
+        return localSnapshot.hostId;
+      });
+      const onLocalHostChange = vi.spyOn(host, "onLocalHostChange");
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+      });
+
+      const startPromise = directory.start();
+      directory.dispose();
+      releaseSeed();
+      await startPromise;
+
+      expect(onLocalHostChange).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Regression (CodeRabbit P2 on OSS #913): the host can be re-enrolled while
+     * the renderer is not running. Treating the persisted value as
+     * authoritative would neutralise the OBSOLETE twin while this machine's
+     * current registry entry stayed remote-kind and relay-dialable.
+     */
+    it("prefers the shell's id over a stale persisted one after re-enrollment", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        "stale-host-id-from-a-previous-enrollment",
+      );
+      const reEnrolledTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: "re-enrolled-host-id",
+      };
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [reEnrolledTwin] }),
+      });
+      await directory.start();
+
+      expect((await directory.list())[0]).toMatchObject({
+        hostId: "re-enrolled-host-id",
+        kind: "local",
+        websocketUrl: null,
+      });
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        "re-enrolled-host-id",
+      );
+    });
+
+    /**
+     * Regression (Codex P1 on OSS #913): the id is not the only holder of
+     * "this machine". The persisted SELECTION can carry the pre-re-enrollment
+     * id, and startup would restore the obsolete registry twin as a valid
+     * remote selection - stranding the app on a dead relay target with local
+     * provisioning disabled. The selection intent must migrate with the id.
+     */
+    it("migrates a remembered selection of the old local id to the re-enrolled one", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        "stale-host-id-from-a-previous-enrollment",
+      );
+      rememberHostSelection("stale-host-id-from-a-previous-enrollment");
+      const obsoleteTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: "stale-host-id-from-a-previous-enrollment",
+      };
+      const reEnrolledTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: "re-enrolled-host-id",
+      };
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
+        // The registry still lists BOTH rows until deregistration propagates -
+        // the exact window where the obsolete twin is remote-kind and dialable.
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [obsoleteTwin, reEnrolledTwin],
+          }),
+      });
+      await directory.start();
+
+      expect(directory.getSelected()?.hostId).toBe("re-enrolled-host-id");
+      // Restored as this machine: the coerced non-dialable local presentation,
+      // never the obsolete twin's relay URL.
+      expect(directory.getSelected()).toMatchObject({
+        kind: "local",
+        websocketUrl: null,
+      });
+      expect(window.localStorage.getItem(LAST_SELECTED_HOST_STORAGE_KEY)).toBe(
+        "re-enrolled-host-id",
+      );
+    });
+
+    /**
+     * The other holder: a LIVE selection. `reconcileSelection()` keeps any id
+     * it can still find, and the obsolete twin stays listed until the registry
+     * catches up - so intent migration alone cannot move an already-bound
+     * selection when the re-enrollment happens mid-session.
+     */
+    it("retargets a live selection of the old id when the host re-enrolls mid-session", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const obsoleteTwin: HostDirectoryEntry = {
+        ...ownRegistryTwin,
+        hostId: localSnapshot.hostId,
+      };
+      const host = makeHost(localSnapshot);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [obsoleteTwin] }),
+      });
+      await directory.start();
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+      host.setLocalHost({
+        ...localSnapshot,
+        hostId: "re-enrolled-host-id",
+      });
+      await flushPromises();
+
+      expect(directory.getSelected()?.hostId).toBe("re-enrolled-host-id");
+      expect(directory.getSelected()?.kind).toBe("local");
+      expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
+        "re-enrolled-host-id",
+      );
+    });
+
+    it("does not rewrite a remembered REMOTE selection on re-enrollment", async () => {
+      // The migration must be scoped to selections that meant "this machine".
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        "stale-host-id-from-a-previous-enrollment",
+      );
+      rememberHostSelection(rememberedRemoteHostEntry.hostId);
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [rememberedRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+      expect(window.localStorage.getItem(LAST_SELECTED_HOST_STORAGE_KEY)).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+    });
+
+    it("leaves other machines' remote hosts untouched", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      const host = makeHost(null);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+
+      expect(await directory.list()).toEqual([
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
       ]);
     });
   });

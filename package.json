@@ -110,6 +110,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
+    "fake-indexeddb": "^6.2.5",
     "fflate": "^0.8.3",
     "fuse.js": "^7.5.0",
     "globals": "^17.8.0",

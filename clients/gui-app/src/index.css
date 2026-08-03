@@ -40,6 +40,40 @@
   }
 }
 
+@keyframes prompt-stash-count-flash {
+  0%,
+  72% {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-primary) 18%, transparent);
+  }
+  100% {
+    background-color: var(--color-muted);
+    color: inherit;
+    box-shadow: none;
+  }
+}
+
+.prompt-stash-count-flash {
+  animation: prompt-stash-count-flash 700ms ease-out both;
+}
+
+/* Attachment previews stay on one compact, independently scrollable row. */
+[data-composer-attachment-strip] {
+  scrollbar-width: none;
+}
+
+[data-composer-attachment-strip]::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-stash-count-flash {
+    animation-duration: 1ms;
+  }
+}
+
 .working-text-shimmer {
   background-image: linear-gradient(
     90deg,
