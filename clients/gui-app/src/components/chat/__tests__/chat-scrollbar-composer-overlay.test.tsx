@@ -355,16 +355,16 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       // Outer absolute positioning layer is pointer-transparent across the
       // full pane width (including the scrollbar edge lanes).
       expect(source).toMatch(
-        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10"/,
+        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10[^"]*"/,
       );
       // Immediate child that used to re-enable hit testing across the full
       // width must also stay transparent; only nested max-w-3xl chrome
       // (dock/composer/shell) restores pointer-events-auto.
       expect(source).toMatch(
-        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10"\s*>\s*<div className="pointer-events-none">/,
+        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10[^"]*"[\s\S]*?>\s*<div className="pointer-events-none">/,
       );
       expect(source).not.toMatch(
-        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10"\s*>\s*<div className="pointer-events-auto">/,
+        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10[^"]*"[\s\S]*?>\s*<div className="pointer-events-auto">/,
       );
     });
   });
