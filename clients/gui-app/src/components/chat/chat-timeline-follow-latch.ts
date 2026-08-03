@@ -120,6 +120,7 @@ function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
 export function useChatTimelineFollowLatch(
   listRef: RefObject<LegendListRef | null>,
   initialScrollAtEnd: boolean,
+  hasRows: boolean,
 ): ChatTimelineFollowLatch {
   const permissionRef = useRef(initialScrollAtEnd);
   const [scrollNode, setScrollNode] = useState<HTMLElement | null>(null);
@@ -150,13 +151,13 @@ export function useChatTimelineFollowLatch(
     void listRef.current?.scrollToEnd({ animated: false });
   }, [listRef]);
 
-  // The empty state does not mount LegendList. Re-resolve after every commit
-  // so the subscription follows the node when the first row appears, and is
-  // cleaned up when the list is replaced or removed.
+  // The empty state does not mount LegendList. Re-resolve when the rendered
+  // timeline crosses that boundary so the first row attaches the listener,
+  // and returning to empty cleans it up.
   useLayoutEffect(() => {
     const current = listRef.current?.getScrollableNode() ?? null;
     setScrollNode((previous) => (previous === current ? previous : current));
-  });
+  }, [listRef, hasRows]);
 
   useLayoutEffect(() => {
     const node = scrollNode;

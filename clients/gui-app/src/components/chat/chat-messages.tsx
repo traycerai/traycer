@@ -208,6 +208,13 @@ interface FreeRestoreGeometry {
   readonly rowPosition: number | null;
 }
 
+/** LegendList's web implementation can return null before its scroll element
+ * attaches even though the cross-platform public type is non-null. Keep that
+ * runtime boundary explicit for mount-time restoration reads. */
+function getScrollableNodeOrNull(list: LegendListRef): HTMLElement | null {
+  return list.getScrollableNode();
+}
+
 function measureFreeRestoreGeometry(
   list: LegendListRef | null,
   index: number | undefined,
@@ -220,7 +227,7 @@ function measureFreeRestoreGeometry(
       rowPosition: null,
     };
   }
-  const scrollNode = list.getScrollableNode();
+  const scrollNode = getScrollableNodeOrNull(list);
   const rowPosition =
     index === undefined ? null : list.getState().positionAtIndex(index);
   if (!scrollNode) {

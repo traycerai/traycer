@@ -239,7 +239,11 @@ export const ChatTimeline = memo(function ChatTimeline({
   // Fixup (fix-detached-streaming-yank/callback-synchronous-follow): see the
   // hook's own doc comment. Bottom-follow is owned entirely here now -
   // LegendList's own `maintainScrollAtEnd` is never passed at all below.
-  const followLatch = useChatTimelineFollowLatch(listRef, initialScrollAtEnd);
+  const followLatch = useChatTimelineFollowLatch(
+    listRef,
+    initialScrollAtEnd,
+    rows.length > 0,
+  );
 
   const navigationHighlightStore = useNavigationHighlightStore(
     navigationHighlightedMessageId,

@@ -227,7 +227,7 @@ describe("useChatTimelineFollowLatch", () => {
     const listRef = makeFakeListRef(node);
     const { result, rerender } = renderHook(
       ({ initialScrollAtEnd }) =>
-        useChatTimelineFollowLatch(listRef, initialScrollAtEnd),
+        useChatTimelineFollowLatch(listRef, initialScrollAtEnd, true),
       { initialProps: { initialScrollAtEnd: true } },
     );
 
@@ -246,7 +246,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true),
+      useChatTimelineFollowLatch(listRef, true, true),
     );
     fireNativeScroll(node); // confirm at edge
 
@@ -272,7 +272,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true),
+      useChatTimelineFollowLatch(listRef, true, true),
     );
     fireNativeScroll(node);
 
@@ -304,7 +304,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, false),
+      useChatTimelineFollowLatch(listRef, false, true),
     );
     fireNativeScroll(node);
 
@@ -322,7 +322,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true),
+      useChatTimelineFollowLatch(listRef, true, true),
     );
     fireNativeScroll(node);
 
@@ -344,7 +344,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, false),
+      useChatTimelineFollowLatch(listRef, false, true),
     );
 
     // A resize/scroll event can still fire while hidden (0x0) - must be
@@ -377,7 +377,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true),
+      useChatTimelineFollowLatch(listRef, true, true),
     );
     fireNativeScroll(node);
 
@@ -409,7 +409,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true),
+      useChatTimelineFollowLatch(listRef, true, true),
     );
     fireNativeScroll(node);
 
@@ -438,7 +438,7 @@ describe("useChatTimelineFollowLatch", () => {
       clientHeight: 500,
     });
     const listRef = makeFakeListRef(node);
-    renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    renderHook(() => useChatTimelineFollowLatch(listRef, true, true));
     fireNativeScroll(node); // confirm following
 
     // Shrink the viewport - distance is now > epsilon with NO scrollTop
@@ -467,7 +467,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true),
+      useChatTimelineFollowLatch(listRef, true, true),
     );
     fireNativeScroll(node);
 
@@ -483,7 +483,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true),
+      useChatTimelineFollowLatch(listRef, true, true),
     );
     fireNativeScroll(node);
 

@@ -344,14 +344,6 @@ function queryScrollToEndPill(): HTMLButtonElement | null {
   });
 }
 
-function getScrollToEndPill(): HTMLButtonElement {
-  const pill = queryScrollToEndPill();
-  if (pill === null) {
-    throw new Error("Scroll-to-end pill button was not rendered");
-  }
-  return pill;
-}
-
 function isJumpPillVisible(): boolean {
   const pill = queryScrollToEndPill();
   if (pill === null) return false;
