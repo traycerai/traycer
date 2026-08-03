@@ -172,6 +172,17 @@ export function useFileEditSession(props: {
       let current = attachmentRef.current;
       if (current?.identityKey !== identityKey) {
         current?.detach();
+        // Null the ref right away, before the await below: if this request
+        // stops being current while awaiting `fileContentRevision`, the
+        // rejected branch below returns without ever reassigning
+        // `attachmentRef.current`, which would otherwise keep pointing at
+        // the just-detached attachment. `setDraft`/`flush`/`retry` read
+        // `attachmentRef.current` directly (not gated by `identityKey`), so
+        // a stale ref would route them at a runtime that no longer holds a
+        // surface lease for this component.
+        if (attachmentRef.current === current) {
+          attachmentRef.current = null;
+        }
         const revision = await fileContentRevision(diskContent);
         if (!request.isCurrent() || generationRef.current !== generation) {
           return { kind: "rejected" };

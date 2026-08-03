@@ -19,7 +19,6 @@ import {
   DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
   WORKSPACE_WRITE_FILE_MAX_CHARS,
 } from "@traycer/protocol/host";
-import { toast } from "sonner";
 import { preloadDiffEditProvider } from "@/components/diff/diff-edit-provider-loader";
 import {
   useDiffClickToEdit,
@@ -33,6 +32,8 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   fileEditIdentityKey,
   type FileEditRuntimeState,
@@ -71,6 +72,14 @@ interface UseGitDiffEditingArgs {
   readonly runningDir: string;
   readonly file: GitChangedFile;
   readonly surfaceId: string;
+  /**
+   * Raw tab visibility, distinct from `interactionEnabled` below: the latter
+   * also goes false for reasons unrelated to the tab being hidden (the diff
+   * query pending/erroring, a binary/truncated diff) and must never release
+   * an in-progress edit session over those. Only an actually inactive
+   * (LRU-hidden) tab should release ownership.
+   */
+  readonly isActive: boolean;
   readonly interactionEnabled: boolean;
   readonly currentDiff: GitGetFileDiffResponse | null;
   readonly currentComparisonIdentity: string;
@@ -128,6 +137,18 @@ export function useGitDiffEditing(
   });
   const active = fileSession.state?.ownerSurfaceId === args.surfaceId;
 
+  // An LRU keep-alive tab hides an inactive Git-diff surface instead of
+  // unmounting it, and this session always passes `autoAttach: false` above -
+  // so the auto-release effect in `useFileEditSession` (gated to attachments
+  // it created itself) never re-runs here. Without this, a tab that was
+  // actively editing before going inactive would keep owning the runtime
+  // forever, and a freshly opened visible tab for the same file would keep
+  // hitting `focus-owner` until the hidden tab eventually unmounts.
+  useEffect(() => {
+    if (args.isActive || !active) return;
+    fileSession.runtime?.releaseOwnership(args.surfaceId);
+  }, [active, args.isActive, args.surfaceId, fileSession.runtime]);
+
   const begin = useCallback(
     async (
       request: DiffEditActivationRequest,
@@ -176,6 +197,7 @@ export function useGitDiffEditing(
     beginRef.current = begin;
   }, [begin]);
   const resumeAttemptRef = useRef<string | null>(null);
+  const driftAttemptRef = useRef<string | null>(null);
   const hasCurrentDiff = args.currentDiff !== null;
   useEffect(() => {
     if (
@@ -222,13 +244,27 @@ export function useGitDiffEditing(
     if (
       !active ||
       hydration === null ||
-      hydration.comparisonIdentity === args.currentComparisonIdentity
+      hydration.comparisonIdentity === args.currentComparisonIdentity ||
+      // `contentsQuery` (a TanStack Query result) is not referentially
+      // stable across renders, so this effect can re-run many times before
+      // the refetch below ever resolves and marks `hydration.comparisonIdentity`
+      // caught up. Without this synchronous guard, each of those re-runs
+      // would start another overlapping `git.getFileContents` RPC for the
+      // same stale identity - mirrors `resumeAttemptRef` above.
+      driftAttemptRef.current === args.currentComparisonIdentity
     ) {
       return;
     }
-    let cancelled = false;
+    const attemptIdentity = args.currentComparisonIdentity;
+    driftAttemptRef.current = attemptIdentity;
     void contentsQuery.refetch().then((result) => {
-      if (cancelled) return;
+      // A ref-based check, not a `cancelled` closure torn down by effect
+      // cleanup: `contentsQuery` changing (e.g. its own `isFetching` flip
+      // while THIS refetch is in flight) re-runs this effect and would tear
+      // down a closure-scoped flag long before the request resolves,
+      // discarding a still-relevant result. `driftAttemptRef` only moves
+      // when a genuinely different comparison identity supersedes this one.
+      if (driftAttemptRef.current !== attemptIdentity) return;
       const latestContent = result.data?.worktreeFile?.contents;
       const matchesBaseline =
         latestContent !== undefined &&
@@ -241,13 +277,10 @@ export function useGitDiffEditing(
       setHydration((current) =>
         current === null
           ? null
-          : { ...current, comparisonIdentity: args.currentComparisonIdentity },
+          : { ...current, comparisonIdentity: attemptIdentity },
       );
-      setStaleIdentity(matchesBaseline ? null : args.currentComparisonIdentity);
+      setStaleIdentity(matchesBaseline ? null : attemptIdentity);
     });
-    return () => {
-      cancelled = true;
-    };
   }, [
     active,
     args.currentComparisonIdentity,
@@ -292,7 +325,16 @@ export function useGitDiffEditing(
     active,
     onActivate: begin,
     onActivationError: () => {
-      toast.error("Couldn’t start editing this diff.");
+      reportableErrorToast(
+        "Couldn’t start editing this diff.",
+        undefined,
+        createReportIssueContext({
+          title: "Could not start editing this diff",
+          message: null,
+          code: null,
+          source: "Git diff edit",
+        }),
+      );
     },
     onChange: fileSession.setDraft,
     onBlur: fileSession.flush,
@@ -431,6 +473,7 @@ export function useEditableGitDiffSurface(args: {
     runningDir: args.runningDir,
     file: args.file,
     surfaceId: args.surfaceId,
+    isActive: args.isActive,
     interactionEnabled: isGitDiffInteractionEnabled({
       isActive: args.isActive,
       fileIsBinary: args.file.isBinary,
