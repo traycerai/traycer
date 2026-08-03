@@ -1170,8 +1170,10 @@ describe("WsStreamClient", () => {
       initialBackoffMs: 10,
       maxBackoffMs: 1_000,
     });
-    let sinceCursor: { readonly ingestVersion: number; readonly eventId: string } | null =
-      null;
+    let sinceCursor: {
+      readonly ingestVersion: number;
+      readonly eventId: string;
+    } | null = null;
     const session = client.subscribeWithParamsProvider(
       "host.communicationGraph.subscribe",
       () => ({ epicId: "epic-42", sinceCursor }),

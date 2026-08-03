@@ -41,7 +41,11 @@ import {
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
 import { callHostRpc } from "../internal/host-rpc";
-import { writeStderr, writeStdout, writeStdoutForAck } from "../runner/std-write";
+import {
+  writeStderr,
+  writeStdout,
+  writeStdoutForAck,
+} from "../runner/std-write";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
@@ -543,7 +547,11 @@ class InboxAcknowledgementQueue {
  * (see `agentInboxSubscribeServerFrameSchemaV12`'s doc comment).
  */
 type NormalizedServerFrame =
-  | { readonly kind: "message"; readonly item: AgentInboxMessage; readonly eventId: string | null }
+  | {
+      readonly kind: "message";
+      readonly item: AgentInboxMessage;
+      readonly eventId: string | null;
+    }
   | { readonly kind: "notice"; readonly notice: AgentInboxNotice }
   | { readonly kind: "role-awareness"; readonly event: RoleAwarenessEvent }
   | { readonly kind: "pong" };

@@ -214,6 +214,45 @@ describe("CommGraphCloudSubscriptionManager", () => {
     expect(manager.getSnapshot().hosts[0]?.hostId).toBe("relay-healthy");
   });
 
+  it("keeps the replacement handle when a relay fails synchronously during opening", () => {
+    const requests: CommGraphCloudSubscriptionRequest[] = [];
+    let staleClosed = false;
+    let replacementClosed = false;
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      (request) => {
+        requests.push(request);
+        if (request.hostId === "relay-stale") {
+          request.handlers.onStatus("unsupported");
+          return {
+            close: () => {
+              staleClosed = true;
+            },
+          };
+        }
+        return {
+          close: () => {
+            replacementClosed = true;
+          },
+        };
+      },
+      () => undefined,
+    );
+
+    manager.setRelayHostIds(["relay-stale", "relay-healthy"]);
+    manager.attach();
+
+    expect(requests.map((request) => request.hostId)).toEqual([
+      "relay-stale",
+      "relay-healthy",
+    ]);
+    expect(staleClosed).toBe(true);
+    expect(replacementClosed).toBe(false);
+
+    manager.detach();
+    expect(replacementClosed).toBe(true);
+  });
+
   it("retries a rejected relay when its directory readiness changes in place", () => {
     const requests: CommGraphCloudSubscriptionRequest[] = [];
     let shouldFail = true;
@@ -305,17 +344,26 @@ describe("CommGraphCloudSubscriptionManager", () => {
     const handlers = recorded.requests[0].handlers;
     handlers.onSnapshot(
       [
-        cloudEvent({ eventId: "event-a", originSequence: 7, capturedAt: 1_000 }),
-        cloudEvent({ eventId: "event-b", originSequence: 7, ingestVersion: 11, capturedAt: 1_000 }),
+        cloudEvent({
+          eventId: "event-a",
+          originSequence: 7,
+          capturedAt: 1_000,
+        }),
+        cloudEvent({
+          eventId: "event-b",
+          originSequence: 7,
+          ingestVersion: 11,
+          capturedAt: 1_000,
+        }),
       ],
       11,
       null,
     );
 
     const events = manager.getSnapshot().events;
-    expect(commGraphEventsAsOfCursor(events, commGraphCursorForEvent(events[0]))).toEqual([
-      events[0],
-    ]);
+    expect(
+      commGraphEventsAsOfCursor(events, commGraphCursorForEvent(events[0])),
+    ).toEqual([events[0]]);
   });
 
   it("applies an advancing frontier without reconnecting, moving, or stalling the cursor", () => {

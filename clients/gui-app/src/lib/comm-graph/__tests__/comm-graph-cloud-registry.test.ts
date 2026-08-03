@@ -29,19 +29,9 @@ describe("comm-graph cloud subscription registry", () => {
 
     // React StrictMode's effect mount → cleanup → remount sequence. The same
     // stable claim is reacquired, and every physical transport is closed once.
-    acquireCommGraphCloudSubscription(
-      "epic-1",
-      claim,
-      opener,
-      ["relay-b"],
-    );
+    acquireCommGraphCloudSubscription("epic-1", claim, opener, ["relay-b"]);
     releaseCommGraphCloudSubscription("epic-1", claim);
-    acquireCommGraphCloudSubscription(
-      "epic-1",
-      claim,
-      opener,
-      ["relay-b"],
-    );
+    acquireCommGraphCloudSubscription("epic-1", claim, opener, ["relay-b"]);
     releaseCommGraphCloudSubscription("epic-1", claim);
 
     expect(opened).toHaveBeenCalledTimes(2);

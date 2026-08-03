@@ -413,8 +413,7 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          | (() => void)
-          | undefined;
+          (() => void) | undefined;
         cb?.();
         return true;
       });
@@ -463,8 +462,7 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          | (() => void)
-          | undefined;
+          (() => void) | undefined;
         cb?.();
         return true;
       });
@@ -509,8 +507,7 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          | ((error: Error) => void)
-          | undefined;
+          ((error: Error) => void) | undefined;
         cb?.(new Error("EPIPE: broken pipe"));
         return true;
       });

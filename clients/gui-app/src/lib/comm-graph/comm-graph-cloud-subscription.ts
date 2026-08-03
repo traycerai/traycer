@@ -237,7 +237,7 @@ export class CommGraphCloudSubscriptionManager {
       this.relayHostId === hostId &&
       this.generation === generation;
     try {
-      this.handle = this.opener({
+      const handle = this.opener({
         hostId,
         epicId: this.epicId,
         readSinceCursor: () => this.cursor,
@@ -260,6 +260,14 @@ export class CommGraphCloudSubscriptionManager {
           },
         },
       });
+      // A LogicalStream can replay a terminal status while the opener is
+      // still returning. That status may synchronously fail over to another
+      // relay, whose handle must not be overwritten by this stale one.
+      if (isCurrent()) {
+        this.handle = handle;
+      } else {
+        this.closeHandle(handle, hostId);
+      }
     } catch (cause) {
       this.relayStatus = "failed";
       // A synchronous dial failure has no handle to emit an `unreachable`
@@ -324,11 +332,7 @@ export class CommGraphCloudSubscriptionManager {
       this.events = this.events.concat(accepted);
       this.events.sort(compareCommGraphEvents);
     }
-    if (
-      accepted.length > 0 ||
-      headVersion !== null ||
-      prunedRowKeys.size > 0
-    ) {
+    if (accepted.length > 0 || headVersion !== null || prunedRowKeys.size > 0) {
       this.publish();
     }
   }
@@ -386,12 +390,19 @@ export class CommGraphCloudSubscriptionManager {
     this.handle = null;
     this.relayHostId = null;
     if (handle === null) return;
+    this.closeHandle(handle, null);
+  }
+
+  private closeHandle(
+    handle: CommGraphCloudSubscriptionHandle,
+    hostId: string | null,
+  ): void {
     try {
       handle.close();
     } catch (cause) {
       appLogger.error(
         "[comm-graph] cloud relay close failed",
-        { epicId: this.epicId },
+        { epicId: this.epicId, hostId },
         cause,
       );
     }
@@ -406,13 +417,13 @@ export class CommGraphCloudSubscriptionManager {
     this.snapshot = {
       events: this.events,
       hosts: statusHostIds.map((hostId) => ({
-          hostId,
-          status: this.relayStatus,
-          cursor: this.cursor?.ingestVersion ?? null,
-          snapshotBoundary: this.historyBoundaryInitialized
-            ? { highestId: this.historyBoundary }
-            : null,
-        })),
+        hostId,
+        status: this.relayStatus,
+        cursor: this.cursor?.ingestVersion ?? null,
+        snapshotBoundary: this.historyBoundaryInitialized
+          ? { highestId: this.historyBoundary }
+          : null,
+      })),
       lastArrival: this.lastArrival,
     };
     for (const listener of Array.from(this.listeners)) listener();

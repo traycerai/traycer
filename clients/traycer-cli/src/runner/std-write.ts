@@ -78,7 +78,9 @@ function trackedWithOutcome(
   tail: Promise<void>,
 ): { readonly settled: Promise<void>; readonly outcome: Promise<boolean> } {
   const outcome = new Promise<boolean>((resolve) => {
-    stream.write(chunk, (error) => resolve(error === undefined || error === null));
+    stream.write(chunk, (error) =>
+      resolve(error === undefined || error === null),
+    );
   });
   const settled = tail.then(() => outcome.then(() => undefined));
   return { settled, outcome };

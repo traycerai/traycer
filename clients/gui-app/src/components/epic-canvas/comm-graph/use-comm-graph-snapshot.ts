@@ -120,21 +120,18 @@ export function useCommGraphSnapshot(
   // available through another host in the user's directory. Relay choice
   // never becomes row identity; the host's availability frame is the sole
   // plane verdict.
-  const relayHostIds = useMemo(
-    () => {
-      const directoryHostIds = hostDirectory.data
-        ?.filter((entry) => dialableHostEndpoint(entry) !== null)
-        .map((entry) => entry.hostId);
-      return Array.from(
-        new Set(
-          directoryHostIds === undefined || directoryHostIds.length === 0
-            ? hostIds
-            : directoryHostIds,
-        ),
-      ).sort();
-    },
-    [hostDirectory.data, hostIds],
-  );
+  const relayHostIds = useMemo(() => {
+    const directoryHostIds = hostDirectory.data
+      ?.filter((entry) => dialableHostEndpoint(entry) !== null)
+      .map((entry) => entry.hostId);
+    return Array.from(
+      new Set(
+        directoryHostIds === undefined || directoryHostIds.length === 0
+          ? hostIds
+          : directoryHostIds,
+      ),
+    ).sort();
+  }, [hostDirectory.data, hostIds]);
   // The ID set does not change when a host publishes its endpoint late or
   // upgrades in place. Keep that transport identity separately so a retained
   // cloud manager can retry a prior dial/compatibility failure for the same
