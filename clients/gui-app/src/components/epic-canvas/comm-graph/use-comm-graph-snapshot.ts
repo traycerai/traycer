@@ -51,6 +51,7 @@ import {
   getCommGraphCloudSubscriptionOpenerOverride,
   getCommGraphSubscriptionOpenerOverride,
 } from "@/lib/comm-graph/comm-graph-opener-override";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 
 const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
@@ -118,7 +119,9 @@ export function useCommGraphSnapshot(
   // plane verdict.
   const relayHostIds = useMemo(
     () => {
-      const directoryHostIds = hostDirectory.data?.map((entry) => entry.hostId);
+      const directoryHostIds = hostDirectory.data
+        ?.filter((entry) => dialableHostEndpoint(entry) !== null)
+        .map((entry) => entry.hostId);
       return Array.from(
         new Set(
           directoryHostIds === undefined || directoryHostIds.length === 0

@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useCommGraphSnapshot } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
 import {
   __setCommGraphCloudSubscriptionOpenerForTests,
@@ -12,7 +13,7 @@ import type { CommGraphSubscriptionRequest } from "@/lib/comm-graph/comm-graph-s
 import type { CommGraphCloudSubscriptionRequest } from "@/lib/comm-graph/comm-graph-cloud-subscription";
 
 const directoryEntries = vi.hoisted(() => ({
-  current: [] as ReadonlyArray<{ readonly hostId: string }>,
+  current: [] as ReadonlyArray<HostDirectoryEntry>,
 }));
 
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
@@ -173,7 +174,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
   });
 
   it("uses a signed-in non-origin host to relay the cloud feed", async () => {
-    directoryEntries.current = [{ hostId: "relay-b" }];
+    directoryEntries.current = [directoryEntry("relay-b", undefined)];
     __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
@@ -186,4 +187,37 @@ describe("useCommGraphSnapshot cloud authority", () => {
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     expect(cloudRequests[0].hostId).toBe("relay-b");
   });
+
+  it("skips unavailable directory entries when choosing a cloud relay", async () => {
+    directoryEntries.current = [
+      directoryEntry("unavailable-relay", { status: "unavailable" }),
+      directoryEntry("available-relay", undefined),
+    ];
+    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    renderHook(() => useCommGraphSnapshot("epic-1", ["offline-origin-a"]));
+
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    expect(cloudRequests[0].hostId).toBe("available-relay");
+  });
 });
+
+function directoryEntry(
+  hostId: string,
+  overrides: Partial<HostDirectoryEntry> | undefined,
+): HostDirectoryEntry {
+  return {
+    hostId,
+    label: hostId,
+    kind: "remote",
+    websocketUrl: `ws://${hostId}/rpc`,
+    status: "available",
+    version: null,
+    ...overrides,
+  };
+}
