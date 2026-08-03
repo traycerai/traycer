@@ -41,6 +41,7 @@ import type {
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
 // One `app_opened` per renderer process, emitted when hydration settles (the
 // earliest point this window knows whether it restored content). Secondary
@@ -204,6 +205,7 @@ function installDesktopWindowsBridge(
   const flushProjection = (): void => {
     void projectionBridge.flush().catch(() => undefined);
     void drainDesktopTabsPersistence().catch(() => undefined);
+    void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
   };
   setDesktopEpicOwnershipBridge(bridge);
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);

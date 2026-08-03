@@ -1,6 +1,13 @@
-import { useMemo, type ReactNode, type UIEvent } from "react";
+import {
+  useMemo,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+  type UIEvent,
+} from "react";
 import { FileDiff } from "@pierre/diffs/react";
-import { parsePatchFiles } from "@pierre/diffs";
+import { parsePatchFiles, type FileDiffContentsLoader } from "@pierre/diffs";
+import type { EditorOptions } from "@pierre/diffs/edit";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import {
   buildPatchCacheKey,
@@ -8,6 +15,10 @@ import {
 } from "@/lib/git/diff-rendering";
 import { DIFF_PANEL_UNSAFE_CSS } from "@/lib/git/diff-tokens-css";
 import { cn } from "@/lib/utils";
+import { DiffEditProvider } from "@/components/diff/diff-edit-provider";
+import { DiffHighlightLoading } from "@/components/diff/diff-highlight-loading";
+import { useDiffsDiffHighlightReady } from "@/components/diff/use-diff-highlight-ready";
+import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
 
 const DIFF_FIND_UNSAFE_CSS = `
   [data-traycer-diff-find-match] {
@@ -31,6 +42,11 @@ export interface DiffContentPrimitiveProps {
   readonly lineNumbers: boolean;
   readonly indicatorStyle: "bars" | "classic" | "none";
   readonly fileHeaders: boolean;
+  readonly editAdapter?: DiffClickToEditAdapter;
+  readonly editSession?: {
+    readonly editorOptions: EditorOptions<undefined>;
+    readonly loadDiffFiles: FileDiffContentsLoader;
+  };
 }
 
 export interface DiffContentFrameProps {
@@ -39,6 +55,9 @@ export interface DiffContentFrameProps {
   readonly scrollContainerRef:
     ((element: HTMLDivElement | null) => void) | null;
   readonly onScroll: ((event: UIEvent<HTMLDivElement>) => void) | null;
+  readonly onKeyDownCapture?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  readonly onPointerDownCapture?: (event: PointerEvent<HTMLDivElement>) => void;
+  readonly editorBoundary?: boolean;
   readonly children: ReactNode;
 }
 
@@ -53,6 +72,11 @@ export function DiffContentFrame(props: DiffContentFrameProps): ReactNode {
         fillsContainer ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 shrink-0",
       )}
       data-diffs-host
+      data-diffs-editor-boundary={
+        props.editorBoundary === true ? "" : undefined
+      }
+      onKeyDownCapture={props.onKeyDownCapture}
+      onPointerDownCapture={props.onPointerDownCapture}
     >
       {banner}
       <div
@@ -85,16 +109,28 @@ export function DiffContentPrimitive(
     );
     return parsePatchFiles(props.patch, cacheKey);
   }, [resolvedTheme, props.patch, props.cacheScope]);
+  const fileDiffs = useMemo(
+    () => parsed.flatMap((patchGroup) => patchGroup.files),
+    [parsed],
+  );
+  const themeName = resolveDiffThemeName(resolvedTheme);
+  const highlightReady = useDiffsDiffHighlightReady({
+    fileDiffs,
+    theme: themeName,
+    enabled: props.editSession === undefined,
+  });
 
   const pierreOverflow = resolvePierreOverflow(props.wordWrap);
 
   return (
-    <>
-      {parsed.flatMap((patchGroup) =>
-        patchGroup.files.map((fileDiff) => (
+    <DiffEditProvider>
+      {highlightReady ? (
+        fileDiffs.map((fileDiff) => (
           <FileDiff
             key={fileDiff.name}
             fileDiff={fileDiff}
+            edit={props.editSession !== undefined}
+            editorOptions={props.editSession?.editorOptions}
             options={{
               disableFileHeader: !props.fileHeaders,
               collapsed: false,
@@ -103,15 +139,20 @@ export function DiffContentPrimitive(
               disableBackground: !props.backgrounds,
               disableLineNumbers: !props.lineNumbers,
               lineDiffType: "none",
+              useTokenTransformer: true,
               overflow: pierreOverflow,
-              theme: resolveDiffThemeName(resolvedTheme),
+              theme: themeName,
               themeType: resolvedTheme,
               unsafeCSS: DIFF_PANEL_WITH_FIND_UNSAFE_CSS,
+              loadDiffFiles: props.editSession?.loadDiffFiles,
+              ...props.editAdapter?.diffOptions,
             }}
           />
-        )),
+        ))
+      ) : (
+        <DiffHighlightLoading testId="diff-highlighting" />
       )}
-    </>
+    </DiffEditProvider>
   );
 }
 

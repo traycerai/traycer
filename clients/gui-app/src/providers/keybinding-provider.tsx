@@ -26,6 +26,7 @@ import {
   type LeaderModifier,
   type LeaderState,
 } from "@/providers/keybinding-context";
+import { isDiffsEditorEvent } from "@/lib/keybindings/editable-target";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -297,6 +298,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       if (event.defaultPrevented) return;
+      if (isDiffsEditorEvent(event)) return;
       if (isArtifactEditorLinkShortcut(event)) return;
 
       // Digit actions (e.g. ⌘1 or header tab sequences like ⌥1,0) must match

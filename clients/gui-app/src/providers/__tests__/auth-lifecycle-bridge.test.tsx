@@ -71,12 +71,13 @@ function fakeChatHandle(
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
   email: string | null,
+  userId: string | null,
 ): void {
-  if (status === "signed-in" && email !== null) {
+  if (status === "signed-in" && email !== null && userId !== null) {
     useAuthStore.setState({
       status,
-      profile: { userId: email, userName: email, email },
-      contextMetadata: { userId: email, username: email },
+      profile: { userId, userName: email, email },
+      contextMetadata: { userId, username: email },
     });
     return;
   }
@@ -85,7 +86,7 @@ function resetAuth(
 
 describe("<EpicSessionLifecycleBridge />", () => {
   beforeEach(() => {
-    resetAuth("signed-in", "alice@example.com");
+    resetAuth("signed-in", "alice@example.com", "user-alice");
     __getOpenEpicRegistryForTests().disposeAll();
     __getChatSessionRegistryForTests().disposeAll();
   });
@@ -94,7 +95,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
     __getChatSessionRegistryForTests().disposeAll();
-    resetAuth("signed-out", null);
+    resetAuth("signed-out", null, null);
   });
 
   it("clears every live Epic and chat session on sign-out", () => {
@@ -129,7 +130,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
     // Flip to signed-out.
     act(() => {
-      resetAuth("signed-out", null);
+      resetAuth("signed-out", null, null);
     });
 
     expect(epicRegistry.size()).toBe(0);
@@ -161,7 +162,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
     // Flip to a different signed-in identity.
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", "alice@example.com", "user-bob");
     });
 
     expect(epicRegistry.size()).toBe(0);

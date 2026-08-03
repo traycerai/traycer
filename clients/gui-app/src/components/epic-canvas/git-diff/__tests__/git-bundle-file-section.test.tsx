@@ -80,6 +80,7 @@ describe("<BundleFileSection />", () => {
           file={FILE}
           headSha="head-1"
           diffViewerPreferences={DEFAULT_DIFF_VIEWER_PREFERENCES}
+          isActive
         />
       </EpicSessionContext.Provider>,
     );

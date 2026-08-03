@@ -11,6 +11,8 @@ import {
   workspacePathMentionSuggestionsRequestSchema,
   workspaceReadFileRequestSchema,
   workspaceReadFileResponseSchema,
+  workspaceWriteFileRequestSchema,
+  workspaceWriteFileResponseSchema,
   workspaceWorktreeMentionSuggestionsResponseSchema,
 } from "@traycer/protocol/host/index";
 
@@ -146,6 +148,43 @@ describe("workspace mention host schemas", () => {
         content: "export const app = true;\n",
         truncated: false,
         error: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("requires SHA-256 revisions for conflict-safe workspace writes", () => {
+    const revision = "a".repeat(64);
+    expect(
+      workspaceWriteFileRequestSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        expectedRevision: revision,
+        content: "export const app = false;\n",
+      }).success,
+    ).toBe(true);
+    expect(
+      workspaceWriteFileRequestSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        expectedRevision: "not-a-revision",
+        content: "export const app = false;\n",
+      }).success,
+    ).toBe(false);
+    expect(
+      workspaceWriteFileResponseSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        status: "saved",
+        revision,
+      }).success,
+    ).toBe(true);
+    expect(
+      workspaceWriteFileResponseSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        status: "conflict",
+        currentRevision: "b".repeat(64),
+        error: "changed",
       }).success,
     ).toBe(true);
   });

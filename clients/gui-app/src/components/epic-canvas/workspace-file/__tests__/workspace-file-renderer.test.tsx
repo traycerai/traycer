@@ -1,0 +1,301 @@
+import "../../../../../__tests__/test-browser-apis";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
+
+const highlightPool = vi.hoisted(() => ({
+  pool: undefined as
+    | undefined
+    | {
+        setRenderOptions: Mock;
+        primeFileHighlightCache: Mock;
+        primeDiffHighlightCache: Mock;
+      },
+  // Mount lifecycle only (useEffect []). Renders may fire more often.
+  mountCount: 0,
+  unmountCount: 0,
+  lastEdit: null as boolean | null,
+}));
+
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark" }),
+}));
+
+vi.mock("@pierre/diffs/react", () => ({
+  useWorkerPool: () => highlightPool.pool,
+  // Stable provider boundary: always present in read and edit mode.
+  EditProvider: (props: { readonly children: ReactNode }) => props.children,
+  File: (props: {
+    readonly edit: boolean;
+    readonly file: { readonly contents: string };
+    readonly options: {
+      readonly onPostRender?: (
+        node: HTMLElement,
+        instance: unknown,
+        phase: string,
+      ) => void;
+    };
+  }) => <MockDiffsFile {...props} />,
+}));
+
+import { WorkspaceFileRenderer } from "../workspace-file-renderer";
+
+function MockDiffsFile(props: {
+  readonly edit: boolean;
+  readonly file: { readonly contents: string };
+  readonly options: {
+    readonly onPostRender?: (
+      node: HTMLElement,
+      instance: unknown,
+      phase: string,
+    ) => void;
+  };
+}): ReactNode {
+  const DiffsContainer = "diffs-container" as "div";
+  const hostRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    highlightPool.lastEdit = props.edit;
+  }, [props.edit]);
+
+  useEffect(() => {
+    highlightPool.mountCount += 1;
+    return () => {
+      highlightPool.unmountCount += 1;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const node = hostRef.current;
+    if (node === null) return;
+    if (node.shadowRoot === null) {
+      node.attachShadow({ mode: "open" });
+    }
+    const content = document.createElement("div");
+    content.setAttribute("data-content", "");
+    content.textContent = props.file.contents;
+    if (props.edit) {
+      content.contentEditable = "true";
+      content.role = "textbox";
+      content.ariaMultiLine = "true";
+    }
+    node.shadowRoot?.replaceChildren(content);
+    props.options.onPostRender?.(node, undefined, "render");
+  }, [props.edit, props.file.contents, props.options]);
+
+  return <DiffsContainer ref={hostRef as never} />;
+}
+
+beforeEach(() => {
+  highlightPool.pool = undefined;
+  highlightPool.mountCount = 0;
+  highlightPool.unmountCount = 0;
+  highlightPool.lastEdit = null;
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("<WorkspaceFileRenderer />", () => {
+  it("keeps the same diffs-container DOM node across read → edit", async () => {
+    const onChange = vi.fn();
+    const editAdapter = createEditAdapter(onChange);
+    const rendered = render(
+      <WorkspaceFileRenderer
+        content={"const value = 1;\n"}
+        fileName="source.ts"
+        language="typescript"
+        editing={false}
+        cacheKey="workspace-file:source.ts"
+        editAdapter={editAdapter}
+        revealLine={null}
+        revealNonce={null}
+        findTarget={null}
+        onRevealConsumed={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const source =
+        activeDiffsContainer()?.shadowRoot?.querySelector("[data-content]");
+      expect(source?.textContent).toContain("const value = 1;");
+      expect(source?.getAttribute("contenteditable")).not.toBe("true");
+    });
+
+    const readContainer = activeDiffsContainer();
+    expect(readContainer).toBeInstanceOf(HTMLElement);
+    expect(highlightPool.mountCount).toBeGreaterThan(0);
+    const mountsBeforeEdit = highlightPool.mountCount;
+    const unmountsBeforeEdit = highlightPool.unmountCount;
+    expect(highlightPool.lastEdit).toBe(false);
+
+    rendered.rerender(
+      <WorkspaceFileRenderer
+        content={"const value = 1;\n"}
+        fileName="source.ts"
+        language="typescript"
+        editing
+        cacheKey="workspace-file:source.ts"
+        editAdapter={editAdapter}
+        revealLine={null}
+        revealNonce={null}
+        findTarget={null}
+        onRevealConsumed={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const editor =
+        activeDiffsContainer()?.shadowRoot?.querySelector("[data-content]");
+      expect(editor).toBeInstanceOf(HTMLElement);
+      if (!(editor instanceof HTMLElement)) return;
+      expect(editor.contentEditable).toBe("true");
+      expect(editor.role).toBe("textbox");
+      expect(editor.ariaMultiLine).toBe("true");
+    });
+
+    expect(activeDiffsContainer()).toBe(readContainer);
+    // No replacement across the transition: same host, no extra mount cycle.
+    expect(highlightPool.mountCount).toBe(mountsBeforeEdit);
+    expect(highlightPool.unmountCount).toBe(unmountsBeforeEdit);
+    expect(highlightPool.lastEdit).toBe(true);
+  });
+
+  it("does not mount the Diffs file surface until primeFileHighlightCache resolves", async () => {
+    let resolvePrime: (() => void) | null = null;
+    const primePromise = new Promise<void>((resolve) => {
+      resolvePrime = resolve;
+    });
+    const setRenderOptions = vi.fn(() => Promise.resolve());
+    const primeFileHighlightCache = vi.fn(() => primePromise);
+    highlightPool.pool = {
+      setRenderOptions,
+      primeFileHighlightCache,
+      primeDiffHighlightCache: vi.fn(() => Promise.resolve()),
+    };
+
+    render(
+      <WorkspaceFileRenderer
+        content={"const value = 1;\n"}
+        fileName="source.ts"
+        language="typescript"
+        editing={false}
+        cacheKey="workspace-file:source.ts"
+        editAdapter={createEditAdapter(vi.fn())}
+        revealLine={null}
+        revealNonce={null}
+        findTarget={null}
+        onRevealConsumed={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("workspace-file-highlighting")).toBeTruthy();
+    expect(activeDiffsContainer()).toBeNull();
+    expect(highlightPool.mountCount).toBe(0);
+
+    await waitFor(() => {
+      expect(primeFileHighlightCache).toHaveBeenCalled();
+    });
+    expect(setRenderOptions).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePrime?.();
+      await primePromise;
+    });
+
+    await waitFor(() => {
+      expect(activeDiffsContainer()).toBeTruthy();
+    });
+    expect(screen.queryByTestId("workspace-file-highlighting")).toBeNull();
+    expect(highlightPool.mountCount).toBeGreaterThan(0);
+    expect(highlightPool.unmountCount).toBeLessThan(highlightPool.mountCount);
+    expect(highlightPool.lastEdit).toBe(false);
+  });
+
+  it("keeps the mounted file visible while later content prewarms", async () => {
+    const primeFileHighlightCache = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockReturnValueOnce(new Promise<void>(() => undefined));
+    highlightPool.pool = {
+      setRenderOptions: vi.fn(() => Promise.resolve()),
+      primeFileHighlightCache,
+      primeDiffHighlightCache: vi.fn(() => Promise.resolve()),
+    };
+    const props = {
+      fileName: "source.ts",
+      language: "typescript",
+      editing: false,
+      cacheKey: "workspace-file:source.ts",
+      editAdapter: createEditAdapter(vi.fn()),
+      revealLine: null,
+      revealNonce: null,
+      findTarget: null,
+      onRevealConsumed: vi.fn(),
+    } as const;
+    const rendered = render(
+      <WorkspaceFileRenderer content={"const value = 1;\n"} {...props} />,
+    );
+    await waitFor(() => {
+      expect(activeDiffsContainer()).toBeTruthy();
+    });
+    const firstHost = activeDiffsContainer();
+    const mountsBefore = highlightPool.mountCount;
+    const unmountsBefore = highlightPool.unmountCount;
+
+    rendered.rerender(
+      <WorkspaceFileRenderer content={"const value = 2;\n"} {...props} />,
+    );
+
+    expect(screen.queryByTestId("workspace-file-highlighting")).toBeNull();
+    expect(activeDiffsContainer()).toBe(firstHost);
+    expect(highlightPool.mountCount).toBe(mountsBefore);
+    expect(highlightPool.unmountCount).toBe(unmountsBefore);
+    await waitFor(() => {
+      expect(primeFileHighlightCache).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+function createEditAdapter(
+  onChange: (content: string) => void,
+): DiffClickToEditAdapter {
+  return {
+    fileOptions: {
+      enableTokenInteractionsOnWhitespace: true,
+      onLineClick: vi.fn(),
+      onLineEnter: vi.fn(),
+      onTokenClick: vi.fn(),
+      onTokenEnter: vi.fn(),
+    },
+    diffOptions: {
+      enableTokenInteractionsOnWhitespace: true,
+      onLineClick: vi.fn(),
+      onLineEnter: vi.fn(),
+      onTokenClick: vi.fn(),
+      onTokenEnter: vi.fn(),
+    },
+    editorOptions: {
+      onChange: (file) => {
+        onChange(file.contents);
+      },
+    },
+    onKeyDownCapture: vi.fn(),
+    onPointerDownCapture: vi.fn(),
+    cancelPendingActivation: vi.fn(),
+  };
+}
+
+function activeDiffsContainer(): HTMLElement | null {
+  return document.querySelector("diffs-container");
+}

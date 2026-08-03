@@ -2,22 +2,17 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
+import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
-import { useShikiHighlighter } from "@/markdown/shiki-highlighter";
-import { useThrottledCodeHighlight } from "@/markdown/use-throttled-code-highlight";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import {
   createWorkspaceFileFindAdapter,
   type WorkspaceFileFindEnvironment,
   type WorkspaceFileSourceFindTarget,
 } from "@/components/epic-canvas/workspace-file/workspace-file-find-adapter";
-import {
-  clearSourceFindHighlights,
-  paintSourceFindHighlights,
-} from "@/components/epic-canvas/workspace-file/workspace-file-source-find-highlight";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 import {
   clearWorkspaceFileRevealTarget,
@@ -31,27 +26,33 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 import { WorkspaceFileDeadTileBanner } from "./dead-tile-banner";
 import { WorkspaceMarkdownLinkProvider } from "@/components/epic-canvas/workspace-file/workspace-markdown-link-provider";
-
+import { WorkspaceFileRenderer } from "@/components/epic-canvas/workspace-file/workspace-file-renderer";
+import { FileAutosaveStatus } from "@/components/diff/file-autosave-status";
+import {
+  useDiffClickToEdit,
+  type DiffClickToEditAdapter,
+} from "@/components/diff/use-diff-click-to-edit";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { fileEditIdentityKey } from "@/lib/workspace/file-edit-runtime";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useAuthStore } from "@/stores/auth/auth-store";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 type WorkspaceFileViewMode = "source" | "preview";
 
 interface WorkspaceFileSourceFindTargetWithNonce extends WorkspaceFileSourceFindTarget {
   readonly nonce: number;
-}
-
-interface WorkspaceFileLineHighlight {
-  readonly line: number;
-  readonly top: number;
-  readonly height: number;
 }
 
 const MARKDOWN_VIEW_MODE_OPTIONS: ReadonlyArray<{
@@ -65,13 +66,9 @@ const MARKDOWN_VIEW_MODE_OPTIONS: ReadonlyArray<{
 /**
  * Host-binding gate for the file preview.
  *
- * `useWorkspaceReadFile` resolves through `useHostClient()`, which is the
- * renderer's *active* host - it does not honor the per-tile
- * `TabHostProvider`. A workspace-file tab carries the host it was
- * opened against (`node.hostId`); if that host is unreachable, or is
- * simply not the currently-active host, the read RPC would silently hit
- * the wrong host. Gate on both conditions and show an informational
- * banner instead of mis-reading.
+ * Reads and writes resolve through the per-tab host client. An unreachable
+ * host cannot service the tile, so the outer gate keeps the live renderer and
+ * its edit mutation unmounted until that same host is reachable again.
  */
 export function WorkspaceFileTile(props: {
   readonly node: WorkspaceFileRef;
@@ -80,15 +77,13 @@ export function WorkspaceFileTile(props: {
 }) {
   const { node } = props;
   const tabHostId = useTabHostId();
-  const activeHostId = useReactiveActiveHostId();
   const reachability = useHostReachability(tabHostId);
   // Read the target here (not just in the live body) so the dead-tile / inactive
   // states - which return BEFORE the live preview mounts - can still evict a
   // stranded entry. Scoped to this tab so a click meant for one tab's preview
   // doesn't move another tab's preview of the same file (CL-6).
   const revealTarget = useWorkspaceFileRevealTarget(props.viewTabId, node.id);
-  const isDeadTile =
-    reachability.status === "unreachable" || tabHostId !== activeHostId;
+  const isDeadTile = reachability.status === "unreachable";
 
   // A reveal target on a dead / inactive tile can never be consumed: the live
   // preview that runs the consume effect (G4) never mounts. Drop it so these
@@ -105,15 +100,6 @@ export function WorkspaceFileTile(props: {
       <WorkspaceFileDeadTileBanner
         hostLabel={reachability.hostLabel}
         reason="offline"
-        testId={`workspace-file-tile-${node.id}`}
-      />
-    );
-  }
-  if (tabHostId !== activeHostId) {
-    return (
-      <WorkspaceFileDeadTileBanner
-        hostLabel={reachability.hostLabel}
-        reason="inactive"
         testId={`workspace-file-tile-${node.id}`}
       />
     );
@@ -135,7 +121,16 @@ function WorkspaceFileTileLive(props: {
   readonly revealTarget: WorkspaceFileRevealTarget | null;
 }) {
   const { node, revealTarget } = props;
-  const query = useWorkspaceReadFile(node.workspacePath, node.filePath);
+  const tabHostId = useTabHostId();
+  const tabHostClient = useTabHostClient();
+  const supportsWrite = useHostSupportsMethod(tabHostId, "workspace.writeFile");
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const queryClient = useQueryClient();
+  const query = useWorkspaceReadFile(
+    tabHostClient,
+    node.workspacePath,
+    node.filePath,
+  );
   const rawContent = readFileContent(query.data);
   const content = useMemo(
     () =>
@@ -154,6 +149,50 @@ function WorkspaceFileTileLive(props: {
     [node.name],
   );
   const [viewMode, setViewMode] = useState<WorkspaceFileViewMode>("source");
+  const editIdentity = useMemo(
+    () => ({
+      userId,
+      hostId: tabHostId,
+      workspacePath: node.workspacePath,
+      filePath: node.filePath,
+    }),
+    [node.filePath, node.workspacePath, tabHostId, userId],
+  );
+  const editSurfaceId = `${props.viewTabId}:workspace-file:${node.instanceId}`;
+  const editEnabled = isWorkspaceFileEditEnabled({
+    isActive: props.isActive,
+    hasContent: rawContent !== null,
+    truncated,
+    supportsWrite,
+  });
+  const editSession = useFileEditSession({
+    client: tabHostClient,
+    identity: editIdentity,
+    diskContent: rawContent,
+    surfaceId: editSurfaceId,
+    autoAttach: editEnabled,
+  });
+  const editing = editSession.state?.ownerSurfaceId === editSurfaceId;
+  const editAdapter = useDiffClickToEdit({
+    surfaceId: editSurfaceId,
+    enabled: editEnabled,
+    active: editing,
+    onActivate: async (request) => {
+      await request.editorReady;
+      return editSession.activate(request, rawContent ?? "");
+    },
+    onActivationError: () => {
+      toast.error("Couldn’t start editing this file.");
+    },
+    onChange: editSession.setDraft,
+    onBlur: editSession.flush,
+    onSaveShortcut: editSession.flush,
+  });
+  const renderedContent = editSession.state?.draftContent ?? content;
+  const findContent =
+    renderedContent === null
+      ? null
+      : normalizeWorkspaceFileContent(renderedContent);
   const markdownPreviewRootRef = useRef<HTMLElement | null>(null);
   const findEnvironmentRef = useRef<WorkspaceFileFindEnvironment | null>(null);
   const [sourceFindTarget, setSourceFindTarget] =
@@ -181,11 +220,14 @@ function WorkspaceFileTileLive(props: {
 
   // The preview content has loaded into a state the consume effect never runs
   // from - a host/payload error, or an empty/failed read (`content === null`).
-  // Neither mounts `CodeEditorPreview`, so evict any pending target here rather
+  // Neither mounts the Diffs source renderer, so evict any pending target here rather
   // than strand it on the channel (CL-5). The loading state is excluded: the
   // content may still resolve to code and consume the target normally.
-  const settledUnconsumable =
-    !query.isLoading && (displayError !== null || content === null);
+  const settledUnconsumable = isSettledUnconsumableWorkspaceFile({
+    isLoading: query.isLoading,
+    hasError: displayError !== null,
+    hasContent: content !== null,
+  });
   useEffect(() => {
     if (settledUnconsumable && revealTarget !== null) {
       clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
@@ -199,12 +241,14 @@ function WorkspaceFileTileLive(props: {
   // target right after the scroll (G4), so a markdown file the user had on
   // preview returns to preview once the one-shot reveal completes. Line links
   // are almost always to code files, where source is the only view anyway.
-  const effectiveViewMode = computeViewMode(
-    revealTarget !== null,
-    markdownFile,
-    viewMode,
-    markdownPreviewDisabled,
-  );
+  const effectiveViewMode = editing
+    ? "source"
+    : computeViewMode(
+        revealTarget !== null,
+        markdownFile,
+        viewMode,
+        markdownPreviewDisabled,
+      );
   // Preserve scroll (both axes - long lines scroll horizontally) across epic
   // switches and remount, once the file content has loaded.
   const { scrollContainerRef, onScroll } = useNativeDivScrollRestoration(
@@ -229,10 +273,66 @@ function WorkspaceFileTileLive(props: {
     [publishFindEnvironment],
   );
 
+  const invalidatedSaveRef = useRef<number | null>(null);
+  useEffect(() => {
+    const savedAt = editSession.state?.lastSavedAt ?? null;
+    if (savedAt === null || invalidatedSaveRef.current === savedAt) return;
+    invalidatedSaveRef.current = savedAt;
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(tabHostId, "workspace.readFile"),
+    });
+  }, [editSession.state?.lastSavedAt, queryClient, tabHostId]);
+
+  const readLatestDiskContent = useCallback(async (): Promise<string> => {
+    const conflictDiskContent = editSession.state?.conflict?.diskContent;
+    if (conflictDiskContent !== null && conflictDiskContent !== undefined) {
+      return conflictDiskContent;
+    }
+    const refreshed = await query.refetch();
+    if (refreshed.error !== null) {
+      throw new Error(transportErrorMessage(refreshed.error));
+    }
+    const payloadError = readFilePayloadError(refreshed.data);
+    if (payloadError !== null) throw new Error(payloadError);
+    if (readFileTruncated(refreshed.data)) {
+      throw new Error(
+        "The latest file is too large to load completely. Your recovered draft was kept.",
+      );
+    }
+    const refreshedContent = readFileContent(refreshed.data);
+    if (refreshedContent === null) {
+      throw new Error(
+        "Couldn't load the latest file from disk. Your recovered draft was kept.",
+      );
+    }
+    return refreshedContent;
+  }, [editSession.state?.conflict?.diskContent, query]);
+  const handleKeepMine = useCallback(async (): Promise<void> => {
+    try {
+      await editSession.resolveKeepMine(await readLatestDiskContent());
+    } catch (error) {
+      editSession.reportConflictResolutionError(
+        conflictResolutionErrorMessage(error),
+      );
+    }
+  }, [editSession, readLatestDiskContent]);
+  const handleUseDisk = useCallback(async (): Promise<void> => {
+    try {
+      await editSession.resolveUseDisk(await readLatestDiskContent());
+    } catch (error) {
+      editSession.reportConflictResolutionError(
+        conflictResolutionErrorMessage(error),
+      );
+    }
+  }, [editSession, readLatestDiskContent]);
+  const handleRevealConsumed = useCallback((): void => {
+    clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+  }, [node.id, props.viewTabId]);
+
   useLayoutEffect(() => {
     findEnvironmentRef.current = {
       viewMode: effectiveViewMode,
-      content,
+      content: findContent,
       isLoading: query.isLoading,
       displayError,
       truncated,
@@ -241,11 +341,11 @@ function WorkspaceFileTileLive(props: {
     };
     publishFindEnvironment();
   }, [
-    content,
     displayError,
     effectiveViewMode,
     publishFindEnvironment,
     query.isLoading,
+    findContent,
     revealSourceMatch,
     truncated,
   ]);
@@ -258,23 +358,28 @@ function WorkspaceFileTileLive(props: {
       filePath={node.filePath}
     >
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3">
-          <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
-            {node.filePath}
-          </StartTruncatedText>
-          {truncated ? (
-            <span className="shrink-0 text-badge text-muted-foreground">
-              Preview truncated
-            </span>
-          ) : null}
-          {markdownFile ? (
-            <MarkdownViewModeToggle
-              previewDisabled={markdownPreviewDisabled}
-              mode={effectiveViewMode}
-              onModeChange={setViewMode}
+        <WorkspaceFileToolbar
+          filePath={node.filePath}
+          truncated={truncated}
+          markdownFile={markdownFile}
+          markdownPreviewDisabled={markdownPreviewDisabled}
+          viewMode={effectiveViewMode}
+          editing={editing}
+          onViewModeChange={setViewMode}
+          status={
+            <FileAutosaveStatus
+              appearance="pill"
+              state={editSession.state}
+              onRetry={editSession.retry}
+              onKeepMine={() => {
+                void handleKeepMine();
+              }}
+              onUseDisk={() => {
+                void handleUseDisk();
+              }}
             />
-          ) : null}
-        </div>
+          }
+        />
         <div
           ref={scrollContainerRef}
           onScroll={onScroll}
@@ -284,22 +389,59 @@ function WorkspaceFileTileLive(props: {
           )}
         >
           <WorkspaceFilePreviewContent
-            content={content}
+            content={renderedContent}
             displayError={displayError}
             fileName={node.name}
             isLoading={query.isLoading}
             language={language}
             viewMode={effectiveViewMode}
-            viewTabId={props.viewTabId}
-            contentId={node.id}
             revealLine={revealTarget?.line ?? null}
             revealNonce={revealTarget?.nonce ?? null}
             sourceFindTarget={sourceFindTarget}
+            editing={editing}
+            editAdapter={editAdapter}
+            cacheKey={fileEditIdentityKey(editIdentity)}
             onMarkdownPreviewRootChange={handleMarkdownPreviewRootChange}
+            onRevealConsumed={handleRevealConsumed}
           />
         </div>
       </div>
     </WorkspaceMarkdownLinkProvider>
+  );
+}
+
+function WorkspaceFileToolbar(props: {
+  readonly filePath: string;
+  readonly truncated: boolean;
+  readonly markdownFile: boolean;
+  readonly markdownPreviewDisabled: boolean;
+  readonly viewMode: WorkspaceFileViewMode;
+  readonly editing: boolean;
+  readonly onViewModeChange: (mode: WorkspaceFileViewMode) => void;
+  readonly status: ReactNode;
+}) {
+  return (
+    <div
+      className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
+      data-testid="workspace-file-toolbar"
+    >
+      <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+        {props.filePath}
+      </StartTruncatedText>
+      {props.truncated ? (
+        <span className="shrink-0 text-badge text-muted-foreground">
+          Preview truncated
+        </span>
+      ) : null}
+      {props.status}
+      {props.markdownFile && !props.editing ? (
+        <MarkdownViewModeToggle
+          previewDisabled={props.markdownPreviewDisabled}
+          mode={props.viewMode}
+          onModeChange={props.onViewModeChange}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -338,12 +480,14 @@ function WorkspaceFilePreviewContent(props: {
   readonly isLoading: boolean;
   readonly language: string;
   readonly viewMode: WorkspaceFileViewMode;
-  readonly viewTabId: string;
-  readonly contentId: string;
   readonly revealLine: number | null;
   readonly revealNonce: number | null;
   readonly sourceFindTarget: WorkspaceFileSourceFindTargetWithNonce | null;
+  readonly editing: boolean;
+  readonly editAdapter: DiffClickToEditAdapter;
+  readonly cacheKey: string;
   readonly onMarkdownPreviewRootChange: (root: HTMLElement | null) => void;
+  readonly onRevealConsumed: () => void;
 }) {
   if (props.isLoading) {
     return (
@@ -388,15 +532,17 @@ function WorkspaceFilePreviewContent(props: {
   }
 
   return (
-    <CodeEditorPreview
-      code={props.content}
+    <WorkspaceFileRenderer
+      content={props.content}
       language={props.language}
       fileName={props.fileName}
-      viewTabId={props.viewTabId}
-      contentId={props.contentId}
+      editing={props.editing}
+      cacheKey={props.cacheKey}
+      editAdapter={props.editAdapter}
       revealLine={props.revealLine}
       revealNonce={props.revealNonce}
       findTarget={props.sourceFindTarget}
+      onRevealConsumed={props.onRevealConsumed}
     />
   );
 }
@@ -489,166 +635,6 @@ function MarkdownFilePreview(props: {
   );
 }
 
-function CodeEditorPreview(props: {
-  readonly code: string;
-  readonly language: string;
-  readonly fileName: string;
-  readonly viewTabId: string;
-  readonly contentId: string;
-  readonly revealLine: number | null;
-  readonly revealNonce: number | null;
-  readonly findTarget: WorkspaceFileSourceFindTargetWithNonce | null;
-}) {
-  const { highlighter, theme, themesVersion } = useShikiHighlighter();
-  // Shared MRU-cached highlight path. The `MAX_HIGHLIGHT_CHARS` guard lives
-  // inside the hook - a large file falls back to the plain `<pre>` below.
-  const highlightedNodes = useThrottledCodeHighlight({
-    highlighter,
-    theme,
-    themesVersion,
-    code: props.code,
-    language: props.language,
-    isStreaming: false,
-  });
-
-  const lines = useMemo(() => lineNumbers(props.code), [props.code]);
-
-  const [lineHighlight, setLineHighlight] =
-    useState<WorkspaceFileLineHighlight | null>(null);
-  const gutterRowRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const codeContentRef = useRef<HTMLDivElement | null>(null);
-
-  // Reveal sync (legitimate DOM/external-store sync, not derived state): scroll
-  // the targeted line into view, paint a transient highlight band, then CONSUME
-  // the channel entry (G4) so a later remount does not re-scroll a stale line.
-  // Keyed on the nonce so re-clicking the same line still re-fires before the
-  // entry is consumed.
-  useEffect(() => {
-    if (props.revealLine === null || props.revealNonce === null) return;
-    const clampedLine = Math.min(Math.max(props.revealLine, 1), lines.length);
-    const row = gutterRowRefs.current[clampedLine - 1];
-    if (row !== null) {
-      if (typeof row.scrollIntoView === "function") {
-        row.scrollIntoView({ block: "center", behavior: "auto" });
-      }
-      setLineHighlight({
-        line: clampedLine,
-        top: row.offsetTop,
-        height: row.offsetHeight,
-      });
-    }
-    clearWorkspaceFileRevealTarget(props.viewTabId, props.contentId);
-  }, [
-    props.revealNonce,
-    props.revealLine,
-    props.viewTabId,
-    props.contentId,
-    lines.length,
-  ]);
-
-  useEffect(() => {
-    if (props.findTarget === null) return;
-    const clampedLine = Math.min(
-      Math.max(props.findTarget.active.line, 1),
-      lines.length,
-    );
-    const row = gutterRowRefs.current[clampedLine - 1];
-    if (row === null) return;
-    if (typeof row.scrollIntoView === "function") {
-      row.scrollIntoView({ block: "center", behavior: "auto" });
-    }
-  }, [props.findTarget, lines.length]);
-
-  // Paint the matched text spans over the rendered code. Re-runs when the
-  // active match changes (new target) and when the rendered DOM swaps between
-  // the Shiki output and the plain `<pre>` fallback (`highlightedNodes`), since
-  // either invalidates the offset-to-text-node mapping the painter relies on.
-  useEffect(() => {
-    const root = codeContentRef.current;
-    if (root === null) return;
-    if (props.findTarget === null) {
-      clearSourceFindHighlights(root);
-      return;
-    }
-    paintSourceFindHighlights({
-      root,
-      matches: props.findTarget.matches,
-      activeOffset: props.findTarget.active.offset,
-    });
-    return () => {
-      clearSourceFindHighlights(root);
-    };
-  }, [props.findTarget, highlightedNodes]);
-
-  return (
-    <div className="min-h-full w-max min-w-full bg-canvas font-mono text-code leading-relaxed">
-      <div className="relative flex min-h-full items-stretch">
-        <div
-          aria-hidden
-          // No z-index: as a `sticky` (positioned) element the gutter already
-          // paints above the non-positioned code on horizontal scroll. Giving it
-          // a z-index creates a stacking context that escapes the tile and pokes
-          // through the canvas drag interaction shield during a drag.
-          className="sticky left-0 select-none border-r border-canvas-border/50 bg-canvas px-3 py-4 text-right text-code text-muted-foreground/55"
-        >
-          {lines.map((line, index) => (
-            <div
-              key={line}
-              ref={(el) => {
-                gutterRowRefs.current[index] = el;
-              }}
-              data-workspace-file-line={line}
-              data-workspace-file-find-active={
-                props.findTarget !== null &&
-                props.findTarget.active.line === line
-                  ? "true"
-                  : undefined
-              }
-              data-workspace-file-find-column={
-                props.findTarget !== null &&
-                props.findTarget.active.line === line
-                  ? props.findTarget.active.column
-                  : undefined
-              }
-              className={cn(
-                "tabular-nums",
-                (line === lineHighlight?.line ||
-                  line === props.findTarget?.active.line) &&
-                  "font-medium text-primary",
-              )}
-            >
-              {line}
-            </div>
-          ))}
-        </div>
-        {lineHighlight !== null ? (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-x-0 bg-primary/10"
-            style={{ top: lineHighlight.top, height: lineHighlight.height }}
-          />
-        ) : null}
-        <div ref={codeContentRef} className="min-w-0 flex-1 p-4">
-          {highlightedNodes !== null ? (
-            <div
-              className="traycer-md-shiki"
-              aria-label={`${props.fileName} source`}
-            >
-              {highlightedNodes}
-            </div>
-          ) : (
-            <pre className="m-0 whitespace-pre bg-transparent p-0">
-              <code className="font-mono text-code text-foreground/85">
-                {props.code}
-              </code>
-            </pre>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function computeViewMode(
   hasRevealTarget: boolean,
   markdownFile: boolean,
@@ -663,13 +649,33 @@ function computeViewMode(
   return "source";
 }
 
-function lineNumbers(code: string): ReadonlyArray<number> {
-  const lineCount = code.length === 0 ? 1 : code.split("\n").length;
-  return Array.from({ length: lineCount }, (_, index) => index + 1);
-}
-
 function normalizeWorkspaceFileContent(content: string): string {
   return content.replace(/\r\n?/g, "\n");
+}
+
+function isWorkspaceFileEditEnabled(args: {
+  readonly isActive: boolean;
+  readonly hasContent: boolean;
+  readonly truncated: boolean;
+  readonly supportsWrite: boolean;
+}): boolean {
+  return (
+    args.isActive && args.hasContent && !args.truncated && args.supportsWrite
+  );
+}
+
+function isSettledUnconsumableWorkspaceFile(args: {
+  readonly isLoading: boolean;
+  readonly hasError: boolean;
+  readonly hasContent: boolean;
+}): boolean {
+  return !args.isLoading && (args.hasError || !args.hasContent);
+}
+
+function conflictResolutionErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Couldn't load the latest file from disk. Your recovered draft was kept.";
 }
 
 function languageForFileName(fileName: string): string {

@@ -84,6 +84,7 @@ describe("DiffWorkerPoolProvider", () => {
 
     expect(mockSetRenderOptions).toHaveBeenCalledWith({
       theme: "pierre-light",
+      useTokenTransformer: true,
     });
   });
 
@@ -105,6 +106,7 @@ describe("DiffWorkerPoolProvider", () => {
 
     expect(mockSetRenderOptions).toHaveBeenCalledWith({
       theme: "pierre-dark",
+      useTokenTransformer: true,
     });
   });
 });

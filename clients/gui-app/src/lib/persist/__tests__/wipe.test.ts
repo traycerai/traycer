@@ -223,13 +223,14 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
   });
 });
 
-describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
-  // A mix of: two real per-window landing-image partitions, a same-prefix db
-  // that is NOT a landing-image db, and an unrelated db. Only the two
-  // `traycer-gui-app:*:landing-images` entries must be deleted.
+describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
+  // A mix of app-owned per-window partitions, a same-prefix db that is not one
+  // of ours, and an unrelated db. Only the known renderer stores are deleted.
   const DB_NAMES = [
     "traycer-gui-app:default:landing-images",
     "traycer-gui-app:window-7:landing-images",
+    "traycer-gui-app:default:file-edit-recovery",
+    "traycer-gui-app:window-7:file-edit-recovery",
     "traycer-gui-app:some-other-store",
     "unrelated-app-db",
   ];
@@ -258,7 +259,7 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     return { deleted };
   }
 
-  it("deletes ONLY `traycer-gui-app:*:landing-images` dbs; same-prefix + unrelated dbs survive", async () => {
+  it("deletes only known renderer dbs; same-prefix + unrelated dbs survive", async () => {
     const { deleted } = installIndexedDB({
       databases: () => Promise.resolve(DB_NAMES.map((name) => ({ name }))),
     });
@@ -269,6 +270,8 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
       [
         "traycer-gui-app:default:landing-images",
         "traycer-gui-app:window-7:landing-images",
+        "traycer-gui-app:default:file-edit-recovery",
+        "traycer-gui-app:window-7:file-edit-recovery",
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
@@ -308,7 +311,7 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     expect(deleteIndex).toBeLessThan(reloadIndex);
   });
 
-  it("still reloads when a landing-image db deletion errors (best-effort)", async () => {
+  it("still reloads when a renderer db deletion errors (best-effort)", async () => {
     // The first partition's delete fires `onerror`; the second succeeds. A single
     // erroring delete must NOT abort the wipe or the reload.
     const value = {

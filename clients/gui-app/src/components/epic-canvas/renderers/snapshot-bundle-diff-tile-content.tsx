@@ -259,6 +259,7 @@ function SnapshotBundleFileSection(props: {
     <DiffBundleFileSectionFrame
       collapsed={collapsed}
       headerRow={headerRow}
+      headerStats={null}
       onOpenFileTile={handleOpenFileTile}
       findFilePath={props.entry.filePath}
       bundleFindFileId={bundleFindFileId}

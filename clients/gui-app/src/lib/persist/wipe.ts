@@ -13,9 +13,9 @@
 //   2. Blanket-prefix sweep    — remove every `traycer-gui-app:`-prefixed key
 //      from BOTH localStorage and sessionStorage. Auth (`traycer.`) and any
 //      non-`traycer-gui-app:` key survive.
-//   3. Drop landing-image dbs  — delete every per-window IndexedDB partition
-//      (`traycer-gui-app:<partition>:landing-images`) so pasted image bytes
-//      don't outlive the wipe. Enumeration is Chromium-only; absent → no-op.
+//   3. Drop renderer dbs       — delete every per-window IndexedDB partition
+//      for pasted image bytes and file-edit recovery drafts. Enumeration is
+//      Chromium-only; absent → no-op.
 //   4. Reload last             — re-hydrate from the now-cleared storage / host
 //      state without racing a pending write.
 
@@ -23,6 +23,8 @@ import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
+import { FILE_EDIT_RECOVERY_DB_SUFFIX } from "@/lib/workspace/file-edit-recovery-store";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -35,6 +37,10 @@ const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 // suffix below pins the db namespace so the wipe only drops image partitions,
 // never any other future `traycer-gui-app:`-prefixed db.
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";
+const RENDERER_DB_SUFFIXES = [
+  LANDING_IMAGE_DB_SUFFIX,
+  FILE_EDIT_RECOVERY_DB_SUFFIX,
+] as const;
 
 function sweepStorage(storage: Storage): number {
   // Collect keys first, then remove: mutating during index iteration shifts the
@@ -82,18 +88,15 @@ function indexedDBFactory(): IDBFactory | undefined {
   return globalThis.indexedDB;
 }
 
-// Drop every landing-image IndexedDB partition. `indexedDB.databases()` is
+// Drop every app-owned per-window IndexedDB partition. `indexedDB.databases()` is
 // Chromium-only (the Electron/Chrome target); when it (or `indexedDB` itself)
 // is absent we no-op so the wipe still reaches the reload. Browser engines
-// without it simply keep the (re-pasteable) image bytes — an accepted leak,
-// not a wipe failure.
-async function deleteLandingImageDatabases(): Promise<void> {
+// without it keep their IndexedDB data — a platform limitation, not a reason
+// to block the rest of the wipe and reload.
+async function deleteRendererDatabases(): Promise<void> {
   const factory = indexedDBFactory();
   if (typeof factory?.databases !== "function") {
-    appLogger.info(
-      "[persist] landing image database enumeration unavailable",
-      {},
-    );
+    appLogger.info("[persist] renderer database enumeration unavailable", {});
     return;
   }
   const databases = await factory.databases();
@@ -103,7 +106,7 @@ async function deleteLandingImageDatabases(): Promise<void> {
       (name): name is string =>
         name !== undefined &&
         name.startsWith(PERSIST_KEY_BOUNDARY) &&
-        name.endsWith(LANDING_IMAGE_DB_SUFFIX),
+        RENDERER_DB_SUFFIXES.some((suffix) => name.endsWith(suffix)),
     );
   // Best-effort per partition: a single db whose delete errors must not abort the
   // rest of the wipe or — critically — the reload (step 4), which is the real
@@ -113,13 +116,13 @@ async function deleteLandingImageDatabases(): Promise<void> {
     names.map((name) =>
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
         failedCount += 1;
-        appLogger.warn("[persist] landing image database delete failed", {
+        appLogger.warn("[persist] renderer database delete failed", {
           error: describeLogError(error),
         });
       }),
     ),
   );
-  appLogger.info("[persist] landing image database delete complete", {
+  appLogger.info("[persist] renderer database delete complete", {
     databaseCount: names.length,
     failedCount,
   });
@@ -143,6 +146,9 @@ export async function clearAllPersistedStores(args: {
       error: describeLogError(error),
     });
   });
+  // Stop edit timers before deleting their journal. The retired runtimes then
+  // cannot recreate a recovery entry from the reload's pagehide handler.
+  await fileEditRuntimeRegistry.teardown();
   // Then the authoritative host clear when the RPC exists. On a shell without
   // it (older preload) the drain above is the degraded fallback; in web mode
   // `hostClear` is null and there is nothing host-side to clear.
@@ -167,11 +173,8 @@ export async function clearAllPersistedStores(args: {
     sessionStorageCount,
   });
 
-  // 3. Drop every landing-image IndexedDB partition (one per runtime window).
-  //    The localStorage sweep above already removed the draft keys that point
-  //    at these bytes; this reclaims the bytes themselves so nothing leaks past
-  //    the wipe.
-  await deleteLandingImageDatabases();
+  // 3. Drop every renderer IndexedDB partition (one per runtime window).
+  await deleteRendererDatabases();
 
   // 4. Reload last.
   appLogger.info("[persist] local GUI state clear complete - reloading", {});

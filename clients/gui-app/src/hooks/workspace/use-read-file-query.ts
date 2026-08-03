@@ -1,14 +1,15 @@
 import { useMemo } from "react";
-import { useHostClient } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 const WORKSPACE_FILE_PREVIEW_MAX_BYTES = 500_000;
 
 export function useWorkspaceReadFile(
+  client: HostClient<HostRpcRegistry> | null,
   workspacePath: string | null,
   filePath: string | null,
 ) {
-  const client = useHostClient();
   const params = useMemo(
     () => ({
       workspacePath: workspacePath ?? "",

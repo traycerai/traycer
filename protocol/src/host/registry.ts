@@ -238,6 +238,7 @@ import {
   workspaceListFileTreeV10,
   workspacePrepareFoldersV10,
   workspaceReadFileV10,
+  workspaceWriteFileV10,
   workspaceResolvePathsByRepoIdentifiersV10,
   workspaceSearchPathsV10,
   workspaceSearchTextV10,
@@ -318,6 +319,7 @@ import {
   gitListChangedFilesUpgradeV10ToV11,
   gitGetFileDiffV10,
   gitGetFileDiffsV10,
+  gitGetFileContentsV10,
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
@@ -3877,6 +3879,21 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Additive, post-v1.0.0 optional method. Older hosts render the same file
+  // surfaces read-only; newer hosts provide conflict-safe in-place saves.
+  "workspace.writeFile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceWriteFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // Additive, post-v1.0.0 optional method: a host that predates it simply lacks
   // it and the renderer falls back to its local file-tree filter, so it rides
   // the optional-capability channel (`degrade: unsupported`) and stays out of
@@ -4495,6 +4512,21 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: gitGetFileDiffsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Optional edit hydration: full old/new/worktree text is fetched only when
+  // the user enters edit mode. Older hosts keep Git diffs read-only.
+  "git.getFileContents": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: gitGetFileContentsV10,
           upgradeFromPreviousVersion: null,
         },
       },

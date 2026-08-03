@@ -8,7 +8,7 @@
  */
 
 export const DIFF_PANEL_UNSAFE_CSS = `
-  [data-diffs-host] {
+  :host, [data-diffs-host] {
     --diffs-font-family: var(--font-mono);
     --diffs-font-size: var(--code-font-size, 13px);
     --diffs-bg: color-mix(in srgb, var(--card) 100%, transparent 0%);
@@ -29,5 +29,9 @@ export const DIFF_PANEL_UNSAFE_CSS = `
     --diffs-text-deletion-override: color-mix(in srgb, var(--destructive) 100%, transparent 0%);
     --diffs-text-addition-dim-override: color-mix(in srgb, var(--success) 60%, var(--muted) 40%);
     --diffs-text-deletion-dim-override: color-mix(in srgb, var(--destructive) 60%, var(--muted) 40%);
+  }
+
+  [data-interactive-lines] [data-line] {
+    cursor: text;
   }
 `;

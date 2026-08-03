@@ -1,0 +1,293 @@
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import type { Editor, EditorOptions } from "@pierre/diffs/edit";
+import type { FileDiffProps, FileOptions } from "@pierre/diffs/react";
+import {
+  focusRegisteredDiffEditor,
+  isDiffEditActivationGesture,
+  registerDiffEditor,
+  resolveLineCaretCharacter,
+  resolveTokenCaretCharacter,
+  type DiffEditCaret,
+} from "@/components/diff/diff-click-to-edit";
+import { preloadDiffEditProvider } from "@/components/diff/diff-edit-provider-loader";
+
+type DiffInteractionOptions = NonNullable<FileDiffProps<undefined>["options"]>;
+
+export interface DiffEditActivationRequest {
+  readonly caret: DiffEditCaret;
+  readonly isCurrent: () => boolean;
+  readonly editorReady: Promise<void>;
+}
+
+export type DiffEditActivationResult =
+  | { readonly kind: "activated" }
+  | { readonly kind: "focus-owner"; readonly ownerSurfaceId: string }
+  | { readonly kind: "rejected" };
+
+export interface DiffClickToEditAdapter {
+  readonly fileOptions: Pick<
+    FileOptions<undefined>,
+    | "enableTokenInteractionsOnWhitespace"
+    | "onLineClick"
+    | "onLineEnter"
+    | "onTokenClick"
+    | "onTokenEnter"
+  >;
+  readonly diffOptions: Pick<
+    DiffInteractionOptions,
+    | "enableTokenInteractionsOnWhitespace"
+    | "onLineClick"
+    | "onLineEnter"
+    | "onTokenClick"
+    | "onTokenEnter"
+  >;
+  readonly editorOptions: EditorOptions<undefined>;
+  readonly onKeyDownCapture: (event: KeyboardEvent<HTMLElement>) => void;
+  readonly onPointerDownCapture: (
+    event: ReactPointerEvent<HTMLElement>,
+  ) => void;
+  readonly cancelPendingActivation: () => void;
+}
+
+export function useDiffClickToEdit(props: {
+  readonly surfaceId: string;
+  readonly enabled: boolean;
+  readonly active: boolean;
+  readonly onActivate: (
+    request: DiffEditActivationRequest,
+  ) => Promise<DiffEditActivationResult>;
+  readonly onActivationError: (error: unknown) => void;
+  readonly onChange: (content: string) => void;
+  readonly onBlur: () => void;
+  readonly onSaveShortcut: () => void;
+}): DiffClickToEditAdapter {
+  const propsRef = useRef(props);
+  useLayoutEffect(() => {
+    propsRef.current = props;
+  }, [props]);
+  const generationRef = useRef(0);
+  const pendingCaretRef = useRef<{
+    readonly generation: number;
+    readonly caret: DiffEditCaret;
+  } | null>(null);
+  const seenTokenEventsRef = useRef<WeakSet<Event> | null>(null);
+  if (seenTokenEventsRef.current === null) {
+    seenTokenEventsRef.current = new WeakSet<Event>();
+  }
+  const unregisterEditorRef = useRef<(() => void) | null>(null);
+  const attachedEditorRef = useRef<Editor<undefined> | null>(null);
+
+  const cancelPendingActivation = useCallback((): void => {
+    generationRef.current += 1;
+    pendingCaretRef.current = null;
+  }, []);
+  const preloadIfEnabled = useCallback((): void => {
+    if (propsRef.current.enabled) void preloadDiffEditProvider();
+  }, []);
+
+  const activate = useCallback(
+    (event: MouseEvent | PointerEvent, caret: DiffEditCaret): void => {
+      if (!propsRef.current.enabled || !isDiffEditActivationGesture(event)) {
+        return;
+      }
+      const generation = generationRef.current + 1;
+      generationRef.current = generation;
+      pendingCaretRef.current = { generation, caret };
+      const request: DiffEditActivationRequest = {
+        caret,
+        isCurrent: () => generationRef.current === generation,
+        editorReady: preloadDiffEditProvider(),
+      };
+      void propsRef.current
+        .onActivate(request)
+        .then((result) => {
+          if (!request.isCurrent() || result.kind !== "focus-owner") return;
+          focusRegisteredDiffEditor(result.ownerSurfaceId, caret);
+        })
+        .catch((error: unknown) => {
+          if (request.isCurrent()) propsRef.current.onActivationError(error);
+        });
+    },
+    [],
+  );
+
+  const fileOptions = useMemo<DiffClickToEditAdapter["fileOptions"]>(() => {
+    if (!props.enabled) return {};
+    return {
+      enableTokenInteractionsOnWhitespace: true,
+      onLineEnter: preloadIfEnabled,
+      onTokenEnter: preloadIfEnabled,
+      onTokenClick: (token, event) => {
+        seenTokenEventsRef.current?.add(event);
+        activate(event, {
+          lineNumber: token.lineNumber,
+          character: resolveTokenCaretCharacter({
+            clientX: event.clientX,
+            lineCharEnd: token.lineCharEnd,
+            lineCharStart: token.lineCharStart,
+            tokenElement: token.tokenElement,
+          }),
+        });
+      },
+      onLineClick: (event) => {
+        if (
+          seenTokenEventsRef.current?.has(event.event) === true ||
+          event.numberColumn
+        ) {
+          return;
+        }
+        activate(event.event, {
+          lineNumber: event.lineNumber,
+          character: resolveLineCaretCharacter({
+            clientX: event.event.clientX,
+            lineElement: event.lineElement,
+          }),
+        });
+      },
+    };
+  }, [activate, preloadIfEnabled, props.enabled]);
+
+  const diffOptions = useMemo<DiffClickToEditAdapter["diffOptions"]>(() => {
+    if (!props.enabled) return {};
+    return {
+      enableTokenInteractionsOnWhitespace: true,
+      onLineEnter: (event) => {
+        if (event.annotationSide === "additions") preloadIfEnabled();
+      },
+      onTokenEnter: (token) => {
+        if (token.side === "additions") preloadIfEnabled();
+      },
+      onTokenClick: (token, event) => {
+        seenTokenEventsRef.current?.add(event);
+        if (token.side !== "additions") return;
+        activate(event, {
+          lineNumber: token.lineNumber,
+          character: resolveTokenCaretCharacter({
+            clientX: event.clientX,
+            lineCharEnd: token.lineCharEnd,
+            lineCharStart: token.lineCharStart,
+            tokenElement: token.tokenElement,
+          }),
+        });
+      },
+      onLineClick: (event) => {
+        if (
+          seenTokenEventsRef.current?.has(event.event) === true ||
+          event.numberColumn ||
+          event.annotationSide !== "additions"
+        ) {
+          return;
+        }
+        activate(event.event, {
+          lineNumber: event.lineNumber,
+          character: resolveLineCaretCharacter({
+            clientX: event.event.clientX,
+            lineElement: event.lineElement,
+          }),
+        });
+      },
+    };
+  }, [activate, preloadIfEnabled, props.enabled]);
+
+  const editorOptions = useMemo<EditorOptions<undefined>>(
+    () => ({
+      persistState: true,
+      onAttach: (editor) => {
+        unregisterEditorRef.current?.();
+        attachedEditorRef.current = editor;
+        unregisterEditorRef.current = registerDiffEditor(
+          props.surfaceId,
+          editor,
+        );
+        queueMicrotask(() => {
+          if (attachedEditorRef.current !== editor) return;
+          const pending = pendingCaretRef.current;
+          if (
+            pending !== null &&
+            pending.generation === generationRef.current &&
+            propsRef.current.active
+          ) {
+            editor.focus({
+              lineNumber: pending.caret.lineNumber,
+              character: pending.caret.character,
+            });
+            return;
+          }
+          editor.focus({ lineNumber: "first-visible" });
+        });
+      },
+      onChange: (changedFile) => {
+        propsRef.current.onChange(changedFile.contents);
+      },
+      onBlur: () => {
+        propsRef.current.onBlur();
+      },
+    }),
+    [props.surfaceId],
+  );
+
+  useEffect(() => {
+    if (!props.active) {
+      unregisterEditorRef.current?.();
+      unregisterEditorRef.current = null;
+      attachedEditorRef.current = null;
+    }
+  }, [props.active]);
+
+  useEffect(() => {
+    return () => {
+      cancelPendingActivation();
+      unregisterEditorRef.current?.();
+      unregisterEditorRef.current = null;
+      attachedEditorRef.current = null;
+    };
+  }, [cancelPendingActivation, props.surfaceId]);
+
+  const onKeyDownCapture = useCallback(
+    (event: KeyboardEvent<HTMLElement>): void => {
+      if (
+        propsRef.current.active &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "s"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        propsRef.current.onSaveShortcut();
+      }
+    },
+    [],
+  );
+  const onPointerDownCapture = useCallback(
+    (event: ReactPointerEvent<HTMLElement>): void => {
+      if (
+        propsRef.current.enabled &&
+        event.button === 0 &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey
+      ) {
+        void preloadDiffEditProvider();
+      }
+    },
+    [],
+  );
+
+  return {
+    fileOptions,
+    diffOptions,
+    editorOptions,
+    onKeyDownCapture,
+    onPointerDownCapture,
+    cancelPendingActivation,
+  };
+}
