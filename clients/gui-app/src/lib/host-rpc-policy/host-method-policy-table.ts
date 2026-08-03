@@ -496,6 +496,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.getTranscript": { ...LATEST_SCHEDULING, poll: null },
   "agent.inbox.read": { ...LATEST_SCHEDULING, poll: null },
+  "agent.inbox.ack": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Claiming a role persists responsibility and broadcasts awareness.
   "agent.roles.claim": {
     mode: "fifo",

@@ -194,5 +194,5 @@ export function useCommGraphTransport(
 }
 
 function commGraphCursorKey(cursor: CommGraphTimeCursor): string {
-  return `${cursor.timestamp}:${cursor.hostId}:${cursor.id}`;
+  return `${cursor.timestamp}:${cursor.hostId}:${cursor.id}:${cursor.eventId ?? ""}`;
 }

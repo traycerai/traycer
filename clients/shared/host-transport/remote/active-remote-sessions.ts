@@ -142,6 +142,8 @@ export function acquireRemoteSession<
     isReady: () => session.isReady(),
     sendUnary: (method, params) => session.sendUnary(method, params),
     subscribe: (method, params) => session.subscribe(method, params),
+    subscribeWithParamsProvider: (method, paramsProvider) =>
+      session.subscribeWithParamsProvider(method, paramsProvider),
     notifyBearerRotated: () => session.notifyBearerRotated(),
     onClosed: (listener) => session.onClosed(listener),
     subscribeAvailabilityRecovered: (listener) =>

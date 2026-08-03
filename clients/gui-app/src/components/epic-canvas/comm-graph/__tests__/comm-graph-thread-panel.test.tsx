@@ -176,6 +176,37 @@ describe("CommGraphThreadPanel", () => {
     expect(rows[1].textContent).toContain("second");
   });
 
+  it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
+    renderPanel([
+      event({
+        id: 1,
+        eventId: "cloud-before-repair",
+        timestamp: 100,
+        messageText: "first\n\nbody",
+      }),
+      event({
+        id: 1,
+        eventId: "cloud-after-repair",
+        timestamp: 200,
+        messageText: "second\n\nbody",
+      }),
+    ]);
+
+    const firstToggle = await screen.findByTestId(
+      "comm-graph-detail-toggle-cloud-before-repair",
+    );
+    const secondToggle = await screen.findByTestId(
+      "comm-graph-detail-toggle-cloud-after-repair",
+    );
+    expect(messageRows()).toHaveLength(2);
+    expect(firstToggle.getAttribute("aria-label")).toBe("Expand message");
+    expect(secondToggle.getAttribute("aria-label")).toBe("Expand message");
+
+    fireEvent.click(firstToggle);
+    expect(firstToggle.getAttribute("aria-label")).toBe("Collapse message");
+    expect(secondToggle.getAttribute("aria-label")).toBe("Expand message");
+  });
+
   it("interleaves BOTH directions chronologically and labels every row", async () => {
     // The canvas edge is undirected now, so this list is the only place
     // direction is expressed - it has to carry that weight on every row.

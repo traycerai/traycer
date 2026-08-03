@@ -11,8 +11,9 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
  * Lifecycle:
  *   - The session opens lazily on `WsStreamClient.subscribe(...)` - the
  *     client dials, runs the open/openAck handshake, mirrors the
- *     compatibility check, then re-declares the same streaming method on
- *     every reconnect so the consumer never re-subscribes by hand.
+ *     compatibility check, then re-declares the same streaming method with
+ *     its current parameters on every reconnect so the consumer never
+ *     re-subscribes by hand.
  *   - Inbound text envelopes are delivered through `onServerFrame` paired
  *     with a binary payload iff `envelope.hasBinaryPayload === true`
  *     (per the `/stream` wire protocol - a binary WS frame is the payload

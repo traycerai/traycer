@@ -3,6 +3,8 @@ import type {
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamClient } from "./i-stream-client";
+import type { IStreamSession } from "./i-stream-session";
+import type { ParamsOf } from "./ws-stream-client";
 import type { StreamMethodSupport } from "./ws-stream-client";
 
 /**
@@ -21,6 +23,15 @@ import type { StreamMethodSupport } from "./ws-stream-client";
 export interface IHostStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > extends IStreamClient<Registry> {
+  /**
+   * Opens a stream whose params are read immediately before every wire
+   * subscribe, including reconnects. Dynamic resume cursors use this instead
+   * of freezing the cursor that happened to be current at session creation.
+   */
+  subscribeWithParamsProvider<Method extends keyof Registry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<Registry, Method>,
+  ): IStreamSession;
   close(reason: string): void;
   isClosed(): boolean;
   /** The reason recorded at close, or `null` while still open. */

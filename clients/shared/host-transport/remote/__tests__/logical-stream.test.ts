@@ -35,7 +35,7 @@ function createStream(
   return new LogicalStream({
     streamId: 17,
     method: "terminal.subscribe",
-    params: {},
+    paramsProvider: () => ({}),
     schemaVersion: { major: 1, minor: 0 },
     qos: QosClass.INTERACTIVE,
     port,

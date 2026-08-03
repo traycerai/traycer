@@ -67,6 +67,7 @@ import {
   commGraphEventDirection,
   type CommGraphEvent,
 } from "@/lib/comm-graph/comm-graph-events";
+import { commGraphEventRowId } from "@/lib/comm-graph/comm-graph-timeline";
 import { commGraphJumpTarget } from "@/lib/comm-graph/comm-graph-jump";
 import { commGraphNoticeReasonLabel } from "@/lib/comm-graph/comm-graph-labels";
 
@@ -195,7 +196,7 @@ export const CommGraphEventRow = memo(function CommGraphEventRow(
       agentNames={agentNames}
       epicId={epicId}
       kind={rowKind(event)}
-      rowId={`${event.hostId}-${event.id}`}
+      rowId={commGraphEventRowId(event)}
       testIdPrefix={testIdPrefix}
       canJump={canJump}
       onJump={onJump}
@@ -471,7 +472,7 @@ function CommGraphSectionedRow(props: {
     rowId,
     testIdPrefix,
   } = props;
-  const rowKey = commGraphRowKey(event.hostId, event.id);
+  const rowKey = commGraphRowKey(event);
   const open = useCommGraphRowOpen(epicId, rowKey);
   const setRowOpen = useSetCommGraphRowOpen();
   const handleOpenChange = useCallback(

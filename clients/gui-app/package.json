@@ -14,7 +14,8 @@
     "lint": "eslint . --cache --fix --max-warnings 0",
     "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
     "format": "bun x prettier --write .",
-    "test": "vitest run --config vitest.config.ts",
+    "test": "vitest run --config vitest.config.ts && bun run test:react-compiler",
+    "test:react-compiler": "vitest run --config vitest.react-compiler.config.ts src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
     "test:watch": "vitest --config vitest.config.ts"
   },
   "dependencies": {

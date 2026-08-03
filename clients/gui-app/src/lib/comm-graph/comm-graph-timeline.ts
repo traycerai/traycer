@@ -35,17 +35,28 @@ export interface CommGraphTimeCursor {
   readonly timestamp: number;
   readonly hostId: string;
   readonly id: number;
+  readonly eventId?: string;
 }
 
-/** Stable per-row identity: `id` is monotonic PER HOST, never globally. */
+/** Cloud rows use their canonical event id; local ids are scoped per host. */
 export function commGraphEventKey(event: CommGraphEvent): string {
-  return `${event.hostId}:${event.id}`;
+  return event.eventId ?? `${event.hostId}:${event.id}`;
+}
+
+/** Stable event identity formatted for the existing row test-id grammar. */
+export function commGraphEventRowId(event: CommGraphEvent): string {
+  return commGraphEventKey(event).replaceAll(":", "-");
 }
 
 export function commGraphCursorForEvent(
   event: CommGraphEvent,
 ): CommGraphTimeCursor {
-  return { timestamp: event.timestamp, hostId: event.hostId, id: event.id };
+  return {
+    timestamp: event.timestamp,
+    hostId: event.hostId,
+    id: event.id,
+    eventId: event.eventId,
+  };
 }
 
 export function commGraphCursorMatchesEvent(
@@ -56,7 +67,8 @@ export function commGraphCursorMatchesEvent(
   return (
     cursor.id === event.id &&
     cursor.hostId === event.hostId &&
-    cursor.timestamp === event.timestamp
+    cursor.timestamp === event.timestamp &&
+    cursor.eventId === event.eventId
   );
 }
 

@@ -49,7 +49,7 @@ export interface LogicalStreamPort {
 export interface LogicalStreamInit {
   readonly streamId: number;
   readonly method: string;
-  readonly params: unknown;
+  readonly paramsProvider: () => unknown;
   /** On-wire negotiated subscribe version (recomputed at open against the host). */
   readonly schemaVersion: SchemaVersion;
   readonly qos: QosClassValue;
@@ -59,8 +59,8 @@ export interface LogicalStreamInit {
 export class LogicalStream implements IStreamSession {
   readonly streamId: number;
   readonly method: string;
-  readonly params: unknown;
   readonly qos: QosClassValue;
+  private readonly paramsProvider: () => unknown;
   private schemaVersion: SchemaVersion;
   private readonly port: LogicalStreamPort;
 
@@ -72,10 +72,15 @@ export class LogicalStream implements IStreamSession {
   constructor(init: LogicalStreamInit) {
     this.streamId = init.streamId;
     this.method = init.method;
-    this.params = init.params;
+    this.paramsProvider = init.paramsProvider;
     this.schemaVersion = init.schemaVersion;
     this.qos = init.qos;
     this.port = init.port;
+  }
+
+  /** Reads the latest params at the wire subscribe boundary. */
+  readParams(): unknown {
+    return this.paramsProvider();
   }
 
   // ---- IStreamSession ---------------------------------------------------- //
