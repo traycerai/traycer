@@ -369,6 +369,10 @@ function SnapshotBundleFileSectionBody(props: {
       banner={null}
       scrollContainerRef={null}
       onScroll={null}
+      fileIdentity={{
+        findFilePath: props.entry.filePath,
+        bundleFindFileId: props.bundleFindFileId,
+      }}
     >
       <DiffContentPrimitive
         patch={patch}

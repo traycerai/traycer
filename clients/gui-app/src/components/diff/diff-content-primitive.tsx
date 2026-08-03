@@ -66,6 +66,17 @@ export interface DiffContentPrimitiveProps {
   };
 }
 
+export interface DiffContentFrameFileIdentity {
+  /** Repo/workspace-relative path this host renders - `data-diff-find-file`. */
+  readonly findFilePath: string;
+  /**
+   * Disambiguates same-path hosts (e.g. staged vs. unstaged) -
+   * `data-bundle-diff-file-id`. Reuse a shared builder (e.g.
+   * `gitBundleDiffFindFileId`) rather than hand-formatting this per surface.
+   */
+  readonly bundleFindFileId: string;
+}
+
 export interface DiffContentFrameProps {
   readonly sizing: "fill" | "content";
   readonly banner: ReactNode | null;
@@ -75,6 +86,17 @@ export interface DiffContentFrameProps {
   readonly onKeyDownCapture?: (event: KeyboardEvent<HTMLDivElement>) => void;
   readonly onPointerDownCapture?: (event: PointerEvent<HTMLDivElement>) => void;
   readonly editorBoundary?: boolean;
+  /**
+   * Stable file identity for cross-surface find/navigation and exact-host
+   * resolution (parity with `DiffBundleFileSectionFrame`, which stamps the
+   * same attributes on its own outer wrapper for the aggregate view). `null`
+   * while this host's file isn't resolvable yet. Every caller of this frame
+   * should supply one instead of leaving single-file/workspace hosts with
+   * only the generic `data-diffs-host` marker - see ADR on Diffs host
+   * identity for why an ambiguous host is unsafe for both automation and the
+   * app's own find/focus/ownership logic.
+   */
+  readonly fileIdentity: DiffContentFrameFileIdentity | null;
   readonly children: ReactNode;
 }
 
@@ -92,6 +114,8 @@ export function DiffContentFrame(props: DiffContentFrameProps): ReactNode {
       data-diffs-editor-boundary={
         props.editorBoundary === true ? "" : undefined
       }
+      data-diff-find-file={props.fileIdentity?.findFilePath}
+      data-bundle-diff-file-id={props.fileIdentity?.bundleFindFileId}
       onKeyDownCapture={props.onKeyDownCapture}
       onPointerDownCapture={props.onPointerDownCapture}
     >

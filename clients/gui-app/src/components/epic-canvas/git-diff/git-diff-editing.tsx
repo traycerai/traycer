@@ -59,6 +59,8 @@ interface GitDiffHydration {
 
 interface EditSeed {
   readonly hydration: GitDiffHydration;
+  /** Whether this seed was captured while the runtime reported `"conflict"`. */
+  readonly conflicted: boolean;
   readonly content: string;
 }
 
@@ -66,7 +68,20 @@ interface EditSeed {
  * Pure decision for the render-phase `editSeed` state adjustment: whether
  * `editRuntime`'s current draft should be captured as the frozen seed for
  * this `hydration` cycle. `null` means no capture is due yet (already
- * captured for this cycle, or the runtime hasn't attached yet).
+ * captured for this cycle/conflict state, or the runtime hasn't attached
+ * yet).
+ *
+ * A `"conflict"` runtime (recovered draft built on a disk baseline this
+ * hydration cycle's fresh content no longer matches - e.g. an external
+ * reset) must NOT have its draft fed into the structural diff model: the
+ * hunks in `hydration.pinnedDiff` were parsed against the FRESH content, so
+ * pairing them with stale draft text produces an internally inconsistent
+ * model that crashes the Diffs renderer (a "trailing context mismatch").
+ * Seed from the fresh content instead in that case - the draft itself is
+ * untouched in `editRuntime.store`, so `keepMine`/`useDisk` can still act on
+ * it, and re-capturing whenever `conflicted` flips (not just when
+ * `hydration` changes) picks the resolved draft back up afterward instead of
+ * leaving the editor stuck showing the fresh content post-resolution.
  */
 function computeEditSeedCapture(
   hydration: GitDiffHydration | null,
@@ -74,8 +89,17 @@ function computeEditSeedCapture(
   editSeed: EditSeed | null,
 ): EditSeed | null {
   if (hydration === null || editRuntime === null) return null;
-  if (editSeed !== null && editSeed.hydration === hydration) return null;
-  return { hydration, content: editRuntime.store.getState().draftContent };
+  const state = editRuntime.store.getState();
+  const conflicted = state.status === "conflict";
+  if (
+    editSeed !== null &&
+    editSeed.hydration === hydration &&
+    editSeed.conflicted === conflicted
+  ) {
+    return null;
+  }
+  const content = conflicted ? hydration.newFile.contents : state.draftContent;
+  return { hydration, conflicted, content };
 }
 
 /** Exponential backoff for the drift-comparison retry, capped at 30s. */

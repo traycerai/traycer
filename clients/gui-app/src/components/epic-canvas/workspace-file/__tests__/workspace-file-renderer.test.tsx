@@ -123,6 +123,7 @@ describe("<WorkspaceFileRenderer />", () => {
         revealNonce={null}
         findTarget={null}
         onRevealConsumed={vi.fn()}
+        fileIdentity={null}
       />,
     );
 
@@ -152,6 +153,7 @@ describe("<WorkspaceFileRenderer />", () => {
         revealNonce={null}
         findTarget={null}
         onRevealConsumed={vi.fn()}
+        fileIdentity={null}
       />,
     );
 
@@ -170,6 +172,33 @@ describe("<WorkspaceFileRenderer />", () => {
     expect(highlightPool.mountCount).toBe(mountsBeforeEdit);
     expect(highlightPool.unmountCount).toBe(unmountsBeforeEdit);
     expect(highlightPool.lastEdit).toBe(true);
+  });
+
+  it("stamps the host's stable file identity for cross-surface find/navigation", () => {
+    const editAdapter = createEditAdapter(vi.fn());
+    const { container } = render(
+      <WorkspaceFileRenderer
+        content={"const value = 1;\n"}
+        fileName="source.ts"
+        language="typescript"
+        editing={false}
+        cacheKey="workspace-file:source.ts"
+        editAdapter={editAdapter}
+        revealLine={null}
+        revealNonce={null}
+        findTarget={null}
+        onRevealConsumed={vi.fn()}
+        fileIdentity={{
+          findFilePath: "src/source.ts",
+          bundleFindFileId: "workspace-file:host-A:/work/repo:src/source.ts",
+        }}
+      />,
+    );
+    const host = container.querySelector("[data-diffs-host]");
+    expect(host?.getAttribute("data-diff-find-file")).toBe("src/source.ts");
+    expect(host?.getAttribute("data-bundle-diff-file-id")).toBe(
+      "workspace-file:host-A:/work/repo:src/source.ts",
+    );
   });
 
   it("does not mount the Diffs file surface until primeFileHighlightCache resolves", async () => {
@@ -197,6 +226,7 @@ describe("<WorkspaceFileRenderer />", () => {
         revealNonce={null}
         findTarget={null}
         onRevealConsumed={vi.fn()}
+        fileIdentity={null}
       />,
     );
 
@@ -242,6 +272,7 @@ describe("<WorkspaceFileRenderer />", () => {
         revealNonce={1}
         findTarget={null}
         onRevealConsumed={onRevealConsumed}
+        fileIdentity={null}
       />,
     );
 
@@ -286,6 +317,7 @@ describe("<WorkspaceFileRenderer />", () => {
         revealNonce={1}
         findTarget={null}
         onRevealConsumed={onRevealConsumed}
+        fileIdentity={null}
       />,
     );
 
@@ -324,6 +356,7 @@ describe("<WorkspaceFileRenderer />", () => {
       revealNonce: null,
       findTarget: null,
       onRevealConsumed: vi.fn(),
+      fileIdentity: null,
     } as const;
     const rendered = render(
       <WorkspaceFileRenderer content={"const value = 1;\n"} {...props} />,

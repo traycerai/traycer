@@ -3,12 +3,14 @@ import type { GitGetFileDiffResponse } from "@traycer/protocol/host";
 import {
   DiffContentFrame,
   DiffContentPrimitive,
+  type DiffContentFrameFileIdentity,
 } from "@/components/diff/diff-content-primitive";
 import { TruncatedBanner } from "./truncated-banner";
 import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
 
 interface FileDiffContentProps {
   readonly diff: GitGetFileDiffResponse;
+  readonly fileIdentity: DiffContentFrameFileIdentity | null;
   readonly mode: "split" | "unified";
   readonly wordWrap: boolean;
   readonly backgrounds: boolean;
@@ -47,6 +49,7 @@ export function FileDiffContent(props: FileDiffContentProps) {
         onKeyDownCapture={props.editAdapter?.onKeyDownCapture}
         onPointerDownCapture={props.editAdapter?.onPointerDownCapture}
         editorBoundary={props.editSession !== undefined}
+        fileIdentity={props.fileIdentity}
         banner={
           props.diff.isTruncated ? (
             <TruncatedBanner

@@ -41,6 +41,7 @@ import {
   useDiffClickToEdit,
   type DiffClickToEditAdapter,
 } from "@/components/diff/use-diff-click-to-edit";
+import type { DiffContentFrameFileIdentity } from "@/components/diff/diff-content-primitive";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { fileEditIdentityKey } from "@/lib/workspace/file-edit-runtime";
@@ -420,6 +421,10 @@ function WorkspaceFileTileLive(props: {
             editing={editing}
             editAdapter={editAdapter}
             cacheKey={fileEditIdentityKey(editIdentity)}
+            fileIdentity={{
+              findFilePath: node.filePath,
+              bundleFindFileId: node.id,
+            }}
             onMarkdownPreviewRootChange={handleMarkdownPreviewRootChange}
             onRevealConsumed={handleRevealConsumed}
           />
@@ -505,6 +510,7 @@ function WorkspaceFilePreviewContent(props: {
   readonly editing: boolean;
   readonly editAdapter: DiffClickToEditAdapter;
   readonly cacheKey: string;
+  readonly fileIdentity: DiffContentFrameFileIdentity | null;
   readonly onMarkdownPreviewRootChange: (root: HTMLElement | null) => void;
   readonly onRevealConsumed: () => void;
 }) {
@@ -574,6 +580,7 @@ function WorkspaceFilePreviewContent(props: {
       revealLine={props.revealLine}
       revealNonce={props.revealNonce}
       findTarget={props.sourceFindTarget}
+      fileIdentity={props.fileIdentity}
       onRevealConsumed={props.onRevealConsumed}
     />
   );

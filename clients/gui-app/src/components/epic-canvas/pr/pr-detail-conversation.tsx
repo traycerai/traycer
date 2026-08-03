@@ -427,6 +427,7 @@ function PrReviewThreadHunk(props: {
         banner={null}
         scrollContainerRef={null}
         onScroll={null}
+        fileIdentity={null}
       >
         <DiffContentPrimitive
           patch={hunk.patch}

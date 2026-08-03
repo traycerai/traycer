@@ -111,6 +111,7 @@ describe("<DiffContentPrimitive />", () => {
         banner={null}
         scrollContainerRef={null}
         onScroll={null}
+        fileIdentity={null}
       >
         <DiffContentPrimitive
           patch="@@ -1 +1 @@\n-old\n+new\n"

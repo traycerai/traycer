@@ -285,6 +285,10 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
       scrollContainerRef={null}
       onScroll={null}
       onLoadFull={loadFull}
+      fileIdentity={{
+        findFilePath: props.file.path,
+        bundleFindFileId: props.bundleFindFileId,
+      }}
       editStatus={
         <DiffBundleFileHeaderPortal>
           <GitDiffEditStatusContent editing={editing} appearance="quiet" />

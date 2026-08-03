@@ -377,6 +377,7 @@ function SnapshotFileDiffContent(props: {
       scrollContainerRef={findScrollContainerRef}
       onScroll={onScroll}
       banner={null}
+      fileIdentity={null}
     >
       <DiffContentPrimitive
         patch={props.patch}

@@ -320,4 +320,116 @@ describe("useGitDiffEditing editableFiles stability", () => {
       "const value = 1;\n",
     );
   });
+
+  it("keeps a conflicting retained draft out of the structural diff model, and restores it on keepMine", async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    // Simulates reactivating a runtime that survived an external reset while
+    // it held an unsaved draft - e.g. a recovered draft whose disk baseline
+    // no longer matches (`FileEditRuntime.restore` sets `status: "conflict"`
+    // in exactly this case). The draft has trailing lines the FRESH patch's
+    // hunks know nothing about, matching the real "trailing context
+    // mismatch" crash this seed-capture bug produced.
+    const identity = {
+      userId: null,
+      hostId: "host-A",
+      workspacePath: "/work/repo",
+      filePath: "src/app.ts",
+    };
+    const runtime = fileEditRuntimeRegistry.getOrCreate(identity, {
+      content: "const value = 1;\n",
+      revision: "rev-clean",
+    });
+    await runtime.whenRecovered();
+    const conflictingDraft =
+      "const value = 1;\nextra line one\nextra line two\n";
+    runtime.store.setState({
+      baselineContent: "const value = 1;\n",
+      baselineRevision: "rev-stale",
+      draftContent: conflictingDraft,
+      contentRevision: 3,
+      status: "conflict",
+      isDirty: true,
+      conflict: {
+        currentRevision: "rev-reset",
+        diskContent: state.worktreeContent,
+        error: "The file changed on disk while an unsaved draft was retained.",
+      },
+    });
+
+    const { result } = renderHook(
+      () =>
+        useGitDiffEditing({
+          client: null,
+          hostId: "host-A",
+          runningDir: "/work/repo",
+          file: FILE,
+          surfaceId: SURFACE_ID,
+          isActive: true,
+          interactionEnabled: true,
+          currentDiff: CURRENT_DIFF,
+          currentComparisonIdentity: "cmp-1",
+          resumeDetachedDraft: false,
+        }),
+      { wrapper },
+    );
+
+    const lineElement = document.createElement("div");
+    lineElement.append("const value = 1;");
+    document.body.append(lineElement);
+    onTestFinished(() => {
+      lineElement.remove();
+    });
+
+    await act(async () => {
+      result.current.editAdapter.diffOptions.onLineClick?.({
+        type: "diff-line",
+        annotationSide: "additions",
+        lineType: "change-addition",
+        lineNumber: 1,
+        lineElement,
+        numberElement: document.createElement("div"),
+        numberColumn: false,
+        event: new PointerEvent("click", { button: 0, clientX: 4 }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.active).toBe(true);
+      expect(result.current.hydrated).toBe(true);
+      expect(result.current.editableFiles).not.toBeNull();
+    });
+
+    // The structural diff model must use the FRESH content (matching
+    // `hydration.pinnedDiff`'s hunks), never the conflicting retained draft -
+    // pairing fresh hunks with the draft's extra trailing lines is exactly
+    // what crashed the Diffs renderer.
+    expect(result.current.editableFiles?.newFile.contents).toBe(
+      state.worktreeContent,
+    );
+    // The draft itself must survive untouched in the runtime, not be
+    // silently discarded.
+    expect(result.current.state?.status).toBe("conflict");
+    expect(result.current.state?.draftContent).toBe(conflictingDraft);
+
+    // Resolving "keep mine" must restore the preserved draft into the
+    // editable model, not leave it stuck on the fresh content.
+    await act(async () => {
+      result.current.keepMine();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.status).not.toBe("conflict");
+    });
+    expect(result.current.editableFiles?.newFile.contents).toBe(
+      conflictingDraft,
+    );
+  });
 });

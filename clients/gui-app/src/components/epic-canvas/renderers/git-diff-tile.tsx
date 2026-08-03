@@ -67,7 +67,10 @@ import {
   type GitBundleDiffTileRef,
   type GitFileDiffTileRef,
 } from "@/components/epic-canvas/git-diff/git-diff-tile-shared";
-import { useGitBundleDiffFind } from "@/components/epic-canvas/git-diff/git-bundle-diff-find";
+import {
+  gitBundleDiffFindFileId,
+  useGitBundleDiffFind,
+} from "@/components/epic-canvas/git-diff/git-bundle-diff-find";
 import { BundleFileSection } from "@/components/epic-canvas/git-diff/git-bundle-file-section";
 import { GitDiffDeadTileBanner } from "./dead-tile-banner";
 
@@ -564,6 +567,10 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       scrollContainerRef={findScrollContainerRef}
       onScroll={onScroll}
       onLoadFull={loadFull}
+      fileIdentity={{
+        findFilePath: props.file.path,
+        bundleFindFileId: gitBundleDiffFindFileId(props.file),
+      }}
       editStatus={
         <DiffTabHeaderPortal>
           <GitDiffEditStatusContent editing={editing} appearance="pill" />

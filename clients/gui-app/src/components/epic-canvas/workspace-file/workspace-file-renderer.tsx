@@ -15,6 +15,7 @@ import { DiffEditProvider } from "@/components/diff/diff-edit-provider";
 import { DiffHighlightLoading } from "@/components/diff/diff-highlight-loading";
 import { useDiffsFileHighlightReady } from "@/components/diff/use-diff-highlight-ready";
 import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
+import type { DiffContentFrameFileIdentity } from "@/components/diff/diff-content-primitive";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import { resolveDiffThemeName } from "@/lib/git/diff-rendering";
 import { DIFF_PANEL_UNSAFE_CSS } from "@/lib/git/diff-tokens-css";
@@ -64,6 +65,12 @@ export function WorkspaceFileRenderer(props: {
   readonly revealNonce: number | null;
   readonly findTarget: WorkspaceFileSourceFindTargetWithNonce | null;
   readonly onRevealConsumed: () => void;
+  /**
+   * Stable file identity for cross-surface find/navigation and exact-host
+   * resolution (parity with `DiffContentFrame`/`DiffBundleFileSectionFrame`)
+   * - `null` while this tab's file identity isn't resolved yet.
+   */
+  readonly fileIdentity: DiffContentFrameFileIdentity | null;
 }): ReactNode {
   const {
     content,
@@ -190,6 +197,8 @@ export function WorkspaceFileRenderer(props: {
       className="min-h-full min-w-full bg-canvas"
       data-diffs-host
       data-diffs-editor-boundary={editing ? "" : undefined}
+      data-diff-find-file={props.fileIdentity?.findFilePath}
+      data-bundle-diff-file-id={props.fileIdentity?.bundleFindFileId}
       onKeyDownCapture={editAdapter.onKeyDownCapture}
       onPointerDownCapture={editAdapter.onPointerDownCapture}
     >
