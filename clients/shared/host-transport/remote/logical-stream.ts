@@ -67,6 +67,7 @@ export class LogicalStream implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private status: StreamConnectionStatus = "connecting";
+  private statusReason: StreamCloseReason | null = null;
   private disposed = false;
 
   constructor(init: LogicalStreamInit) {
@@ -101,6 +102,14 @@ export class LogicalStream implements IStreamSession {
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
+    // `RemoteSession` may synchronously reject a new optional stream while a
+    // ready session checks its manifest. The subscription returns only after
+    // that check, so consumers necessarily install their handler after the
+    // terminal transition. Replay it once so they can fail over instead of
+    // remaining permanently pending.
+    if (this.status === "closed") {
+      handler(this.status, this.statusReason);
+    }
   }
 
   /**
@@ -189,6 +198,7 @@ export class LogicalStream implements IStreamSession {
       return;
     }
     this.status = next;
+    this.statusReason = reason;
     const handler = this.statusHandler;
     if (handler !== null) {
       handler(next, reason);

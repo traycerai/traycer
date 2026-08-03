@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -85,5 +86,31 @@ describe("LogicalStream", () => {
     stream.close();
     stream.requestReconnect();
     expect(reconnectReasons).toHaveLength(1);
+  });
+
+  it("replays a terminal failure to a handler installed after subscription setup", () => {
+    const stream = createStream([], []);
+    const details: FatalErrorDetails = {
+      code: "INCOMPATIBLE_METHOD",
+      reason: "host does not advertise the method",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    stream.goFatal(details);
+
+    const statuses: Array<{
+      readonly status: StreamConnectionStatus;
+      readonly reason: StreamCloseReason | null;
+    }> = [];
+    stream.onStatusChange((status, reason) => {
+      statuses.push({ status, reason });
+    });
+
+    expect(statuses).toEqual([
+      {
+        status: "closed",
+        reason: { kind: "fatalError", details },
+      },
+    ]);
   });
 });

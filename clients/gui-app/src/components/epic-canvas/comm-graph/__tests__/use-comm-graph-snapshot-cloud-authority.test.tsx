@@ -205,6 +205,29 @@ describe("useCommGraphSnapshot cloud authority", () => {
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     expect(cloudRequests[0].hostId).toBe("available-relay");
   });
+
+  it("retries a rejected fallback relay when that same host publishes its endpoint", async () => {
+    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    let endpointPublished = false;
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      if (!endpointPublished) throw new Error("host endpoint is not ready");
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    const { rerender } = renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["relay-a"]),
+    );
+    expect(cloudRequests).toHaveLength(0);
+
+    endpointPublished = true;
+    directoryEntries.current = [directoryEntry("relay-a", { version: "2.0" })];
+    rerender();
+
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    expect(cloudRequests[0].hostId).toBe("relay-a");
+  });
 });
 
 function directoryEntry(

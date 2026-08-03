@@ -60,6 +60,7 @@ export class CommGraphCloudSubscriptionManager {
   private readonly onRowsPruned: (rowKeys: ReadonlySet<string>) => void;
   private readonly listeners = new Set<() => void>();
   private relayHostIds: ReadonlyArray<string> = [];
+  private relayReadinessKey: string | null = null;
   /** Every host whose agents this epic projects. The cloud feed is shared
    * across them, so its state must not be shown only on the transport relay. */
   private originHostIds: ReadonlyArray<string> = [];
@@ -116,6 +117,21 @@ export class CommGraphCloudSubscriptionManager {
     if (this.relayHostId !== null && next.includes(this.relayHostId)) return;
     this.closeCurrent();
     if (this.attached) this.openNextRelay();
+    this.publish();
+  }
+
+  /**
+   * Clears retained dial verdicts when the directory changes the transport
+   * identity of a relay without changing its host ID. This lets a host that
+   * published late, restarted, or upgraded get another cloud-feed attempt.
+   */
+  setRelayReadinessKey(readinessKey: string): void {
+    if (this.disposed || readinessKey === this.relayReadinessKey) return;
+    this.relayReadinessKey = readinessKey;
+    if (!this.attached || this.relayHostId !== null) return;
+    this.rejectedRelayHostIds.clear();
+    this.unsupportedRelayHostIds.clear();
+    this.openNextRelay();
     this.publish();
   }
 

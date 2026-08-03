@@ -51,7 +51,10 @@ import {
   getCommGraphCloudSubscriptionOpenerOverride,
   getCommGraphSubscriptionOpenerOverride,
 } from "@/lib/comm-graph/comm-graph-opener-override";
-import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import {
+  dialableHostEndpoint,
+  hostTransportKey,
+} from "@/lib/host/transport-key";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 
 const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
@@ -132,6 +135,29 @@ export function useCommGraphSnapshot(
     },
     [hostDirectory.data, hostIds],
   );
+  // The ID set does not change when a host publishes its endpoint late or
+  // upgrades in place. Keep that transport identity separately so a retained
+  // cloud manager can retry a prior dial/compatibility failure for the same
+  // host ID, without reopening on an equivalent directory re-emit.
+  const relayReadinessKey = useMemo(
+    () =>
+      hostDirectory.data === undefined
+        ? "directory-pending"
+        : hostDirectory.data
+            .map(
+              (entry) =>
+                hostTransportKey(entry) ??
+                [
+                  entry.hostId,
+                  entry.status,
+                  entry.version ?? "",
+                  entry.websocketUrl ?? "",
+                ].join("\u0000"),
+            )
+            .sort()
+            .join("\u0001"),
+    [hostDirectory.data],
+  );
 
   // Read through a ref so acquiring does not re-run (and re-claim) every time
   // the host set changes - the claim only needs the set that is current at the
@@ -144,6 +170,10 @@ export function useCommGraphSnapshot(
   useEffect(() => {
     relayHostIdsRef.current = relayHostIds;
   }, [relayHostIds]);
+
+  useEffect(() => {
+    cloudManager.setRelayReadinessKey(relayReadinessKey);
+  }, [cloudManager, relayReadinessKey]);
 
   useEffect(() => {
     acquireCommGraphCloudSubscription(
