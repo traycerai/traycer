@@ -16,6 +16,26 @@ const LARGE_CONTENT_ROW_COUNT = 400;
  */
 let scrollContainerScrollHeightOverridePx: number | null = null;
 let messageRowHeightOverrides = new Map<string, number>();
+let syntheticScrollEventsEnabled = true;
+
+/**
+ * Real browsers fire `scroll` (and, where supported, `scrollend`) for
+ * PROGRAMMATIC `scrollTo` calls too - jsdom fires neither, which forces
+ * LegendList's animated-scroll promise to resolve only via its internal
+ * `SCROLL_END_MAX_MS` (1500ms) watchdog and `awaitScrollSettle` to resolve
+ * only via its 750ms fallback. The shim below restores the browser contract
+ * so settles land within frames instead of watchdog windows. Tests that
+ * deliberately exercise the never-fires-natively fallback timing (the
+ * op1/op2 stale-callback pin) opt out with `false`; resets after the test.
+ */
+export function setLegendListSyntheticScrollEventsEnabled(
+  enabled: boolean,
+): void {
+  syntheticScrollEventsEnabled = enabled;
+  onTestFinished(() => {
+    syntheticScrollEventsEnabled = true;
+  });
+}
 
 export function setLegendListScrollContainerScrollHeightOverride(
   heightPx: number | null,
@@ -182,6 +202,59 @@ export function installLegendListViewportMetrics(): void {
       Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
     });
   }
+
+  // LegendList feature-detects scrollend support via `"onscrollend" in
+  // target` before listening for it; jsdom has no such property. Seed it so
+  // the library's target-aware scrollend finish (near-target check included)
+  // races ahead of its idle/max timers instead of never being registered.
+  const seededOnScrollEnd = !("onscrollend" in HTMLElement.prototype);
+  if (seededOnScrollEnd) {
+    Object.defineProperty(HTMLElement.prototype, "onscrollend", {
+      configurable: true,
+      writable: true,
+      value: null,
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, "onscrollend");
+    });
+  }
+  // Browser contract (partially) restored for programmatic scrolls (see
+  // `setLegendListSyntheticScrollEventsEnabled`): a real browser fires
+  // `scrollend` once a `scrollTo` it issued itself stops moving. Dispatch it
+  // a frame later (rAF, deliberately NOT setTimeout - the highlight-expiry
+  // tests fake setTimeout and must not freeze this) so listeners registered
+  // synchronously after the `scrollTo` call still catch it.
+  //
+  // Deliberately NO synthetic `scroll` event: ticket 19's capture-phase
+  // classifier and the scroll-only reader-departure detection both key off
+  // `scroll`, and a frame-delayed dispatch can land after the library's
+  // ownership window has closed - reading as an OS-scrollbar-drag departure
+  // and yanking anchors into free-scrolling (58 tests go red). Tests that
+  // need the classifier to observe a write keep firing `scroll` explicitly
+  // (`fireCaptureScrollAfterLibraryWrite` and friends), exactly as before.
+  //
+  // Timing: the dispatch waits ~10 frames (~160ms at jsdom's 16ms rAF
+  // cadence), NOT one. LegendList finishes a NON-animated scroll through its
+  // own 100ms `finishScrollTo` timer, which is what reconciles internal
+  // scroll state (`isAtEnd` etc.) with the DOM; a scrollend that wakes
+  // `awaitScrollSettle` before that timer lets `validate` read stale state
+  // (the retry-exhaustion test settles "valid" off a pre-reconcile
+  // `isAtEnd`). Frames rather than setTimeout so fake-timer tests don't
+  // freeze the dispatch.
+  const dispatchSyntheticScrollEnd = (target: HTMLElement): void => {
+    if (!syntheticScrollEventsEnabled) return;
+    let remainingFrames = 10;
+    const tick = (): void => {
+      remainingFrames -= 1;
+      if (remainingFrames <= 0) {
+        target.dispatchEvent(new Event("scrollend"));
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  };
+
   const scrollToSpy = vi
     .spyOn(HTMLElement.prototype, "scrollTo")
     .mockImplementation(function scrollToShim(
@@ -193,6 +266,7 @@ export function installLegendListViewportMetrics(): void {
         const second = args[1];
         this.scrollLeft = first;
         this.scrollTop = typeof second === "number" ? second : 0;
+        dispatchSyntheticScrollEnd(this);
         return;
       }
       if (typeof first === "object") {
@@ -202,6 +276,7 @@ export function installLegendListViewportMetrics(): void {
         if (typeof first.top === "number") {
           this.scrollTop = first.top;
         }
+        dispatchSyntheticScrollEnd(this);
       }
     });
 
@@ -226,7 +301,12 @@ export function installLegendListViewportMetrics(): void {
 
 /**
  * LegendList's `initialScrollAtEnd` bootstrap and layout measurement need a
- * few frames plus its scroll-finish fallback (hundreds of ms) in jsdom.
+ * few frames in jsdom, plus its NON-animated scroll finish - a plain 100ms
+ * `setTimeout(finishScrollTo)` in the vendored source that no event can
+ * accelerate. The synthetic scroll/scrollend dispatch above already collapses
+ * every event-driven settle to frame scale; the sleep here only needs to
+ * outlast that 100ms timer (which starts during the frame loop) plus commit
+ * slack, not the library's old 1500ms animated watchdog.
  */
 export async function settleLegendList(): Promise<void> {
   await act(async () => {
@@ -235,8 +315,12 @@ export async function settleLegendList(): Promise<void> {
         requestAnimationFrame(() => resolve());
       });
     }
+    // The 12 frames are load-bearing for bootstrap convergence (8 frames
+    // fails ~25 tests). Frames (~190ms at jsdom's 16ms cadence) already
+    // outlast the library's 100ms non-animated finish timer; the sleep is
+    // commit slack.
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, 80);
     });
   });
 }
