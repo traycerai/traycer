@@ -352,6 +352,27 @@ describe("TAB_KINDS surface exhaustiveness", () => {
   });
 });
 
+describe("tabs store transaction layout", () => {
+  afterEach(() => {
+    resetTabsStore();
+  });
+
+  it("preserves activation history through transaction replacement and finalization", () => {
+    let layout = withTabs([EPIC_A, EPIC_B, EPIC_C]);
+    layout = focusLayoutRef(layout, EPIC_A);
+    layout = focusLayoutRef(layout, EPIC_C);
+
+    useTabsStore.getState().replaceLayoutForTransaction(layout);
+    useTabsStore.getState().finalizeTransactionLayout();
+
+    expect(tabActivationHistory(useTabsStore.getState())).toEqual([
+      EPIC_C,
+      EPIC_A,
+      EPIC_B,
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Invariants through every pure reducer
 // ---------------------------------------------------------------------------

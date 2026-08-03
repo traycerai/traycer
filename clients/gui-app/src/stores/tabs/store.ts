@@ -416,6 +416,7 @@ export const useTabsStore = create<TabsStoreState>()(
           items: layout.items,
           activeItemId: layout.activeItemId,
           systemTabs: layout.systemTabs,
+          activationHistory: layout.activationHistory,
         });
       },
 
