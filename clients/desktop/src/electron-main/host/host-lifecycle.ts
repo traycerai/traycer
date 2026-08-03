@@ -299,6 +299,15 @@ export class HostLifecycle extends EventEmitter {
   }
 
   /**
+   * The host's durable enrollment record. Read-only, and unlike `pid.json` it
+   * outlives the host process - which is what makes it answerable while the
+   * host is stopped.
+   */
+  get identityEnrollmentFile(): string {
+    return this.options.layout.identityEnrollmentFile;
+  }
+
+  /**
    * Whether this lifecycle has been torn down. Exposed so the
    * SMAppService respawn path can short-circuit between awaits without
    * driving real OS mutations against an already-disposed instance.

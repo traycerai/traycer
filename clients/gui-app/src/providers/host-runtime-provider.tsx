@@ -8,7 +8,7 @@ import {
   type Context,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import type {
   HostClient,
   IHostQueryInvalidator,
@@ -39,6 +39,10 @@ import {
 } from "@/lib/host/host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { appLogger } from "@/lib/logger";
+import {
+  runnerHostQueryScopeId,
+  runnerQueryKeys,
+} from "@/lib/query-keys/runner-mutation-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
@@ -180,6 +184,8 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         runnerHost,
         remoteFetcher:
           remoteFetcher ?? buildDefaultRemoteFetcher(auth, runnerHost),
+        localHostIdSeeder: () =>
+          queryClient.fetchQuery(localHostIdQueryOptions(runnerHost)),
       });
 
       let runtime: HostRuntime<Registry> | null = null;
@@ -324,6 +330,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       remoteFetcher,
       authorityRegistry,
       requestCoordinator,
+      queryClient,
     ]);
 
     useEffect(() => {
@@ -387,6 +394,32 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
  * the last-known remote entries instead of wiping the merged directory and
  * unbinding an active remote selection.
  */
+/**
+ * The shell's durable answer to "which host id is THIS machine", the value
+ * `HostDirectoryService` seeds itself with before its first emission.
+ *
+ * Query owns the read like every other `RunnerHost` request, but the directory
+ * consumes it through `fetchQuery` rather than a hook: the service is
+ * constructed inside the provider's effect and must recognise this machine
+ * BEFORE it emits a directory, so a hook's value would arrive a render too
+ * late to BE the seed. `fetchQuery` still gives it the centralized key, the
+ * cache, and in-flight dedupe.
+ *
+ * `retry: false` deliberately. `start()` awaits this, and the service already
+ * falls back to the persisted id when the shell cannot answer - so Query's
+ * default backoff would delay the first directory the user sees in order to
+ * reach a value there is already a fallback for.
+ */
+function localHostIdQueryOptions(runnerHost: IRunnerHost) {
+  return queryOptions({
+    queryKey: runnerQueryKeys.lastKnownLocalHostId(
+      runnerHostQueryScopeId(runnerHost),
+    ),
+    queryFn: () => runnerHost.getLastKnownLocalHostId(),
+    retry: false,
+  });
+}
+
 function buildDefaultRemoteFetcher(
   auth: AuthService,
   runnerHost: IRunnerHost,

@@ -15,6 +15,7 @@ const LARGE_CONTENT_ROW_COUNT = 400;
  * under the 1.5-viewport animated split). Call with `null` to restore default.
  */
 let scrollContainerScrollHeightOverridePx: number | null = null;
+let messageRowHeightOverrides = new Map<string, number>();
 
 export function setLegendListScrollContainerScrollHeightOverride(
   heightPx: number | null,
@@ -25,6 +26,15 @@ export function setLegendListScrollContainerScrollHeightOverride(
       scrollContainerScrollHeightOverridePx = null;
     });
   }
+}
+
+export function setLegendListMessageRowHeightOverrides(
+  heights: ReadonlyMap<string, number>,
+): void {
+  messageRowHeightOverrides = new Map(heights);
+  onTestFinished(() => {
+    messageRowHeightOverrides = new Map();
+  });
 }
 
 function rectOf(x: number, y: number, width: number, height: number): DOMRect {
@@ -60,6 +70,15 @@ function isSpacerShell(element: HTMLElement): boolean {
 
 function heightFor(element: HTMLElement): number {
   if (isListItemShell(element)) {
+    const ownMessageId = element.getAttribute("data-message-id");
+    const nestedMessageId = element
+      .querySelector<HTMLElement>("[data-message-id]")
+      ?.getAttribute("data-message-id");
+    const messageId = ownMessageId ?? nestedMessageId;
+    if (typeof messageId === "string") {
+      const override = messageRowHeightOverrides.get(messageId);
+      if (override !== undefined) return override;
+    }
     return ITEM_HEIGHT_PX;
   }
   if (isSpacerShell(element)) {

@@ -143,6 +143,7 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
   const hostLayout: HostFsLayout = {
     rootDir: tempDir,
     pidMetadataFile: join(tempDir, "pid.json"),
+    identityEnrollmentFile: join(tempDir, "identity", "enrollment.json"),
     logFile: hostLogPath,
     installDir: join(tempDir, "install"),
     installRecordFile: join(tempDir, "install.json"),

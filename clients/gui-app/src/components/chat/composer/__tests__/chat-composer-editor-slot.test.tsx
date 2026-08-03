@@ -54,7 +54,9 @@ function renderEditorSlot(): void {
       hasPastedImageBytes={null}
       ingestPastedComposerImages={null}
       isActive
-      onSnapshot={() => undefined}
+      onDocumentChange={() => undefined}
+
+      onSelectionChange={() => undefined}
       onSubmit={() => undefined}
       steerHintActive
       onPaste={() => undefined}

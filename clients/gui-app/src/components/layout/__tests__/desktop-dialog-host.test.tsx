@@ -362,6 +362,7 @@ function createBaseRunnerHost(): IRunnerHost {
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
+    getLastKnownLocalHostId: () => Promise.resolve(null),
     service: null,
     traycerCli: null,
     migration: null,

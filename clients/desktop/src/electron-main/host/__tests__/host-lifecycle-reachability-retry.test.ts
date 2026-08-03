@@ -58,6 +58,7 @@ function layoutIn(dir: string): HostFsLayout {
   return {
     rootDir: dir,
     pidMetadataFile: join(dir, "pid.json"),
+    identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
     logFile: join(dir, "host.log"),
     installDir: join(dir, "install"),
     installRecordFile: join(dir, "install", "install.json"),

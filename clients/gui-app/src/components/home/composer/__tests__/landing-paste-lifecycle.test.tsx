@@ -35,6 +35,11 @@ import {
   imageHashKeys,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  reserveLandingImageBudget,
+  resetLandingImageBudgetReservationsForTesting,
+} from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -146,6 +151,7 @@ vi.mock(
       instance: ComposerPromptEditorHandle,
     ): ComposerPromptEditorHandle => ({
       isReady: () => instance.isReady(),
+      hasFocus: () => false,
       focus: () => instance.focus(),
       focusAtEnd: () => instance.focusAtEnd(),
       getJSON: () => instance.getJSON(),
@@ -153,6 +159,8 @@ vi.mock(
       clear: () => instance.clear(),
       setContent: (content, selection) =>
         instance.setContent(content, selection),
+      syncContent: (content, selection) =>
+        instance.syncContent(content, selection),
       insertImageAttachments: (attrs) => instance.insertImageAttachments(attrs),
       beginPathInsertion: () => instance.beginPathInsertion(),
       removeImageAttachmentById: (id) => instance.removeImageAttachmentById(id),
@@ -372,11 +380,13 @@ beforeEach(async () => {
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   draftRuntimeRegistry.resetForTesting();
+  resetLandingImageBudgetReservationsForTesting();
 });
 
 afterEach(() => {
   cleanup();
   draftRuntimeRegistry.resetForTesting();
+  resetLandingImageBudgetReservationsForTesting();
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   vi.useRealTimers();
@@ -737,6 +747,122 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
         screen.getByTestId("lifecycle-attachment-pending").textContent,
       ).toBe("false");
     });
+  });
+
+  it("releases each pasted image reservation before staggered remount re-entry", async () => {
+    const bytesA = bytesOf([1, 2, 3]);
+    const bytesB = bytesOf([4, 5, 6]);
+    const hashA = await sha256Hex(bytesA);
+    const hashB = await sha256Hex(bytesB);
+    const competing = reserveLandingImageBudget("near-cap", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - 6 },
+    ]);
+    expect(competing).not.toBeNull();
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+    await waitFor(() => {
+      expect(setGates.has(hashA)).toBe(true);
+      expect(setGates.has(hashB)).toBe(true);
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // Settle only A. Its original job must release A's anonymous share before
+    // the remounted job reserves the hash-aware share; B remains fully pending
+    // and keeps its own reservation throughout.
+    setGates.get(hashA)?.release();
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms).toHaveLength(2);
+      expect(atoms[0]?.hash).toBe(hashA);
+      expect(atoms[0]?.b64content).toBeNull();
+      expect(atoms[1]?.hash).toBeNull();
+      expect(atoms[1]?.b64content).not.toBeNull();
+    });
+
+    setGates.get(hashB)?.release();
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms[1]?.hash).toBe(hashB);
+      expect(atoms[1]?.b64content).toBeNull();
+    });
+    competing?.release();
+  });
+
+  it("re-reserves a pending image after an inactive gap and rejects it when capacity was consumed", async () => {
+    const bytes = bytesOf([6, 6, 6]);
+    const hash = await sha256Hex(bytes);
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "gap.png"));
+
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    await act(async () => {
+      setGates.get(hash)?.release();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const competingReservation = reserveLandingImageBudget("other-draft", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(competingReservation).not.toBeNull();
+
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms).toHaveLength(0);
+    });
+    expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+      "Couldn't add the image.",
+      expect.objectContaining({
+        description: "Remove images or close a draft yourself, then try again.",
+      }),
+      expect.objectContaining({
+        message: "The image storage budget was exceeded.",
+      }),
+    );
+    competingReservation?.release();
   });
 
   // Seam 4: delete-before-write → rewrite false, reconcile, zero unrooted keys.

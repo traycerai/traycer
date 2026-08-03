@@ -689,12 +689,14 @@ function mountSubmit(input: MountSubmitInput): {
 function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
   return {
     isReady: () => true,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => false,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,

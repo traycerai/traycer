@@ -306,6 +306,22 @@ export interface IRunnerHost {
   ): Disposable;
 
   /**
+   * The `hostId` this machine's local host most recently published, read from
+   * durable host metadata rather than from a live connection - so it still
+   * answers while the host is stopped, restarting, or unreachable.
+   *
+   * `onLocalHostChange` deliberately emits a snapshot only for a host that is
+   * actually dialable, which leaves a blind spot: the registry also lists this
+   * machine, and during a local restart its remote-kind twin is the only entry
+   * carrying that id. Without this, a shell cannot tell "another machine" from
+   * "my own host, currently down" in exactly the window where it matters.
+   *
+   * `null` when this shell has no local host, or when no host has ever
+   * published metadata on this machine.
+   */
+  getLastKnownLocalHostId(): Promise<string | null>;
+
+  /**
    * Subscribes to OS wake events (device resume / screen unlock). The handler
    * fires shortly after the machine wakes from sleep - the signal `gui-app`
    * uses to force-reconnect its host streams so an open epic recovers from

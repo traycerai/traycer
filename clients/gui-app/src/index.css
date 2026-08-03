@@ -40,6 +40,40 @@
   }
 }
 
+@keyframes prompt-stash-count-flash {
+  0%,
+  72% {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-primary) 18%, transparent);
+  }
+  100% {
+    background-color: var(--color-muted);
+    color: inherit;
+    box-shadow: none;
+  }
+}
+
+.prompt-stash-count-flash {
+  animation: prompt-stash-count-flash 700ms ease-out both;
+}
+
+/* Attachment previews stay on one compact, independently scrollable row. */
+[data-composer-attachment-strip] {
+  scrollbar-width: none;
+}
+
+[data-composer-attachment-strip]::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-stash-count-flash {
+    animation-duration: 1ms;
+  }
+}
+
 .working-text-shimmer {
   background-image: linear-gradient(
     90deg,
@@ -1086,7 +1120,16 @@
 }
 
 @layer base {
-  * {
+  /* The chat transcript marks its real scroll owner with
+     `data-native-scrollbar`. Keep that element completely outside the app
+     scrollbar theme so the browser/OS owns its gutter, thumb, visibility,
+     hover behavior, and accessibility. */
+  [data-native-scrollbar] {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  *:not([data-native-scrollbar]) {
     scrollbar-width: thin;
     scrollbar-color: color-mix(
         in oklch,
@@ -1095,34 +1138,24 @@
       )
       transparent;
   }
-  *::-webkit-scrollbar {
+  *:not([data-native-scrollbar])::-webkit-scrollbar {
     width: 4px !important;
     height: 4px !important;
   }
-  *::-webkit-scrollbar-track {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-track {
     background: transparent;
   }
-  *::-webkit-scrollbar-thumb {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-thumb {
     background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
     border-radius: var(--radius-sm);
     border: 0;
     min-height: 24px;
   }
-  *::-webkit-scrollbar-thumb:hover {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-thumb:hover {
     background: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
   }
-  *::-webkit-scrollbar-corner {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-corner {
     background: transparent;
-  }
-
-  .chat-scrollbar-native-thin {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .chat-scrollbar-native-thin::-webkit-scrollbar {
-    width: 2px !important;
-    height: 2px !important;
   }
 
   /* `@pierre/trees` scroll surface. The global `*::-webkit-scrollbar`
@@ -1280,144 +1313,6 @@
   [data-composer-editor] blockquote {
     @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
   }
-
-  /* Fade transcript rows as they pass beneath the top chrome AND beneath the
-     composer dock, with a mirrored bottom band. A mask stays visible even
-     when the chrome and timeline share the same background. The right-edge
-     mask excludes the scrollbar gutter (2px - matches `.chat-scrollbar-
-     native-thin`'s `::-webkit-scrollbar` width override, which is also what
-     `scrollbar-gutter-both` on the list reserves on each edge in Chromium -
-     ticket 16/M1 replaced the old one-sided `mr-1` margin hack with that
-     property) and stays fully opaque top-to-bottom so the fade never
-     darkens the bar itself. The left gutter needs no matching treatment -
-     nothing renders there, it is blank reserved space. Opt-in via
-     `topFadeEnabled` on `ChatTimeline` - the same class carries both edges,
-     since both are "edge of the transcript" chrome.
-
-     The bottom band's own bottom edge sits `--chat-bottom-overlay-inset`
-     above the container's bottom edge - the dock's live measured height
-     (chat-messages.tsx writes the var from `endInset`, the same value used
-     for `contentInsetEndAdjustment`). The `inset` px strip below the band is
-     left uncovered by any mask layer (alpha 0): it renders behind the
-     opaque composer dock either way, so leaving it as the mask's natural
-     "uncovered = transparent" default avoids a fifth layer for a region
-     nothing ever shows through.
-
-     Positions below are plain `<length-percentage>` pairs measured from the
-     top-left, NOT the `[left|right] off? && [top|bottom] off?` edge-offset
-     grammar (e.g. `left bottom var(...)`) - mixing that grammar with `var()`
-     made the whole `mask-position` value invalid in this engine, silently
-     resetting EVERY layer to its `0% 0%` initial position (verified via
-     computed style; the old top-only mask happened to look right only
-     because 0% 0% and "top" coincide). And a lone `calc(100% - X)` in a
-     position (not size) is NOT "X px up from the bottom": background/mask
-     position percentages resolve against `(container - layer)`, so the
-     layer's own height is already subtracted once by the `100%` term -
-     writing `100% - fold - inset` double-subtracts `fold` and lands the
-     band a whole fold-height too high (verified pixel-by-pixel against an
-     isolated test page). `100% - inset` is the correct offset. */
-  .chat-timeline-scroll-fade {
-    --chat-timeline-scroll-fade-height: 2.5rem;
-
-    -webkit-mask-image:
-      linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgb(0 0 0 / 10%) 10%,
-        rgb(0 0 0 / 30%) 24%,
-        rgb(0 0 0 / 58%) 42%,
-        rgb(0 0 0 / 82%) 62%,
-        rgb(0 0 0 / 96%) 82%,
-        black 100%
-      ),
-      linear-gradient(black, black),
-      linear-gradient(
-        to top,
-        transparent 0%,
-        rgb(0 0 0 / 10%) 10%,
-        rgb(0 0 0 / 30%) 24%,
-        rgb(0 0 0 / 58%) 42%,
-        rgb(0 0 0 / 82%) 62%,
-        rgb(0 0 0 / 96%) 82%,
-        black 100%
-      ),
-      linear-gradient(black, black);
-    -webkit-mask-position:
-      0px 0px,
-      0px var(--chat-timeline-scroll-fade-height),
-      0px
-        max(
-          var(--chat-timeline-scroll-fade-height),
-          calc(100% - var(--chat-bottom-overlay-inset, 0px))
-        ),
-      right;
-    -webkit-mask-repeat: no-repeat;
-    -webkit-mask-size:
-      100% var(--chat-timeline-scroll-fade-height),
-      100%
-        max(
-          0px,
-          calc(
-            100% - var(--chat-timeline-scroll-fade-height) -
-              var(--chat-timeline-scroll-fade-height) -
-              var(--chat-bottom-overlay-inset, 0px)
-          )
-        ),
-      100% var(--chat-timeline-scroll-fade-height),
-      2px 100%;
-    mask-image:
-      linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgb(0 0 0 / 10%) 10%,
-        rgb(0 0 0 / 30%) 24%,
-        rgb(0 0 0 / 58%) 42%,
-        rgb(0 0 0 / 82%) 62%,
-        rgb(0 0 0 / 96%) 82%,
-        black 100%
-      ),
-      linear-gradient(black, black),
-      linear-gradient(
-        to top,
-        transparent 0%,
-        rgb(0 0 0 / 10%) 10%,
-        rgb(0 0 0 / 30%) 24%,
-        rgb(0 0 0 / 58%) 42%,
-        rgb(0 0 0 / 82%) 62%,
-        rgb(0 0 0 / 96%) 82%,
-        black 100%
-      ),
-      linear-gradient(black, black);
-    mask-position:
-      0px 0px,
-      0px var(--chat-timeline-scroll-fade-height),
-      0px
-        max(
-          var(--chat-timeline-scroll-fade-height),
-          calc(100% - var(--chat-bottom-overlay-inset, 0px))
-        ),
-      right;
-    mask-repeat: no-repeat;
-    mask-size:
-      100% var(--chat-timeline-scroll-fade-height),
-      100%
-        max(
-          0px,
-          calc(
-            100% - var(--chat-timeline-scroll-fade-height) -
-              var(--chat-timeline-scroll-fade-height) -
-              var(--chat-bottom-overlay-inset, 0px)
-          )
-        ),
-      100% var(--chat-timeline-scroll-fade-height),
-      2px 100%;
-  }
-
-  @media (min-width: 40rem) {
-    .chat-timeline-scroll-fade {
-      --chat-timeline-scroll-fade-height: 3rem;
-    }
-  }
 }
 
 /*
@@ -1433,4 +1328,15 @@
 ::highlight(traycer-find-match-active) {
   background-color: color-mix(in srgb, var(--primary) 75%, transparent);
   color: var(--primary-foreground);
+}
+
+/*
+ * Communication-graph edge focus (`comm-graph-edge-interaction.ts`).
+ * React Flow strips the edge group's outline and paints its own focus stroke
+ * only for a `selectable` edge - which that canvas is not - so a focused edge
+ * would otherwise look identical to an unfocused one.
+ */
+.react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--ring);
+  stroke-width: 2;
 }

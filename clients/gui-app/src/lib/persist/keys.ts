@@ -59,6 +59,14 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const lastSelectedHostKey = (): string =>
   persistKey("last-selected-host");
 
+// The hostId this machine's OWN local host last published. Unscoped and
+// identity-free like the picker memory: it is a fact about this machine, not
+// about who is signed in. The directory uses it to keep the machine's own
+// host out of the remote arm while the local host is booting - the boot
+// window is exactly when no live local snapshot exists to tell it apart.
+export const lastLocalHostIdKey = (): string =>
+  persistKey("last-local-host-id");
+
 export const appLocalNotificationsKey = (userId: string | null): string =>
   scopedPersistKey("app-local-notifications", scopeBucket(userId));
 
@@ -244,6 +252,8 @@ export const PERSIST_STORES = [
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
   // App-level creation-surface host picker memory (host-directory-service.ts).
   { camelName: "lastSelectedHost", leaf: "last-selected-host", kind: "static" },
+  // This machine's own local host id (host-directory-service.ts).
+  { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
   // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.
   {
     camelName: "consumedInitialRoute",

@@ -200,6 +200,7 @@ export interface DesktopPreloadBridge {
   };
   onSystemResumed(handler: () => void): { dispose: () => void };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+  getLastKnownLocalHostId(): Promise<string | null>;
   trayState: {
     setEpics(epics: readonly TrayEpic[]): Promise<void>;
     setIndicator(state: TrayIndicatorState): Promise<void>;
@@ -857,6 +858,10 @@ export class DesktopRunnerHost implements IRunnerHost {
         this.localHostHandlers.delete(handler);
       },
     };
+  }
+
+  getLastKnownLocalHostId(): Promise<string | null> {
+    return this.bridge.getLastKnownLocalHostId();
   }
 
   onSystemResumed(handler: () => void): Disposable {

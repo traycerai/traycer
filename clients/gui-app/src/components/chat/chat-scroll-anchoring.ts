@@ -9,14 +9,20 @@
 export type ChatTimelineScrollMode =
   "following-end" | "anchoring-new-turn" | "free-scrolling";
 
-export const CHAT_LIST_ANCHOR_OFFSET = 16;
+/**
+ * Minimum top offset for a newly anchored turn. The transcript's compact
+ * fade header is 40px; wider layouts report a larger measured header and the
+ * controller raises the live offset to match it. Keeping the minimum aligned
+ * with the fade prevents a freshly sent query from being placed inside the
+ * mask's clipped band before the first measurement arrives.
+ */
+export const CHAT_LIST_ANCHOR_OFFSET = 40;
 
 /** The controller's initial ref/state seed for the three-mode policy, at
  *  mount, before any live event has run through the classifier or a real
- *  gesture. `freshOpenAnchorMessageId` (decision #15) takes precedence over
- *  `bottomFollowing` (the restored scroll-state cache) - a never-before-
- *  opened chat anchors the last user message instead of parking at the
- *  tail; a restored following-end tab keeps following. */
+ *  gesture. `initialAnchorMessageId` covers both a never-before-opened chat
+ *  and a restored in-progress turn. Either takes precedence over
+ *  `bottomFollowing`; a restored following-end tab keeps following. */
 export interface ChatTimelineInitialModeSeed {
   readonly mode: ChatTimelineScrollMode;
   readonly isAtEnd: boolean;
@@ -26,10 +32,10 @@ export interface ChatTimelineInitialModeSeed {
 }
 
 export function resolveChatTimelineInitialModeSeed(input: {
-  readonly freshOpenAnchorMessageId: string | null;
+  readonly initialAnchorMessageId: string | null;
   readonly bottomFollowing: boolean;
 }): ChatTimelineInitialModeSeed {
-  if (input.freshOpenAnchorMessageId !== null) {
+  if (input.initialAnchorMessageId !== null) {
     return {
       mode: "anchoring-new-turn",
       isAtEnd: true,
@@ -167,43 +173,6 @@ export function getChatAnchoredTurnMetrics({
   };
 }
 
-/**
- * Ticket 5 / F3: the maximum DOM `scrollTop` reachable once
- * `anchoredEndSpace` is gone (plain free-scrolling restore).
- *
- * LegendList's content length (installed 3.2.0) is
- * `headerSize + footerSize + totalSize + contentInsetBottom` (plus unused
- * style/align pads our chat timeline never sets). With content-relative
- * positions, `lastBottom` is the bottom of the last real row (= totalSize
- * when fully measured). Max scroll is content length minus the viewport:
- *
- *   max(0, header + footer + lastBottom + endInset - viewportLength)
- *
- * This is NOT `targetScrollToRevealEnd` from `getChatAnchoredTurnMetrics` -
- * that is the anchor engine's reveal target
- * (`lastBottom - (viewport - endInset - anchorOffset)`), which under-clamps
- * the no-reserve max by `header + footer - anchorOffset` and would leave a
- * mid-anchor remount 88/104px short of the true natural end on the fade
- * header. Keep the reveal metric for the reveal pass; use this only for the
- * save-time F3 clamp.
- */
-export function getChatNaturalMaxScrollWithoutAnchorReserve(input: {
-  readonly headerSize: number;
-  readonly footerSize: number;
-  readonly lastBottom: number;
-  readonly endInset: number;
-  readonly viewportLength: number;
-}): number {
-  return Math.max(
-    0,
-    input.headerSize +
-      input.footerSize +
-      input.lastBottom +
-      input.endInset -
-      input.viewportLength,
-  );
-}
-
 /** Whether the real (measured) content bottom extends past the usable viewport. */
 export function chatTimelineRealContentOverflowsViewport(
   state: ChatTimelineListMeasurementState,
@@ -283,11 +252,15 @@ export interface ChatTimelineEndState {
   readonly isNearEnd?: boolean;
 }
 
-/** `isNearEnd` (library default 10% threshold) restores follow before the strict `isAtEnd`. */
+/**
+ * Only the strict live edge grants follow ownership. `isNearEnd` remains
+ * available to callers as presentation/proximity data, but it must never
+ * re-attach a reader who deliberately stopped short of the tail.
+ */
 export function resolveChatTimelineIsAtEnd(
   state: ChatTimelineEndState | undefined,
 ): boolean | undefined {
-  return state?.isNearEnd ?? state?.isAtEnd;
+  return state?.isAtEnd;
 }
 
 /**
@@ -305,19 +278,10 @@ export function resolveChatTimelineIsAtEnd(
  * round-trips exact pixels is `(position + topOffsetAdjustment) - scroll`,
  * not bare `position - scroll` (decision #18).
  *
- * `naturalMaxScroll` (F3 fix): the current live `scroll` may exceed the
- * content's natural (no-`anchoredEndSpace`-reserve) scrollable range while
- * `anchoring-new-turn` is reserving trailing blank space below the anchor for
- * a still-streaming reply - a scroll position only reachable BECAUSE of that
- * reserve. Restoring later as plain `free-scrolling` has no reserve, so
- * capturing the raw `scroll` would produce an offset the browser clamps on
- * restore, dropping the row from where it should land. Pass
- * `getChatNaturalMaxScrollWithoutAnchorReserve` (NOT
- * `targetScrollToRevealEnd` - that is the reveal-pass target and under-clamps
- * the true no-reserve max). Clamp is applied to `scroll` before subtracting;
- * top-offset is independent of the reserve and is still added. `null` for the
- * ordinary (never-anchoring) free-scrolling case, where no such reserve
- * exists and the raw `scroll` is already valid.
+ * Reply-reserve geometry is persisted independently and recreated before
+ * restore convergence, so this captures the real visible DOM coordinate
+ * without clamping it into a different geometry. Save → restore → save is
+ * therefore idempotent even while a detached turn keeps streaming.
  */
 export interface ChatFreeScrollingMeasurementSource {
   readonly getState: () => {
@@ -326,8 +290,8 @@ export interface ChatFreeScrollingMeasurementSource {
     /**
      * LegendList top pad before row 0 (`headerSize` + `stylePaddingTop` +
      * `alignItemsAtEndPadding`). Same value restore adds via
-     * `getTopOffsetAdjustment`. Omit or `0` when unknown (unit tests of pure
-     * clamp arithmetic); production save path passes the live measured value.
+     * `getTopOffsetAdjustment`. Omit or `0` when unknown; production save
+     * passes the live measured value.
      */
     readonly topOffsetAdjustment?: number;
   };
@@ -336,7 +300,6 @@ export interface ChatFreeScrollingMeasurementSource {
 export function captureChatFreeScrollingOffset(
   list: ChatFreeScrollingMeasurementSource | null,
   index: number | undefined,
-  naturalMaxScroll: number | null,
 ): number {
   if (list === null || index === undefined) return 0;
   const state = list.getState();
@@ -347,9 +310,5 @@ export function captureChatFreeScrollingOffset(
     Number.isFinite(state.topOffsetAdjustment)
       ? state.topOffsetAdjustment
       : 0;
-  const scroll =
-    naturalMaxScroll === null
-      ? state.scroll
-      : Math.min(state.scroll, naturalMaxScroll);
-  return position + topOffset - scroll;
+  return position + topOffset - state.scroll;
 }

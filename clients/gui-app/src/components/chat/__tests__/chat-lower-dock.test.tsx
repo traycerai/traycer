@@ -192,7 +192,7 @@ describe("<ChatLowerDock />", () => {
   });
 });
 
-function renderDock(input: {
+interface DockInput {
   readonly queue: ChatSessionState["queue"];
   readonly todo: PinnedTodoSnapshot | null;
   readonly changes: ReadonlyArray<AccumulatedFileChange>;
@@ -202,7 +202,9 @@ function renderDock(input: {
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
-}) {
+}
+
+function renderDock(input: DockInput) {
   return render(
     <TooltipProvider delayDuration={0}>
       <ChatLowerDock

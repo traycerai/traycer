@@ -52,7 +52,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.bodyAttachmentPresence = props.hasPastedImageBytes;
       testState.bodyPickerStore = props.pickerStore;
       testState.bodyInitialSelection = props.initialSelection;
-      testState.bodySnapshot = props.onSnapshot;
+      testState.bodySnapshot = props.onDocumentChange;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
@@ -403,12 +403,14 @@ describe("NewConversationModalBody direct submit gate", () => {
 function editorHandle(): ComposerPromptEditorHandle {
   return {
     isReady: () => true,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => DIRTY_CONTENT,
     isEmpty: () => false,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,

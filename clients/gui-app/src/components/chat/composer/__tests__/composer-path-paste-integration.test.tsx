@@ -523,7 +523,9 @@ function Harness({
       hasPastedImageBytes={null}
       ingestPastedComposerImages={null}
       stabilizeImageAttachmentCaret={false}
-      onSnapshot={() => undefined}
+      onDocumentChange={() => undefined}
+
+      onSelectionChange={() => undefined}
       onSubmit={() => undefined}
       onPaste={paste.onPaste}
       onDragOver={paste.onDragOver}
