@@ -440,10 +440,7 @@ function dispatchKeyInScope(key: string): void {
 async function enterFreeScrollingAwayFromEnd(): Promise<void> {
   const scrollNode = getScrollNode();
   setLegendListScrollContainerScrollHeightOverride(
-    Math.max(
-      scrollNode.scrollHeight,
-      LEGEND_LIST_HEADER_PX + 40 * 90 + 40,
-    ),
+    Math.max(scrollNode.scrollHeight, LEGEND_LIST_HEADER_PX + 40 * 90 + 40),
   );
   fireEvent.wheel(scrollNode, { deltaY: -80 });
   await fireScrollTopAndFlush(0);
@@ -980,7 +977,9 @@ describe("ChatMessages scroll policy", () => {
     const parked = getScrollNode().scrollTop;
     expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
-    rerenderMessages(appendAssistant(messages, "stream-after-departure", 10_000));
+    rerenderMessages(
+      appendAssistant(messages, "stream-after-departure", 10_000),
+    );
     await settleLegendList();
     expect(getScrollNode().scrollTop).toBe(parked);
     expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -1117,7 +1116,6 @@ describe("ChatMessages scroll policy", () => {
       });
       expect(getScrollNode().scrollTop).toBe(scrollBefore);
     });
-
   });
 
   describe("aria-live turn completion", () => {
@@ -2497,7 +2495,7 @@ describe("ChatMessages scroll policy", () => {
         epicId: identity.epicId,
         chatId: identity.chatId,
       });
-      expect((peekSavedChatTabState(identity) !== null)).toBe(false);
+      expect(peekSavedChatTabState(identity) !== null).toBe(false);
     });
 
     it("keeps tool, subagent, and activity-group open state across unmount+remount with the same instanceId", async () => {
@@ -2936,7 +2934,7 @@ describe("ChatMessages scroll policy", () => {
       // Same chat, brand-new tileInstanceId - must still restore via durable,
       // which the non-live unmount above just committed (F1's durable-only
       // commit path) - nothing else in this test ever wrote it.
-      expect((peekSavedChatTabState(reopenedIdentity) !== null)).toBe(true);
+      expect(peekSavedChatTabState(reopenedIdentity) !== null).toBe(true);
       // Ticket 15 review (live pass S5 round 3): a mode-only assertion
       // stayed green through two live failures - a poisoned
       // {anchorMessageId, anchorIndex, offset} triple (a stale anchor row
@@ -3332,7 +3330,7 @@ describe("ChatMessages scroll policy", () => {
       const identity = makeDefaultTestIdentity(instanceId);
 
       // Truly fresh: no seed, not streaming.
-      expect((peekSavedChatTabState(identity) !== null)).toBe(false);
+      expect(peekSavedChatTabState(identity) !== null).toBe(false);
       tileLiveness.live = true;
       const { rerenderWith } = renderChatMessages({
         messages,
@@ -3341,7 +3339,7 @@ describe("ChatMessages scroll policy", () => {
         composerOverlayHeight: 80,
       });
       await settleLegendList();
-      expect((peekSavedChatTabState(identity) !== null)).toBe(false);
+      expect(peekSavedChatTabState(identity) !== null).toBe(false);
 
       // Resize the overlaid composer - previously re-ran the unmount-save
       // effect cleanup because endInset was in the dep array, flipping
@@ -3349,7 +3347,7 @@ describe("ChatMessages scroll policy", () => {
       rerenderWith({ composerOverlayHeight: 240 });
       await settleLegendList();
 
-      expect((peekSavedChatTabState(identity) !== null)).toBe(false);
+      expect(peekSavedChatTabState(identity) !== null).toBe(false);
     });
   });
 
@@ -3534,9 +3532,9 @@ describe("ChatMessages scroll policy", () => {
     it("flushing an instanceId with no live/mounted tile is a harmless no-op", () => {
       const instanceId = `t20-no-live-mount-${Math.random().toString(36).slice(2)}`;
       expect(() => flushChatTabViewportHandoff([instanceId])).not.toThrow();
-      expect((peekSavedChatTabState(makeDefaultTestIdentity(instanceId) ) !== null)).toBe(
-        false,
-      );
+      expect(
+        peekSavedChatTabState(makeDefaultTestIdentity(instanceId)) !== null,
+      ).toBe(false);
     });
   });
 
@@ -3702,7 +3700,6 @@ describe("ChatMessages scroll policy", () => {
       ).toBe(true);
     });
   });
-
 
   describe("behavior contract: strict isAtEnd follow (post anchor removal)", () => {
     it("fresh idle/streaming chats initialize at true bottom geometry (not only data-scroll-mode)", async () => {
@@ -3874,8 +3871,7 @@ describe("ChatMessages scroll policy", () => {
       if (list === null) {
         throw new Error("LegendList ref is not mounted");
       }
-      const deepPark =
-        LEGEND_LIST_HEADER_PX + 28 * TICKET_13_ROW_HEIGHT_PX;
+      const deepPark = LEGEND_LIST_HEADER_PX + 28 * TICKET_13_ROW_HEIGHT_PX;
       fireEvent.wheel(getScrollNode(), { deltaY: -40 });
       await act(async () => {
         void list.scrollToOffset({ offset: deepPark, animated: false });
@@ -3982,7 +3978,11 @@ describe("ChatMessages scroll policy", () => {
       expect(legendListRefHolder.current?.getState().isAtEnd).toBe(false);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
-      const streamed = appendAssistant(messages, "near-end-band-stream", 99_000);
+      const streamed = appendAssistant(
+        messages,
+        "near-end-band-stream",
+        99_000,
+      );
       rerenderMessages(streamed);
       await settleLegendList();
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -4008,7 +4008,6 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-
   describe("review-corrections: restoration-state regressions", () => {
     it("strict-bottom pointerdown does not persist free-reading; reopen follows newest after growth", async () => {
       // P1-a: cancelTimelineLiveFollowForUserNavigation used to force
@@ -4033,9 +4032,7 @@ describe("ChatMessages scroll policy", () => {
       // No-op pointerdown at the strict bottom (disclosure click / already-
       // visible target shape): cancels ops but must NOT publish free-scrolling.
       act(() => {
-        fireEvent.pointerDown(
-          screen.getByTestId("chat-transcript-container"),
-        );
+        fireEvent.pointerDown(screen.getByTestId("chat-transcript-container"));
       });
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
@@ -4628,9 +4625,7 @@ describe("ChatMessages scroll policy", () => {
       // Bare non-publishing pointerdown (disclosure click shape) - bumps
       // generation but must not publish free-scrolling or release the gate.
       act(() => {
-        fireEvent.pointerDown(
-          screen.getByTestId("chat-transcript-container"),
-        );
+        fireEvent.pointerDown(screen.getByTestId("chat-transcript-container"));
       });
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
 
@@ -5237,7 +5232,11 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().scrollTop).toBe(0);
 
       // Growth arrives while the free-reading surface is hidden.
-      const grown = appendAssistant(messages, "hidden-free-growth-msg", 900_000);
+      const grown = appendAssistant(
+        messages,
+        "hidden-free-growth-msg",
+        900_000,
+      );
       setLegendListScrollContainerScrollHeightOverride(
         LEGEND_LIST_HEADER_PX + grown.length * 90 + 40,
       );
@@ -6100,9 +6099,9 @@ describe("ChatMessages scroll policy", () => {
       // current end.
       let partialMessages: ReadonlyArray<ChatMessageModel> =
         fullMessages.slice(180);
-      expect(
-        partialMessages.some((message) => message.id === anchorId),
-      ).toBe(false);
+      expect(partialMessages.some((message) => message.id === anchorId)).toBe(
+        false,
+      );
 
       setLegendListScrollContainerScrollHeightOverride(
         LEGEND_LIST_HEADER_PX + partialMessages.length * 90 + 40,
@@ -6723,5 +6722,4 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
   });
-
 });

@@ -131,7 +131,7 @@ function seedTicket5PerTabState(epicId: string): void {
 
 function expectTicket5PerTabStatePresent(epicId: string): void {
   const identity = identityFor(epicId);
-  expect((peekSavedChatTabState(identity) !== null)).toBe(true);
+  expect(peekSavedChatTabState(identity) !== null).toBe(true);
   expect(restoreChatTabState(identity, []).mode).toBe("free-scrolling");
   expect(
     getOrCreateActivityGroupOpenStore(identity)
@@ -178,7 +178,7 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
     useTileFindStore.getState().uiByTileInstanceId[CHAT_A.instanceId],
   ).toBeUndefined();
   // Durable scroll + minimap still restore via chat-key after tab-key eviction.
-  expect((peekSavedChatTabState(identity) !== null)).toBe(true);
+  expect(peekSavedChatTabState(identity) !== null).toBe(true);
   expect(restoreChatTabState(identity, []).mode).toBe("free-scrolling");
   expect(restoreChatTurnMinimapActiveEntry(identity)).toBe("msg-seed");
   // A2A / activity-group registries: getOrCreate after tab-key eviction

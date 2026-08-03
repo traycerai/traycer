@@ -457,9 +457,7 @@ function emitChatSnapshot(
         settings: CHAT_RUN_SETTINGS,
         activeSessionChain: null,
         claudePendingWakes: [],
-        messages: [
-          ...(messages ?? [buildUserSnapshotMessage(chat, 1)]),
-        ],
+        messages: [...(messages ?? [buildUserSnapshotMessage(chat, 1)])],
         events: [],
       },
       access: { role: "owner", ownerUserId: "owner-1", canAct: true },
@@ -489,9 +487,7 @@ interface ChatStreamFactoryHandle {
 }
 
 function installChatStreamFactory(
-  messagesByChatId:
-    | ReadonlyMap<string, ReadonlyArray<Message>>
-    | undefined,
+  messagesByChatId: ReadonlyMap<string, ReadonlyArray<Message>> | undefined,
 ): ChatStreamFactoryHandle {
   const messagesStore = new Map<string, ReadonlyArray<Message>>(
     messagesByChatId ?? [],
@@ -1684,9 +1680,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const anchorMessageId = longMessages[anchorIndex]?.messageId ?? null;
     expect(anchorMessageId).toBeTruthy();
 
-    installChatStreamFactory(
-      new Map([[CHAT_TRACKED.id, longMessages]]),
-    );
+    installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
     setLegendListScrollContainerScrollHeightOverride(
       LEGEND_LIST_HEADER_PX + messageCount * LEGEND_LIST_ROW_HEIGHT_PX + 40,
     );
@@ -1715,9 +1709,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const beforeHide = scrollNode.scrollTop;
     expect(beforeHide).toBeGreaterThan(0);
 
-    const readyEnvironment = getTileSurfaceEnvironment(
-      CHAT_TRACKED.instanceId,
-    );
+    const readyEnvironment = getTileSurfaceEnvironment(CHAT_TRACKED.instanceId);
     if (readyEnvironment === null) {
       throw new Error(
         "expected a published ReadyTileSurfaceEnvironment for the tracked chat",
@@ -1741,9 +1733,9 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
       });
     });
     await settleLegendList();
-    expect(
-      messagesScroll(container, CHAT_TRACKED.instanceId).scrollTop,
-    ).toBe(0);
+    expect(messagesScroll(container, CHAT_TRACKED.instanceId).scrollTop).toBe(
+      0,
+    );
     expect(
       getTileSurfaceEnvironment(CHAT_TRACKED.instanceId)?.presentation
         .topLevelVisible,
@@ -1777,7 +1769,9 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const longMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
     setLegendListScrollContainerScrollHeightOverride(
-      LEGEND_LIST_HEADER_PX + longMessages.length * LEGEND_LIST_ROW_HEIGHT_PX + 40,
+      LEGEND_LIST_HEADER_PX +
+        longMessages.length * LEGEND_LIST_ROW_HEIGHT_PX +
+        40,
     );
     enableLegendListBrowserScrollEvents();
     seedCanvas(
@@ -1843,7 +1837,9 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const longMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
     setLegendListScrollContainerScrollHeightOverride(
-      LEGEND_LIST_HEADER_PX + longMessages.length * LEGEND_LIST_ROW_HEIGHT_PX + 40,
+      LEGEND_LIST_HEADER_PX +
+        longMessages.length * LEGEND_LIST_ROW_HEIGHT_PX +
+        40,
     );
     enableLegendListBrowserScrollEvents();
     saveChatTabState({
@@ -1987,8 +1983,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
     const freeAnchorIndex = 20;
     const freeViewOffset = 24;
-    const freeAnchorId =
-      trackedMessages[freeAnchorIndex]?.messageId ?? null;
+    const freeAnchorId = trackedMessages[freeAnchorIndex]?.messageId ?? null;
     expect(freeAnchorId).toBeTruthy();
     const freeMidTop =
       LEGEND_LIST_HEADER_PX +
@@ -2120,8 +2115,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
     const freeAnchorIndex = 20;
     const freeViewOffset = 24;
-    const freeAnchorId =
-      trackedMessages[freeAnchorIndex]?.messageId ?? null;
+    const freeAnchorId = trackedMessages[freeAnchorIndex]?.messageId ?? null;
     expect(freeAnchorId).toBeTruthy();
     const freeMidTop =
       LEGEND_LIST_HEADER_PX +
@@ -2162,7 +2156,9 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const afterGrowth = messagesScroll(container, CHAT_TRACKED.instanceId);
     expect(afterGrowth.dataset.scrollMode).toBe("free-scrolling");
     expect(afterGrowth.scrollTop).toBe(freeMidTop);
-    expect(afterGrowth.scrollTop).toBeLessThan(maxScrollTopFor(afterGrowth) - 1);
+    expect(afterGrowth.scrollTop).toBeLessThan(
+      maxScrollTopFor(afterGrowth) - 1,
+    );
 
     await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
     await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
@@ -2178,8 +2174,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
     const freeAnchorIndex = 18;
     const freeViewOffset = 12;
-    const freeAnchorId =
-      trackedMessages[freeAnchorIndex]?.messageId ?? null;
+    const freeAnchorId = trackedMessages[freeAnchorIndex]?.messageId ?? null;
     expect(freeAnchorId).toBeTruthy();
     const freeMidTop =
       LEGEND_LIST_HEADER_PX +
@@ -2235,9 +2230,9 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     // Case B: reach true bottom, growth while away, restore following-end with
     // pill hidden (must track the NEW true bottom, not a stale free entry).
     await gestureToTrueBottom(freeRestored);
-    expect(
-      isScrollToEndPillVisible(container, CHAT_TRACKED.instanceId),
-    ).toBe(false);
+    expect(isScrollToEndPillVisible(container, CHAT_TRACKED.instanceId)).toBe(
+      false,
+    );
 
     await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
     trackedMessages = appendLongTranscriptTail(
@@ -2257,9 +2252,9 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const bottomRestored = messagesScroll(container, CHAT_TRACKED.instanceId);
     expect(bottomRestored.dataset.scrollMode).toBe("following-end");
     expect(bottomRestored.scrollTop).toBe(maxScrollTopFor(bottomRestored));
-    expect(
-      isScrollToEndPillVisible(container, CHAT_TRACKED.instanceId),
-    ).toBe(false);
+    expect(isScrollToEndPillVisible(container, CHAT_TRACKED.instanceId)).toBe(
+      false,
+    );
   });
 
   it("row 24 - internal-tab-bottom-follow: same-group reorder (no remount) preserves following-end", async () => {

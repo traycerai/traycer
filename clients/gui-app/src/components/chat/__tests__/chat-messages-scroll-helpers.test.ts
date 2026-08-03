@@ -277,7 +277,9 @@ describe("chatTimelineGetItemType", () => {
     expect(chatTimelineGetItemType(human)).toBe("user:human");
     expect(chatTimelineGetItemType(a2a)).toBe("user:a2a");
     expect(chatTimelineGetItemType(assistant("x", 3))).toBe("assistant");
-    expect(chatTimelineGetItemType(human)).not.toBe(chatTimelineGetItemType(a2a));
+    expect(chatTimelineGetItemType(human)).not.toBe(
+      chatTimelineGetItemType(a2a),
+    );
   });
 });
 

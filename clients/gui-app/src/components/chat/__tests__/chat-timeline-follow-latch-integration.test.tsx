@@ -19,11 +19,7 @@
  * proofs belong here.
  */
 import { act, cleanup, render } from "@testing-library/react";
-import {
-  createRef,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { createRef, type ReactNode, type RefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTimeline } from "@/components/chat/chat-timeline";

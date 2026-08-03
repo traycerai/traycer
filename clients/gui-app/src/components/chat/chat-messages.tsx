@@ -1972,7 +1972,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         reconcileInvalidTimelineLanding();
       },
     });
-  }, [identity, reconcileInvalidTimelineLanding, restorePersistedTimelineLocation]);
+  }, [
+    identity,
+    reconcileInvalidTimelineLanding,
+    restorePersistedTimelineLocation,
+  ]);
 
   // Fixup (fix-top-level-task-tab-scroll-restoration): `ChatMessages` stays
   // mounted while its top-level task/epic pane hides (`TopLevelTabHost`'s
@@ -2028,11 +2032,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       onValidated: () => undefined,
       onExhausted: () => undefined,
     });
-  }, [
-    identity,
-    restorePersistedTimelineLocation,
-    visible,
-  ]);
+  }, [identity, restorePersistedTimelineLocation, visible]);
 
   const navigateToMessage = useCallback(
     (messageId: string, highlight: boolean, animated: boolean): void => {

@@ -1,5 +1,13 @@
 import { renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
   isChatTimelineAtStrictBottom,
@@ -211,9 +219,15 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("review regression: downward scroll that remains non-bottom cannot reacquire", () => {
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true),
+    );
     fireNativeScroll(node); // confirm at edge
 
     // Detach far above.
@@ -231,15 +245,27 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("review regression: library catch-up then upward detach above the old numeric position", () => {
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true),
+    );
     fireNativeScroll(node);
 
     // Catch-up scroll moves further down (still at the edge as content grew).
     shim.setGeometry(node, { scrollTop: 1200, scrollHeight: 1700 });
     fireNativeScroll(node);
-    expect(isChatTimelineAtStrictBottom({ scrollTop: 1200, scrollHeight: 1700, clientHeight: 500 })).toBe(true);
+    expect(
+      isChatTimelineAtStrictBottom({
+        scrollTop: 1200,
+        scrollHeight: 1700,
+        clientHeight: 500,
+      }),
+    ).toBe(true);
 
     // Reader detaches upward to 1100 - ABOVE the very first observed 1000,
     // but 400px from the true end. A numeric "hasn't decreased since 1000"
@@ -251,9 +277,15 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("review regression: sub-epsilon scrollTop change while distance remains >1px", () => {
-    const node = shim.makeNode({ scrollTop: 200, scrollHeight: 1700, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 200,
+      scrollHeight: 1700,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, false));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false),
+    );
     fireNativeScroll(node);
 
     shim.setGeometry(node, { scrollTop: 200.4 }); // sub-1px nudge, still ~1000px away
@@ -263,9 +295,15 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("review regression: programmatic non-bottom navigation and MVCP/virtualization remap do not grant permission", () => {
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true),
+    );
     fireNativeScroll(node);
 
     // Explicit navigation to a mid-transcript, non-bottom coordinate - a
@@ -279,9 +317,15 @@ describe("useChatTimelineFollowLatch", () => {
   it("review regression: hidden 0x0 reveal does not overwrite a restored free-reading permission", () => {
     // Mount hidden (0x0) with a restored NON-bottom intent
     // (`initialScrollAtEnd=false`).
-    const node = shim.makeNode({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
+    const node = shim.makeNode({
+      scrollTop: 0,
+      scrollHeight: 0,
+      clientHeight: 0,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, false));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false),
+    );
 
     // A resize/scroll event can still fire while hidden (0x0) - must be
     // ignored as unmeasurable, not treated as a confirmed edge.
@@ -289,7 +333,11 @@ describe("useChatTimelineFollowLatch", () => {
     fireNativeScroll(node);
 
     // Reveal at the restored free-reading coordinate - far from the end.
-    shim.setGeometry(node, { scrollTop: 500, scrollHeight: 2000, clientHeight: 500 });
+    shim.setGeometry(node, {
+      scrollTop: 500,
+      scrollHeight: 2000,
+      clientHeight: 500,
+    });
     fireResizeObservers();
 
     result.current.followEndIfPermitted();
@@ -302,9 +350,15 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("review regression: silent detach then item-size/footer/viewport callbacks with no preparatory rerender do not follow", () => {
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true),
+    );
     fireNativeScroll(node);
 
     // Silent DOM-only detach - no React render anywhere in this sequence.
@@ -328,9 +382,15 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("confirms permission at the strict edge and follows on every real maintain trigger", () => {
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true),
+    );
     fireNativeScroll(node);
 
     // Content grows past the confirmed edge - there is now something to
@@ -352,7 +412,11 @@ describe("useChatTimelineFollowLatch", () => {
     // already had to be protected against - the resize observer must only
     // TRIGGER a follow attempt against the EXISTING permission, never itself
     // decide permission from post-resize geometry.
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
     renderHook(() => useChatTimelineFollowLatch(listRef, true));
     fireNativeScroll(node); // confirm following
@@ -376,9 +440,15 @@ describe("useChatTimelineFollowLatch", () => {
     // lands exactly at the edge with no reader-earned follow behind it -
     // `followEndIfPermitted` must not issue an imperative call that has
     // nothing to correct.
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true),
+    );
     fireNativeScroll(node);
 
     result.current.followEndIfPermitted();
@@ -386,9 +456,15 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("re-acquires only after a fresh measured <=1px edge, not merely on any downward motion", () => {
-    const node = shim.makeNode({ scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 });
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() => useChatTimelineFollowLatch(listRef, true));
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true),
+    );
     fireNativeScroll(node);
 
     shim.setGeometry(node, { scrollTop: 200 });

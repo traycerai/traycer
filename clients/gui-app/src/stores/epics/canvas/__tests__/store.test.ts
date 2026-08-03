@@ -2562,7 +2562,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(
       findPaneById(requireCanvas("tab-capture-isolation").root, "pane-gone"),
     ).toBeNull();
-    expect((peekSavedChatTabState(identity) !== null)).toBe(false);
+    expect(peekSavedChatTabState(identity) !== null).toBe(false);
     expect(restoreChatTabState(identity, [])).toEqual({
       mode: "following-end",
       anchorMessageId: null,

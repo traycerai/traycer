@@ -220,7 +220,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorIndex: null,
       offset: 0,
     });
-    expect((peekSavedChatTabState(id) !== null)).toBe(true);
+    expect(peekSavedChatTabState(id) !== null).toBe(true);
     expect(restoreChatTabState(id, messages)).toEqual({
       mode: "following-end",
       anchorMessageId: null,
@@ -257,7 +257,7 @@ describe("ticket 15 dual-key scroll cache", () => {
     evictChatTabState([closed.tileInstanceId]);
     // New open mints a fresh tileInstanceId for the same (epic, chat).
     const reopened = chatIdIdentity("reopen-new");
-    expect((peekSavedChatTabState(reopened) !== null)).toBe(true);
+    expect(peekSavedChatTabState(reopened) !== null).toBe(true);
     expect(restoreChatTabState(reopened, messages)).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[3]?.id,
@@ -319,7 +319,7 @@ describe("ticket 15 dual-key scroll cache", () => {
     evictChatTabState([id.tileInstanceId]);
     // Same identity still hasSaved via durable; a different tileInstanceId
     // of the same chat also restores.
-    expect((peekSavedChatTabState(id) !== null)).toBe(true);
+    expect(peekSavedChatTabState(id) !== null).toBe(true);
     expect(
       restoreChatTabState(chatIdIdentity("reopen-new"), messages).mode,
     ).toBe("free-scrolling");
@@ -336,18 +336,18 @@ describe("ticket 15 dual-key scroll cache", () => {
       offset: 8,
     });
     evictChatTabState([id.tileInstanceId]);
-    expect((peekSavedChatTabState(id) !== null)).toBe(true);
+    expect(peekSavedChatTabState(id) !== null).toBe(true);
 
     evictChatTabPersistenceForChat({
       epicId: EPIC,
       chatId: DELETE_SINGLE_CHAT,
     });
-    expect((peekSavedChatTabState(id) !== null)).toBe(false);
+    expect(peekSavedChatTabState(id) !== null).toBe(false);
     expect(isChatKeyTombstoned(chatTabPersistenceChatKey(id))).toBe(true);
 
     const reopened = identity("reopen-new", EPIC, DELETE_SINGLE_CHAT);
     expect(restoreChatTabState(reopened, messages).mode).toBe("following-end");
-    expect((peekSavedChatTabState(reopened) !== null)).toBe(false);
+    expect(peekSavedChatTabState(reopened) !== null).toBe(false);
 
     // Terminal regardless of who writes DURABLE state after the delete -
     // the whole point of the tombstone (round-3 finding: a late-arriving
@@ -365,9 +365,9 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorIndex: 1,
       offset: 99,
     });
-    expect((peekSavedChatTabState(reopened) !== null)).toBe(true);
+    expect(peekSavedChatTabState(reopened) !== null).toBe(true);
     evictChatTabState([reopened.tileInstanceId]);
-    expect((peekSavedChatTabState(reopened) !== null)).toBe(false);
+    expect(peekSavedChatTabState(reopened) !== null).toBe(false);
   });
 
   it("stale-anchor nearest-neighbor: clamps index below, above, and empty", () => {
@@ -434,7 +434,6 @@ describe("ticket 15 dual-key scroll cache", () => {
       offset: 0,
     });
   });
-
 });
 
 describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulated promotion)", () => {
@@ -654,7 +653,7 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
       EPIC,
       DELETE_ALL_SEVEN_CHAT,
     );
-    expect((peekSavedChatTabState(preDeleteReopen) !== null)).toBe(true);
+    expect(peekSavedChatTabState(preDeleteReopen) !== null).toBe(true);
     expect(
       getOrCreateA2AOpenStore(preDeleteReopen).getState().sentOpenIds.has("s"),
     ).toBe(true);
@@ -686,7 +685,7 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
     evictChatTabPersistenceForChat({ epicId: id.epicId, chatId: id.chatId });
 
     const reopened = identity("reopen-new", EPIC, DELETE_ALL_SEVEN_CHAT);
-    expect((peekSavedChatTabState(reopened) !== null)).toBe(false);
+    expect(peekSavedChatTabState(reopened) !== null).toBe(false);
     expect(
       getOrCreateA2AOpenStore(reopened).getState().sentOpenIds.has("s"),
     ).toBe(false);

@@ -53,9 +53,9 @@ describe("captureChatFreeScrollingOffset", () => {
     expect(captureChatFreeScrollingOffset(listWith(undefined, 40, 0), 0)).toBe(
       0,
     );
-    expect(
-      captureChatFreeScrollingOffset(listWith(Number.NaN, 40, 0), 0),
-    ).toBe(0);
+    expect(captureChatFreeScrollingOffset(listWith(Number.NaN, 40, 0), 0)).toBe(
+      0,
+    );
   });
 
   it("captures position + topOffsetAdjustment - scroll (decision #18)", () => {
@@ -67,9 +67,9 @@ describe("captureChatFreeScrollingOffset", () => {
   });
 
   it("treats a missing or non-finite topOffsetAdjustment as 0", () => {
-    expect(captureChatFreeScrollingOffset(listWith(500, 2000, undefined), 0)).toBe(
-      500 - 2000,
-    );
+    expect(
+      captureChatFreeScrollingOffset(listWith(500, 2000, undefined), 0),
+    ).toBe(500 - 2000);
     expect(
       captureChatFreeScrollingOffset(listWith(720, 360, Number.NaN), 0),
     ).toBe(720 - 360);
