@@ -25,17 +25,22 @@ export function AttachmentStrip(props: AttachmentStripProps) {
   );
   if (atoms.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-2 px-1 pb-2">
-      {atoms.map((atom) => (
-        <ImageAttachmentChip
-          key={atom.id}
-          atom={atom}
-          displayLabel={labelsByImageId.get(atom.id)}
-          onRemove={onRemoveImage}
-          fetcher={fetcher}
-          sessionObjectUrl={sessionObjectUrl}
-        />
-      ))}
+    <div
+      data-composer-attachment-strip=""
+      className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
+    >
+      <div className="flex w-max gap-2">
+        {atoms.map((atom) => (
+          <ImageAttachmentChip
+            key={atom.id}
+            atom={atom}
+            displayLabel={labelsByImageId.get(atom.id)}
+            onRemove={onRemoveImage}
+            fetcher={fetcher}
+            sessionObjectUrl={sessionObjectUrl}
+          />
+        ))}
+      </div>
     </div>
   );
 }

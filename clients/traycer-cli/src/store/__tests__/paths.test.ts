@@ -16,6 +16,7 @@ import {
   hostLogPath,
   hostPidMetadataPath,
   hostStagingRoot,
+  hostUpdateProgressMarkerPath,
   traycerHomeDir,
 } from "../paths";
 import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
@@ -89,6 +90,15 @@ describe("store/paths host helpers", () => {
     );
     expect(hostInstallRecordPath("dev")).toBe(
       join(hostInstallDir("dev"), "install.json"),
+    );
+  });
+
+  it("resolves the update-progress marker directly under the environment host root", () => {
+    expect(hostUpdateProgressMarkerPath("production")).toBe(
+      join(HOST_HOME, "update-progress.json"),
+    );
+    expect(hostUpdateProgressMarkerPath("dev")).toBe(
+      join(HOST_HOME, "dev", "update-progress.json"),
     );
   });
 

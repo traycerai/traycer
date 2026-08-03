@@ -29,6 +29,8 @@ import {
   useHostClient,
   type HostRpcRegistry,
 } from "@/lib/host";
+import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
+import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -91,6 +93,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import type { HostWorkspaceControlsHostScope } from "./host-workspace-controls-scope";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
@@ -110,6 +113,7 @@ import {
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-result";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
 import { useChatById } from "@/lib/epic-selectors";
 import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -986,6 +990,11 @@ function HostOnlySelect(props: {
   readonly loading: boolean;
   readonly disabled: boolean;
 }) {
+  const binding = useHostBinding();
+  const directory = binding === null ? null : binding.directory;
+  const [open, setOpen] = useState<boolean>(false);
+  const remoteRestricted = useRemoteHostsPlanRestricted();
+  useRefreshHostDirectoryOnOpen(open, directory);
   const options = hostSelectOptions(
     props.entries,
     props.activeHostId,
@@ -999,6 +1008,8 @@ function HostOnlySelect(props: {
   const disabled = lockedToFixedHost || props.disabled;
   return (
     <Select
+      open={open}
+      onOpenChange={setOpen}
       value={props.activeHostId ?? undefined}
       onValueChange={props.onSelect}
       disabled={disabled}
@@ -1039,13 +1050,51 @@ function HostOnlySelect(props: {
           <SelectItem
             key={host.hostId}
             value={host.hostId}
-            disabled={props.mode === "locked" || host.status === "unavailable"}
+            disabled={
+              props.mode === "locked" ||
+              host.status === "unavailable" ||
+              (remoteRestricted && host.kind === "remote")
+            }
           >
-            {hostOptionLabel(host)}
+            <HostSelectOptionContent
+              host={host}
+              remoteRestricted={remoteRestricted}
+            />
           </SelectItem>
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function HostSelectOptionContent(props: {
+  readonly host: HostDirectoryEntry;
+  readonly remoteRestricted: boolean;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className="min-w-0 truncate">
+        {settingsHostOptionLabel(props.host)}
+      </span>
+      {props.host.kind === "local" ? (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground [[data-slot=select-trigger]_&]:hidden"
+          data-testid={`composer-host-local-chip-${props.host.hostId}`}
+        >
+          Local
+        </Badge>
+      ) : null}
+      {props.remoteRestricted && props.host.kind === "remote" ? (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground [[data-slot=select-trigger]_&]:hidden"
+          data-testid={`composer-host-paid-plan-chip-${props.host.hostId}`}
+        >
+          Paid plan
+        </Badge>
+      ) : null}
+    </span>
   );
 }
 
@@ -1071,11 +1120,6 @@ function hostSelectOptions(
     },
     ...entries,
   ];
-}
-
-function hostOptionLabel(host: HostDirectoryEntry): string {
-  const label = host.label.length > 0 ? host.label : host.hostId;
-  return host.status === "unavailable" ? `${label} (offline)` : label;
 }
 
 type UnresolvedWorkspaceFolder = Extract<

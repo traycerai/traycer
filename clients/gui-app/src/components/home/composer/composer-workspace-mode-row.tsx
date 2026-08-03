@@ -1,6 +1,4 @@
 import type { ReactNode } from "react";
-import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
-import type { AgentMode } from "@/components/home/data/landing-options";
 
 interface ComposerWorkspaceRowProps {
   /**
@@ -13,7 +11,6 @@ interface ComposerWorkspaceRowProps {
 
 interface ComposerReadonlyWorkspaceModeRowProps {
   readonly workspaceSlot: ReactNode;
-  readonly agentMode: AgentMode | null;
 }
 
 export function ComposerWorkspaceRow(props: ComposerWorkspaceRowProps) {
@@ -30,9 +27,6 @@ export function ComposerReadonlyWorkspaceModeRow(
   return (
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
       <div className="min-w-0">{props.workspaceSlot}</div>
-      {props.agentMode === null ? null : (
-        <AgentModeReadonlyLabel value={props.agentMode} />
-      )}
     </div>
   );
 }

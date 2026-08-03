@@ -49,10 +49,10 @@ vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
   return {
     ...actual,
     scheduleLandingImageReconcile: mocks.scheduleLandingImageReconcile,
-    // Budget always allows paste fixtures (store tests cover real budget).
-    reserveLandingImageBudget: () => true,
   };
 });
+// Paste fixtures are tiny (well under 64 MiB); use the real
+// `reserveLandingImageBudget` so this stays an integration test of admission.
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 

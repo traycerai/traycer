@@ -1,11 +1,20 @@
 import { applyHost, type ApplyHostOutcome } from "../installer/apply";
-import { downloadAndStageHost } from "../installer/download-stage";
+import {
+  downloadAndStageHost,
+  type HostDownloadOutcome,
+} from "../installer/download-stage";
+import {
+  deleteUpdateProgressMarker,
+  writeUpdateProgressMarker,
+} from "../host/update-progress-marker";
+import { probeHostHealth } from "../service/health-probe";
 import {
   readHostInstallRecord,
   type HostInstallRecord,
 } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
 import type { Environment } from "../runner/environment";
+import type { ILogger } from "../logger";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -76,20 +85,21 @@ const NO_SERVICE_ACTION_LIFECYCLE: LegacyHostUpdateServiceLifecycle = {
 
 export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    const environment = ctx.runtime.environment;
     ctx.runtime.logger.info("Host update command started", {
-      environment: ctx.runtime.environment,
+      environment,
       force: args.force,
     });
 
     const downloadOutcome = await downloadAndStageHost({
-      environment: ctx.runtime.environment,
+      environment,
       versionRequest: null,
       automatic: false,
       onProgress: (info) => ctx.progress(info),
       registryClient: null,
     });
     ctx.runtime.logger.info("Host update stage phase completed", {
-      environment: ctx.runtime.environment,
+      environment,
       outcome: downloadOutcome.outcome,
     });
 
@@ -103,15 +113,78 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       downloadOutcome.reason === "installed-up-to-date"
     );
 
-    const legacy = await applyAndProjectLegacy(
-      ctx.runtime.environment,
-      args.force,
-      needsApply,
-      (info) => ctx.progress(info),
-    );
+    // Remote Host Support T16: the daemon polls `update-progress.json` and
+    // folds it into `host.status@1.1` / the drain gate, so an update that is
+    // in flight (or that failed) is visible to a remote client that cannot
+    // watch this process. Written BEFORE the apply half touches the install
+    // and terminated on every exit path below. Marker I/O is deliberately
+    // never allowed to fail the update itself - a missing marker degrades
+    // the remote progress readout, it must not break the local update.
+    const targetVersion = downloadTargetVersion(downloadOutcome);
+    if (needsApply) {
+      await writeUpdateProgressMarkerSafely(ctx.runtime.logger, environment, {
+        state: "updating",
+        error: null,
+        targetVersion,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    let legacy: LegacyHostUpdateResult;
+    try {
+      legacy = await applyAndProjectLegacy(
+        environment,
+        args.force,
+        needsApply,
+        (info) => ctx.progress(info),
+      );
+    } catch (err) {
+      if (needsApply) {
+        await markUpdateFailed(
+          ctx.runtime.logger,
+          environment,
+          targetVersion,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      throw err;
+    }
+
+    if (needsApply) {
+      // Verify the host the swap just installed actually comes back before
+      // reporting success: a binary that commits cleanly but never listens
+      // is exactly the failure the marker exists to surface remotely.
+      //
+      // NOTE: this does NOT roll back. `applyHost` documents an explicit
+      // no-rollback contract for the staged layer, so a failed probe is
+      // reported (marker + E_HOST_UPDATE_HEALTH_CHECK_FAILED) and left for
+      // an operator/next apply rather than silently reverted here.
+      const probe = await probeHostHealth({
+        environment,
+        checkProcessAlive: null,
+        checkTcpReachable: null,
+        totalBudgetMs: null,
+        retryDelayMs: null,
+      });
+      if (!probe.healthy) {
+        await markUpdateFailed(
+          ctx.runtime.logger,
+          environment,
+          legacy.version,
+          probe.detail,
+        );
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+          message: `host update: applied ${legacy.version} but the host did not become healthy: ${probe.detail}`,
+          details: { environment, version: legacy.version },
+          exitCode: 1,
+        });
+      }
+      await deleteUpdateProgressMarker(environment);
+    }
 
     ctx.runtime.logger.info("Host update command completed", {
-      environment: ctx.runtime.environment,
+      environment,
       downloadOutcome: downloadOutcome.outcome,
       version: legacy.version,
       changed: legacy.previousVersion !== legacy.version,
@@ -123,6 +196,46 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       exitCode: 0,
     };
   };
+}
+
+// Every `HostDownloadOutcome` branch names the version this invocation was
+// working toward; `promoted` reports it as the staged version it just placed.
+function downloadTargetVersion(outcome: HostDownloadOutcome): string {
+  return outcome.outcome === "promoted"
+    ? outcome.stagedVersion
+    : outcome.targetVersion;
+}
+
+async function writeUpdateProgressMarkerSafely(
+  logger: ILogger,
+  environment: Environment,
+  progress: Parameters<typeof writeUpdateProgressMarker>[1],
+): Promise<void> {
+  try {
+    await writeUpdateProgressMarker(environment, progress);
+  } catch (err) {
+    logger.warn("Host update failed to persist progress marker", {
+      environment,
+      state: progress.state,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// Terminates the "updating" marker with the real cause so the daemon reports
+// a failed update instead of an update that appears to still be running.
+async function markUpdateFailed(
+  logger: ILogger,
+  environment: Environment,
+  targetVersion: string,
+  error: string,
+): Promise<void> {
+  await writeUpdateProgressMarkerSafely(logger, environment, {
+    state: "failed",
+    error,
+    targetVersion,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 async function applyAndProjectLegacy(

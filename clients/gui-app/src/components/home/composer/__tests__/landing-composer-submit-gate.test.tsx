@@ -36,7 +36,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
         props.editorRef.current = editorHandle();
       };
       testState.snapshot = () => {
-        props.onSnapshot(DIRTY_CONTENT, { from: 1, to: 1 });
+        props.onDocumentChange(DIRTY_CONTENT, { from: 1, to: 1 });
       };
       return React.createElement(
         React.Fragment,
@@ -445,12 +445,14 @@ describe("LandingComposer direct submit gate", () => {
 function editorHandle(): ComposerPromptEditorHandle {
   return {
     isReady: () => true,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => DIRTY_CONTENT,
     isEmpty: () => false,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,

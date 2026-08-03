@@ -10,6 +10,7 @@ import {
   Option,
   type Command as CommanderCommand,
 } from "commander";
+import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
@@ -1478,7 +1479,6 @@ function registerAgentCommands(
       .option("--name <name>", "Display name for the child agent")
       .option("--harness <id>", harnessHelp)
       .option("--model <id>", "Model id for the child agent")
-      .option("--agent-mode <mode>", "Agent mode: regular or epic")
       .option(
         "--reasoning-effort <effort>",
         "Reasoning effort for supported models",
@@ -1506,7 +1506,7 @@ function registerAgentCommands(
       )
       .option(
         "--permission-mode <mode>",
-        "GUI permission mode: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
+        `GUI permission mode. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
     (opts) =>
       buildAgentCreateCommand({
@@ -1518,7 +1518,6 @@ function registerAgentCommands(
         surface: typeof opts.surface === "string" ? opts.surface : null,
         harness: typeof opts.harness === "string" ? opts.harness : null,
         model: typeof opts.model === "string" ? opts.model : null,
-        agentMode: typeof opts.agentMode === "string" ? opts.agentMode : null,
         reasoningEffort:
           typeof opts.reasoningEffort === "string"
             ? opts.reasoningEffort
@@ -1624,7 +1623,7 @@ function registerAgentCommands(
       )
       .option(
         "--permission-mode <mode>",
-        "Permission mode for future turns: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
+        `Permission mode for future turns. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
     (opts) =>
       buildAgentConfigureCommand({

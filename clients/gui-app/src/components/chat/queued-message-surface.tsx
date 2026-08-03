@@ -49,7 +49,7 @@ import type {
   ChatActiveTurn,
   ChatQueuedItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { QueuedMessageContentPreview } from "@/components/chat/queued-message-content-preview";
+import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
 import {
   QUEUED_MESSAGE_DND_MODIFIERS,
@@ -189,8 +189,9 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       <CollapsibleContent>
         <div
           data-testid="queued-message-list"
+          data-native-scrollbar="true"
           className={cn(
-            "overflow-y-auto border-t border-border/50 chat-scrollbar-native-thin",
+            "overflow-y-auto border-t border-border/50",
             props.scrollRegionMaxHeightClass,
           )}
         >
@@ -567,8 +568,9 @@ function QueuedMessageRowContent(props: {
         </div>
       ) : null}
       <div
-        className="max-h-[3lh] overflow-y-auto pr-1 text-ui-sm leading-5 wrap-break-word chat-scrollbar-native-thin"
+        className="max-h-[3lh] overflow-y-auto pr-1 text-ui-sm leading-5 wrap-break-word"
         data-testid="queued-message-content-scroll"
+        data-native-scrollbar="true"
       >
         {showFloatingChrome ? (
           <QueuedMessageFloatingChrome
@@ -599,7 +601,12 @@ function QueuedMessageRowContent(props: {
             ) : null}
           </QueuedMessageFloatingChrome>
         ) : null}
-        <QueuedMessageContentPreview content={props.item.message.content} />
+        <ComposerContentPreview
+          content={props.item.message.content}
+          emptyLabel="Queued message"
+          testId="queued-message-content-preview"
+          className={undefined}
+        />
       </div>
     </div>
   );

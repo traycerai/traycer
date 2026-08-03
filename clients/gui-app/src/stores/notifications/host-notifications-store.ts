@@ -6,7 +6,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsSubscribeClientFrameSchema,
   hostNotificationsSubscribeServerFrameSchemaV11,
@@ -22,7 +22,10 @@ import {
   subscribeHostNotificationPresence,
   type HostNotificationPresenceFrame,
 } from "@/lib/notifications/notification-presence";
-import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
 import { compareFeedIdAscending } from "@/lib/notifications/notification-lifecycle";
 
 export const HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT = 50;
@@ -462,7 +465,7 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
 );
 
 export function openHostNotificationsStream(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   options: {
     readonly windowId: string;
@@ -486,11 +489,11 @@ export function openHostNotificationsStream(
   // so without this reopen a single bad window (e.g. the host briefly unable
   // to validate bearers) leaves notifications dead until app restart while
   // the rest of the app self-heals through per-interaction re-subscribes.
-  const reopenScheduler = createNotificationStreamReopenScheduler(() => {
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
     currentSession?.close();
     currentSession = null;
     openSession();
-  });
+  }, isReopenableNotificationsStreamClose);
 
   // Presence has two consumers with deliberately independent gates:
   //  - `onPresenceChanged` (local): drives entity read-consumption over the

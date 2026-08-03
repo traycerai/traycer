@@ -14,6 +14,7 @@ import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-te
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { ChatForkDialog } from "@/components/chats/chat-fork-dialog";
 import { ChatForkIndicatorBanner } from "@/components/chats/chat-fork-indicator-banner";
+import { RemoteWorkspacePathPickerHost } from "@/components/home/host-workspace-selector/remote-workspace-path-picker-host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 
 interface AppShellProps {
@@ -63,6 +64,7 @@ export function AppShell(props: AppShellProps) {
             </main>
             <OpenFolderDialog />
             <ChatForkDialog />
+            <RemoteWorkspacePathPickerHost />
             <QuitInterceptBridge />
             <MigrationRunController />
             <MigrationBlockingModalHost />

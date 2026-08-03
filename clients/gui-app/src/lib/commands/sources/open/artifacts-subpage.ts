@@ -25,16 +25,23 @@ export function useArtifactsOpenerItems(
       const artifact = projection.artifacts.byId[id];
       if (!isOpenableEpicNodeKind(artifact.kind)) return [];
       return [
-        openerExistingLeaf("artifacts", ctx, {
-          id: artifact.id,
-          instanceId: uuidv4(),
-          type: artifact.kind,
-          name:
-            artifact.title.length > 0
-              ? artifact.title
-              : `Untitled ${artifact.kind}`,
-          hostId: defaultHostId,
-        }),
+        openerExistingLeaf(
+          "artifacts",
+          ctx,
+          {
+            id: artifact.id,
+            instanceId: uuidv4(),
+            type: artifact.kind,
+            name:
+              artifact.title.length > 0
+                ? artifact.title
+                : `Untitled ${artifact.kind}`,
+            hostId: defaultHostId,
+          },
+          // Artifacts carry no per-item hostId (verified host-agnostic, audit
+          // G3) - never badged.
+          null,
+        ),
       ];
     });
   }, [ctx, projection, defaultHostId]);

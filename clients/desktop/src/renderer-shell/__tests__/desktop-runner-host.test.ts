@@ -72,10 +72,13 @@ function buildFakeBridge(
   }> = [];
   const bridge: DesktopPreloadBridge = {
     authnBaseUrl: "http://localhost:5005",
+    relayBaseUrl: "ws://localhost:8787/attach",
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
+    listRegisteredHosts: async () => ({ kind: "network-error" as const }),
+    updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {
@@ -116,6 +119,7 @@ function buildFakeBridge(
     },
     notifications: {
       show: async () => undefined,
+      onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: (_handler: (payload: unknown) => void) => ({
         dispose: () => undefined,
       }),
@@ -145,6 +149,7 @@ function buildFakeBridge(
       respawnCounter.count += 1;
       return { kind: "restarted" as const };
     },
+    getLastKnownLocalHostId: async () => null,
     trayState: {
       setEpics: async (_epics: readonly TrayEpic[]) => undefined,
       setIndicator: async (_state: TrayIndicatorState) => undefined,

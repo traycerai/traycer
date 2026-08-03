@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import log from "electron-log";
@@ -171,7 +171,11 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   notifyRespawningCalls = 0;
   reloadSnapshotCalls = 0;
   ensureWatcherCalls = 0;
-  readonly pidMetadataFile = "/tmp/fake-traycer-host/pid.json";
+  // Mutable so the identity-seed suite can point them at real files in a temp
+  // dir. Everything else keeps the unwritable defaults, which is what makes a
+  // handler that reads them without being asked to fail loudly.
+  pidMetadataFile = "/tmp/fake-traycer-host/pid.json";
+  identityEnrollmentFile = "/tmp/fake-traycer-host/identity/enrollment.json";
   isDisposed = false;
 
   getSnapshot(): DesktopLocalHostSnapshot | null {
@@ -625,6 +629,10 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.authTokenStoreRotate,
         RunnerHostInvoke.authTokenStoreDelete,
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        // Remote Host Support: host-registry read (§7) and version-policy
+        // write (§13, T16) run in main for the renderer-origin CORS reason.
+        RunnerHostInvoke.listRegisteredHosts,
+        RunnerHostInvoke.updateHostVersionPolicy,
         RunnerHostInvoke.listUserSessions,
         RunnerHostInvoke.revokeUserSession,
         RunnerHostInvoke.revokeAllSessions,
@@ -637,6 +645,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.requestMicrophoneAccess,
         RunnerHostInvoke.openMicrophoneSettings,
         RunnerHostInvoke.requestHostRespawn,
+        RunnerHostInvoke.lastKnownLocalHostId,
         RunnerHostInvoke.traySetIndicator,
         RunnerHostInvoke.traySetEpics,
         RunnerHostInvoke.setUnsyncedEditsSnapshot,
@@ -2879,6 +2888,111 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  // The renderer's host directory seeds "which id is THIS machine" from this
+  // handler, and then persists the answer and neutralizes the matching registry
+  // row. A wrong answer therefore does not degrade - it neutralizes the wrong
+  // twin and leaves the real one remote-kind and relay-dialable, which is the
+  // local-provisioning lockout the seed exists to prevent.
+  describe("lastKnownLocalHostId identity seed", () => {
+    async function seedFrom(files: {
+      readonly enrollment: string | null;
+      readonly pid: string | null;
+    }): Promise<string | null> {
+      const dir = await mkdtemp(join(tmpdir(), "traycer-identity-seed-"));
+      try {
+        const host = new FakeHost();
+        host.identityEnrollmentFile = join(dir, "identity", "enrollment.json");
+        host.pidMetadataFile = join(dir, "pid.json");
+        if (files.enrollment !== null) {
+          await mkdir(join(dir, "identity"), { recursive: true });
+          await writeFile(host.identityEnrollmentFile, files.enrollment);
+        }
+        if (files.pid !== null) {
+          await writeFile(host.pidMetadataFile, files.pid);
+        }
+
+        const mod = await import("../register-runner-ipc");
+        const bridge = new mod.RunnerIpcBridge({
+          host,
+          hostController: new FakeHostController(),
+          authnBaseUrl: "http://localhost:5005",
+          authRedirectUri: null,
+          tray: null,
+          zoomController: undefined,
+          authTokenStore: undefined,
+          window: buildWindow(),
+        });
+        bridge.install();
+        const handler = ipcMainState.handlers.get(
+          RunnerHostInvoke.lastKnownLocalHostId,
+        );
+        if (handler === undefined) {
+          throw new Error("lastKnownLocalHostId handler missing");
+        }
+        const answer: unknown = await handler(bareEvent());
+        bridge.dispose();
+        return typeof answer === "string" ? answer : null;
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    function pidFile(hostId: string): string {
+      return JSON.stringify({
+        hostId,
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version: "1.2.3",
+        pid: 4242,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      });
+    }
+
+    it("prefers the durable enrollment over pid metadata left by an ungraceful stop", async () => {
+      // `readPidMetadata` accepts this file structurally - no liveness or
+      // reachability check - so a crash leftover names the PREVIOUS id long
+      // after a re-enrollment replaced it.
+      await expect(
+        seedFrom({
+          enrollment: JSON.stringify({ hostId: "enrolled-current" }),
+          pid: pidFile("stale-after-crash"),
+        }),
+      ).resolves.toBe("enrolled-current");
+    });
+
+    it("falls back to pid metadata for an install with no enrollment record", async () => {
+      // The other half. Without this the preference above would answer null on
+      // an older install and seed nothing at all.
+      await expect(
+        seedFrom({ enrollment: null, pid: pidFile("pid-only-host") }),
+      ).resolves.toBe("pid-only-host");
+    });
+
+    it("answers null - never pid metadata - when the enrollment record exists but is unusable", async () => {
+      // CodeRabbit (OSS #913): an unusable record is NOT the same fact as an
+      // absent one. The file existing proves this install enrolls, so a
+      // corrupt read must not hand the decision to the stale-prone source the
+      // enrollment-first ordering exists to outrank. Null lets the renderer
+      // keep its persisted value.
+      await expect(
+        seedFrom({
+          enrollment: "{ not json",
+          pid: pidFile("stale-after-crash"),
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        seedFrom({ enrollment: "{}", pid: pidFile("stale-after-crash") }),
+      ).resolves.toBeNull();
+    });
+
+    it("answers null when neither file identifies this machine", async () => {
+      // A shell with no local host at all. The directory keeps its persisted
+      // value rather than being told something wrong.
+      await expect(
+        seedFrom({ enrollment: null, pid: null }),
+      ).resolves.toBeNull();
+    });
+  });
+
   // Field RCA 2026-07-28: the takeover fallback's host-busy denial resolves
   // `deferred`, and the invoke must RESOLVE it as `declined` rather than
   // reject - a rejected invoke lands on the renderer's reportable error
@@ -3044,6 +3158,73 @@ describe("RunnerIpcBridge", () => {
       },
       { channel: RunnerHostEvent.zoomChange, payload: 100 },
     ]);
+    bridge.dispose();
+  });
+
+  it("relays a background renderer notification to the focused renderer only", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const focusedWindow = buildWindow();
+    const backgroundWindow = buildWindow();
+    registry.add("window-focused", 101, focusedWindow);
+    registry.add("window-background", 202, backgroundWindow);
+    focusedWindow.setFocused(true);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    const display = {
+      title: "Traycer",
+      body: "Background agent failed",
+      payload: null,
+      replaceKey: "app-local:host.error:failure-1",
+      deliveryKey: "user-1:host.error:failure-1:40",
+      foregroundAppLocal: {
+        userId: "user-1",
+        entry: { id: "host.error:failure-1", updatedAt: 40 },
+      },
+    };
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      true,
+    );
+
+    expect(focusedWindow.sentMessages).toEqual([
+      {
+        channel: RunnerHostEvent.notificationForegroundDisplay,
+        payload: display,
+      },
+    ]);
+    expect(backgroundWindow.sentMessages).toEqual([]);
+
+    expect(bridge.deliverForegroundNotificationDisplay(101, display)).toBe(
+      true,
+    );
+    expect(focusedWindow.sentMessages).toHaveLength(1);
+
+    focusedWindow.setFocused(false);
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      false,
+    );
+
+    const destroyedFocusedWindow = buildWindowWithDestroyed(true);
+    destroyedFocusedWindow.setFocused(true);
+    registry.add("window-destroyed", 303, destroyedFocusedWindow);
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      false,
+    );
+    expect(destroyedFocusedWindow.sentMessages).toEqual([]);
     bridge.dispose();
   });
 

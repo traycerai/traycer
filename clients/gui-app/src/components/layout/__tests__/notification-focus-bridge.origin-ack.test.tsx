@@ -127,7 +127,9 @@ async function mountBridge(
   });
   const directory = new HostDirectoryService({
     runnerHost,
-    remoteFetcher: () => Promise.resolve([ORIGIN_HOST]),
+    remoteFetcher: () =>
+      Promise.resolve({ kind: "hosts" as const, entries: [ORIGIN_HOST] }),
+    localHostIdSeeder: null,
   });
   await directory.start();
 

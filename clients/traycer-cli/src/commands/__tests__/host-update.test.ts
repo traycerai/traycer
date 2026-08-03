@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `host update` is the composite (Host Update Layer Redesign Tech Plan,
 // "New/changed commands" > `host update`, D6): stage whatever `latest`
@@ -32,6 +32,22 @@ const mocks = vi.hoisted(() => ({
   // (inside the same lock span the busy decision was made under) rather
   // than after it.
   callOrder: [] as string[],
+  // Remote Host Support T16: the CLI writes `update-progress.json` so the
+  // daemon can fold in-flight/failed update state into `host.status@1.1`.
+  // Mocked so this suite never touches the real marker file or opens a real
+  // TCP probe against a host that isn't running.
+  writeUpdateProgressMarkerMock: vi.fn(),
+  deleteUpdateProgressMarkerMock: vi.fn(),
+  probeHostHealthMock: vi.fn(),
+}));
+
+vi.mock("../../host/update-progress-marker", () => ({
+  writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
+  deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
+}));
+
+vi.mock("../../service/health-probe", () => ({
+  probeHostHealth: mocks.probeHostHealthMock,
 }));
 
 vi.mock("../../installer/download-stage", () => ({
@@ -222,6 +238,16 @@ function fakeCtx(): CommandContext {
 }
 
 describe("buildHostUpdateCommand composite", () => {
+  beforeEach(() => {
+    // The post-apply health probe gates success, so every apply-path test
+    // needs a verdict. `resetAllMocks` below wipes return values, so the
+    // healthy default is re-established per test rather than once.
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+  });
+
   afterEach(() => {
     // resetAllMocks (not clearAllMocks) so a mockResolvedValue/
     // mockRejectedValue configured in one test can't leak into the next.
@@ -529,5 +555,124 @@ describe("buildHostUpdateCommand composite", () => {
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     });
     expect(mocks.applyHostMock).not.toHaveBeenCalled();
+  });
+});
+
+// Remote Host Support T16. The daemon has no view of this process, so the
+// `update-progress.json` marker is the ONLY way a remote client learns that an
+// update is in flight or that it failed. These pin that the marker is written
+// before the apply half runs and terminated on every exit path - a silently
+// missing marker leaves a remote client reporting a permanently "updating"
+// (or permanently idle) host.
+describe("buildHostUpdateCommand update-progress marker (T16)", () => {
+  beforeEach(() => {
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    mocks.callOrder = [];
+  });
+
+  function promoted(stagedVersion: string): HostDownloadOutcome {
+    return { outcome: "promoted", stagedVersion, installedVersion: "1.0.0" };
+  }
+
+  it("marks the update in flight before applying and clears the marker once the host probes healthy", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({ force: false })(fakeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+    );
+  });
+
+  it("leaves a failed marker (and refuses success) when the applied host never becomes healthy", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: false,
+      detail: "port 8765 never accepted a connection",
+    });
+
+    await expect(
+      buildHostUpdateCommand({ force: false })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+      "production",
+      expect.objectContaining({
+        state: "failed",
+        targetVersion: "2.0.0",
+        error: "port 8765 never accepted a connection",
+      }),
+    );
+    // A failed update must never look finished to the daemon.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a failed marker carrying the cause when the apply half throws", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
+    mocks.applyHostMock.mockRejectedValue(new Error("commit failed"));
+
+    await expect(
+      buildHostUpdateCommand({ force: false })(fakeCtx()),
+    ).rejects.toThrow("commit failed");
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+      "production",
+      expect.objectContaining({ state: "failed", error: "commit failed" }),
+    );
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+  });
+
+  it("never writes a marker for an already-at-latest run that applies nothing", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      targetVersion: "2.0.0",
+      installedVersion: "2.0.0",
+      stagedVersion: null,
+    } satisfies HostDownloadOutcome);
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+
+    const result = await buildHostUpdateCommand({ force: false })(fakeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    // No install was touched, so there is nothing to health-check either.
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the update working when the marker write itself fails", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+    mocks.writeUpdateProgressMarkerMock.mockRejectedValue(
+      new Error("EACCES: read-only home"),
+    );
+
+    const result = await buildHostUpdateCommand({ force: false })(fakeCtx());
+
+    // Degraded remote progress reporting must not fail a local update.
+    expect(result.exitCode).toBe(0);
   });
 });

@@ -53,15 +53,21 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => mockAuth,
 }));
 
-// No stream client: in cloud mode the provider opens no local stream anyway,
-// and the two consumption triggers are deliberately independent of the relay.
+// Feed-mode capability still reads the app-wide stream binding.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => null,
   useStreamMethodSupport: () => feedSupport.value,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mockLocalHostEntry.hostId,
+// Per G8 the provider binds to the LOCAL host, so these two hooks replace
+// `useReactiveActiveHostId` + `useWsStreamClient`. No stream client: in cloud
+// mode the provider opens no local stream anyway, and the two consumption
+// triggers are deliberately independent of the relay.
+vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
+  useReactiveLocalHostEntry: () => mockLocalHostEntry,
+}));
+
+vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
+  useHostStreamClientFor: () => null,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({

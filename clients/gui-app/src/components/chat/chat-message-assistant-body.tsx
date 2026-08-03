@@ -788,12 +788,17 @@ function AssistantSegment({
         />
       );
     case "reasoning":
+      // Unreachable from the timeline - `isActivitySegment` admits reasoning
+      // unconditionally, so every reasoning block reaches the renderer through
+      // an activity group. Kept so the switch stays exhaustive over the segment
+      // taxonomy, and for direct renders in tests.
       return (
         <ReasoningSegment
           findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
+          bodyBoundedByParent={false}
         />
       );
     case "tool": {

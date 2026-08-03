@@ -8,7 +8,7 @@ import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 /**
  * Live display title for an epic-scoped terminal session, resolved from the
  * HOST's `terminal.list` rows - the single source of truth for terminal
- * titles (explicit `session.title`, else the active process name).
+ * titles (explicit title, else live directory + active process/default).
  *
  * `client` is the session's BOUND-host client (session ids are only unique
  * per host, and a tab's bound host may not be the app-wide default host).
@@ -49,5 +49,6 @@ export function useTerminalDisplayTitle(args: {
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
+    currentCwd: session.currentCwd,
   });
 }

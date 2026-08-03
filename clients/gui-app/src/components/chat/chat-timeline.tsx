@@ -3,7 +3,10 @@ import {
   memo,
   use,
   useCallback,
+  useLayoutEffect,
   useMemo,
+  useState,
+  useSyncExternalStore,
   type RefObject,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -21,11 +24,97 @@ import {
   resolveChatTimelineIsAtEnd,
 } from "@/components/chat/chat-scroll-anchoring";
 import { chatTimelineGetItemType } from "@/components/chat/chat-messages-scroll-helpers";
+import { registerPanelResizeParticipant } from "@/lib/layout/panel-resizing-class";
+import {
+  captureChatTimelineVisibleRows,
+  clearChatTimelineVisibleRows,
+} from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import {
   computeStableChatTimelineRows,
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
   type StableChatTimelineRowsState,
 } from "./chat-stable-rows";
+
+/**
+ * Ticket 24 (painted-chat lifecycle audit, finding 5): a row-local
+ * subscription for the navigation highlight, kept OUT of
+ * `ChatTimelineRowSharedState`. That context's value is a single object
+ * shared by every mounted row - React forces every context consumer to
+ * re-render whenever the value changes, bypassing each row's own `memo`
+ * bailout entirely (a probe confirmed 8/8 mounted rows re-rendering on one
+ * highlight move). `useSyncExternalStore` lets each row subscribe with its
+ * own selector (`id === message.id`); React re-renders a given subscriber
+ * only when ITS boolean actually flips, so a highlight move re-renders
+ * exactly the old and new highlighted rows.
+ */
+interface NavigationHighlightStore {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly getSnapshot: () => string | null;
+  readonly setHighlightedId: (id: string | null) => void;
+}
+
+function createNavigationHighlightStore(
+  initialHighlightedId: string | null,
+): NavigationHighlightStore {
+  let highlightedId = initialHighlightedId;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot() {
+      return highlightedId;
+    },
+    setHighlightedId(next) {
+      if (next === highlightedId) return;
+      highlightedId = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+function useIsNavigationHighlighted(
+  store: NavigationHighlightStore,
+  messageId: string,
+): boolean {
+  return useSyncExternalStore(
+    store.subscribe,
+    () => store.getSnapshot() === messageId,
+  );
+}
+
+/** Owns the store's lifetime and keeps it synced with the latest prop -
+ *  pulled out of `ChatTimeline`'s own body (alongside
+ *  `resolveChatTimelineSizePreservationEnabled` below) to keep that
+ *  component's cyclomatic complexity under the lint limit. */
+function useNavigationHighlightStore(
+  navigationHighlightedMessageId: string | null | undefined,
+): NavigationHighlightStore {
+  const [store] = useState<NavigationHighlightStore>(() =>
+    createNavigationHighlightStore(navigationHighlightedMessageId ?? null),
+  );
+
+  // Review round 1, finding 1: a PASSIVE effect here runs after paint unless
+  // the update happens to originate inside a parent `useLayoutEffect` (the
+  // external-jump activation path) - the 3s highlight-timeout clear
+  // (`setTimeout`) and the real-gesture clear (a plain callback, not a
+  // layout effect) have no such guarantee, so a paint could commit the new
+  // prop while the store - and therefore every row's boolean - still holds
+  // the old id, and a row mounting in that window would read the stale
+  // snapshot. `useLayoutEffect` publishes synchronously before the browser
+  // paints on EVERY producer path uniformly, not just the ones that happen
+  // to chain off another layout effect. The mutation itself is still
+  // outside render (it runs in the commit/layout phase, not the render
+  // phase), so `useSyncExternalStore`'s purity contract is unaffected.
+  useLayoutEffect(() => {
+    store.setHighlightedId(navigationHighlightedMessageId ?? null);
+  }, [store, navigationHighlightedMessageId]);
+
+  return store;
+}
 
 /**
  * Shared, closure-free row context. Row components read business-logic
@@ -40,7 +129,7 @@ interface ChatTimelineRowSharedState {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
-  readonly navigationHighlightedMessageId: string | null | undefined;
+  readonly navigationHighlightStore: NavigationHighlightStore;
 }
 
 const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
@@ -50,15 +139,12 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
-// M4 (ticket 16 spacer alignment): the 40px header/footer and 64/80px fade
-// header were unsanctioned drift (decision log #30).
+// M4 (ticket 16 spacer alignment): the old 40px header/footer were
+// unsanctioned drift (decision log #30).
 // Consumers read the live measured size via `onListMetricsChange`, so they
 // adapt automatically; nothing here is a hardcoded assumption elsewhere.
 const CHAT_TIMELINE_LIST_HEADER = (
   <div aria-hidden="true" className="h-3 sm:h-4" />
-);
-const CHAT_TIMELINE_LIST_FADE_HEADER = (
-  <div aria-hidden="true" className="h-10 sm:h-12" />
 );
 const CHAT_TIMELINE_LIST_FOOTER = (
   <div aria-hidden="true" className="h-3 sm:h-4" />
@@ -95,7 +181,6 @@ export interface ChatTimelineProps {
    *  position-based inference cannot reliably tell them apart). */
   readonly "data-scroll-mode"?: string;
   /** Top-fade chrome; the scroll-policy ticket decides when it's on. */
-  readonly topFadeEnabled?: boolean;
   /**
    * Whether the initial mount parks at the tail. `true` (the default) for a
    * fresh, never-scrolled-in chat (decision #15 - ticket 4 replaces this with
@@ -106,14 +191,12 @@ export interface ChatTimelineProps {
    */
   readonly initialScrollAtEnd?: boolean;
   /**
-   * Ticket 5: exact restored free-scrolling position (the saved anchor row +
-   * pixel offset), passed straight through as LegendList's own
-   * `initialScrollIndex` bootstrap - the same measurement-aware convergence
-   * path `initialScrollAtEnd` uses, so a deep anchor past variable-height rows
-   * still lands correctly once real heights replace the `estimatedItemSize`
-   * guess (verified against the installed @legendapp/list 3.2.0 source, not
-   * just its type declarations). `null` for the ordinary fresh-open/no-restore
-   * case - `initialScrollAtEnd` or the anchor engine own the DOM position then.
+   * Ticket 5: restored row bootstrap, passed straight through as LegendList's
+   * own `initialScrollIndex`. For free-scrolling this carries the saved pixel
+   * offset and self-corrects as variable-height rows are measured. For a
+   * restored new-turn session it makes a deep semantic query row measurable;
+   * the anchor engine then owns the exact offset and reply reserve. `null` for
+   * the ordinary fresh-open/no-restore case.
    */
   readonly initialScrollIndex?: ChatTimelineInitialScrollAnchor | null;
   /**
@@ -123,8 +206,9 @@ export interface ChatTimelineProps {
    * sit `anchorOffset` px from the viewport top while its reply streams in.
    */
   readonly anchorMessageId?: string | null;
-  /** Pixel offset from the viewport top for the anchored row (decision #12-13:
-   *  flat 16px + the controller's live pinned-stack height). */
+  /** Pixel offset from the viewport top for the anchored row. The controller
+   *  keeps it at least as large as the measured fade/header so the query is
+   *  fully visible while its reply streams below. */
   readonly anchorOffset?: number;
   readonly onAnchorReady?: (messageId: string, anchorIndex: number) => void;
   readonly onAnchorSizeChanged?: (messageId: string, size: number) => void;
@@ -152,10 +236,12 @@ export interface ChatTimelineProps {
    * when a later measurement pass corrects an earlier row's position from
    * under them). `false` in `following-end` (end-stick governs via
    * `maintainScrollAtEnd`) and `anchoring-new-turn` (the anchor engine owns
-   * motion; its own reveal-pass drift re-assert already handles above-anchor
-   * growth under `size:false` - enabling this too would double-correct the
-   * same shift). `false` by default so ticket-2/3-era callers keep today's
-   * `size:false` semantics unless they opt in.
+   * motion; its own drift re-assert - the reveal pass for a `messages`
+   * change, ticket 22's coalesced scheduler for a geometry-only change under
+   * the same `messages` - already handles above-anchor growth under
+   * `size:false`; enabling this too would double-correct the same shift).
+   * `false` by default so ticket-2/3-era callers keep today's `size:false`
+   * semantics unless they opt in.
    */
   readonly sizePreservationEnabled?: boolean;
   /** Message row receiving the temporary external-navigation highlight. */
@@ -173,6 +259,14 @@ export interface ChatTimelineProps {
     readonly headerSize: number;
     readonly footerSize: number;
   }) => void;
+  /**
+   * Ticket 22: the scroll container's own layout (width/height) changing -
+   * a divider drag/pane resize. Unlike `onItemSizeChanged`, LegendList never
+   * routes this through a data/scroll/item-size callback; it is the ONLY
+   * signal for a viewport-length change that leaves every row's own
+   * measured size untouched.
+   */
+  readonly onLayout?: () => void;
 }
 
 /**
@@ -190,7 +284,6 @@ export const ChatTimeline = memo(function ChatTimeline({
   listRef,
   onScroll,
   className,
-  topFadeEnabled = false,
   initialScrollAtEnd = true,
   initialScrollIndex = null,
   anchorMessageId = null,
@@ -204,9 +297,14 @@ export const ChatTimeline = memo(function ChatTimeline({
   navigationHighlightedMessageId,
   onItemSizeChanged,
   onListMetricsChange,
+  onLayout,
   ...rest
 }: ChatTimelineProps) {
   const rows = useStableChatTimelineRows(listRef, messages);
+
+  const navigationHighlightStore = useNavigationHighlightStore(
+    navigationHighlightedMessageId,
+  );
 
   const sharedState = useMemo<ChatTimelineRowSharedState>(
     () => ({
@@ -214,14 +312,14 @@ export const ChatTimeline = memo(function ChatTimeline({
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
-      navigationHighlightedMessageId,
+      navigationHighlightStore,
     }),
     [
       taskTitle,
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
-      navigationHighlightedMessageId,
+      navigationHighlightStore,
     ],
   );
 
@@ -271,7 +369,6 @@ export const ChatTimeline = memo(function ChatTimeline({
     handleAnchorSizeChanged,
     rows,
   ]);
-
   const handleScroll = useCallback(() => {
     const state = listRef.current?.getState();
     const isAtEnd = resolveChatTimelineIsAtEnd(state);
@@ -280,6 +377,32 @@ export const ChatTimeline = memo(function ChatTimeline({
     }
     onScroll?.();
   }, [listRef, onIsAtEndChange, onScroll]);
+
+  // Ticket 23 (D20 port): registers this mounted timeline as a panel-resize
+  // participant so a divider drag's capture pass (see
+  // `lib/layout/panel-resizing-class.ts`) can mark ITS OWN currently visible
+  // rows right before the freeze class lands - see `ChatTimelineRow`'s own
+  // doc comment for the freeze mechanism. `useLayoutEffect`, not `useEffect`:
+  // registration must be live before the browser can paint a state where a
+  // drag could start. Cleared defensively on unmount (in addition to
+  // unregistering) even though the unmounted DOM is about to be discarded
+  // anyway - matches the ticket's explicit "cleared ... at end/unmount"
+  // contract.
+  useLayoutEffect(() => {
+    const capture = (): void => {
+      const node = listRef.current?.getScrollableNode();
+      if (node) captureChatTimelineVisibleRows(node);
+    };
+    const clear = (): void => {
+      const node = listRef.current?.getScrollableNode();
+      if (node) clearChatTimelineVisibleRows(node);
+    };
+    const unregister = registerPanelResizeParticipant({ capture, clear });
+    return () => {
+      clear();
+      unregister();
+    };
+  }, [listRef]);
 
   if (rows.length === 0) {
     return <ChatEmptyState />;
@@ -305,11 +428,10 @@ export const ChatTimeline = memo(function ChatTimeline({
         getItemType={chatTimelineGetItemType}
         renderItem={renderItem}
         estimatedItemSize={90}
-        // `isNearEnd` (read via resolveChatTimelineIsAtEnd) is computed by
-        // LegendList from `onEndReachedThreshold`, NOT `maintainScrollAtEndThreshold`
-        // - the installed 3.2.0 defaults `onEndReachedThreshold` to 0.5 (50% of
-        // scroll length), not the 10% decision #5 assumes. Set it explicitly;
-        // verified against the installed package source, not its type doc.
+        // Keep LegendList's proximity threshold explicit for onEndReached and
+        // presentation consumers. Follow ownership deliberately reads only
+        // strict `isAtEnd` via resolveChatTimelineIsAtEnd; this 10% band can
+        // never re-attach a detached reader.
         onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
         initialScrollAtEnd={initialScrollAtEnd}
         {...(initialScrollIndex !== null ? { initialScrollIndex } : {})}
@@ -330,25 +452,20 @@ export const ChatTimeline = memo(function ChatTimeline({
         maintainVisibleContentPosition={maintainVisibleContentPosition}
         onItemSizeChanged={onItemSizeChanged}
         onScroll={handleScroll}
+        onLayout={onLayout}
         {...(onListMetricsChange !== undefined
           ? { onMetricsChange: onListMetricsChange }
           : {})}
+        showsVerticalScrollIndicator
+        data-native-scrollbar="true"
         className={cn(
-          // M1 (ticket 16 gutter alignment): `scrollbar-gutter-both`
-          // reserves the scrollbar's track width on BOTH edges permanently, so
-          // the centered `max-w-3xl` column never shifts when the bar
-          // appears/disappears - the previous one-sided `mr-1` margin hack
-          // only reserved the right edge, and the fade mask's own gutter
-          // exclusion band (index.css) is sized to match this.
-          "chat-scrollbar-native-thin scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
-          topFadeEnabled && "chat-timeline-scroll-fade",
+          // The Legend List node is the sole scroll owner. Its native marker
+          // opts out of the app-wide scrollbar theme in index.css; explicit
+          // overflow keeps platform visibility and hit-testing in charge.
+          "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
           className,
         )}
-        ListHeaderComponent={
-          topFadeEnabled
-            ? CHAT_TIMELINE_LIST_FADE_HEADER
-            : CHAT_TIMELINE_LIST_HEADER
-        }
+        ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
         ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
         {...rest}
         // Round-2 finding 3, test-observability only: echoes the SAME
@@ -455,14 +572,25 @@ function useStableChatTimelineRows(
 }
 
 /**
- * One transcript row. During a panel-resize drag (`traycer-panel-resizing`
- * on `<html>`) every row flips to `content-visibility: hidden`: each
- * pointermove reflows all visible panes, and live rows would re-wrap and
- * re-rasterize every transcript at every intermediate width - a
- * multi-hundred-MB transient spike in the GPU process's tile pool. Hidden
- * rows keep their remembered size (the `auto` intrinsic-size keyword), so
- * LegendList's measurement sees stable heights for the whole drag; one
- * reflow on pointer-up restores content at the final width.
+ * One transcript row. Ticket 23's live profile measured a divider drag
+ * across two heavy transcripts at ~2x the idle frame budget (19.5-24% of
+ * frames over 1.5x budget, 50-75ms long tasks); a count-only ResizeObserver
+ * pass recorded substantial multi-row churn per pointermove (~22 entries in
+ * a typical callback - not literally every mounted row on every event).
+ * During a panel-resize drag (`traycer-panel-resizing` on `<html>`),
+ * `ChatTimeline`'s capture pass (D20 port, wired through
+ * `registerPanelResizeParticipant`) marks each row that was on-screen at
+ * drag START with `data-panel-resize-visible`; only UNMARKED rows flip to
+ * `content-visibility: hidden` below - marked rows stay live and can still
+ * re-render/remeasure normally. The `auto` keyword in the per-role
+ * `contain-intrinsic-size` hints below means a row that was already laid out
+ * before the drag keeps its own last-remembered size once hidden; the
+ * accompanying role length (8rem/4rem/14rem) is only the fallback for a row
+ * that mounts already-frozen, i.e. has no remembered size to fall back on
+ * (CSS Sizing Level 4's "last remembered size" - `auto` prefers it when one
+ * exists, the length is the no-memory fallback, not the other way around).
+ * So LegendList's measured heights survive the freeze untouched and one
+ * reflow on release restores content at the final width.
  */
 const ChatTimelineRow = memo(function ChatTimelineRow({
   message,
@@ -473,16 +601,18 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   if (ctx === null) {
     throw new Error("ChatTimelineRow must render inside ChatTimeline");
   }
+  const isNavigationHighlighted = useIsNavigationHighlighted(
+    ctx.navigationHighlightStore,
+    message.id,
+  );
 
   return (
     <div
       data-message-id={message.id}
-      data-navigation-highlighted={
-        ctx.navigationHighlightedMessageId === message.id ? "true" : undefined
-      }
+      data-navigation-highlighted={isNavigationHighlighted ? "true" : undefined}
       className={cn(
-        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
-        ctx.navigationHighlightedMessageId === message.id &&
+        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
+        isNavigationHighlighted &&
           "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
         chatTimelineRowSizeHintClassName(message.role),
       )}

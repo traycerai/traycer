@@ -9,7 +9,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IHostStreamClient } from "./host-stream-client";
 
 export type WorktreeChangedStreamCallbacks = {
   readonly onChanged: (scope: WorktreeChangedScope) => void;
@@ -20,7 +20,7 @@ export type WorktreeChangedStreamCallbacks = {
 };
 
 export type WorktreeChangedStreamClientOptions = {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly callbacks: WorktreeChangedStreamCallbacks;
 };
 

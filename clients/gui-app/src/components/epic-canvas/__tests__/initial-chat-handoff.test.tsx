@@ -98,6 +98,10 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
 }));
 
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 // `EpicSessionProvider` opens its own durable transport via this factory, but
 // the coordinator under test installs an `__setEpicStreamClientFactoryForTests`
 // override that short-circuits before `openTransport` runs - so a stable stub

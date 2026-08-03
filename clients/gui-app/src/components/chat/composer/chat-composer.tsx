@@ -78,6 +78,13 @@ import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
+import {
+  useChatPromptStashDestination,
+  useChatPromptStashSource,
+} from "./use-chat-prompt-stash-adapters";
+import { PromptStashControl } from "./prompt-stash-control";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -169,6 +176,30 @@ export interface ChatComposerSubmitInput {
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
 }
 
+function composerUtilityNeedsClearance(args: {
+  readonly rowCount: number;
+  readonly saving: boolean;
+  readonly connectedUpperSurface: boolean;
+}): boolean {
+  const triggerVisible = args.rowCount > 0 || args.saving;
+  return triggerVisible && args.connectedUpperSurface;
+}
+
+function ComposerUtilityClearanceFill(props: {
+  readonly visible: boolean;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <div
+      aria-hidden
+      data-composer-utility-clearance-fill=""
+      className="pointer-events-none absolute inset-x-3 top-0 h-3 border-x border-border bg-muted/30"
+    >
+      <div className="size-full bg-muted/30" />
+    </div>
+  );
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -207,6 +238,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const openEpicHandle = useOpenEpicHandle();
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
@@ -236,7 +268,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftContent,
     draftHasText,
     draftHasImages,
-    handleSnapshot,
+    handleDocumentChange,
+    handleSelectionChange,
   } = useChatComposerDraft({
     taskId,
     editorRef,
@@ -369,6 +402,37 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isResolvingFilePaths,
   });
 
+  const readPromptStashImage = useCallback(
+    async (hash: string) => {
+      const state = openEpicHandle.store.getState();
+      if (!state.hasAttachmentBytes(hash)) return null;
+      // Capture deliberately survives composer unmount, so this read is not
+      // coupled to component-lifecycle cancellation.
+      const bytes = await state.readAttachmentBytes(
+        hash,
+        new AbortController().signal,
+      );
+      return bytes === null ? null : new Uint8Array(bytes);
+    },
+    [openEpicHandle],
+  );
+  const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
+  // Chat writes the draft store, but restore still requires the exact ready
+  // editor generation that started the restore - a remount under the same
+  // taskId must not consume the stash into a different editor instance.
+  const promptStashDestination = useChatPromptStashDestination(
+    taskId,
+    editorRef,
+  );
+  const promptStash = usePromptStash({
+    active: focused,
+    disabled: attachmentPending,
+    editorRef,
+    readHashImage: readPromptStashImage,
+    source: promptStashSource,
+    destination: promptStashDestination,
+  });
+
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
   const { submitDraft, steerConflict } = useChatComposerSubmit({
     taskId,
@@ -449,6 +513,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
+  const utilityClearanceVisible = composerUtilityNeedsClearance({
+    rowCount: promptStash.rows.length,
+    saving: promptStash.saving,
+    connectedUpperSurface: topSpacing === "connected",
+  });
 
   return (
     <>
@@ -514,7 +583,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
             />
           ) : null}
           {topSlot}
-          <div className="flex flex-col gap-3">
+          <div
+            data-composer-utility-clearance={
+              utilityClearanceVisible ? "" : undefined
+            }
+            className={cn(
+              "relative flex flex-col gap-3",
+              utilityClearanceVisible && "pt-3",
+            )}
+          >
+            <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
             <ComposerShell
               pickerStore={pickerStore}
               onDragOver={onDragOver}
@@ -522,6 +600,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
               dragOverlayVariant={dragOverlayVariant}
+              utilityRail={
+                <PromptStashControl
+                  controller={promptStash}
+                  pickerStore={pickerStore}
+                />
+              }
               attachmentsStrip={
                 <ChatComposerAttachmentsStrip
                   content={draftContent}
@@ -540,7 +624,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   hasPastedImageBytes={hasPastedImageBytes}
                   ingestPastedComposerImages={null}
                   isActive={focused}
-                  onSnapshot={handleSnapshot}
+                  onDocumentChange={handleDocumentChange}
+                  onSelectionChange={handleSelectionChange}
                   onSubmit={handleSubmitDraft}
                   steerHintActive={steerHintActive}
                   onPaste={onPaste}

@@ -175,6 +175,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
       actions.submit({
         draftId,
         editor: editorHandleForPrompt("Plan the GUI migration"),
+        slashCatalog: null,
         toolbar: {
           selection: {
             harnessId: "codex",
@@ -184,7 +185,6 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           reasoning: "high",
           serviceTier: "",
           permission: "supervised",
-          agentMode: "regular",
         },
       });
     };
@@ -727,12 +727,14 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   const content = jsonContentForPrompt(prompt);
   return {
     isReady: () => true,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,

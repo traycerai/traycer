@@ -3,7 +3,7 @@ import type {
   IStreamSession,
   StreamCloseReason,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   type HostNotificationsCloudFeedRow,
@@ -11,7 +11,10 @@ import {
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
 
 export type CloudNotificationsConnectionState =
   "connecting" | "connected" | "reconnecting" | "unavailable";
@@ -309,7 +312,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
  * retry loop: a terminal stream close is otherwise permanent in the shared
  * transport and would leave the cloud-only surface stale until app restart. */
 export function openCloudNotificationsStream(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   onEntitlementDenied: (() => void) | null,
   onArrivals:
@@ -321,11 +324,11 @@ export function openCloudNotificationsStream(
   // client resets the store before opening its controller; delayed callbacks
   // from this one must never repopulate that new ownership epoch.
   const sessionEpoch = useCloudNotificationsStore.getState().sessionEpoch;
-  const reopenScheduler = createNotificationStreamReopenScheduler(() => {
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
     currentSession?.close();
     currentSession = null;
     openSession();
-  });
+  }, isReopenableNotificationsStreamClose);
 
   const reconnect = (): void => {
     if (disposed) return;

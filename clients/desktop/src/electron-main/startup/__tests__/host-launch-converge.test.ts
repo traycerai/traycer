@@ -4,6 +4,7 @@ import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   ApplyStagedTrigger,
+  ConvergeReadyOk,
   HostControllerStatus,
   MutationOutcome,
 } from "../../host/host-controller-types";
@@ -105,17 +106,32 @@ function fakeHostController(
 ): IpcHostController & {
   readonly applyStagedCalls: readonly [ApplyStagedTrigger, boolean][];
   readonly activateInstalledCalls: readonly boolean[];
+  readonly convergeReadyCalls: readonly boolean[];
   readonly stageLatestCalls: number;
+  /**
+   * Method names in invocation order. Counts alone cannot express "recovery
+   * ran BEFORE the release download", which is the whole point of the
+   * unavailable-first ordering.
+   */
+  readonly callOrder: readonly string[];
 } {
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
   const activateInstalledCalls: boolean[] = [];
+  const convergeReadyCalls: boolean[] = [];
+  const callOrder: string[] = [];
   let stageLatestCalls = 0;
   return {
+    get callOrder() {
+      return callOrder;
+    },
     get applyStagedCalls() {
       return applyStagedCalls;
     },
     get activateInstalledCalls() {
       return activateInstalledCalls;
+    },
+    get convergeReadyCalls() {
+      return convergeReadyCalls;
     },
     get stageLatestCalls() {
       return stageLatestCalls;
@@ -136,13 +152,16 @@ function fakeHostController(
       activateInstalledCalls.push(force);
       return activateInstalledOutcome;
     },
-    convergeReady: () => {
-      throw new Error(
-        "fakeHostController.convergeReady: not used by these tests",
-      );
+    async convergeReady(
+      force: boolean,
+    ): Promise<MutationOutcome<ConvergeReadyOk>> {
+      convergeReadyCalls.push(force);
+      callOrder.push("convergeReady");
+      return { kind: "ok", value: { running: true, version: "1.4.0" } };
     },
     async stageLatest(): Promise<void> {
       stageLatestCalls += 1;
+      callOrder.push("stageLatest");
     },
     installVersion: () => {
       throw new Error(
@@ -277,6 +296,202 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
     expect(controller.applyStagedCalls).toEqual([]);
     expect(controller.activateInstalledCalls).toEqual([]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  it("re-registers and starts an installed host when reinstall left its service unavailable", async () => {
+    const controller = fakeHostController(
+      fakeStatus(false, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([false]);
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  // An unavailable service is not registered at all, so the host is
+  // unreachable until it is. `stageLatest()` joins a controller-owned release
+  // download that can run for minutes on a slow link; recovering after it
+  // would leave the user hostless for that entire window.
+  it("recovers an unavailable service BEFORE joining the release download", async () => {
+    const controller = fakeHostController(
+      fakeStatus(false, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.callOrder).toEqual(["convergeReady", "stageLatest"]);
+    // Exactly once: the post-stage arm must not re-run a recovery that the
+    // pre-stage pass already performed.
+    expect(controller.convergeReadyCalls).toEqual([false]);
+  });
+
+  // Applying is itself the fastest route back to a running host and
+  // re-registers on the way, so a ready stage keeps its precedence rather
+  // than paying for a separate recovery first.
+  // `activation: "unavailable"` describes the RUNNING runtime, so a machine
+  // that has never installed a host reports it too. Recovering there would
+  // provision and start a background host before sign-in, bypassing the
+  // renderer's signed-in provisioning gate.
+  it("does not provision a host that was never installed", async () => {
+    const controller = fakeHostController(
+      { ...fakeStatus(false, "unavailable", false), installedVersion: null },
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  it("keeps apply-first precedence when an update is already staged", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+  });
+
+  // The other side of that precedence. `applyStaged` RESOLVES its failures
+  // rather than throwing, and the pre-stage recovery stood down because a
+  // stage was ready - so when the apply then does not land, an absent service
+  // had nobody left to re-register it and the machine stayed unreachable until
+  // the next launch.
+  it.each([
+    ["a failed apply", { kind: "failed" as const, message: "apply failed" }],
+    [
+      "a stage that no longer matches",
+      { kind: "stage-fingerprint-mismatch" as const, message: "mismatch" },
+    ],
+    [
+      "bytes that committed without converging",
+      { kind: "installed-not-converged" as const, message: "not converged" },
+    ],
+    // Codex P1: `deferred` is NOT always contention. A registry outage leaves
+    // the stage un-eligibility-checked and resolves this same arm while
+    // holding no lock at all - skipping recovery there left an installed
+    // service unregistered because a network probe failed. The lock-contention
+    // reading is safe here too: convergeReady runs its own bounded CLI-lock
+    // retry and resolves deferred itself.
+    [
+      "an apply deferred by an unreachable registry",
+      {
+        kind: "deferred" as const,
+        message: "The staged host could not be eligibility-checked.",
+      },
+    ],
+  ])("recovers an absent service after %s", async (_label, outcome) => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      outcome,
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.convergeReadyCalls).toEqual([false]);
+  });
+
+  // `busy` is the one pass-through: the controller's own gate says the host
+  // has work in progress, and convergeReady consults the same gate. Note the
+  // asymmetry with `deferred` above - that arm carries a non-contention
+  // meaning (registry outage) and so must go through the status gates.
+  it("does not chase a busy apply with a recovery", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      {
+        kind: "busy",
+        continuation: "retry-with-force",
+        message: "busy",
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  it("does not recover after a failed apply when the service is present anyway", async () => {
+    // A failed apply is not by itself an activation problem. Without this the
+    // arm would fire on every unsuccessful update, turning an ordinary "stayed
+    // on the old version" into a service cycle.
+    const controller = fakeHostController(
+      fakeStatus(true, "activated", false),
+      { kind: "failed", message: "apply failed" },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  it("does not turn a failed apply into a first install on a host that was never installed", async () => {
+    const controller = fakeHostController(
+      { ...fakeStatus(true, "unavailable", false), installedVersion: null },
+      { kind: "failed", message: "apply failed" },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  it("does not recover when the user removed the host during the apply", async () => {
+    // The apply can take minutes. `removedByUser` is therefore re-read after
+    // it rather than inherited from the pre-apply sample - a user who removed
+    // the host mid-update must not be handed a reinstall.
+    const base = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      { kind: "failed", message: "apply failed" },
+      { kind: "ok", value: { activated: true } },
+    );
+    let statusReads = 0;
+    const controller: IpcHostController & {
+      readonly convergeReadyCalls: readonly boolean[];
+    } = {
+      ...base,
+      // Reads 1 and 2 are the initial and post-stage samples; the third is the
+      // one this arm takes after the apply returns.
+      async getStatus(): Promise<HostControllerStatus> {
+        statusReads += 1;
+        return fakeStatus(true, "unavailable", statusReads > 2);
+      },
+    };
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
   });
 
   it("P1: does not resurrect a host removed by the user", async () => {

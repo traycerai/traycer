@@ -26,7 +26,7 @@ import {
   usePointerDragCommit,
   type PointerDragSliderProps,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
-import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { isPanelResizeInteractionActive } from "@/lib/layout/panel-resizing-class";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
@@ -133,7 +133,11 @@ export function LandingTerminalPanel(): ReactNode {
         sessionId: `landing-term-${uuidv4()}`,
         hostId,
         cwd,
-        name: workspaceFolderName(cwd),
+        name: terminalSessionTitle({
+          title: null,
+          activeProcessName: null,
+          currentCwd: cwd,
+        }),
         titleSource: "default",
       });
       return instanceId;

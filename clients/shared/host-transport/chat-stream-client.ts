@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Typed handlers for a `chat.subscribe@1.1` session. The GUI chat store binds
@@ -123,7 +123,7 @@ export interface ChatStreamCallbacks {
 }
 
 export interface ChatStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly chatId: string;
   readonly callbacks: ChatStreamCallbacks;
@@ -139,7 +139,7 @@ export interface ChatStreamClientOptions {
 export class ChatStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: ChatStreamCallbacks;
-  private readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  private readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   private closed: boolean;
 
   constructor(options: ChatStreamClientOptions) {

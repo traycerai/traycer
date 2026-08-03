@@ -33,12 +33,27 @@ const hostBoundary = vi.hoisted(() => ({
   seenTileHostIds: new Set<string>(),
 }));
 
+const activeHostEntry = vi.hoisted(() => ({
+  hostId: "default-host",
+  label: "Default host",
+  kind: "mock" as const,
+  websocketUrl: "ws://default-host.test/stream",
+  version: null,
+  status: "available" as const,
+}));
+
 const activeHostClient = vi.hoisted(() => ({
+  // The remote-aware owner identity key (R-1) reads the full active entry, not
+  // just its id, so the fake must answer `getActiveHost` too - with the real
+  // entry, matching `resolveHostById` below rather than contradicting it.
+  getActiveHost: () => activeHostEntry,
   getActiveHostId: () => "default-host",
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
   onChange: () => () => undefined,
   request: () => Promise.resolve({}),
+  resolveHostById: (hostId: string) =>
+    hostId === activeHostEntry.hostId ? activeHostEntry : null,
 }));
 
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({

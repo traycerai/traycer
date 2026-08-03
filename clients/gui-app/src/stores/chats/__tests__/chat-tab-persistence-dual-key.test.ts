@@ -219,6 +219,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: null,
       anchorIndex: null,
       offset: 0,
+      replyReserveMessageId: null,
     });
     expect(hasSavedChatTabState(id)).toBe(true);
     expect(restoreChatTabState(id, messages)).toEqual({
@@ -226,6 +227,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: null,
       anchorIndex: null,
       offset: 0,
+      replyReserveMessageId: null,
     });
 
     saveChatTabState({
@@ -234,12 +236,14 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[2]?.id ?? null,
       anchorIndex: 2,
       offset: 48,
+      replyReserveMessageId: null,
     });
     expect(restoreChatTabState(id, messages)).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[2]?.id,
       anchorIndex: 2,
       offset: 48,
+      replyReserveMessageId: null,
     });
   });
 
@@ -252,6 +256,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[3]?.id ?? null,
       anchorIndex: 3,
       offset: 12,
+      replyReserveMessageId: null,
     });
     // Canvas close sweep: tab-key only.
     evictChatTabState([closed.tileInstanceId]);
@@ -263,6 +268,41 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[3]?.id,
       anchorIndex: 3,
       offset: 12,
+      replyReserveMessageId: null,
+    });
+  });
+
+  it("persists detached reading coordinates independently from streaming reply-reserve geometry", () => {
+    const messages = makeMessages(6);
+    const id = chatIdIdentity("detached-reserve");
+    const viewportAnchorId = messages[1]?.id ?? null;
+    const replyReserveMessageId = messages[4]?.id ?? null;
+
+    saveChatTabState({
+      identity: id,
+      mode: "free-scrolling",
+      anchorMessageId: viewportAnchorId,
+      anchorIndex: 1,
+      offset: -24,
+      replyReserveMessageId,
+    });
+
+    expect(restoreChatTabState(id, messages)).toEqual({
+      mode: "free-scrolling",
+      anchorMessageId: viewportAnchorId,
+      anchorIndex: 1,
+      offset: -24,
+      replyReserveMessageId,
+    });
+
+    // If the streaming turn was genuinely removed while away, only its
+    // geometry is discarded; the unrelated reading anchor still restores.
+    expect(restoreChatTabState(id, messages.slice(0, 4))).toEqual({
+      mode: "free-scrolling",
+      anchorMessageId: viewportAnchorId,
+      anchorIndex: 1,
+      offset: -24,
+      replyReserveMessageId: null,
     });
   });
 
@@ -284,6 +324,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[4]?.id ?? null,
       anchorIndex: 4,
       offset: 20,
+      replyReserveMessageId: null,
     });
 
     // While both stay open, each tab-key restores its own entry.
@@ -303,6 +344,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[4]?.id,
       anchorIndex: 4,
       offset: 20,
+      replyReserveMessageId: null,
     });
   });
 
@@ -387,6 +429,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[0]?.id,
       anchorIndex: 0,
       offset: 0,
+      replyReserveMessageId: null,
     });
 
     // Index above range clamps to last row.
@@ -402,6 +445,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[4]?.id,
       anchorIndex: 4,
       offset: 0,
+      replyReserveMessageId: null,
     });
 
     // Mid-list gone message with a recorded index lands on that neighbor.
@@ -417,6 +461,7 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: messages[2]?.id,
       anchorIndex: 2,
       offset: 0,
+      replyReserveMessageId: null,
     });
 
     // Empty transcript: no neighbor to land on.
@@ -432,6 +477,44 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorMessageId: null,
       anchorIndex: null,
       offset: 0,
+      replyReserveMessageId: null,
+    });
+  });
+
+  it("degrades a missing semantic new-turn anchor to a safe free-scroll neighbor", () => {
+    const messages = makeMessages(5);
+    const id = chatIdIdentity("stale-new-turn");
+
+    saveChatTabState({
+      identity: id,
+      mode: "anchoring-new-turn",
+      anchorMessageId: "query-removed-while-away",
+      anchorIndex: 3,
+      offset: 0,
+      replyReserveMessageId: null,
+    });
+
+    expect(restoreChatTabState(id, messages)).toEqual({
+      mode: "free-scrolling",
+      anchorMessageId: messages[3]?.id,
+      anchorIndex: 3,
+      offset: 0,
+      replyReserveMessageId: null,
+    });
+
+    saveChatTabState({
+      identity: id,
+      mode: "anchoring-new-turn",
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 99,
+    });
+    expect(restoreChatTabState(id, messages)).toEqual({
+      mode: "free-scrolling",
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+      replyReserveMessageId: null,
     });
   });
 });
@@ -990,6 +1073,7 @@ describe("ticket 15 review round 4: real close order across all seven registries
       anchorMessageId: messages[1]?.id ?? null,
       anchorIndex: 1,
       offset: 10,
+      replyReserveMessageId: null,
     });
     getOrCreateA2AOpenStore(viewA).getState().setSentOpen("a2a-b", false);
     getOrCreateA2AOpenStore(viewA).getState().setSentOpen("a2a-a", true);
@@ -1055,6 +1139,7 @@ describe("ticket 15 review round 4: real close order across all seven registries
       anchorMessageId: messages[1]?.id,
       anchorIndex: 1,
       offset: 10,
+      replyReserveMessageId: null,
     });
     expect(
       getOrCreateA2AOpenStore(reopenedA).getState().sentOpenIds.has("a2a-a"),

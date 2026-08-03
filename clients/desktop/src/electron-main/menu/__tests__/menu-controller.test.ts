@@ -73,6 +73,8 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   reloadSnapshotCalls = 0;
   ensureWatcherCalls = 0;
   readonly pidMetadataFile = "/tmp/fake-traycer-host/pid.json";
+  readonly identityEnrollmentFile =
+    "/tmp/fake-traycer-host/identity/enrollment.json";
   isDisposed = false;
 
   getSnapshot(): DesktopLocalHostSnapshot | null {

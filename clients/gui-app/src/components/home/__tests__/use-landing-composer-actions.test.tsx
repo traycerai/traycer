@@ -201,6 +201,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -265,6 +266,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -288,6 +290,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: {
           ...defaultToolbar(),
           selection: {
@@ -326,7 +329,6 @@ describe("useLandingComposerActions", () => {
       result.current.selectTerminalAgent(
         {
           harnessId: "claude",
-          agentMode: "regular",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
@@ -377,7 +379,6 @@ describe("useLandingComposerActions", () => {
       result.current.selectTerminalAgent(
         {
           harnessId: "claude",
-          agentMode: "regular",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
@@ -420,6 +421,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: {
           ...defaultToolbar(),
           selection: { harnessId: "codex", modelSlug: "", profileId: null },
@@ -460,6 +462,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -535,6 +538,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForHashImage("hash-same-session", "look here"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -571,6 +575,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForHashImage("hash-restored", "restored draft"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -612,6 +617,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForHashImage("hash-missing", "wiped image"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -647,6 +653,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForHashImage("hash-error", "unreadable image"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -688,11 +695,13 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor,
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
       result.current.submit({
         draftId: null,
         editor,
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -749,6 +758,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -835,6 +845,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -933,6 +944,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1024,6 +1036,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1101,6 +1114,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1154,6 +1168,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1201,6 +1216,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1266,6 +1282,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1316,6 +1333,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1380,6 +1398,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1435,6 +1454,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId,
         editor: editorHandleForPrompt("first request"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1466,14 +1486,13 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
-  it("replaces the draft in place when the editor re-emits the sent content", async () => {
-    // The live editor is not the memoized fixture: `getJSON()` builds a fresh
-    // object per call, and the composer makes it fire on its own during a send -
-    // `startSubmission` flips `isSubmitting`, which flips the editor's
-    // `disabled`, and Tiptap's `setEditable` emits `update` unconditionally.
-    // That echo carries the SAME document, so it must not retire the placement:
-    // the epic belongs in the tab the draft occupied, not in a background one
-    // with the sent prompt left behind on the landing page.
+  it("replaces the draft in place when only the caret moves after submit", async () => {
+    // Under the event-driven contract, `setEditable(!disabled, false)` no
+    // longer re-emits a document `update` on submit, and selection moves go
+    // through `setSelection` (no contentRevision bump). A caret-only path
+    // after submit must keep settlement current so the epic replaces the
+    // draft tab in place - not a background tab with the sent prompt left
+    // behind on the landing page.
     const draftId = useLandingDraftStore
       .getState()
       .createDraftWithId("draft-editable-echo", null);
@@ -1503,6 +1522,7 @@ describe("useLandingComposerActions", () => {
           ...editorHandleForPrompt(SUBMITTED_PROMPT),
           getJSON: () => jsonContentForPrompt(SUBMITTED_PROMPT),
         },
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1514,10 +1534,10 @@ describe("useLandingComposerActions", () => {
       ).toBe(true);
     });
 
-    // The `setEditable` echo: same document, new object, no user edit.
+    // Caret-only after submit - must not retire the placement.
     const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
     if (runtime === null) throw new Error("expected draft runtime");
-    runtime.setSnapshot(jsonContentForPrompt(SUBMITTED_PROMPT), null);
+    runtime.setSelection({ from: 2, to: 2 });
 
     createGate.resolve({ roomInfo: null });
     await waitFor(() => {
@@ -1565,6 +1585,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: draftA,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1638,6 +1659,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: draftA,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1708,6 +1730,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: draftA,
         editor: editorHandleForPrompt("submit A"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1722,6 +1745,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: draftB,
         editor: editorHandleForPrompt("submit B"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1770,7 +1794,6 @@ describe("useLandingComposerActions", () => {
       result.current.selectTerminalAgent(
         {
           harnessId: "claude",
-          agentMode: "regular",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
@@ -1818,6 +1841,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForHashImage("retry-image", "retry"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1857,6 +1881,7 @@ describe("useLandingComposerActions", () => {
       result.current.submit({
         draftId: null,
         editor: editorHandleForPrompt("retry create"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1899,7 +1924,6 @@ function defaultToolbar() {
     reasoning: "high" as const,
     serviceTier: "" as const,
     permission: "supervised" as const,
-    agentMode: "regular" as const,
   };
 }
 
@@ -1907,12 +1931,14 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   const content = jsonContentForPrompt(prompt);
   return {
     isReady: () => true,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,

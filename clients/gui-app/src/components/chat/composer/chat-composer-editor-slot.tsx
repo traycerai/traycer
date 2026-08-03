@@ -40,10 +40,11 @@ interface ChatComposerEditorSlotProps {
       ) => ReadonlyArray<PastedComposerImageOutcome>)
     | null;
   readonly isActive: boolean;
-  readonly onSnapshot: (
+  readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },
   ) => void;
+  readonly onSelectionChange: (selection: { from: number; to: number }) => void;
   readonly onSubmit: (source: ChatComposerSubmitSource) => void;
   /** True while a Cmd+Enter here would steer the running turn (decision 8 hint). */
   readonly steerHintActive: boolean;
@@ -68,7 +69,8 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     hasPastedImageBytes,
     ingestPastedComposerImages,
     isActive,
-    onSnapshot,
+    onDocumentChange,
+    onSelectionChange,
     onSubmit,
     steerHintActive,
     onPaste,
@@ -98,7 +100,8 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       placeholder={placeholder}
       editorClassName="max-h-[3.5lh] min-h-9"
       stabilizeImageAttachmentCaret
-      onSnapshot={onSnapshot}
+      onDocumentChange={onDocumentChange}
+      onSelectionChange={onSelectionChange}
       onSubmit={onSubmit}
       onPaste={onPaste}
       onDragOver={onDragOver}

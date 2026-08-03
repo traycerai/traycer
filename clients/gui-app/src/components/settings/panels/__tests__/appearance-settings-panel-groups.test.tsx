@@ -29,6 +29,7 @@ function resetAppearanceSettings(): void {
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     pointerCursors: true,
+    chatTurnMinimapSide: "right",
     codeFontFamily: null,
     codeFontSize: DEFAULT_CODE_FONT_SIZE,
     terminalFontFamily: null,
@@ -75,6 +76,17 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(documentPosition(iface, typography)).toBe("before");
     expect(documentPosition(typography, terminal)).toBe("before");
     expect(documentPosition(terminal, artifactIcons)).toBe("before");
+  });
+
+  it("offers a hide option for the message minimap", () => {
+    renderPanel(queryClient);
+
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Message minimap side" }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Hide" }));
+
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
   });
 
   it("renders named sections as h2 headings outside separate bordered cards", () => {

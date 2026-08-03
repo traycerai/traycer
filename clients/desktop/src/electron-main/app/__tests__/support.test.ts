@@ -78,6 +78,7 @@ async function withPidMetadataFile(
     await run({
       rootDir: dir,
       pidMetadataFile,
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),

@@ -13,9 +13,10 @@
 //   2. Blanket-prefix sweep    — remove every `traycer-gui-app:`-prefixed key
 //      from BOTH localStorage and sessionStorage. Auth (`traycer.`) and any
 //      non-`traycer-gui-app:` key survive.
-//   3. Drop landing-image dbs  — delete every per-window IndexedDB partition
-//      (`traycer-gui-app:<partition>:landing-images`) so pasted image bytes
-//      don't outlive the wipe. Enumeration is Chromium-only; absent → no-op.
+//   3. Drop composer blob dbs  — delete every per-window landing-image
+//      partition and the app-global prompt-stash database so pasted/stashed
+//      image bytes don't outlive the wipe. Enumeration is Chromium-only;
+//      absent → no-op.
 //   4. Reload last             — re-hydrate from the now-cleared storage / host
 //      state without racing a pending write.
 
@@ -23,6 +24,8 @@ import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
+import { PROMPT_STASH_DB_NAME } from "@/lib/composer/prompt-stash-repository";
+import { publishPromptStashReset } from "@/lib/composer/prompt-stash-channel";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -35,6 +38,7 @@ const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 // suffix below pins the db namespace so the wipe only drops image partitions,
 // never any other future `traycer-gui-app:`-prefixed db.
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";
+const PROMPT_STASH_DB_SUFFIX = ":prompt-stash";
 
 function sweepStorage(storage: Storage): number {
   // Collect keys first, then remove: mutating during index iteration shifts the
@@ -82,47 +86,81 @@ function indexedDBFactory(): IDBFactory | undefined {
   return globalThis.indexedDB;
 }
 
-// Drop every landing-image IndexedDB partition. `indexedDB.databases()` is
-// Chromium-only (the Electron/Chrome target); when it (or `indexedDB` itself)
-// is absent we no-op so the wipe still reaches the reload. Browser engines
-// without it simply keep the (re-pasteable) image bytes — an accepted leak,
-// not a wipe failure.
-async function deleteLandingImageDatabases(): Promise<void> {
-  const factory = indexedDBFactory();
-  if (typeof factory?.databases !== "function") {
+// Landing-image partition names are per-window/runtime and only discoverable
+// through enumeration; `indexedDB.databases()` is Chromium-only, so on an
+// engine without it those names simply can't be found - an accepted leak
+// (the bytes are re-pasteable), not a wipe failure.
+async function enumeratedComposerBlobDatabaseNames(
+  factory: IDBFactory,
+): Promise<readonly string[]> {
+  if (typeof factory.databases !== "function") {
     appLogger.info(
-      "[persist] landing image database enumeration unavailable",
+      "[persist] composer blob database enumeration unavailable",
       {},
     );
-    return;
+    return [];
   }
-  const databases = await factory.databases();
-  const names = databases
+  let databases: readonly IDBDatabaseInfo[];
+  try {
+    databases = await factory.databases();
+  } catch (error: unknown) {
+    appLogger.warn("[persist] composer blob database enumeration failed", {
+      error: describeLogError(error),
+    });
+    return [];
+  }
+  return databases
     .map((db) => db.name)
     .filter(
       (name): name is string =>
         name !== undefined &&
         name.startsWith(PERSIST_KEY_BOUNDARY) &&
-        name.endsWith(LANDING_IMAGE_DB_SUFFIX),
+        (name.endsWith(LANDING_IMAGE_DB_SUFFIX) ||
+          name.endsWith(PROMPT_STASH_DB_SUFFIX)),
     );
-  // Best-effort per partition: a single db whose delete errors must not abort the
-  // rest of the wipe or — critically — the reload (step 4), which is the real
-  // recovery and tears down every connection anyway. The bytes are re-pasteable.
+}
+
+// Drop every landing-image partition this run can enumerate, plus the
+// prompt-stash database unconditionally by its exact, fixed name - unlike
+// the per-window landing partitions, the stash has exactly one name known
+// ahead of time, so its deletion never depends on `databases()` support.
+// `indexedDB` itself absent (e.g. a non-browser runtime) still no-ops the
+// whole thing so the wipe reaches the reload.
+async function deleteComposerBlobDatabases(): Promise<boolean> {
+  const factory = indexedDBFactory();
+  if (factory === undefined) {
+    appLogger.info("[persist] composer blob database delete unavailable", {
+      reason: "no IndexedDB in this runtime",
+    });
+    return false;
+  }
+  const enumerated = await enumeratedComposerBlobDatabaseNames(factory);
+  const names = new Set(enumerated);
+  names.add(PROMPT_STASH_DB_NAME);
+  // Best-effort per partition: a single db whose delete errors must not abort
+  // the rest of the wipe or - critically - the reload (step 4), which is the
+  // real recovery and tears down every connection anyway. The bytes are
+  // re-pasteable (landing) or already gone from the user's perspective
+  // (stash, whose entries the localStorage sweep never touched but whose
+  // db this same step is the only thing that reclaims).
   let failedCount = 0;
+  let promptStashDeleted = true;
   await Promise.all(
-    names.map((name) =>
+    Array.from(names).map((name) =>
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
         failedCount += 1;
-        appLogger.warn("[persist] landing image database delete failed", {
+        if (name === PROMPT_STASH_DB_NAME) promptStashDeleted = false;
+        appLogger.warn("[persist] composer blob database delete failed", {
           error: describeLogError(error),
         });
       }),
     ),
   );
-  appLogger.info("[persist] landing image database delete complete", {
-    databaseCount: names.length,
+  appLogger.info("[persist] composer blob database delete complete", {
+    databaseCount: names.size,
     failedCount,
   });
+  return promptStashDeleted;
 }
 
 export async function clearAllPersistedStores(args: {
@@ -167,11 +205,12 @@ export async function clearAllPersistedStores(args: {
     sessionStorageCount,
   });
 
-  // 3. Drop every landing-image IndexedDB partition (one per runtime window).
+  // 3. Drop every composer-owned IndexedDB blob database.
   //    The localStorage sweep above already removed the draft keys that point
   //    at these bytes; this reclaims the bytes themselves so nothing leaks past
   //    the wipe.
-  await deleteLandingImageDatabases();
+  const promptStashDeleted = await deleteComposerBlobDatabases();
+  if (promptStashDeleted) publishPromptStashReset();
 
   // 4. Reload last.
   appLogger.info("[persist] local GUI state clear complete - reloading", {});

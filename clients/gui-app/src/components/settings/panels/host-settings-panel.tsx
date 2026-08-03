@@ -20,6 +20,7 @@ import {
   extractErrorMessage,
   findReleasedAt,
 } from "@/components/settings/panels/host-settings-panel-model";
+import { MyHostsList } from "@/components/settings/panels/my-hosts-list";
 import { HostSummaryCard } from "@/components/settings/panels/host-settings-summary-card";
 import { InstallationDetailsDisclosure } from "@/components/settings/panels/host-settings-installation-details";
 import { PackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -79,10 +80,12 @@ export function HostSettingsPanel() {
     return (
       <SettingsPanelShell
         title="Host"
-        description="Host management is only available on the desktop app."
+        description="Your hosts across every device."
       >
+        <MyHostsList />
         <div className="px-5 py-6 text-ui-sm text-muted-foreground">
-          This shell doesn&apos;t bundle the Traycer CLI.
+          Local host management is only available on the desktop app — this
+          shell doesn&apos;t bundle the Traycer CLI.
         </div>
       </SettingsPanelShell>
     );
@@ -455,124 +458,139 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   return (
     <SettingsPanelShell
       title="Host"
-      description="Local background service that runs Traycer on your machine."
+      description="Your hosts across every device, plus this machine's local service."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-        {packageManagerUpgrade !== null ? (
-          <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
-        ) : null}
+      <MyHostsList />
+      <section aria-labelledby="local-host-management-heading">
+        <div className="border-b border-border/40 px-5 py-4">
+          <h3
+            id="local-host-management-heading"
+            className="text-ui font-medium"
+          >
+            This machine
+          </h3>
+          <p className="mt-1 text-ui-sm text-muted-foreground">
+            Install, update, restart, register, deregister, and rename the
+            Traycer host service running on this machine.
+          </p>
+        </div>
+        <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+          {packageManagerUpgrade !== null ? (
+            <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
+          ) : null}
 
-        <HostSummaryCard
-          status={status}
-          statusPending={statusPending}
-          banner={{
-            progress,
-            terminalOutcome:
-              terminalOutcome === null
-                ? null
-                : { message: terminalOutcome.message },
-            onRetryTerminalOutcome: handleRetryTerminalOutcome,
-            onDismissTerminalOutcome: () => setTerminalOutcome(null),
-          }}
-          nameEdit={{
-            settings: hostNameSettings,
-            pending: hostNamePending,
-            error: hostNameError,
-            draft: hostNameDraft,
-            savePending: hostNameMutation.isPending,
-            editing: editingName,
-            onDraftChange: (value) => setHostNameDraftOverride(value),
-            onSave: () => {
-              hostNameMutation.mutate(
-                customNameFromDraft(hostNameDraft, hostNameSettings),
-              );
-            },
-            onReset: () => {
-              hostNameMutation.mutate(null);
-            },
-            onOpenEditing: () => setEditingName(true),
-            onCancel: () => {
-              setEditingName(false);
-              setHostNameDraftOverride(null);
-            },
-          }}
-          actions={{
-            anyPending,
-            installPending,
-            restartPending: restartMutation.isPending,
-            onInstall: () =>
-              convergeReadyMutation.mutate(
-                { force: false },
-                {
-                  onSuccess: (outcome) => {
-                    if (outcome.kind === "ok" && outcome.value.running) {
-                      toast.success(
-                        outcome.value.version !== null
-                          ? `Installed host v${outcome.value.version}`
-                          : "Host installed",
-                      );
-                    }
-                    invalidate();
+          <HostSummaryCard
+            status={status}
+            statusPending={statusPending}
+            banner={{
+              progress,
+              terminalOutcome:
+                terminalOutcome === null
+                  ? null
+                  : { message: terminalOutcome.message },
+              onRetryTerminalOutcome: handleRetryTerminalOutcome,
+              onDismissTerminalOutcome: () => setTerminalOutcome(null),
+            }}
+            nameEdit={{
+              settings: hostNameSettings,
+              pending: hostNamePending,
+              error: hostNameError,
+              draft: hostNameDraft,
+              savePending: hostNameMutation.isPending,
+              editing: editingName,
+              onDraftChange: (value) => setHostNameDraftOverride(value),
+              onSave: () => {
+                hostNameMutation.mutate(
+                  customNameFromDraft(hostNameDraft, hostNameSettings),
+                );
+              },
+              onReset: () => {
+                hostNameMutation.mutate(null);
+              },
+              onOpenEditing: () => setEditingName(true),
+              onCancel: () => {
+                setEditingName(false);
+                setHostNameDraftOverride(null);
+              },
+            }}
+            actions={{
+              anyPending,
+              installPending,
+              restartPending: restartMutation.isPending,
+              onInstall: () =>
+                convergeReadyMutation.mutate(
+                  { force: false },
+                  {
+                    onSuccess: (outcome) => {
+                      if (outcome.kind === "ok" && outcome.value.running) {
+                        toast.success(
+                          outcome.value.version !== null
+                            ? `Installed host v${outcome.value.version}`
+                            : "Host installed",
+                        );
+                      }
+                      invalidate();
+                    },
+                    onError: (err) => {
+                      toastFromRunnerError(err, "Couldn't install host");
+                    },
                   },
-                  onError: (err) => {
-                    toastFromRunnerError(err, "Couldn't install host");
-                  },
-                },
-              ),
-            onRestart: () => setRestartConfirmOpen(true),
-            onOpenDoctor: () => setDoctorOpen(true),
-          }}
-          updates={{
-            hidden: status?.state === "not-installed",
-            registryState,
-            registryFetching:
-              registryFetching || refreshRegistryMutation.isPending,
-            anyPending,
-            updatePending,
-            latestReleasedAt,
-            nowMs,
-            updateReady: controllerStatus?.updateReady ?? false,
-            stagedVersion: controllerStatus?.stagedVersion ?? null,
-            downloadProgress: controllerStatus?.download?.progress ?? null,
-            onUpdate: () => runApply(false),
-            onRefresh: handleRefreshRegistry,
-          }}
-        />
-
-        <SettingsGroup
-          title="Installation"
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <InstallationDetailsDisclosure
-            record={installedRecord ?? null}
-            loading={installedPending}
-          />
-          <AdvancedDisclosure
-            installedVersion={installedRecord?.version ?? null}
-            availableSnapshot={availableSnapshot}
-            availablePending={availablePending}
-            availableErrorMessage={extractErrorMessage(
-              availableError,
+                ),
+              onRestart: () => setRestartConfirmOpen(true),
+              onOpenDoctor: () => setDoctorOpen(true),
+            }}
+            updates={{
+              hidden: status?.state === "not-installed",
               registryState,
-            )}
-            availableFetching={availableFetching}
-            includePreReleases={includePreReleases}
-            registryState={registryState}
-            statusState={status?.state}
-            anyPending={anyPending}
-            registerPending={registerPending}
-            deregisterPending={deregisterServiceMutation.isPending}
-            onInstallVersion={(version) => runInstallVersion(version, false)}
-            onRegisterService={() => registerServiceMutation.mutate()}
-            onDeregisterService={() => deregisterServiceMutation.mutate()}
-            onRefreshAvailable={handleRefreshRegistry}
-            onIncludePreReleasesChange={setIncludePreReleases}
+              registryFetching:
+                registryFetching || refreshRegistryMutation.isPending,
+              anyPending,
+              updatePending,
+              latestReleasedAt,
+              nowMs,
+              updateReady: controllerStatus?.updateReady ?? false,
+              stagedVersion: controllerStatus?.stagedVersion ?? null,
+              downloadProgress: controllerStatus?.download?.progress ?? null,
+              onUpdate: () => runApply(false),
+              onRefresh: handleRefreshRegistry,
+            }}
           />
-        </SettingsGroup>
-      </div>
+
+          <SettingsGroup
+            title="Installation"
+            tone="default"
+            dataTestId={undefined}
+            fill={false}
+          >
+            <InstallationDetailsDisclosure
+              record={installedRecord ?? null}
+              loading={installedPending}
+            />
+            <AdvancedDisclosure
+              installedVersion={installedRecord?.version ?? null}
+              availableSnapshot={availableSnapshot}
+              availablePending={availablePending}
+              availableErrorMessage={extractErrorMessage(
+                availableError,
+                registryState,
+              )}
+              availableFetching={availableFetching}
+              includePreReleases={includePreReleases}
+              registryState={registryState}
+              statusState={status?.state}
+              anyPending={anyPending}
+              registerPending={registerPending}
+              deregisterPending={deregisterServiceMutation.isPending}
+              onInstallVersion={(version) => runInstallVersion(version, false)}
+              onRegisterService={() => registerServiceMutation.mutate()}
+              onDeregisterService={() => deregisterServiceMutation.mutate()}
+              onRefreshAvailable={handleRefreshRegistry}
+              onIncludePreReleasesChange={setIncludePreReleases}
+            />
+          </SettingsGroup>
+        </div>
+      </section>
 
       <RestartHostConfirmDialog
         open={restartConfirmOpen}
