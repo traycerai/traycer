@@ -51,6 +51,7 @@ import {
   getCommGraphCloudSubscriptionOpenerOverride,
   getCommGraphSubscriptionOpenerOverride,
 } from "@/lib/comm-graph/comm-graph-opener-override";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 
 const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
   let closed = false;
@@ -68,6 +69,7 @@ export function useCommGraphSnapshot(
   epicId: string,
   hostIds: ReadonlyArray<string>,
 ): CommGraphSnapshot {
+  const hostDirectory = useHostDirectoryList();
   // Stable for this component's lifetime, and reads every host dependency live
   // on each dial - but only while this component is mounted to keep refreshing
   // them, which is why the claim below hands it back on unmount.
@@ -109,15 +111,23 @@ export function useCommGraphSnapshot(
     [epicId],
   );
 
-  // Relay selection is scoped to the epic's origin hosts. In particular, it
-  // must not react to the application's globally selected host: a graph tile
-  // can remain mounted while that selection changes, and switching transport
-  // identity beneath its retained subscription would violate tab ownership.
-  // Relay choice never becomes row identity; the host's availability frame is
-  // the sole plane verdict.
+  // Any signed-in host may relay the cloud feed. Origin hosts can all be
+  // offline (or absent for legacy agents), but the cloud view remains
+  // available through another host in the user's directory. Relay choice
+  // never becomes row identity; the host's availability frame is the sole
+  // plane verdict.
   const relayHostIds = useMemo(
-    () => Array.from(new Set(hostIds)),
-    [hostIds],
+    () => {
+      const directoryHostIds = hostDirectory.data?.map((entry) => entry.hostId);
+      return Array.from(
+        new Set(
+          directoryHostIds === undefined || directoryHostIds.length === 0
+            ? hostIds
+            : directoryHostIds,
+        ),
+      ).sort();
+    },
+    [hostDirectory.data, hostIds],
   );
 
   // Read through a ref so acquiring does not re-run (and re-claim) every time

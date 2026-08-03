@@ -11,8 +11,17 @@ import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-gra
 import type { CommGraphSubscriptionRequest } from "@/lib/comm-graph/comm-graph-subscription";
 import type { CommGraphCloudSubscriptionRequest } from "@/lib/comm-graph/comm-graph-cloud-subscription";
 
+const directoryEntries = vi.hoisted(() => ({
+  current: [] as ReadonlyArray<{ readonly hostId: string }>,
+}));
+
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => vi.fn(),
+}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: directoryEntries.current,
+  }),
 }));
 
 function cloudEvent(): HostCommunicationGraphCloudFeedEvent {
@@ -39,6 +48,7 @@ function cloudEvent(): HostCommunicationGraphCloudFeedEvent {
 
 describe("useCommGraphSnapshot cloud authority", () => {
   beforeEach(() => {
+    directoryEntries.current = [];
     __resetCommGraphCloudRegistryForTests();
     __resetCommGraphRegistryForTests();
   });
@@ -160,5 +170,20 @@ describe("useCommGraphSnapshot cloud authority", () => {
 
     await waitFor(() => expect(localClose).toHaveBeenCalledTimes(1));
     expect(result.current.events).toEqual([]);
+  });
+
+  it("uses a signed-in non-origin host to relay the cloud feed", async () => {
+    directoryEntries.current = [{ hostId: "relay-b" }];
+    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    renderHook(() => useCommGraphSnapshot("epic-1", ["offline-origin-a"]));
+
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    expect(cloudRequests[0].hostId).toBe("relay-b");
   });
 });

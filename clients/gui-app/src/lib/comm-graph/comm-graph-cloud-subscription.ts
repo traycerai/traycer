@@ -383,12 +383,10 @@ export class CommGraphCloudSubscriptionManager {
 
   private publish(): void {
     if (this.disposed) return;
-    const statusHostIds =
-      this.originHostIds.length > 0
-        ? this.originHostIds
-        : this.relayHostId === null
-          ? []
-          : [this.relayHostId];
+    let statusHostIds = this.originHostIds;
+    if (statusHostIds.length === 0 && this.relayHostId !== null) {
+      statusHostIds = [this.relayHostId];
+    }
     this.snapshot = {
       events: this.events,
       hosts: statusHostIds.map((hostId) => ({
