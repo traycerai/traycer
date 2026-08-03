@@ -391,6 +391,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt",
         queueItemId: "queue-steer-edit",
         messageId: "message-queue-steer-edit",
         message: {
@@ -467,6 +468,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt",
         queueItemId: "queue-edit",
         messageId: "message-queue-edit",
         message: {

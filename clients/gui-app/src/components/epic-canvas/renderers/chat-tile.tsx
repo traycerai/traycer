@@ -24,6 +24,7 @@ import type {
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   BackgroundItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -895,7 +896,10 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
              * transcript's bottom content inset. The wrapper owns the opaque
              * backdrop and a paint-only 1px overdraw so fractional scrolling
-             * cannot expose the transcript between the dock and tile edge.
+             * cannot expose the transcript between the dock and tile edge. The
+             * full-width positioning layer stays pointer-transparent; centered
+             * lower surfaces opt back in so their invisible gutters cannot
+             * cover the scrollbar.
              */}
             {view.snapshotLoaded ? (
               <div
@@ -903,7 +907,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-canvas after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']"
                 data-chat-lower-surfaces-overlay=""
               >
-                <div className="pointer-events-auto">
+                <div className="pointer-events-none">
                   <SurfaceActivityProvider active={view.surfaceFocused}>
                     <ChatLowerInteractionSurfaces
                       epicId={view.currentEpicId}
@@ -1273,9 +1277,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     renderedDisplayContext,
   );
+  // Only a prompt item can be loaded into the composer for editing, so narrow
+  // here rather than at each consumer: this feeds the composer's settings seed
+  // and its remount key, neither of which a content-free managed-command item
+  // could supply.
   const editingQueueItem =
     state.queue.items.find(
-      (item) => item.queueItemId === uiState.editingQueueItemId,
+      (item): item is ChatQueuedPromptItem =>
+        item.kind === "prompt" &&
+        item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
   const chatSettingsSeed = state.chat?.settings ?? null;

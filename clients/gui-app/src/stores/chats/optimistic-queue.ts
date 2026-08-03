@@ -1,5 +1,6 @@
 import type {
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatQueueState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -24,7 +25,7 @@ export function isOptimisticQueuedItem(
 
 export function appendOptimisticQueuedItem(
   queue: ChatQueueState,
-  item: ChatQueuedItem,
+  item: ChatQueuedPromptItem,
 ): ChatQueueState {
   if (queueContainsQueuedSend(queue, item)) return queue;
   return {
@@ -71,7 +72,7 @@ export function removeOptimisticQueuedItemByMessageId(
 ): ChatQueueState {
   return withoutOptimisticQueuedItems(
     queue,
-    (item) => item.messageId === messageId,
+    (item) => item.kind === "prompt" && item.messageId === messageId,
   );
 }
 
@@ -80,6 +81,10 @@ function shouldRetainOptimisticQueuedItem(
   authoritativeQueue: ChatQueueState,
   retainedClientActionIds: ReadonlySet<string>,
 ): boolean {
+  // Only an optimistic user send can be retained across a snapshot swap; the
+  // host is the sole author of managed-command items, so there is never a
+  // local one to hold onto.
+  if (item.kind !== "prompt") return false;
   const clientActionId = optimisticQueuedItemClientActionId(item.queueItemId);
   if (clientActionId === null) return false;
   if (!retainedClientActionIds.has(clientActionId)) return false;
@@ -112,13 +117,16 @@ function withoutOptimisticQueuedItems(
 
 function queueContainsQueuedSend(
   queue: ChatQueueState,
-  item: ChatQueuedItem,
+  item: ChatQueuedPromptItem,
 ): boolean {
   const content = JSON.stringify(item.message.content);
   const sender = JSON.stringify(item.sender);
   const settings = JSON.stringify(item.settings);
   return queue.items.some((candidate) => {
     if (candidate.queueItemId === item.queueItemId) return true;
+    // A managed-command item carries no message/sender/settings, so it can
+    // never be the host's echo of this send.
+    if (candidate.kind !== "prompt") return false;
     if (candidate.messageId === item.messageId) return true;
     if (JSON.stringify(candidate.message.content) !== content) return false;
     if (JSON.stringify(candidate.sender) !== sender) return false;

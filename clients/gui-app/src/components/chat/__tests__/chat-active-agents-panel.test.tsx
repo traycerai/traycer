@@ -46,6 +46,11 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   }),
 }));
 
+vi.mock("@/lib/epic-selectors", () => ({
+  useMaybeEpicTuiAgentHarnessId: (nodeId: string) =>
+    nodeId === "child-2" ? "claude" : null,
+}));
+
 // Stub the host-coupled stop button so these render tests stay focused on the
 // panel/list structure (header "Stop all", per-row hover stops, self-stop
 // inclusion) without the host client / mutation stack.
@@ -216,6 +221,7 @@ describe("ActiveAgentsPanel", () => {
             type: "chat",
             name: "Root chat",
             hostId: "d1",
+            harnessId: null,
           },
         },
       },
@@ -230,6 +236,7 @@ describe("ActiveAgentsPanel", () => {
             type: "chat",
             name: "Sub-agent one",
             hostId: "d1",
+            harnessId: null,
           },
         },
       },
@@ -244,6 +251,7 @@ describe("ActiveAgentsPanel", () => {
             type: "terminal-agent",
             name: "Sub-agent two",
             hostId: "d2",
+            harnessId: "claude",
           },
         },
       },

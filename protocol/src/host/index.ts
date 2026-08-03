@@ -6,6 +6,7 @@ export * from "./git-contracts";
 export * from "./git-constants";
 export * from "./git-schemas";
 export * from "./lifecycle";
+export * from "./managed-command";
 export * from "./migration";
 export * from "./notifications";
 export * from "./pr-contracts";

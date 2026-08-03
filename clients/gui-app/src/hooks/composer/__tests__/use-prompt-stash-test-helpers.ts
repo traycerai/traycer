@@ -286,6 +286,7 @@ export function makeEditor(initial: {
       content = next;
     },
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,

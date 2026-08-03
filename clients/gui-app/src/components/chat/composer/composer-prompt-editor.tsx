@@ -19,6 +19,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
+import type { MentionAttachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
@@ -30,7 +31,10 @@ import type {
   PastedComposerImage,
   PastedComposerImageOutcome,
 } from "./editor/extensions/chat-paste-handler";
-import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
+import {
+  insertMentionAttachmentCommand,
+  mentionSuggestionPluginKey,
+} from "./editor/extensions/mention-extension";
 import {
   skillSuggestionPluginKey,
   slashSuggestionPluginKey,
@@ -83,6 +87,8 @@ export interface ComposerPromptEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
+  /** Insert an existing @-mention attachment at the preserved caret. */
+  readonly insertMentionAttachment: (mention: MentionAttachment) => boolean;
   /**
    * Starts a path-insertion job anchored to the current caret. The returned
    * one-shot `commit` maps that position through intervening editor changes
@@ -519,6 +525,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor, stabilizeImageAttachmentCaret],
   );
 
+  const insertMentionAttachment = useCallback(
+    (mention: MentionAttachment): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return insertMentionAttachmentCommand(editor, mention);
+    },
+    [editor],
+  );
+
   const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
     if (editor === null || editor.isDestroyed) return null;
     let position = editor.state.selection.to;
@@ -622,6 +636,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       setContent,
       syncContent,
       insertImageAttachments,
+      insertMentionAttachment,
       beginPathInsertion,
       removeImageAttachmentById,
       rewriteImageAttachmentHashById,
@@ -637,6 +652,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       hasFocus,
       getJSON,
       insertImageAttachments,
+      insertMentionAttachment,
       insertDictatedText,
       isEmpty,
       isReady,
