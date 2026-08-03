@@ -3100,9 +3100,10 @@ function applyBlockDelta(
 // The block id whose OWNING message a detached backgrounded-subagent event
 // targets, plus whether routing to that owner is MANDATORY:
 //   - `subagent.*`             → the subagent block (`event.blockId`).
-//   - a terminal `tool_call.*` → its non-empty `parentBlockId` when it is a
-//     subagent CHILD; otherwise its own `blockId` (a genuinely top-level
-//     background command/Monitor terminal).
+//   - a terminal `tool_call.*` / `command.completed` → its non-empty
+//     `parentBlockId` when it is a subagent CHILD; otherwise its own `blockId`
+//     (a genuinely top-level background terminal - Claude backgrounds through a
+//     `tool_call`, Codex through a plain `command`).
 //   - any other nested event  → its `parentBlockId`.
 // `mandatory` is set whenever the owner comes from `parentBlockId` or from a
 // parentless background tool terminal: such an event belongs to an older row
@@ -3128,7 +3129,8 @@ function detachedSubagentOwnerTarget(
   }
   if (
     event.type === "tool_call.completed" ||
-    event.type === "tool_call.errored"
+    event.type === "tool_call.errored" ||
+    event.type === "command.completed"
   ) {
     if (parentBlockId !== null) {
       return { ownerBlockId: parentBlockId, mandatory: true };

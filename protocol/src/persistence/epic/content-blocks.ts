@@ -351,6 +351,25 @@ export const commandBlockSchema = z.object({
   // (e.g. grep over a large tree) and there is no durable store to lazy-fetch
   // them from. The card shows command + cwd + exit code + status, which is the
   // load-bearing signal.
+  // Persistent marker with the same three-state meaning as
+  // `toolCallBlockSchema.backgroundTask`: true once this command has been
+  // promoted to a backgrounded one (Codex yields a long-running exec to the
+  // background and keeps it alive past the turn that started it). The marker
+  // survives EVERY terminal path and reload, so the GUI keeps rendering it as a
+  // standalone background card once it settles instead of collapsing back into
+  // the generic activity group. `null` means "not yet known" - the promotion is
+  // only decided at the parent turn's end, so a command that is still running
+  // has no confirmed answer yet. Defaulted to `false` (not `null`) for blocks
+  // persisted before this field existed, since backgrounding didn't exist as a
+  // concept then.
+  backgroundTask: z.boolean().nullable().default(false),
+  // Set when the terminal outcome was an explicit stop - the host asked the
+  // provider to terminate a backgrounded command, or a teardown killed it -
+  // rather than the command failing on its own. The provider reports its own
+  // kill with a synthetic exit code, and rendering that as a failure would
+  // blame the command for something we did. Mirrors
+  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse.
+  stopped: z.boolean().default(false),
 });
 export type CommandBlock = z.infer<typeof commandBlockSchema>;
 

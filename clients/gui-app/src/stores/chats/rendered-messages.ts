@@ -3119,6 +3119,8 @@ const BLOCK_HANDLERS: {
     // No command-progress signal today; the field exists for footer symmetry.
     progress: null,
     startedAt: block.timestamp,
+    backgroundTask: block.backgroundTask,
+    stopped: block.stopped,
     parentId: block.parentBlockId ?? null,
   }),
   subagent: (block) =>

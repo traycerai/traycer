@@ -3349,6 +3349,161 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
+  // The codex analogue of the detached tool_call terminal above: codex
+  // backgrounds a plain `command` block, and its terminal lands as
+  // `command.completed` minutes after the row settled (live-repro: the card
+  // ticked forever and only "cleared" when the next send re-derived state).
+  it("routes a detached background command's terminal to the settled row that owns it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "assistant",
+          messageId: "assistant-settled",
+          sender: {
+            type: "agent",
+            harnessId: "codex",
+            agentId: "codex",
+            displayName: "Codex",
+            reply: { expectsReply: false },
+            inReplyTo: null,
+          },
+          blocks: [
+            {
+              type: "command",
+              blockId: "bg-command",
+              status: "streaming",
+              timestamp: 2,
+              command: "sleep 20 && echo done",
+              cwd: "/tmp",
+              exitCode: null,
+              backgroundTask: true,
+              stopped: false,
+            },
+          ],
+          startedAt: 2,
+          timestamp: 2,
+          turnId: "turn-settled",
+          usage: null,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    // A NEXT turn is live (raised directly - `startRunningTurn` would emit its
+    // own snapshot and wipe the settled row above).
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-1",
+        status: "running",
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        profileId: null,
+        userMessageId: "message-1",
+        startedAt: 3,
+        updatedAt: 3,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "active-text",
+        timestamp: 4,
+        delta: "Active turn",
+      },
+    });
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "command.completed",
+        blockId: "bg-command",
+        timestamp: 30,
+        command: "sleep 20 && echo done",
+        exitCode: 0,
+        backgroundTask: true,
+      },
+    });
+
+    const state = harness.handle.store.getState();
+    const settled = state.messages.find(
+      (message) => message.messageId === "assistant-settled",
+    );
+    if (settled?.role !== "assistant") {
+      throw new Error("Expected the settled assistant row");
+    }
+    expect(settled.blocks).toEqual([
+      expect.objectContaining({
+        type: "command",
+        blockId: "bg-command",
+        status: "completed",
+        exitCode: 0,
+      }),
+    ]);
+    expect(state.liveAssistantMessage?.blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  it("does not apply an ownerless detached background command terminal to the active turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "active-text",
+        timestamp: 4,
+        delta: "Active turn",
+      },
+    });
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "command.completed",
+        blockId: "detached-command",
+        timestamp: 5,
+        command: "sleep 20 && echo done",
+        exitCode: 0,
+        backgroundTask: true,
+      },
+    });
+
+    const blocks = harness.handle.store.getState().liveAssistantMessage?.blocks;
+    expect(blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
   it("keeps a completed live assistant visible when the next turn starts", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
