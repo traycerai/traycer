@@ -32,10 +32,11 @@ export function isDiffsEditorEvent(event: Event): boolean {
     if (target.hasAttribute("data-diffs-editor-boundary")) {
       insideDiffsEditor = true;
     }
-    if (
-      target.isContentEditable ||
-      target.getAttribute("contenteditable") !== null
-    ) {
+    // `isContentEditable` (not raw attribute presence) so an explicit
+    // `contenteditable="false"` node inside the boundary is correctly NOT
+    // treated as editable - `getAttribute(...) !== null` would wrongly match
+    // it too, since the attribute is present regardless of its value.
+    if (target.isContentEditable) {
       hasEditableTarget = true;
     }
   }

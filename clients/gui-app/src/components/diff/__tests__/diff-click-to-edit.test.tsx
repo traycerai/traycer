@@ -248,9 +248,14 @@ describe("click-to-edit adapter", () => {
     const rangeRect = vi
       .spyOn(Range.prototype, "getBoundingClientRect")
       .mockImplementation(function mockedRect(this: Range): DOMRect {
-        const offset = this.startOffset;
-        // Each glyph is 10px wide starting at x=0.
-        return rect(offset * 10, 10);
+        // Each glyph is 10px wide starting at x=0. The optimized caret walk
+        // measures the WHOLE node (startOffset 0, endOffset text.length)
+        // before falling back to per-character ranges, so the mock must
+        // size itself off both offsets, not just startOffset.
+        return rect(
+          this.startOffset * 10,
+          (this.endOffset - this.startOffset) * 10,
+        );
       });
 
     try {
@@ -274,6 +279,51 @@ describe("click-to-edit adapter", () => {
     }
   });
 
+  it("skips whole text nodes left of the click instead of measuring every character", () => {
+    // Regression for the click-to-edit hot path doing one Range +
+    // getBoundingClientRect per UTF-16 code unit: a long, highlighted line
+    // (many small token text nodes) must skip nodes entirely left of the
+    // click in ~O(1) instead of walking every character of every node.
+    const GLYPH_WIDTH = 10;
+    const BEFORE_LENGTH = 3000;
+    const line = document.createElement("div");
+    const before = document.createElement("span");
+    before.textContent = "x".repeat(BEFORE_LENGTH);
+    const after = document.createElement("span");
+    after.textContent = "abc";
+    line.append(before, after);
+    document.body.append(line);
+
+    const beforeTextNode = before.firstChild;
+    const beforeWidth = BEFORE_LENGTH * GLYPH_WIDTH;
+    let callCount = 0;
+    const rangeRect = vi
+      .spyOn(Range.prototype, "getBoundingClientRect")
+      .mockImplementation(function mockedRect(this: Range): DOMRect {
+        callCount += 1;
+        const base = this.startContainer === beforeTextNode ? 0 : beforeWidth;
+        return rect(
+          base + this.startOffset * GLYPH_WIDTH,
+          (this.endOffset - this.startOffset) * GLYPH_WIDTH,
+        );
+      });
+
+    try {
+      // Click on the "b" in "abc", well past `before`'s span.
+      const clientX = beforeWidth + 15;
+      expect(resolveLineCaretCharacter({ lineElement: line, clientX })).toBe(
+        BEFORE_LENGTH + 1,
+      );
+      // A per-character walk of `before` alone would need BEFORE_LENGTH
+      // calls; skipping it whole plus a handful of calls for `after` stays
+      // far below that.
+      expect(callCount).toBeLessThan(20);
+    } finally {
+      rangeRect.mockRestore();
+      line.remove();
+    }
+  });
+
   it("maps a line-only click through measured caret resolution", () => {
     const activate = vi.fn<Activate>(() =>
       Promise.resolve({ kind: "activated" }),
@@ -285,7 +335,10 @@ describe("click-to-edit adapter", () => {
     const rangeRect = vi
       .spyOn(Range.prototype, "getBoundingClientRect")
       .mockImplementation(function mockedRect(this: Range): DOMRect {
-        return rect(this.startOffset * 10, 10);
+        return rect(
+          this.startOffset * 10,
+          (this.endOffset - this.startOffset) * 10,
+        );
       });
 
     try {
@@ -346,7 +399,58 @@ describe("click-to-edit adapter", () => {
     await request.editorReady;
     expect(editorReadySettled).toBe(true);
   });
+
+  it("does not leave opportunistic preload rejections unhandled", () => {
+    // Regression: `preloadIfEnabled` (hover) and `onPointerDownCapture`
+    // (pointerdown) both fire-and-forget `preloadDiffEditProvider()`, which
+    // rethrows a failed dynamic import. Without a `.catch`, a failed
+    // opportunistic preload leaks an unhandled rejection - unlike the
+    // activation path, which awaits the same promise through `editorReady`
+    // and reports failures via `onActivationError`. Spying on `.catch` of
+    // the returned promise proves a handler is actually attached, rather
+    // than relying on the timing of process-level rejection tracking.
+    const rejection = Promise.reject(new Error("preload chunk failed"));
+    const catchSpy = vi.spyOn(rejection, "catch");
+    preloadState.preload.mockReturnValue(rejection);
+
+    const { result } = renderAdapter(vi.fn(), vi.fn());
+    act(() => {
+      result.current.fileOptions.onLineEnter?.(fileLine(1));
+    });
+    expect(catchSpy).toHaveBeenCalledTimes(1);
+
+    render(<PointerHarness />);
+    fireEvent.pointerDown(screen.getByTestId("pointer-target"), {
+      button: 0,
+    });
+    expect(catchSpy).toHaveBeenCalledTimes(2);
+
+    // The shared test-suite rejection tracker (test-browser-apis.ts) only
+    // *logs* a leaked rejection rather than failing the run, but attach a
+    // real handler anyway so this deliberately-rejected fixture promise
+    // never reaches it.
+    return rejection.catch(() => undefined);
+  });
 });
+
+function PointerHarness() {
+  const adapter = useDiffClickToEdit({
+    surfaceId: "pointer-surface",
+    enabled: true,
+    active: false,
+    onActivate: () => Promise.resolve({ kind: "activated" }),
+    onActivationError: vi.fn(),
+    onChange: vi.fn(),
+    onBlur: vi.fn(),
+    onSaveShortcut: vi.fn(),
+  });
+  return (
+    <div
+      data-testid="pointer-target"
+      onPointerDownCapture={adapter.onPointerDownCapture}
+    />
+  );
+}
 
 function KeyboardHarness(props: { readonly onFlush: () => void }) {
   const adapter = useDiffClickToEdit({

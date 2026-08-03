@@ -100,7 +100,7 @@ export function resolveLineCaretCharacter(input: {
   readonly lineElement: HTMLElement;
   readonly clientX: number;
 }): number {
-  const { lineElement } = input;
+  const { lineElement, clientX } = input;
   const walker = lineElement.ownerDocument.createTreeWalker(lineElement, 4);
   const range = lineElement.ownerDocument.createRange();
   let character = 0;
@@ -108,18 +108,51 @@ export function resolveLineCaretCharacter(input: {
 
   while (textNode !== null) {
     const text = textNode.nodeValue ?? "";
-    for (let offset = 0; offset < text.length; offset += 1) {
-      range.setStart(textNode, offset);
-      range.setEnd(textNode, offset + 1);
-      const bounds = range.getBoundingClientRect();
-      if (bounds.width > 0 || bounds.height > 0) {
-        const midpoint = bounds.left + bounds.width / 2;
-        if (input.clientX <= midpoint) return character + offset;
-      }
+    if (
+      text.length > 0 &&
+      !isNodeEntirelyLeftOfClick(range, textNode, text, clientX)
+    ) {
+      const offset = resolveOffsetWithinNode(range, textNode, text, clientX);
+      if (offset !== null) return character + offset;
     }
     character += text.length;
     textNode = walker.nextNode();
   }
 
   return character;
+}
+
+// Measures the whole node before walking it one UTF-16 code unit at a time -
+// a long line (a minified bundle, say) can carry thousands of characters
+// across many highlighted-token text nodes, and most of them sit entirely
+// left of the click. Skip those in one measurement instead of one Range +
+// getBoundingClientRect per character.
+function isNodeEntirelyLeftOfClick(
+  range: Range,
+  textNode: Node,
+  text: string,
+  clientX: number,
+): boolean {
+  range.setStart(textNode, 0);
+  range.setEnd(textNode, text.length);
+  const bounds = range.getBoundingClientRect();
+  return (bounds.width > 0 || bounds.height > 0) && clientX > bounds.right;
+}
+
+function resolveOffsetWithinNode(
+  range: Range,
+  textNode: Node,
+  text: string,
+  clientX: number,
+): number | null {
+  for (let offset = 0; offset < text.length; offset += 1) {
+    range.setStart(textNode, offset);
+    range.setEnd(textNode, offset + 1);
+    const bounds = range.getBoundingClientRect();
+    if (bounds.width > 0 || bounds.height > 0) {
+      const midpoint = bounds.left + bounds.width / 2;
+      if (clientX <= midpoint) return offset;
+    }
+  }
+  return null;
 }

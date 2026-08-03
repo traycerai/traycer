@@ -21,6 +21,17 @@ import { preloadDiffEditProvider } from "@/components/diff/diff-edit-provider-lo
 
 type DiffInteractionOptions = NonNullable<FileDiffProps<undefined>["options"]>;
 
+/**
+ * Opportunistic preloads (hover, pointerdown) are fire-and-forget - nothing
+ * awaits them, so a rejected dynamic import must not surface as an unhandled
+ * rejection. The activation path preloads separately via `preloadDiffEditProvider`
+ * directly, awaited through `editorReady`, and reports failures via
+ * `onActivationError`; this helper is only for the passive warm-up calls.
+ */
+function preloadDiffEditProviderSilently(): void {
+  void preloadDiffEditProvider().catch(() => undefined);
+}
+
 export interface DiffEditActivationRequest {
   readonly caret: DiffEditCaret;
   readonly isCurrent: () => boolean;
@@ -90,7 +101,7 @@ export function useDiffClickToEdit(props: {
     pendingCaretRef.current = null;
   }, []);
   const preloadIfEnabled = useCallback((): void => {
-    if (propsRef.current.enabled) void preloadDiffEditProvider();
+    if (propsRef.current.enabled) preloadDiffEditProviderSilently();
   }, []);
 
   const activate = useCallback(
@@ -276,7 +287,7 @@ export function useDiffClickToEdit(props: {
         !event.metaKey &&
         !event.shiftKey
       ) {
-        void preloadDiffEditProvider();
+        preloadDiffEditProviderSilently();
       }
     },
     [],
