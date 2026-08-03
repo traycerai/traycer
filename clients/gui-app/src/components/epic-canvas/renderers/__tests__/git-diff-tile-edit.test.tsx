@@ -451,6 +451,38 @@ describe("<GitDiffTile /> editing", () => {
     ).toBe(true);
   });
 
+  it("retries a failed drift comparison instead of treating it as checked-and-stale", async () => {
+    const rendered = renderTile(NODE, true);
+    fireEvent.click(screen.getByRole("button", { name: "Click code" }));
+    expect(
+      await screen.findByRole("button", { name: "Change draft" }),
+    ).toBeTruthy();
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+
+    state.refetchContents.mockResolvedValueOnce({
+      error: new Error("worktree read offline"),
+      data: undefined,
+    });
+    state.worktreeOid = "worktree-2";
+    rendered.rerender(tileElement(NODE, true));
+
+    await waitFor(() => {
+      expect(state.refetchContents).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText("Worktree changed")).toBeNull();
+
+    // A later render (still the same, unresolved comparison identity) must
+    // retry rather than staying permanently marked "checked" against a
+    // failed attempt.
+    state.worktreeContent = "const external = true;\n";
+    rendered.rerender(tileElement(NODE, true));
+    await waitFor(() => {
+      expect(state.refetchContents).toHaveBeenCalledTimes(3);
+    });
+    const staleStatus = await screen.findByText("Worktree changed");
+    expect(staleStatus).toBeTruthy();
+  });
+
   it("keeps the editor document, caret, runtime draft, and loader stable through a pending OID rollover", async () => {
     const rendered = renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));

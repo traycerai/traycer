@@ -226,7 +226,30 @@ export function useGitDiffEditing(
       isCurrent: () => !cancelled,
       editorReady: preloadDiffEditProvider(),
     };
-    void beginRef.current(request);
+    // `begin` awaits `request.editorReady` (this same preload) inside its own
+    // `Promise.all` - unlike the click-driven path, which routes through
+    // `useDiffClickToEdit`'s internal `.catch()` into `onActivationError`,
+    // nothing awaits this fire-and-forget call. A preload rejection (e.g. a
+    // chunk load failure) would otherwise surface as an unhandled promise
+    // rejection, and `resumeAttemptRef` would stay pinned to this content
+    // revision forever, permanently skipping the automatic resume for it.
+    void beginRef.current(request).catch((error: unknown) => {
+      if (resumeAttemptRef.current === attemptKey) {
+        resumeAttemptRef.current = null;
+      }
+      if (!cancelled) {
+        reportableErrorToast(
+          "Couldn’t resume editing this diff.",
+          undefined,
+          createReportIssueContext({
+            title: "Could not resume editing this diff",
+            message: error instanceof Error ? error.message : null,
+            code: null,
+            source: "Git diff edit",
+          }),
+        );
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -257,30 +280,51 @@ export function useGitDiffEditing(
     }
     const attemptIdentity = args.currentComparisonIdentity;
     driftAttemptRef.current = attemptIdentity;
-    void contentsQuery.refetch().then((result) => {
-      // A ref-based check, not a `cancelled` closure torn down by effect
-      // cleanup: `contentsQuery` changing (e.g. its own `isFetching` flip
-      // while THIS refetch is in flight) re-runs this effect and would tear
-      // down a closure-scoped flag long before the request resolves,
-      // discarding a still-relevant result. `driftAttemptRef` only moves
-      // when a genuinely different comparison identity supersedes this one.
-      if (driftAttemptRef.current !== attemptIdentity) return;
-      const latestContent = result.data?.worktreeFile?.contents;
-      const matchesBaseline =
-        latestContent !== undefined &&
-        latestContent === fileSession.runtime?.store.getState().baselineContent;
-      // Mark this comparison identity checked either way. Leaving it unmarked
-      // on a genuine mismatch would keep `hydration.comparisonIdentity` stale
-      // forever, and since this effect's own `refetch()` changes `contentsQuery`
-      // identity, that would re-fire this effect (and re-hit the host) on
-      // every render for as long as the file stays flagged stale.
-      setHydration((current) =>
-        current === null
-          ? null
-          : { ...current, comparisonIdentity: attemptIdentity },
-      );
-      setStaleIdentity(matchesBaseline ? null : attemptIdentity);
-    });
+    void contentsQuery
+      .refetch()
+      .then((result) => {
+        // A ref-based check, not a `cancelled` closure torn down by effect
+        // cleanup: `contentsQuery` changing (e.g. its own `isFetching` flip
+        // while THIS refetch is in flight) re-runs this effect and would tear
+        // down a closure-scoped flag long before the request resolves,
+        // discarding a still-relevant result. `driftAttemptRef` only moves
+        // when a genuinely different comparison identity supersedes this one.
+        if (driftAttemptRef.current !== attemptIdentity) return;
+        // A transport failure (`result.error`, the same field
+        // `validateGitEditContents` below checks) or a payload-level error
+        // (RPC succeeded but reported one) means this comparison never
+        // actually ran - `worktreeFile` is absent either way. Treating that
+        // the same as "checked, content differs" would flag a
+        // merely-unreachable host as genuine worktree drift. Leave the ref
+        // unset (not "checked") so the next render - `contentsQuery` is not
+        // referentially stable, so there always is one - retries the same
+        // identity instead of treating a failed check as a completed one.
+        if (result.error !== null || (result.data?.error ?? null) !== null) {
+          driftAttemptRef.current = null;
+          return;
+        }
+        const latestContent = result.data?.worktreeFile?.contents;
+        const matchesBaseline =
+          latestContent !== undefined &&
+          latestContent ===
+            fileSession.runtime?.store.getState().baselineContent;
+        // Mark this comparison identity checked either way. Leaving it unmarked
+        // on a genuine mismatch would keep `hydration.comparisonIdentity` stale
+        // forever, and since this effect's own `refetch()` changes `contentsQuery`
+        // identity, that would re-fire this effect (and re-hit the host) on
+        // every render for as long as the file stays flagged stale.
+        setHydration((current) =>
+          current === null
+            ? null
+            : { ...current, comparisonIdentity: attemptIdentity },
+        );
+        setStaleIdentity(matchesBaseline ? null : attemptIdentity);
+      })
+      .catch(() => {
+        if (driftAttemptRef.current === attemptIdentity) {
+          driftAttemptRef.current = null;
+        }
+      });
   }, [
     active,
     args.currentComparisonIdentity,
