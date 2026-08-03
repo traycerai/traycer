@@ -13,7 +13,6 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
 import {
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
-  CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
 } from "@/components/chat/chat-turn-minimap-logic";
@@ -478,7 +477,10 @@ describe("ChatTurnMinimap always-on rail", () => {
     ).not.toBeNull();
     expect(
       hitStrip.getAttribute("data-chat-turn-minimap-interactive-width"),
-    ).toBe(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH);
+    ).toBe(`${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}`);
+    expect(hitStrip.style.width).toBe(
+      `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
+    );
   });
 });
 
@@ -617,6 +619,40 @@ describe("ChatTurnMinimap mouse interaction", () => {
     expect(blurSpy).toHaveBeenCalled();
   });
 
+  it("keeps the rail clickable without activating during a quote-selection drag", async () => {
+    const { onSelect } = renderMinimap({
+      messages: makeThreeTurnTranscript(),
+    });
+    await flushMinimapFrames(2);
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    mockRailGeometry(hitStrip, { top: 100, height: 200 });
+
+    // A selection that begins in transcript text can cross the edge rail.
+    // Primary-button motion must not open the preview over that gesture.
+    fireEvent.mouseMove(hitStrip, { buttons: 1, clientY: 200 });
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).toBeNull();
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // After mouseup, the quote flow still owns a non-collapsed selection.
+    // Incidental pointer motion near the rail must continue to leave it alone.
+    const getSelectionSpy = vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: false,
+    } as Selection);
+    fireEvent.mouseMove(hitStrip, { buttons: 0, clientY: 200 });
+    expect(
+      document.querySelector("[data-chat-turn-minimap-preview]"),
+    ).toBeNull();
+    getSelectionSpy.mockRestore();
+
+    // A clean, intentional rail click remains navigation, independent of the
+    // popover card's separate click target.
+    fireEvent.click(hitStrip, { clientY: 200 });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith("message-2");
+  });
+
   it("clicking the preview card selects its message", async () => {
     const { onSelect } = renderMinimap({
       messages: makeTwoTurnTranscript(),
@@ -722,7 +758,10 @@ describe("ChatTurnMinimap mouse interaction", () => {
     expect(collapseButton.getAttribute("data-variant")).toBe("ghost");
     expect(
       hitStrip.getAttribute("data-chat-turn-minimap-interactive-width"),
-    ).toBe(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH);
+    ).toBe(`${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}`);
+    expect(hitStrip.style.width).toBe(
+      `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
+    );
     expect(
       collapseButton.querySelector(".lucide-fold-vertical"),
     ).not.toBeNull();

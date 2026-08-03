@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
-  CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
-  CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_ITEM_SPACING,
   CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS,
   CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS,
   resolveChatTurnMinimapHeightStyle,
   resolveChatTurnMinimapIndexFromPointer,
-  resolveChatTurnMinimapInteractiveWidth,
   resolveChatTurnMinimapRowHeight,
   resolveChatTurnMinimapRowInView,
   resolveChatTurnMinimapRowTop,
@@ -183,27 +180,6 @@ describe("resolveChatTurnMinimapIndexFromPointer", () => {
         pointerY: lastInteriorBoundary + 1,
       }),
     ).toBe(4);
-  });
-});
-
-describe("resolveChatTurnMinimapInteractiveWidth", () => {
-  it("returns the collapsed numeric width when not expanded", () => {
-    expect(
-      resolveChatTurnMinimapInteractiveWidth(
-        CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-        false,
-      ),
-    ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
-  });
-
-  it("returns the expanded rem width once the preview is open", () => {
-    expect(resolveChatTurnMinimapInteractiveWidth(0, true)).toBe(
-      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
-    );
-    expect(resolveChatTurnMinimapInteractiveWidth(40, true)).toBe(
-      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
-    );
-    expect(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH).toContain("100vw");
   });
 });
 

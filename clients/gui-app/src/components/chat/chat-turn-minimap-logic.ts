@@ -90,20 +90,6 @@ export function resolveChatTurnMinimapIndexFromPointer(input: {
 
 /** Always-on edge hit target, including narrow and tiled transcript panes. */
 export const CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
-export const CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH =
-  "min(22rem, calc(100vw - 1rem))";
-
-/**
- * Once the preview is open, keep the full preview and the space leading to it
- * interactive. The collapsed rail keeps a compact fixed edge target so it
- * remains usable in narrow and tiled panes.
- */
-export function resolveChatTurnMinimapInteractiveWidth(
-  collapsedWidth: number,
-  expanded: boolean,
-): number | string {
-  return expanded ? CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH : collapsedWidth;
-}
 
 export interface ChatTurnMinimapListState {
   readonly scroll?: number;

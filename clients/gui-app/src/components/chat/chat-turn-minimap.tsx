@@ -16,7 +16,6 @@ import {
   CHAT_TURN_MINIMAP_MIN_ITEMS,
   resolveChatTurnMinimapHeightStyle,
   resolveChatTurnMinimapIndexFromPointer,
-  resolveChatTurnMinimapInteractiveWidth,
   resolveChatTurnMinimapRowViewportDistance,
   resolveChatTurnMinimapTopStyle,
   type ChatTurnMinimapListState,
@@ -134,6 +133,21 @@ function chatTurnMinimapEventTargetsPreview(target: EventTarget): boolean {
     target instanceof Element &&
     target.closest("[data-chat-turn-minimap-preview]") !== null
   );
+}
+
+/**
+ * A primary-button move can be a transcript text-selection gesture crossing
+ * the edge rail. Likewise, a completed non-collapsed selection belongs to the
+ * quote flow until the user explicitly clicks the minimap. Neither state
+ * should open a preview over the selected text merely because the pointer is
+ * near the rail.
+ */
+function chatTurnMinimapShouldIgnoreHover(
+  event: ReactMouseEvent<HTMLElement>,
+): boolean {
+  if (event.buttons !== 0) return true;
+  const selection = window.getSelection();
+  return selection !== null && !selection.isCollapsed;
 }
 
 /** The preview anchors to the active strip's own top edge, except at the
@@ -713,10 +727,6 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   const safeBottomInset = Math.max(0, Math.ceil(bottomInset));
   const previewVisible = interactionStarted && activeItem !== null;
-  const interactiveWidth = resolveChatTurnMinimapInteractiveWidth(
-    CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-    previewVisible || expanded,
-  );
 
   return (
     <div
@@ -744,7 +754,9 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
           <button
             aria-label="Message minimap"
             className="pointer-events-auto relative block h-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-            data-chat-turn-minimap-interactive-width={interactiveWidth}
+            data-chat-turn-minimap-interactive-width={
+              CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH
+            }
             data-testid="chat-turn-minimap-hit-strip"
             {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
             onClick={handleHitStripClick}
@@ -755,11 +767,13 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
             onKeyDown={handleHitStripKeyDown}
             onMouseDown={handleHitStripMouseDown}
             onMouseMove={(event) => {
-              if (!expanded) updateActiveIndexFromPointer(event);
+              if (!expanded && !chatTurnMinimapShouldIgnoreHover(event)) {
+                updateActiveIndexFromPointer(event);
+              }
             }}
             ref={hitStripRef}
             style={{
-              width: interactiveWidth,
+              width: CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
             }}
             type="button"
           >

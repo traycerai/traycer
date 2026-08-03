@@ -893,12 +893,15 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * Absolutely overlays the transcript (decision log #3) instead of
              * pushing its height via flex, so streamed replies flow visually
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset.
+             * transcript's bottom content inset. The wrapper owns the opaque
+             * backdrop and a paint-only 1px overdraw so fractional scrolling
+             * cannot expose the transcript between the dock and tile edge.
              */}
             {view.snapshotLoaded ? (
               <div
                 ref={setLowerSurfacesElement}
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-canvas after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']"
+                data-chat-lower-surfaces-overlay=""
               >
                 <div className="pointer-events-auto">
                   <SurfaceActivityProvider active={view.surfaceFocused}>
