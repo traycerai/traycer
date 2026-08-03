@@ -50,8 +50,6 @@ export function CommGraphTile(props: CommGraphTileProps) {
     jumpToSender,
     canJumpToCreated,
     jumpToCreated,
-    canJumpToNoticed,
-    jumpToNoticed,
     openAgent,
   } = useCommGraphJump(node.epicId, agents);
 
@@ -91,8 +89,6 @@ export function CommGraphTile(props: CommGraphTileProps) {
           onJumpToSender={jumpToSender}
           canJumpToCreated={canJumpToCreated}
           onJumpToCreated={jumpToCreated}
-          canJumpToNoticed={canJumpToNoticed}
-          onJumpToNoticed={jumpToNoticed}
           onOpenAgent={openAgent}
         />
       </div>

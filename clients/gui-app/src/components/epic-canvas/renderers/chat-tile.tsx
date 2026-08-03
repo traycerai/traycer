@@ -737,9 +737,6 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
       if (target.kind === "first-message") {
         return view.messages[0]?.id ?? null;
       }
-      if (target.kind === "last-message") {
-        return view.messages.at(-1)?.id ?? null;
-      }
       return messageIdForBlock(view.messages, target.blockId);
     };
     const messageId = resolveTargetMessageId();
