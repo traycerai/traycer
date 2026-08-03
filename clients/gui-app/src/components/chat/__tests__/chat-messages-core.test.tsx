@@ -1099,6 +1099,54 @@ describe("ChatMessages scroll policy", () => {
       ).toBeNull();
     });
 
+    it("navigates from the painted narrow rail through the real transcript viewport", async () => {
+      const messages = makeTranscript(20);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "narrow-painted-minimap-click",
+      });
+      mockNarrowTranscriptWidth(420);
+      await settleLegendList();
+
+      const interactionRegion = document.querySelector<HTMLElement>(
+        "[data-chat-turn-minimap-interaction-region]",
+      );
+      if (interactionRegion === null) {
+        throw new Error("expected minimap interaction region");
+      }
+      vi.spyOn(interactionRegion, "getBoundingClientRect").mockReturnValue({
+        x: 420,
+        y: 100,
+        width: 0,
+        height: 200,
+        top: 100,
+        left: 420,
+        right: 420,
+        bottom: 300,
+        toJSON: () => ({}),
+      });
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("expected LegendListRef");
+      const scrollToIndex = vi.spyOn(list, "scrollToIndex");
+      const transcriptTarget = screen.getByTestId("mock-message-message-10");
+      const click = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 419,
+        clientY: 100,
+      });
+
+      act(() => {
+        transcriptTarget.dispatchEvent(click);
+      });
+
+      expect(click.defaultPrevented).toBe(true);
+      await waitFor(() => expect(scrollToIndex).toHaveBeenCalled());
+      expect(
+        screen.getByTestId("chat-turn-minimap-hit-strip").hasAttribute("inert"),
+      ).toBe(true);
+    });
+
     it("stays interactive at the harness's default pane width", async () => {
       const messages = makeTranscript(20);
       renderChatMessages({ messages, scrollStateKey: "m3b-usable-hit-strip" });

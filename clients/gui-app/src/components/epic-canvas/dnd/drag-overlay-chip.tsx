@@ -7,7 +7,13 @@
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
-import { FileDiff, FilePlus, GitPullRequest } from "lucide-react";
+import {
+  Activity,
+  FileDiff,
+  FilePlus,
+  Folder,
+  GitPullRequest,
+} from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
@@ -16,18 +22,21 @@ import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  WORKSPACE_FOLDER_DND_TYPE,
   type EpicCanvasDragSourceData,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
 import {
   isBlankTileRef,
+  isManagedCommandOutputTileRef,
   isCommGraphTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   isPrDetailTileRef,
   isPrDiffTileRef,
   type BlankTileRef,
+  type ManagedCommandOutputTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
@@ -86,6 +95,8 @@ export function EpicRootDragOverlayContent() {
   const openableSource = canvasOpenableDragSource(activeSource);
   const railSource =
     activeSource?.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE ? activeSource : null;
+  const folderSource =
+    activeSource?.kind === WORKSPACE_FOLDER_DND_TYPE ? activeSource : null;
 
   return (
     <>
@@ -95,6 +106,14 @@ export function EpicRootDragOverlayContent() {
             key={overlayTile.instanceId}
             node={overlayTile}
             epicId={openableSource.epicId}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence initial={false}>
+        {folderSource === null ? null : (
+          <WorkspaceFolderDragOverlay
+            key={folderSource.folderPath}
+            name={folderSource.name}
           />
         )}
       </AnimatePresence>
@@ -115,6 +134,15 @@ export function EpicRootDragOverlayContent() {
         )}
       </AnimatePresence>
     </>
+  );
+}
+
+function WorkspaceFolderDragOverlay(props: { readonly name: string }) {
+  return (
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+      <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{props.name}</span>
+    </m.div>
   );
 }
 
@@ -146,6 +174,9 @@ function EpicCanvasNodeDragOverlay(props: {
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
   }
+  if (isManagedCommandOutputTileRef(props.node)) {
+    return <ManagedCommandOutputTileDragOverlay node={props.node} />;
+  }
   if (isCommGraphTileRef(props.node)) {
     return (
       <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
@@ -155,6 +186,21 @@ function EpicCanvasNodeDragOverlay(props: {
     );
   }
   return <ArtifactNodeDragOverlay node={props.node} epicId={props.epicId} />;
+}
+
+/**
+ * The dragged output window carries no label of its own (its tile is just the
+ * command pointer), so the chip names the surface rather than the command.
+ */
+function ManagedCommandOutputTileDragOverlay(props: {
+  readonly node: ManagedCommandOutputTileRef;
+}) {
+  return (
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+      <Activity className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+    </m.div>
+  );
 }
 
 function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {

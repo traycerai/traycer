@@ -14,6 +14,7 @@ import type {
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -354,7 +355,11 @@ function steeredMessageIdsFromEvents(
         if (queueItemHasActiveInterruptRestartSteer(item)) {
           continue;
         }
-        steeredMessageIds.delete(item.messageId);
+        // Only prompt items map back to a rendered user message; a
+        // managed-command item has no message to un-badge.
+        if (item.kind === "prompt") {
+          steeredMessageIds.delete(item.messageId);
+        }
         steerRequestMessageIdsByQueueItemId.delete(item.queueItemId);
       }
     }
@@ -367,6 +372,8 @@ function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
   const requestedItems = queueItemsFromEventMetadata(event.metadata);
   for (const item of requestedItems) {
     if (item.queueItemId !== event.queueItemId) continue;
+    // Managed-command items are never steered, so they never carry a request.
+    if (item.kind !== "prompt") return false;
     return item.steerRequest?.mode === "interrupt_restart";
   }
   return false;
@@ -375,6 +382,7 @@ function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
 function queueItemHasActiveInterruptRestartSteer(
   item: ChatQueuedItem,
 ): boolean {
+  if (item.kind !== "prompt") return false;
   return (
     (item.status === "steer_requested" || item.status === "steering") &&
     item.steerRequest !== null &&
@@ -2128,7 +2136,7 @@ function renderSteerBlockUserMessage(
 
 function renderSteeredUserMessage(input: {
   readonly id: string;
-  readonly content: ChatQueuedItem["message"]["content"];
+  readonly content: ChatQueuedPromptItem["message"]["content"];
   readonly timestamp: number;
   readonly persistentMessageId: string | null;
   readonly sender: UserMessageSender | null;
