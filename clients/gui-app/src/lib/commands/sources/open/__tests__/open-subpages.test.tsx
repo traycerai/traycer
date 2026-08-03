@@ -25,6 +25,9 @@ const spies = vi.hoisted(() => ({
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
   current: "default-host",
 }));
+const remoteHostAvailableMock = vi.hoisted<{ current: boolean }>(() => ({
+  current: true,
+}));
 const ACTIVE_ROWS = vi.hoisted<WorktreeBindingSelectorRowV12[]>(() => [
   {
     hostId: "default-host",
@@ -222,6 +225,31 @@ vi.mock("@/lib/host", () => ({
   }),
   useHostClient: () => ({
     request: () => new Promise(() => {}),
+    resolveHostById: (hostId: string) => {
+      if (hostId === "default-host") {
+        return {
+          hostId,
+          label: "Default Mac",
+          kind: "local",
+          websocketUrl: "ws://default-host.test",
+          version: null,
+          status: "available",
+        };
+      }
+      if (hostId === "terminal-host") {
+        return {
+          hostId,
+          label: "Remote Terminal Mac",
+          kind: "remote",
+          websocketUrl: remoteHostAvailableMock.current
+            ? "ws://terminal-host.test"
+            : null,
+          version: null,
+          status: remoteHostAvailableMock.current ? "available" : "unavailable",
+        };
+      }
+      return null;
+    },
     getActiveHostId: () => "default-host",
     getRequestContextUserId: () => "user-test",
     onChange: () => () => undefined,
@@ -372,6 +400,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   activeHostIdMock.current = "default-host";
+  remoteHostAvailableMock.current = true;
   terminalBindingsMock.active.data.rows = ACTIVE_ROWS;
   terminalBindingsMock.active.data.folderlessCwd = "/work/default-cwd";
   terminalBindingsMock.active.isPending = false;
@@ -555,6 +584,32 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected terminal ref");
     }
     expect(opened.ref.cwd).toBe("/remote/feature-worktree");
+  });
+
+  it("rechecks remote host reachability when a workspace leaf is invoked", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const workspaces = renderItems(newTerminal.subpage.useItems);
+    const remoteHost = workspaces.find(
+      (item) => item.label === "Remote Terminal Mac",
+    );
+    if (remoteHost?.subpage === null || remoteHost?.subpage === undefined) {
+      throw new Error("expected remote-host workspace subpage");
+    }
+    const remoteWorkspaces = renderItems(remoteHost.subpage.useItems);
+    const remoteWorkspace = remoteWorkspaces.find(
+      (item) => item.label === "/remote/feature-worktree",
+    );
+
+    // The row remains mounted with cached workspace data while the live host
+    // directory changes underneath it. Invocation must use that live state.
+    remoteHostAvailableMock.current = false;
+    runById(remoteWorkspaces, remoteWorkspace?.id ?? "missing");
+
+    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
   });
 
   it("keeps reachable remote hosts selectable while no active host is resolved", () => {

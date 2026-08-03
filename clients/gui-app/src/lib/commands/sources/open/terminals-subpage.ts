@@ -10,6 +10,7 @@
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { buildTerminalTileRef } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -20,7 +21,11 @@ import {
   useWorktreeListBindingsForEpic,
   useWorktreeListBindingsForEpicForClient,
 } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
-import { useHostBinding, useHostClient } from "@/lib/host";
+import {
+  useHostBinding,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
@@ -47,6 +52,7 @@ function terminalWorkspaceLeaf(
   ctx: CommandContext,
   target: { readonly hostId: string; readonly cwd: string },
   label: string,
+  hostClient: HostClient<HostRpcRegistry>,
 ): CommandItem {
   // Cmdk can invoke a selected row twice before its view rerenders. Keep this
   // synchronous per-leaf latch so one workspace selection creates one terminal.
@@ -57,6 +63,14 @@ function terminalWorkspaceLeaf(
     keywords: [target.cwd, "new", "terminal", "workspace"],
     run: () => {
       if (hasLaunched) return;
+      const liveEntry = hostClient.resolveHostById(target.hostId);
+      if (
+        liveEntry === null ||
+        liveEntry.status !== "available" ||
+        liveEntry.websocketUrl === null
+      ) {
+        return;
+      }
       hasLaunched = true;
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,
@@ -127,10 +141,16 @@ function terminalWorkspaceFolderlessCwdErrorHint(hostId: string): CommandItem {
 function terminalWorkspaceLeaves(
   ctx: CommandContext,
   hostId: string,
-  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
-  folderlessCwd: string | null,
+  workspace: {
+    readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
+    readonly folderlessCwd: string | null;
+  },
+  hostClient: HostClient<HostRpcRegistry>,
 ): ReadonlyArray<CommandItem> {
-  const rowsWithoutResolvedMissing = withoutResolvedMissingRows(rows, null);
+  const rowsWithoutResolvedMissing = withoutResolvedMissingRows(
+    workspace.rows,
+    null,
+  );
   const visibleRows = rowsWithoutResolvedMissing.filter(
     (row) => row.hostId === hostId,
   );
@@ -148,6 +168,7 @@ function terminalWorkspaceLeaves(
       ctx,
       { hostId: row.hostId, cwd: row.runningDir },
       row.runningDir,
+      hostClient,
     ),
   );
   const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
@@ -162,9 +183,17 @@ function terminalWorkspaceLeaves(
   // Match the sidebar picker: the host-owned fallback cwd is valid only when
   // the Epic truly has no live binding rows on any host. Disabled bindings do
   // not silently degrade to an unrelated default directory.
-  if (rowsWithoutResolvedMissing.length === 0 && folderlessCwd !== null) {
+  if (
+    rowsWithoutResolvedMissing.length === 0 &&
+    workspace.folderlessCwd !== null
+  ) {
     return [
-      terminalWorkspaceLeaf(ctx, { hostId, cwd: folderlessCwd }, folderlessCwd),
+      terminalWorkspaceLeaf(
+        ctx,
+        { hostId, cwd: workspace.folderlessCwd },
+        workspace.folderlessCwd,
+        hostClient,
+      ),
     ];
   }
   if (rowsWithoutResolvedMissing.length === 0) {
@@ -207,14 +236,18 @@ function terminalWorkspaceQueryItems(
   ctx: CommandContext,
   hostId: string,
   query: TerminalWorkspaceQueryState,
+  hostClient: HostClient<HostRpcRegistry>,
 ): ReadonlyArray<CommandItem> {
   if (query.isPending) return [terminalWorkspaceStatusHint(hostId, "loading")];
   if (query.isError) return [terminalWorkspaceStatusHint(hostId, "error")];
   return terminalWorkspaceLeaves(
     ctx,
     hostId,
-    query.rows ?? [],
-    query.folderlessCwd ?? null,
+    {
+      rows: query.rows ?? [],
+      folderlessCwd: query.folderlessCwd ?? null,
+    },
+    hostClient,
   );
 }
 
@@ -222,6 +255,7 @@ function useHostTerminalWorkspaceItems(
   ctx: CommandContext,
   hostId: string,
 ): ReadonlyArray<CommandItem> {
+  const hostClient = useHostClient();
   const client = useHostClientForHostId(hostId);
   const bindings = useWorktreeListBindingsForEpicForClient({
     client,
@@ -230,13 +264,25 @@ function useHostTerminalWorkspaceItems(
   });
   return useMemo(
     () =>
-      terminalWorkspaceQueryItems(ctx, hostId, {
-        rows: bindings.data?.rows,
-        folderlessCwd: bindings.data?.folderlessCwd,
-        isPending: bindings.isPending,
-        isError: bindings.isError,
-      }),
-    [bindings.data, bindings.isError, bindings.isPending, ctx, hostId],
+      terminalWorkspaceQueryItems(
+        ctx,
+        hostId,
+        {
+          rows: bindings.data?.rows,
+          folderlessCwd: bindings.data?.folderlessCwd,
+          isPending: bindings.isPending,
+          isError: bindings.isError,
+        },
+        hostClient,
+      ),
+    [
+      bindings.data,
+      bindings.isError,
+      bindings.isPending,
+      ctx,
+      hostClient,
+      hostId,
+    ],
   );
 }
 
@@ -255,6 +301,7 @@ function useNewTerminalWorkspaceItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
   const activeHostId = useReactiveActiveHostId();
+  const hostClient = useHostClient();
   const bindings = useWorktreeListBindingsForEpic({
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
@@ -268,12 +315,17 @@ function useNewTerminalWorkspaceItems(
     const localLeaves =
       activeHostId === null
         ? []
-        : terminalWorkspaceQueryItems(ctx, activeHostId, {
-            rows: bindings.data?.rows,
-            folderlessCwd: bindings.data?.folderlessCwd,
-            isPending: bindings.isPending,
-            isError: bindings.isError,
-          });
+        : terminalWorkspaceQueryItems(
+            ctx,
+            activeHostId,
+            {
+              rows: bindings.data?.rows,
+              folderlessCwd: bindings.data?.folderlessCwd,
+              isPending: bindings.isPending,
+              isError: bindings.isError,
+            },
+            hostClient,
+          );
     const otherHosts = (directory.data ?? [])
       .filter(
         (entry) =>
@@ -298,6 +350,7 @@ function useNewTerminalWorkspaceItems(
     bindings.isPending,
     ctx,
     directory.data,
+    hostClient,
   ]);
 }
 
