@@ -144,8 +144,8 @@ function renderInlineEdit(dirty: boolean) {
 }
 
 describe("chatMessageEditingForInlineEdit", () => {
-  it("requires a dirty edit before enabling submit", () => {
-    expect(renderInlineEdit(false).canSubmit).toBe(false);
+  it("allows resubmitting unchanged non-empty content", () => {
+    expect(renderInlineEdit(false).canSubmit).toBe(true);
     expect(renderInlineEdit(true).canSubmit).toBe(true);
   });
 

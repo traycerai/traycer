@@ -546,7 +546,6 @@ export function chatMessageEditingForInlineEdit(input: {
     canSubmit:
       input.canModifyMessages &&
       input.editSettings !== null &&
-      editing.dirty &&
       inlineEditHasDraftContent(editing),
     slashProviderId: input.editSettings?.harnessId ?? DEFAULT_SLASH_PROVIDER_ID,
     mentionRoots: input.mentionRoots,
