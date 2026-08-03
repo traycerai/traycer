@@ -2,9 +2,12 @@ import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { epicArtifactMentionToken } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   ACTIVE_AGENT_DND_TYPE,
+  ARTIFACT_TAB_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
+  LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
+  TERMINAL_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   WORKSPACE_FOLDER_DND_TYPE,
   type EpicCanvasDragSourceData,
@@ -124,72 +127,94 @@ function pathMentionAttachment(args: {
   };
 }
 
+function gitDiffMention(
+  source: Extract<
+    EpicCanvasDragSourceData,
+    { readonly kind: typeof GIT_DIFF_TILE_DND_TYPE }
+  >,
+  targetHostId: string,
+): MentionAttachment | null {
+  if (source.tile.hostId !== targetHostId || source.tile.diff.kind !== "file") {
+    return null;
+  }
+  return pathMentionAttachment({
+    pathKind: "file",
+    workspacePath: source.tile.diff.runningDir,
+    relPath: source.tile.diff.filePath,
+    label: getBasename(source.tile.diff.filePath),
+  });
+}
+
+function activeAgentMention(
+  source: Extract<
+    EpicCanvasDragSourceData,
+    { readonly kind: typeof ACTIVE_AGENT_DND_TYPE }
+  >,
+  targetHostId: string,
+): MentionAttachment | null {
+  if (
+    source.agent.hostId !== targetHostId ||
+    source.agent.harnessId === "cursor"
+  ) {
+    return null;
+  }
+  return entityMentionAttachment({
+    contextType: source.agent.type,
+    epicId: source.epicId,
+    entityId: source.agent.id,
+    label: source.agent.name,
+    description: epicTitle(source.epicId),
+  });
+}
+
+function unreachableDragSource(source: never): null {
+  void source;
+  return null;
+}
+
 /** Convert a root-DnD source into the same attachment shape inserted by @. */
 export function mentionAttachmentFromDragSource(
   source: EpicCanvasDragSourceData,
   targetHostId: string,
 ): MentionAttachment | null {
-  if (source.kind === SIDEBAR_NODE_DND_TYPE) {
-    return sidebarNodeMention(source, targetHostId);
-  }
-  if (source.kind === WORKSPACE_FILE_DND_TYPE) {
-    if (source.ref.hostId !== targetHostId) return null;
-    return pathMentionAttachment({
-      pathKind: "file",
-      workspacePath: source.ref.workspacePath,
-      relPath: source.ref.filePath,
-      label: source.ref.name,
-    });
-  }
-  if (source.kind === WORKSPACE_FOLDER_DND_TYPE) {
-    if (source.hostId !== targetHostId) return null;
-    return pathMentionAttachment({
-      pathKind: "folder",
-      workspacePath: source.workspacePath,
-      relPath: source.folderPath,
-      label: source.name,
-    });
-  }
-  if (source.kind === GIT_DIFF_TILE_DND_TYPE) {
-    if (
-      source.tile.hostId !== targetHostId ||
-      source.tile.diff.kind !== "file"
-    ) {
+  switch (source.kind) {
+    case SIDEBAR_NODE_DND_TYPE:
+      return sidebarNodeMention(source, targetHostId);
+    case WORKSPACE_FILE_DND_TYPE:
+      if (source.ref.hostId !== targetHostId) return null;
+      return pathMentionAttachment({
+        pathKind: "file",
+        workspacePath: source.ref.workspacePath,
+        relPath: source.ref.filePath,
+        label: source.ref.name,
+      });
+    case WORKSPACE_FOLDER_DND_TYPE:
+      if (source.hostId !== targetHostId) return null;
+      return pathMentionAttachment({
+        pathKind: "folder",
+        workspacePath: source.workspacePath,
+        relPath: source.folderPath,
+        label: source.name,
+      });
+    case GIT_DIFF_TILE_DND_TYPE:
+      return gitDiffMention(source, targetHostId);
+    case CHAT_ARTIFACT_DND_TYPE:
+      if (source.artifact.hostId !== targetHostId) return null;
+      return entityMentionAttachment({
+        contextType: source.artifact.type,
+        epicId: source.epicId,
+        entityId: source.artifact.id,
+        label: source.artifact.name,
+        description: epicTitle(source.epicId),
+      });
+    case ACTIVE_AGENT_DND_TYPE:
+      return activeAgentMention(source, targetHostId);
+    case ARTIFACT_TAB_DND_TYPE:
+    case TERMINAL_TILE_DND_TYPE:
+    case LEFT_PANEL_RAIL_ITEM_DND_TYPE:
+      // Tabs, raw terminals, and panel chrome are not message context.
       return null;
-    }
-    return pathMentionAttachment({
-      pathKind: "file",
-      workspacePath: source.tile.diff.runningDir,
-      relPath: source.tile.diff.filePath,
-      label: getBasename(source.tile.diff.filePath),
-    });
+    default:
+      return unreachableDragSource(source);
   }
-  if (source.kind === CHAT_ARTIFACT_DND_TYPE) {
-    if (source.artifact.hostId !== targetHostId) return null;
-    return entityMentionAttachment({
-      contextType: source.artifact.type,
-      epicId: source.epicId,
-      entityId: source.artifact.id,
-      label: source.artifact.name,
-      description: epicTitle(source.epicId),
-    });
-  }
-  if (source.kind === ACTIVE_AGENT_DND_TYPE) {
-    if (
-      source.agent.hostId !== targetHostId ||
-      source.agent.harnessId === "cursor"
-    ) {
-      return null;
-    }
-    return entityMentionAttachment({
-      contextType: source.agent.type,
-      epicId: source.epicId,
-      entityId: source.agent.id,
-      label: source.agent.name,
-      description: epicTitle(source.epicId),
-    });
-  }
-  // Artifact tabs, raw terminal sessions, and panel-rail chrome are not
-  // readable message context and intentionally stay non-attachable.
-  return null;
 }

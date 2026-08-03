@@ -36,4 +36,17 @@ describe("workspace-folder drag source", () => {
       }),
     ).toBeNull();
   });
+
+  it.each([
+    ["workspace path", { workspacePath: "" }],
+    ["folder name", { name: "" }],
+    ["canvas scope", { viewTabId: "" }],
+  ])("rejects a missing %s", (_label, override) => {
+    expect(
+      readEpicCanvasDragSourceData({
+        ...SOURCE,
+        ...override,
+      }),
+    ).toBeNull();
+  });
 });

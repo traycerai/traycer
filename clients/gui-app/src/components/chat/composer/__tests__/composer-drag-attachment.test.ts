@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACTIVE_AGENT_DND_TYPE,
   ARTIFACT_TAB_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
+  SIDEBAR_NODE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   WORKSPACE_FOLDER_DND_TYPE,
@@ -11,10 +12,83 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { mentionAttachmentFromDragSource } from "@/components/chat/composer/composer-drag-attachment";
 
+const { peekOpenEpicMock, epicTreeRecordMock } = vi.hoisted(() => ({
+  peekOpenEpicMock: vi.fn(),
+  epicTreeRecordMock: vi.fn(),
+}));
+
+vi.mock("@/lib/registries/epic-session-registry", () => ({
+  getOpenEpicRegistry: () => ({ peek: peekOpenEpicMock }),
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  epicTreeRecordForNodeId: epicTreeRecordMock,
+}));
+
 const SCOPE = { epicId: "epic-1", viewTabId: "view-1" } as const;
 const TARGET_HOST_ID = "host-1";
 
+beforeEach(() => {
+  peekOpenEpicMock.mockReset();
+  epicTreeRecordMock.mockReset();
+  peekOpenEpicMock.mockReturnValue(null);
+});
+
 describe("mentionAttachmentFromDragSource", () => {
+  it("resolves sidebar nodes through the open Epic projection", () => {
+    peekOpenEpicMock.mockReturnValue({
+      store: {
+        getState: () => ({
+          epic: { title: "Drag attachments" },
+          tuiAgents: { byId: {} },
+        }),
+      },
+    });
+    epicTreeRecordMock.mockReturnValue({
+      id: "spec-1",
+      parentId: null,
+      name: "Composer spec",
+      type: "spec",
+      status: null,
+      hostId: TARGET_HOST_ID,
+    });
+    const source: EpicCanvasDragSourceData = {
+      kind: SIDEBAR_NODE_DND_TYPE,
+      ...SCOPE,
+      nodeId: "spec-1",
+    };
+
+    expect(
+      mentionAttachmentFromDragSource(source, TARGET_HOST_ID),
+    ).toMatchObject({
+      contextType: "spec",
+      path: "spec:epic-1/spec-1",
+      label: "Composer spec",
+      description: "Drag attachments",
+    });
+  });
+
+  it("rejects unavailable sidebar sessions and records", () => {
+    const source: EpicCanvasDragSourceData = {
+      kind: SIDEBAR_NODE_DND_TYPE,
+      ...SCOPE,
+      nodeId: "missing",
+    };
+
+    expect(mentionAttachmentFromDragSource(source, TARGET_HOST_ID)).toBeNull();
+
+    peekOpenEpicMock.mockReturnValue({
+      store: {
+        getState: () => ({
+          epic: { title: "Drag attachments" },
+          tuiAgents: { byId: {} },
+        }),
+      },
+    });
+    epicTreeRecordMock.mockReturnValue(null);
+    expect(mentionAttachmentFromDragSource(source, TARGET_HOST_ID)).toBeNull();
+  });
+
   it("builds the existing file and folder mention shapes", () => {
     const fileSource: EpicCanvasDragSourceData = {
       kind: WORKSPACE_FILE_DND_TYPE,
