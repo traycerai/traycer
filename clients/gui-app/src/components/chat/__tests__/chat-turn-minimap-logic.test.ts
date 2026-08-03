@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM,
+  CHAT_TURN_MINIMAP_EDGE_INSET_REM,
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
-  CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_ITEM_SPACING,
   CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS,
   CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS,
   resolveChatTurnMinimapHeightStyle,
+  resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapIndexFromPointer,
-  resolveChatTurnMinimapInteractiveWidth,
   resolveChatTurnMinimapRowHeight,
   resolveChatTurnMinimapRowInView,
   resolveChatTurnMinimapRowTop,
@@ -16,6 +17,9 @@ import {
   resolveChatTurnMinimapTopPercent,
   resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
+import { DEFAULT_UI_FONT_SIZE } from "@/stores/settings/settings-store";
+
+const DEFAULT_UI_ROOT_FONT_SIZE = DEFAULT_UI_FONT_SIZE;
 
 describe("resolveChatTurnMinimapHeightStyle", () => {
   it("adds endpoint hit padding to the visual track height, capped by the viewport and pane", () => {
@@ -186,24 +190,182 @@ describe("resolveChatTurnMinimapIndexFromPointer", () => {
   });
 });
 
-describe("resolveChatTurnMinimapInteractiveWidth", () => {
-  it("returns the collapsed numeric width when not expanded", () => {
+describe("resolveChatTurnMinimapHitStripWidth", () => {
+  it("returns 0 for non-finite or non-positive viewport widths", () => {
     expect(
-      resolveChatTurnMinimapInteractiveWidth(
-        CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-        false,
-      ),
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 0,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: -10,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: Number.NaN,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: Number.POSITIVE_INFINITY,
+      }),
+    ).toBe(0);
+  });
+
+  it("returns 0 for non-finite or non-positive root font sizes", () => {
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 0,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: -15,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: Number.NaN,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: Number.POSITIVE_INFINITY,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+  });
+
+  it("returns concrete safe budgets for supported UI root sizes", () => {
+    // Reviewer / production-failure cases first.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 20,
+        viewportWidth: 900,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 20,
+        viewportWidth: 1000,
+      }),
+    ).toBe(5);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 17,
+        viewportWidth: 800,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 15,
+        viewportWidth: 800,
+      }),
+    ).toBe(28);
+
+    // Independently calculated expectations across supported roots and common
+    // pane widths. Keeping fixed numbers here prevents a mirrored implementation
+    // from hiding arithmetic regressions.
+    const expectedWidths = [
+      [10, [0, 40, 40, 40, 40, 40]],
+      [15, [0, 28, 40, 40, 40, 40]],
+      [17, [0, 0, 29, 40, 40, 40]],
+      [20, [0, 0, 0, 5, 40, 40]],
+    ] as const;
+    const viewportWidths = [420, 800, 900, 1000, 1200, 2400] as const;
+    for (const [rootFontSize, expectedForRoot] of expectedWidths) {
+      for (const [index, viewportWidth] of viewportWidths.entries()) {
+        expect(
+          resolveChatTurnMinimapHitStripWidth({
+            rootFontSize,
+            viewportWidth,
+          }),
+        ).toBe(expectedForRoot[index]);
+      }
+    }
+  });
+
+  it("returns 0 when the rem content column consumes the viewport (narrow/tiled)", () => {
+    // Default 15px: content max is 720px; at or below that the gutter is 0.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth:
+          CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM * DEFAULT_UI_ROOT_FONT_SIZE,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 420,
+      }),
+    ).toBe(0);
+    // Barely wider than content max: gutter still smaller than edge inset.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 730,
+      }),
+    ).toBe(0);
+  });
+
+  it("caps the hit strip at the max width in a wide pane", () => {
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 1200,
+      }),
+    ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 2400,
+      }),
+    ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
+    // Small root still caps rather than following the full gutter.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 10,
+        viewportWidth: 800,
+      }),
     ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
   });
 
-  it("returns the expanded rem width once the preview is open", () => {
-    expect(resolveChatTurnMinimapInteractiveWidth(0, true)).toBe(
-      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
+  it("uses the remaining side gutter minus rem edge inset when between 0 and max", () => {
+    // font15 / 800: contentMax=720, sideGutter=40, edgeInset=11.25 → 28
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 15,
+        viewportWidth: 800,
+      }),
+    ).toBe(
+      Math.floor(
+        (800 - CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM * 15) / 2 -
+          CHAT_TURN_MINIMAP_EDGE_INSET_REM * 15,
+      ),
     );
-    expect(resolveChatTurnMinimapInteractiveWidth(40, true)).toBe(
-      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
-    );
-    expect(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH).toContain("100vw");
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 15,
+        viewportWidth: 800,
+      }),
+    ).toBe(28);
+    // font20 / 1000: contentMax=960, sideGutter=20, edgeInset=15 → 5
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 20,
+        viewportWidth: 1000,
+      }),
+    ).toBe(5);
   });
 });
 
