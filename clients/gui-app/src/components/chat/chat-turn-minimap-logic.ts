@@ -93,6 +93,8 @@ export function resolveChatTurnMinimapIndexFromPointer(input: {
 /** Matches the rem-based `left-3` / `right-3` interaction-region inset. */
 export const CHAT_TURN_MINIMAP_EDGE_INSET_REM = 0.75;
 export const CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
+/** Matches the widest painted marker (`w-6`) in `chat-turn-minimap.tsx`. */
+export const CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM = 1.5;
 
 /**
  * The minimap overlays a viewport edge while the transcript column is

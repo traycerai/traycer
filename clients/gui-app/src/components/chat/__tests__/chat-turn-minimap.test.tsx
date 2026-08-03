@@ -9,13 +9,22 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RefObject } from "react";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
 import {
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
+  CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
   resolveChatTurnMinimapHitStripWidth,
 } from "@/components/chat/chat-turn-minimap-logic";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
@@ -49,6 +58,7 @@ afterEach(() => {
   // Appearance font size is a global store; restore default so rem-geometry
   // suites never leak into later cases.
   useSettingsStore.setState({ uiFontSize: DEFAULT_UI_FONT_SIZE });
+  window.getSelection()?.removeAllRanges();
 });
 
 /** Flush the mount-time rAF that measures viewport width / in-view strips. */
@@ -208,7 +218,7 @@ function installControllableResizeObserver(): {
  * the hit strip; we always resolve the live region element.
  */
 function mockRailGeometry(
-  _hitStripOrRegion: HTMLElement,
+  fallbackElement: HTMLElement,
   input: {
     top: number;
     height: number;
@@ -219,7 +229,7 @@ function mockRailGeometry(
   const interactionRegion =
     document.querySelector<HTMLElement>(
       "[data-chat-turn-minimap-interaction-region]",
-    ) ?? _hitStripOrRegion;
+    ) ?? fallbackElement;
   const left = input.left ?? 0;
   const width = input.width ?? 40;
   vi.spyOn(interactionRegion, "getBoundingClientRect").mockReturnValue({
@@ -449,19 +459,14 @@ const CONSTRAINED_VIEWPORT_PX = 420;
 /**
  * Default UI font 15: contentMax=720, sideGutter=(800-720)/2=40,
  * edgeInset=11.25 → hit strip = 28px.
- * 28px > resting 0.5rem (7.5px), so passive viewport hover is OFF here —
- * button owns hover. Distinct from the P1 partial-positive cases below.
+ * 28px > widest marker 1.5rem (22.5px), so passive viewport hover is OFF
+ * here — button owns hover. Distinct from the partial-positive cases below.
  */
 const PARTIAL_GUTTER_VIEWPORT_PX = 800;
 const PARTIAL_GUTTER_HIT_STRIP_WIDTH_DEFAULT_FONT = 28;
 /**
- * Production pairs this with resting marker `w-2` (0.5rem). Passive viewport
- * hover is active when measured hit strip is strictly narrower than that.
- */
-const CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM = 0.5;
-/**
  * Independent review P1 partial-positive gutters: safe hit strip is positive
- * but narrower than the painted resting marker, so overflow was dead until
+ * but narrower than the widest painted marker, so overflow was dead until
  * passive activation expanded beyond width-zero only.
  */
 const PARTIAL_POSITIVE_PASSIVE_CASES = [
@@ -470,39 +475,39 @@ const PARTIAL_POSITIVE_PASSIVE_CASES = [
     uiFontSize: 20,
     viewportWidth: 1000,
     hitWidth: 5,
-    restingPx: 10,
+    markerPx: 30,
   },
   {
     label: "font17/pane850",
     uiFontSize: 17,
     viewportWidth: 850,
     hitWidth: 4,
-    restingPx: 8.5,
+    markerPx: 25.5,
   },
   {
     label: "font15/pane750",
     uiFontSize: 15,
     viewportWidth: 750,
     hitWidth: 3,
-    restingPx: 7.5,
+    markerPx: 22.5,
   },
 ] as const;
 /**
- * hit width exactly equals resting 0.5rem (integer rem cases only) — passive
- * must stay OFF (`resolvedHitStripWidth < resting`, not `<=`).
+ * Hit width exactly equals the widest marker's 1.5rem — passive
+ * must stay OFF (`resolvedHitStripWidth < widest marker`, not `<=`).
  */
-const RESTING_EQUALITY_BOUNDARY_CASES = [
+const MARKER_EQUALITY_BOUNDARY_CASES = [
   {
-    label: "font20/pane1010",
+    label: "font20/pane1050",
     uiFontSize: 20,
-    viewportWidth: 1010,
-    hitWidth: 10,
+    viewportWidth: 1050,
+    hitWidth: 30,
   },
   {
-    label: "font16/pane808",
+    label: "font16/pane840",
     uiFontSize: 16,
-    viewportWidth: 808,
-    hitWidth: 8,
+    viewportWidth: 840,
+    hitWidth: 24,
   },
 ] as const;
 /**
@@ -549,9 +554,9 @@ function expectFixedTwoRemCardSeparation(input: {
   }
   expect(preview?.classList).not.toContain("left-8");
   expect(preview?.classList).not.toContain("right-8");
-  // 2rem > resting 0.5rem marker: card cannot cover painted marker spans.
+  // 2rem > widest 1.5rem marker: card cannot cover painted marker spans.
   expect(input.uiFontSize * PREVIEW_EDGE_OFFSET_REM).toBeGreaterThan(
-    input.uiFontSize * CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM,
+    input.uiFontSize * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
   );
   // Hit strip must stay at the gutter-safe width (never expanded under the card).
   const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
@@ -841,6 +846,7 @@ describe("ChatTurnMinimap preview content", () => {
         clientY: 0,
       });
     });
+    await flushMinimapFrames(1);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
@@ -1350,6 +1356,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
     const clearSelection = installNonCollapsedSelection(
       "selected transcript text",
     );
+    onTestFinished(clearSelection);
 
     fireEvent.mouseMove(hitStrip, { clientY: 200 });
     expect(
@@ -1371,6 +1378,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
     const clearSelection = installNonCollapsedSelection(
       "selected transcript text",
     );
+    onTestFinished(clearSelection);
 
     fireEvent.mouseDown(hitStrip, { clientY: 200 });
     fireEvent.click(hitStrip, { clientY: 200 });
@@ -1392,6 +1400,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
     const clearSelection = installNonCollapsedSelection(
       "selected transcript text",
     );
+    onTestFinished(clearSelection);
 
     fireEvent.focus(hitStrip);
     expect(
@@ -1420,6 +1429,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
     const clearSelection = installNonCollapsedSelection(
       "selected transcript text",
     );
+    onTestFinished(clearSelection);
 
     fireEvent.click(hitStrip, { clientY: 200 });
     fireEvent.focus(hitStrip);
@@ -1698,6 +1708,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
         clientY: 50,
       });
     });
+    await flushMinimapFrames(1);
 
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
@@ -2494,6 +2505,7 @@ describe("ChatTurnMinimap fixed 2rem card separation and open-preview gap", () =
         clientY: RAIL_TOP + RAIL_HEIGHT / 2,
       });
     });
+    await flushMinimapFrames(1);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
@@ -2536,6 +2548,7 @@ describe("ChatTurnMinimap fixed 2rem card separation and open-preview gap", () =
         clientY: RAIL_TOP + RAIL_HEIGHT / 2,
       });
     });
+    await flushMinimapFrames(1);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
@@ -2659,6 +2672,7 @@ describe("ChatTurnMinimap fixed 2rem card separation and open-preview gap", () =
         clientY: RAIL_TOP + RAIL_HEIGHT / 2,
       });
     });
+    await flushMinimapFrames(1);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
@@ -2668,11 +2682,11 @@ describe("ChatTurnMinimap fixed 2rem card separation and open-preview gap", () =
 
 /**
  * Passive viewport hover activates whenever the safe hit strip is strictly
- * narrower than the resting 0.5rem marker (zero-gutter and partial-positive
+ * narrower than the widest 1.5rem marker (zero-gutter and partial-positive
  * gutters), and also while a preview is open (2rem gap bridge). Button-owned
- * hover covers max-width and hit >= resting until a card opens.
+ * hover covers max-width and hit >= the widest marker until a card opens.
  */
-describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () => {
+describe("ChatTurnMinimap passive hover (hit narrower than widest marker)", () => {
   const RAIL_TOP = 100;
   const RAIL_HEIGHT = 200;
   const RIGHT_EDGE_X = 580;
@@ -2717,7 +2731,7 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
     );
     expect(input.hitWidth).toBeGreaterThan(0);
     expect(input.hitWidth).toBeLessThan(
-      input.uiFontSize * CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM,
+      input.uiFontSize * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
     );
 
     const rendered = renderMinimap({
@@ -2901,6 +2915,66 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
     expectInteractionRegionHidden();
   });
 
+  it("coalesces pointer moves into one layout read using the latest point", async () => {
+    const { viewport } = await renderZeroGutterPassive({});
+    const interactionRegion = getInteractionRegion();
+    const rectSpy = vi
+      .spyOn(interactionRegion, "getBoundingClientRect")
+      .mockReturnValue({
+        x: RIGHT_EDGE_X,
+        y: RAIL_TOP,
+        width: 0,
+        height: RAIL_HEIGHT,
+        top: RAIL_TOP,
+        left: RIGHT_EDGE_X,
+        right: RIGHT_EDGE_X,
+        bottom: RAIL_TOP + RAIL_HEIGHT,
+        toJSON: () => ({}),
+      });
+    const frames = installHeldAnimationFrames();
+    try {
+      act(() => {
+        dispatchViewportPointer(viewport, "pointermove", {
+          clientX: RIGHT_EDGE_X,
+          clientY: RAIL_TOP,
+        });
+        dispatchViewportPointer(viewport, "pointermove", {
+          clientX: RIGHT_EDGE_X,
+          clientY: RAIL_TOP + RAIL_HEIGHT,
+        });
+      });
+
+      expect(frames.held.size).toBe(1);
+      expect(rectSpy).not.toHaveBeenCalled();
+      const frameId = [...frames.held.keys()][0];
+      act(() => {
+        frames.flush(frameId);
+      });
+
+      expect(rectSpy).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText("Turn gamma")).toBeTruthy();
+
+      act(() => {
+        dispatchViewportPointer(viewport, "pointermove", {
+          clientX: RIGHT_EDGE_X,
+          clientY: RAIL_TOP,
+        });
+      });
+      expect(frames.held.size).toBe(1);
+      const pendingFrameId = [...frames.held.keys()][0];
+      act(() => {
+        dispatchViewportPointer(viewport, "pointerleave", {
+          clientX: 0,
+          clientY: 0,
+        });
+      });
+      expect(frames.cancelCalls).toContain(pendingFrameId);
+      expect(frames.held.size).toBe(0);
+    } finally {
+      frames.restore();
+    }
+  });
+
   it("retains the preview while the pointer moves into the preview target", async () => {
     const { viewport } = await renderZeroGutterPassive({});
     openPassiveAtY(viewport, {
@@ -2940,6 +3014,7 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
         clientY: RAIL_TOP + 10,
       });
     });
+    await flushMinimapFrames(1);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
@@ -3093,6 +3168,7 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
     const clearSelection = installNonCollapsedSelection(
       "selected transcript text",
     );
+    onTestFinished(clearSelection);
     let selectionEvent: PointerEvent | undefined;
     act(() => {
       selectionEvent = dispatchViewportPointer(viewport, "pointermove", {
@@ -3157,7 +3233,7 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
       `${CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH}px`,
     );
     expect(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH).toBeGreaterThan(
-      DEFAULT_UI_FONT_SIZE * CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM,
+      DEFAULT_UI_FONT_SIZE * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
     );
     mockRailGeometry(hitStrip, {
       top: RAIL_TOP,
@@ -3184,14 +3260,14 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
   });
 
   it.each(PARTIAL_POSITIVE_PASSIVE_CASES)(
-    "partial-positive $label: geometry pins safe width and activates passive (hit $hitWidth < resting $restingPx)",
+    "partial-positive $label: geometry pins safe width and activates passive (hit $hitWidth < marker $markerPx)",
     async (partialCase) => {
       expect(
         hitStripWidthFor(partialCase.viewportWidth, partialCase.uiFontSize),
       ).toBe(partialCase.hitWidth);
       expect(
-        partialCase.uiFontSize * CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM,
-      ).toBe(partialCase.restingPx);
+        partialCase.uiFontSize * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
+      ).toBe(partialCase.markerPx);
 
       await renderPartialPositivePassive({
         uiFontSize: partialCase.uiFontSize,
@@ -3346,6 +3422,7 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
         clientY: RAIL_TOP + 10,
       });
     });
+    await flushMinimapFrames(1);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
@@ -3401,6 +3478,7 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
     const clearSelection = installNonCollapsedSelection(
       "selected partial-positive text",
     );
+    onTestFinished(clearSelection);
     let selectionEvent: PointerEvent | undefined;
     act(() => {
       selectionEvent = dispatchViewportPointer(viewport, "pointermove", {
@@ -3459,15 +3537,15 @@ describe("ChatTurnMinimap passive hover (hit narrower than resting marker)", () 
     expectPositiveSafeHitStrip(hitWidth);
   });
 
-  it.each(RESTING_EQUALITY_BOUNDARY_CASES)(
-    "passive off when hit equals resting 0.5rem ($label: hit $hitWidth)",
+  it.each(MARKER_EQUALITY_BOUNDARY_CASES)(
+    "passive off when hit equals widest marker 1.5rem ($label: hit $hitWidth)",
     async (boundaryCase) => {
       useSettingsStore.setState({ uiFontSize: boundaryCase.uiFontSize });
       expect(
         hitStripWidthFor(boundaryCase.viewportWidth, boundaryCase.uiFontSize),
       ).toBe(boundaryCase.hitWidth);
       expect(boundaryCase.hitWidth).toBe(
-        boundaryCase.uiFontSize * CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM,
+        boundaryCase.uiFontSize * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
       );
 
       const { viewport } = renderMinimap({
@@ -3608,6 +3686,7 @@ describe("ChatTurnMinimap selection finalization races", () => {
 
     // Selection finalizes before the scheduled frame (no further pointermove).
     const restoreSelection = mockGetSelectionCollapsed(false);
+    onTestFinished(restoreSelection);
     await flushMinimapFrames(1);
 
     expect(
@@ -3667,6 +3746,7 @@ describe("ChatTurnMinimap selection finalization races", () => {
       // Only the latest frame runs: collapsed at first schedule, non-collapsed
       // for the replacement frame — first frame must not have closed early.
       const restoreSelection = mockGetSelectionCollapsed(false);
+      onTestFinished(restoreSelection);
       act(() => {
         frames.flush(secondId);
       });
@@ -3715,6 +3795,7 @@ describe("ChatTurnMinimap selection finalization races", () => {
     expect(await screen.findByText("Turn beta")).toBeTruthy();
 
     const clearSelection = installNonCollapsedSelection("quote this text");
+    onTestFinished(clearSelection);
     act(() => {
       dispatchDocumentSelectionChange();
     });
@@ -3736,6 +3817,7 @@ describe("ChatTurnMinimap selection finalization races", () => {
 
     const clearExpandedSelection =
       installNonCollapsedSelection("expanded quote");
+    onTestFinished(clearExpandedSelection);
     act(() => {
       dispatchDocumentSelectionChange();
     });
@@ -3749,6 +3831,7 @@ describe("ChatTurnMinimap selection finalization races", () => {
   it("selectionchange closes wide compact and expanded previews immediately", async () => {
     await openWidePreview({ expanded: false });
     const clearCompact = installNonCollapsedSelection("wide compact quote");
+    onTestFinished(clearCompact);
     act(() => {
       dispatchDocumentSelectionChange();
     });
@@ -3760,6 +3843,7 @@ describe("ChatTurnMinimap selection finalization races", () => {
     cleanup();
     await openWidePreview({ expanded: true });
     const clearExpanded = installNonCollapsedSelection("wide expanded quote");
+    onTestFinished(clearExpanded);
     act(() => {
       dispatchDocumentSelectionChange();
     });
@@ -3790,6 +3874,7 @@ describe("ChatTurnMinimap selection finalization races", () => {
     expect(await screen.findByText("Turn beta")).toBeTruthy();
 
     const clearSelection = installNonCollapsedSelection("temporary quote");
+    onTestFinished(clearSelection);
     act(() => {
       dispatchDocumentSelectionChange();
     });

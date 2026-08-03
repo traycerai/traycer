@@ -17,10 +17,9 @@ import {
   resolveChatTurnMinimapTopPercent,
   resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
+import { DEFAULT_UI_FONT_SIZE } from "@/stores/settings/settings-store";
 
-/** Supported Appearance UI root font sizes exercised by the helper. */
-const UI_ROOT_FONT_SIZES = [10, 15, 17, 20] as const;
-const DEFAULT_UI_ROOT_FONT_SIZE = 15;
+const DEFAULT_UI_ROOT_FONT_SIZE = DEFAULT_UI_FONT_SIZE;
 
 describe("resolveChatTurnMinimapHeightStyle", () => {
   it("adds endpoint hit padding to the visual track height, capped by the viewport and pane", () => {
@@ -192,36 +191,6 @@ describe("resolveChatTurnMinimapIndexFromPointer", () => {
 });
 
 describe("resolveChatTurnMinimapHitStripWidth", () => {
-  /**
-   * Safe hit budget mirrors production: rem-scaled content cap + edge inset,
-   * floored and capped at the fixed 40px max.
-   */
-  function expectedHitStripWidth(
-    rootFontSize: number,
-    viewportWidth: number,
-  ): number {
-    if (
-      !Number.isFinite(viewportWidth) ||
-      viewportWidth <= 0 ||
-      !Number.isFinite(rootFontSize) ||
-      rootFontSize <= 0
-    ) {
-      return 0;
-    }
-    const contentMaxWidth =
-      CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM * rootFontSize;
-    const contentWidth = Math.min(viewportWidth, contentMaxWidth);
-    const sideGutter = Math.max(0, (viewportWidth - contentWidth) / 2);
-    const edgeInset = CHAT_TURN_MINIMAP_EDGE_INSET_REM * rootFontSize;
-    return Math.max(
-      0,
-      Math.min(
-        CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-        Math.floor(sideGutter - edgeInset),
-      ),
-    );
-  }
-
   it("returns 0 for non-finite or non-positive viewport widths", () => {
     expect(
       resolveChatTurnMinimapHitStripWidth({
@@ -303,16 +272,24 @@ describe("resolveChatTurnMinimapHitStripWidth", () => {
       }),
     ).toBe(28);
 
-    // Full matrix across supported roots and common pane widths.
+    // Independently calculated expectations across supported roots and common
+    // pane widths. Keeping fixed numbers here prevents a mirrored implementation
+    // from hiding arithmetic regressions.
+    const expectedWidths = [
+      [10, [0, 40, 40, 40, 40, 40]],
+      [15, [0, 28, 40, 40, 40, 40]],
+      [17, [0, 0, 29, 40, 40, 40]],
+      [20, [0, 0, 0, 5, 40, 40]],
+    ] as const;
     const viewportWidths = [420, 800, 900, 1000, 1200, 2400] as const;
-    for (const rootFontSize of UI_ROOT_FONT_SIZES) {
-      for (const viewportWidth of viewportWidths) {
+    for (const [rootFontSize, expectedForRoot] of expectedWidths) {
+      for (const [index, viewportWidth] of viewportWidths.entries()) {
         expect(
           resolveChatTurnMinimapHitStripWidth({
             rootFontSize,
             viewportWidth,
           }),
-        ).toBe(expectedHitStripWidth(rootFontSize, viewportWidth));
+        ).toBe(expectedForRoot[index]);
       }
     }
   });

@@ -12,6 +12,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { FoldVertical, UnfoldVertical } from "lucide-react";
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
+  CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
   CHAT_TURN_MINIMAP_MIN_ITEMS,
   resolveChatTurnMinimapHeightStyle,
   resolveChatTurnMinimapHitStripWidth,
@@ -144,12 +145,6 @@ function chatTurnMinimapHasActiveTextSelection(): boolean {
   return window.getSelection()?.isCollapsed === false;
 }
 
-// Keep this paired with the resting `w-2` marker class below. When the real
-// side gutter is narrower than the painted marker, a non-blocking viewport
-// listener owns the overflow instead of widening the button over transcript
-// text.
-const CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM = 0.5;
-
 interface ChatTurnMinimapPassiveHoverState {
   readonly active: boolean;
   readonly horizontalProximity: number;
@@ -167,7 +162,7 @@ function resolveChatTurnMinimapPassiveHoverState(input: {
     active:
       input.hitStripWidth !== null &&
       input.hitStripWidth <
-        input.uiFontSize * CHAT_TURN_MINIMAP_RESTING_STRIP_WIDTH_REM,
+        input.uiFontSize * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM,
     horizontalProximity: input.uiFontSize,
   };
 }
@@ -177,7 +172,11 @@ function useChatTurnMinimapPassiveHover(input: {
   readonly closeInteraction: () => void;
   readonly horizontalProximity: number;
   readonly interactionRegionRef: RefObject<HTMLDivElement | null>;
-  readonly onPointerY: (pointerY: number) => void;
+  readonly onPointerGeometry: (
+    pointerY: number,
+    railTop: number,
+    railHeight: number,
+  ) => void;
   readonly side: ChatTurnMinimapSide;
   readonly viewportRef: RefObject<HTMLElement | null>;
 }): void {
@@ -186,7 +185,7 @@ function useChatTurnMinimapPassiveHover(input: {
     closeInteraction,
     horizontalProximity,
     interactionRegionRef,
-    onPointerY,
+    onPointerGeometry,
     side,
     viewportRef,
   } = input;
@@ -195,30 +194,51 @@ function useChatTurnMinimapPassiveHover(input: {
     if (!active) return;
     const viewport = viewportRef.current;
     if (viewport === null) return;
+    let moveFrame: number | null = null;
+    let pendingPoint: { readonly x: number; readonly y: number } | null = null;
     let pointerUpFrame: number | null = null;
+
+    const cancelMoveFrame = (): void => {
+      pendingPoint = null;
+      if (moveFrame === null) return;
+      cancelAnimationFrame(moveFrame);
+      moveFrame = null;
+    };
 
     const handlePointerMove = (event: PointerEvent): void => {
       if (event.buttons !== 0 || chatTurnMinimapHasActiveTextSelection()) {
+        cancelMoveFrame();
         closeInteraction();
         return;
       }
-      if (chatTurnMinimapEventTargetsPreview(event.target)) return;
-      const interactionRegion = interactionRegionRef.current;
-      if (interactionRegion === null) return;
-      const rect = interactionRegion.getBoundingClientRect();
-      const edgeX = side === "left" ? rect.left : rect.right;
-      const withinHorizontalProximity =
-        Math.abs(event.clientX - edgeX) <= horizontalProximity;
-      const withinVerticalRail =
-        event.clientY >= rect.top && event.clientY <= rect.bottom;
-      if (!withinHorizontalProximity || !withinVerticalRail) {
-        closeInteraction();
+      if (chatTurnMinimapEventTargetsPreview(event.target)) {
+        cancelMoveFrame();
         return;
       }
-      onPointerY(event.clientY);
+      pendingPoint = { x: event.clientX, y: event.clientY };
+      if (moveFrame !== null) return;
+      moveFrame = requestAnimationFrame(() => {
+        moveFrame = null;
+        const point = pendingPoint;
+        pendingPoint = null;
+        const interactionRegion = interactionRegionRef.current;
+        if (point === null || interactionRegion === null) return;
+        const rect = interactionRegion.getBoundingClientRect();
+        const edgeX = side === "left" ? rect.left : rect.right;
+        const withinHorizontalProximity =
+          Math.abs(point.x - edgeX) <= horizontalProximity;
+        const withinVerticalRail =
+          point.y >= rect.top && point.y <= rect.bottom;
+        if (!withinHorizontalProximity || !withinVerticalRail) {
+          closeInteraction();
+          return;
+        }
+        onPointerGeometry(point.y, rect.top, rect.height);
+      });
     };
     const handlePointerDown = (event: PointerEvent): void => {
       if (!chatTurnMinimapEventTargetsPreview(event.target)) {
+        cancelMoveFrame();
         closeInteraction();
       }
     };
@@ -231,24 +251,29 @@ function useChatTurnMinimapPassiveHover(input: {
         }
       });
     };
+    const handlePointerLeave = (): void => {
+      cancelMoveFrame();
+      closeInteraction();
+    };
 
     viewport.addEventListener("pointermove", handlePointerMove);
     viewport.addEventListener("pointerdown", handlePointerDown);
     viewport.addEventListener("pointerup", handlePointerUp);
-    viewport.addEventListener("pointerleave", closeInteraction);
+    viewport.addEventListener("pointerleave", handlePointerLeave);
     return () => {
+      cancelMoveFrame();
       if (pointerUpFrame !== null) cancelAnimationFrame(pointerUpFrame);
       viewport.removeEventListener("pointermove", handlePointerMove);
       viewport.removeEventListener("pointerdown", handlePointerDown);
       viewport.removeEventListener("pointerup", handlePointerUp);
-      viewport.removeEventListener("pointerleave", closeInteraction);
+      viewport.removeEventListener("pointerleave", handlePointerLeave);
     };
   }, [
     active,
     closeInteraction,
     horizontalProximity,
     interactionRegionRef,
-    onPointerY,
+    onPointerGeometry,
     side,
     viewportRef,
   ]);
@@ -726,12 +751,27 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     [resolveActiveIndexFromPointerY],
   );
 
+  const updateActiveIndexFromPointerGeometry = useCallback(
+    (pointerY: number, railTop: number, railHeight: number): void => {
+      setInteractionStarted(true);
+      setActiveIndex(
+        resolveChatTurnMinimapIndexFromPointer({
+          itemCount: items.length,
+          railTop,
+          railHeight,
+          pointerY,
+        }),
+      );
+    },
+    [items.length],
+  );
+
   useChatTurnMinimapPassiveHover({
     active: passiveHoverActive,
     closeInteraction,
     horizontalProximity: passiveHorizontalProximity,
     interactionRegionRef,
-    onPointerY: updateActiveIndexFromPointerY,
+    onPointerGeometry: updateActiveIndexFromPointerGeometry,
     side,
     viewportRef,
   });
