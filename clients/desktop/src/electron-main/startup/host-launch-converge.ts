@@ -1,7 +1,13 @@
 import { log } from "../app/logger";
 import { refreshRegistryUpdateState } from "../ipc/host-management-ipc";
 import { isHostRemovedByUser } from "../host/host-removal-state";
-import type { HostControllerStatus } from "../host/host-controller-types";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ConvergeReadyOk,
+  HostControllerStatus,
+  MutationOutcome,
+} from "../host/host-controller-types";
 import type { HostActivationState } from "../host/host-state";
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 
@@ -18,6 +24,21 @@ const ACTIVATION_DEBT_STATES: ReadonlySet<HostActivationState> = new Set([
   "pendingActivation",
   "activationUnknown",
 ]);
+
+// The one predicate every recovery arm gates on, in both halves:
+// `activation: "unavailable"` describes the RUNNING runtime only, so an
+// absent service is a repair target ONLY under a host that is genuinely
+// installed - a fresh machine that has never installed one reports the same
+// activation state, and recovering there would provision and start a
+// background host before the user has signed in, bypassing the renderer's
+// `authStatus === "signed-in"` provisioning gate. Named once so a future
+// activation state or an extra condition cannot land in one arm and not the
+// others.
+function isUnavailableInstalledHost(status: HostControllerStatus): boolean {
+  return (
+    status.activation === "unavailable" && status.installedVersion !== null
+  );
+}
 
 // "Update to X" gates on `updateReady` OR activation debt (Renderer
 // surfaces cutover ticket, D4/D5): a ready update supersedes debt (its own
@@ -90,6 +111,28 @@ export async function runLaunchHostConvergeReconcile(
     return;
   }
 
+  // An `unavailable` service is not registered at all, so NOTHING can reach
+  // this host until it is re-registered - and the decision arms below run
+  // only after `stageLatest()` settles, which joins a controller-owned
+  // release download that can take minutes on a slow link. Recovering first
+  // is what keeps a reinstall from leaving the user hostless for the length
+  // of a WAN transfer. An already-staged update keeps its apply-first
+  // precedence instead: applying is itself the fastest route to a running
+  // host, and it re-registers on the way.
+  //
+  // This arm repairs a service that went missing from under an INSTALLED
+  // host; `isUnavailableInstalledHost` is what keeps it from ever being the
+  // thing that performs the first install.
+  const recovery =
+    !initialStatus.updateReady && isUnavailableInstalledHost(initialStatus)
+      ? await hostController.convergeReady(false)
+      : null;
+  if (recovery !== null) {
+    log.info("[host-controller] launch converge recovered an absent service", {
+      kind: recovery.kind,
+    });
+  }
+
   // Registry discovery stages asynchronously so a generic refresh never
   // blocks its caller on a WAN download. At launch that is insufficient: a
   // reconcile which samples status before staging finishes would leave the
@@ -103,14 +146,26 @@ export async function runLaunchHostConvergeReconcile(
     return;
   }
 
-  const outcome = status.updateReady
-    ? await hostController.applyStaged("launch", false)
-    : status.activation === "pendingActivation" ||
-        status.activation === "activationUnknown"
-      ? await hostController.activateInstalled(false)
-      : null;
+  let outcome: MutationOutcome<
+    ApplyStagedOk | ActivateInstalledOk | ConvergeReadyOk
+  > | null = null;
+  if (status.updateReady) {
+    const applied = await hostController.applyStaged("launch", false);
+    outcome = await recoverAfterFailedApply(hostController, applied);
+  } else if (
+    status.activation === "pendingActivation" ||
+    status.activation === "activationUnknown"
+  ) {
+    outcome = await hostController.activateInstalled(false);
+  } else if (isUnavailableInstalledHost(status) && recovery === null) {
+    // `recovery === null` keeps this from re-running a recovery the pre-stage
+    // pass already attempted, since repeating a failure seconds later helps
+    // nobody.
+    outcome = await hostController.convergeReady(false);
+  }
 
-  if (outcome === null) {
+  const effectiveOutcome = outcome ?? recovery;
+  if (effectiveOutcome === null) {
     log.info("[host-controller] launch converge has no activation debt", {
       activation: status.activation,
     });
@@ -119,7 +174,8 @@ export async function runLaunchHostConvergeReconcile(
 
   log.info("[host-controller] launch converge reconcile complete", {
     updateReady: status.updateReady,
-    kind: outcome.kind,
+    kind: effectiveOutcome.kind,
+    recoveredBeforeStaging: recovery !== null,
   });
   // Fixup B1: a successful apply just moved `installedVersion` (and cleared
   // the stage), so the cache/menu built from the pre-apply registry snapshot
@@ -127,10 +183,63 @@ export async function runLaunchHostConvergeReconcile(
   // `updateReady`-derived) reflects the freshly applied version instead of
   // advertising the update we just installed. `activateInstalled` never moves
   // `installedVersion`, so there's nothing new to advertise on that branch.
-  if (status.updateReady && outcome.kind === "ok") {
+  if (status.updateReady && effectiveOutcome.kind === "ok") {
     await refreshHostRegistryIfNotRemoved(hostController, menu, {
       force: true,
       maxAgeMs: null,
     });
   }
+}
+
+/**
+ * The other half of the recovery arm above: what happens when a ready stage
+ * takes apply-first precedence and then the apply does not land.
+ *
+ * `applyStaged` RESOLVES `failed` / `stage-fingerprint-mismatch` /
+ * `installed-not-converged` rather than throwing, and the pre-stage recovery
+ * deliberately stood down because a stage was ready. So a host whose service
+ * was ALSO absent had nobody left to re-register it: launch logged an outcome
+ * and returned, leaving the machine unreachable until the next launch or a
+ * manual repair - through the one pass that exists to guarantee the opposite.
+ *
+ * Only `busy` passes through untouched: it is the controller's own gate saying
+ * the host has work in progress, and `convergeReady` consults the same gate.
+ * `deferred` does NOT pass through, because it is not one fact. The same arm
+ * carries at least three: another Traycer process holding the CLI lock, a
+ * launch-trigger apply on a removed host, and - the one that broke this - a
+ * registry outage leaving the stage un-eligibility-checked
+ * (`host-controller.ts`, `coalesceIntent`'s `eligibleStage === null` return).
+ * That last one holds no lock at all; skipping recovery for it left an
+ * installed service unregistered because a NETWORK PROBE failed. The status
+ * gates below sort them out instead: a removed host is caught by the re-read,
+ * and a lock actually held is `convergeReady`'s own problem - it runs its
+ * bounded CLI-lock retry and resolves `deferred` itself rather than throwing,
+ * by which time the other process may well have finished.
+ *
+ * `removedByUser` is re-read rather than inherited: the apply can take
+ * minutes, and a user who removed the host during it must not be handed a
+ * reinstall as a consolation prize.
+ */
+async function recoverAfterFailedApply(
+  hostController: IpcHostController,
+  applied: MutationOutcome<ApplyStagedOk>,
+): Promise<MutationOutcome<ApplyStagedOk | ConvergeReadyOk>> {
+  if (applied.kind === "ok" || applied.kind === "busy") {
+    return applied;
+  }
+  const status = await hostController.getStatus();
+  if (status.removedByUser) {
+    log.info("[host-controller] launch converge skipped after apply removal");
+    return applied;
+  }
+  // A failed apply is not by itself an activation problem - without this gate
+  // the arm would cycle the service on every unsuccessful update.
+  if (!isUnavailableInstalledHost(status)) {
+    return applied;
+  }
+  log.info(
+    "[host-controller] launch converge recovering an absent service after a failed apply",
+    { applyKind: applied.kind },
+  );
+  return hostController.convergeReady(false);
 }

@@ -149,6 +149,7 @@ function buildFakeBridge(
       respawnCounter.count += 1;
       return { kind: "restarted" as const };
     },
+    getLastKnownLocalHostId: async () => null,
     trayState: {
       setEpics: async (_epics: readonly TrayEpic[]) => undefined,
       setIndicator: async (_state: TrayIndicatorState) => undefined,

@@ -93,9 +93,35 @@ export const runnerMutationKeys = {
     ["runner.globalShortcuts.set", id] as const,
 };
 
+const runnerHostQueryScopeIds = new WeakMap<object, number>();
+let nextRunnerHostQueryScopeId = 1;
+
+/**
+ * Same hazard `supportBridgeQueryScopeId` above exists for: TanStack Query
+ * hashes keys STRUCTURALLY (JSON serialization), so two runner-host instances
+ * whose enumerable surface serializes identically hash to the same key - and a
+ * pending `fetchQuery` for the OLD runner then dedupes the NEW runner's read
+ * onto it, seeding the replacement directory with the previous shell's
+ * identity. A per-instance primitive token is what actually delivers the
+ * "scoped by instance" the key promises.
+ */
+export function runnerHostQueryScopeId(runnerHost: object): number {
+  const existing = runnerHostQueryScopeIds.get(runnerHost);
+  if (existing !== undefined) return existing;
+  const scopeId = nextRunnerHostQueryScopeId;
+  nextRunnerHostQueryScopeId += 1;
+  runnerHostQueryScopeIds.set(runnerHost, scopeId);
+  return scopeId;
+}
+
 export const runnerQueryKeys = {
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
+  // The shell's durable answer to "which host id belongs to THIS machine",
+  // read once while the host directory bootstraps. Takes the SCOPE ID, not
+  // the runner object - see `runnerHostQueryScopeId`.
+  lastKnownLocalHostId: (runnerHostScopeId: number) =>
+    ["runner.host.lastKnownLocalHostId", runnerHostScopeId] as const,
   // `traycerCli: object` keys these queries to a specific runner-host
   // instance so a host swap (test setups, hot reload) invalidates the
   // cache cleanly. Identity comparison only - the object is never
