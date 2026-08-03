@@ -30,9 +30,6 @@ export interface CommGraphThreadPanelProps {
   /** Created-row jump to the child's transcript start - see `CommGraphJump`. */
   readonly canJumpToCreated: (event: CommGraphEvent) => boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  /** Notice-row jump to the idle agent's tail - see `CommGraphJump`. */
-  readonly canJumpToNoticed: (event: CommGraphEvent) => boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   /** Opens an agent's tile with no scroll - an anchor-less heading link. */
   readonly onOpenAgentId: (agentId: string) => void;
   readonly onClose: () => void;
@@ -43,14 +40,12 @@ export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
     agentNames,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     edge,
     epicId,
     onClose,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgentId,
   } = props;
@@ -76,8 +71,6 @@ export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
       onJumpToSender={onJumpToSender}
       canJumpToCreated={canJumpToCreated}
       onJumpToCreated={onJumpToCreated}
-      canJumpToNoticed={canJumpToNoticed}
-      onJumpToNoticed={onJumpToNoticed}
       onOpenAgentId={onOpenAgentId}
       onClose={onClose}
     />

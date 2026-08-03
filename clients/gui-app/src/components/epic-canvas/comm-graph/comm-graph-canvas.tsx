@@ -15,7 +15,6 @@ import {
   Background,
   Controls,
   ReactFlow,
-  ReactFlowProvider,
   type NodeMouseHandler,
   type Viewport,
 } from "@xyflow/react";
@@ -50,6 +49,7 @@ import {
 import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
 import { CommGraphAgentDetailPanel } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-panel";
 import { commGraphEventTouchesAgent } from "@/lib/comm-graph/comm-graph-timeline";
+import { commGraphEdgeInteraction } from "@/components/epic-canvas/comm-graph/comm-graph-edge-interaction";
 import {
   commGraphEdgeTravel,
   type CommGraphEdgeTravel,
@@ -59,11 +59,14 @@ import type {
   CommGraphPulseKind,
 } from "@/lib/comm-graph/comm-graph-timeline";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
+import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 
 const NODE_TYPES = { [COMM_GRAPH_AGENT_NODE_TYPE]: CommGraphAgentNodeView };
 const EDGE_TYPES = { [COMM_GRAPH_EDGE_TYPE]: CommGraphEdgeView };
 // React Flow's attribution link is not part of this surface.
 const PRO_OPTIONS = { hideAttribution: true };
+// React Flow defaults to 0.5, which is too close for a wide agent graph to fit.
+const COMM_GRAPH_MIN_ZOOM = 0.1;
 
 /** Which detail surface the canvas has open, if any. */
 type CommGraphSelectedDetail =
@@ -99,9 +102,6 @@ export interface CommGraphCanvasProps {
   /** Created-row jump to the child's transcript start - see `CommGraphJump`. */
   readonly canJumpToCreated: (event: CommGraphEvent) => boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  /** Notice-row jump to the idle agent's tail - see `CommGraphJump`. */
-  readonly canJumpToNoticed: (event: CommGraphEvent) => boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   readonly onOpenAgent: (agent: CommGraphAgentNode) => void;
 }
 
@@ -129,10 +129,17 @@ function nodeHostStatus(
 }
 
 export function CommGraphCanvas(props: CommGraphCanvasProps) {
+  // ReactFlow must create its own provider from the computed nodes below. An
+  // empty outer provider would make it reuse a store initialized before those
+  // nodes exist, so the first fit-to-view would have no graph to frame.
+  return <CommGraphCanvasBody {...props} />;
+}
+
+function isDefaultView(view: CommGraphTileViewState): boolean {
   return (
-    <ReactFlowProvider>
-      <CommGraphCanvasBody {...props} />
-    </ReactFlowProvider>
+    view.x === DEFAULT_COMM_GRAPH_VIEW.x &&
+    view.y === DEFAULT_COMM_GRAPH_VIEW.y &&
+    view.zoom === DEFAULT_COMM_GRAPH_VIEW.zoom
   );
 }
 
@@ -142,14 +149,12 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     agents,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     epicId,
     events,
     hosts,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgent,
     onViewChange,
@@ -165,6 +170,12 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   const { resolvedTheme } = useResolvedTheme();
   const activityTiers = useEpicAgentActivityTiers();
 
+  // Shared by the edge labels and both detail panels, so an agent is named the
+  // same way wherever it appears.
+  const nameById = useMemo(
+    () => new Map(agents.map((agent) => [agent.id, agent.name])),
+    [agents],
+  );
   const hostStatusById = useMemo(
     () =>
       new Map<string, CommGraphHostStatus>(
@@ -220,6 +231,13 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     [handleSelectAgent],
   );
 
+  // Both halves of "an edge is a control", from one call - see the module for
+  // the React Flow behavior each knob answers.
+  const { edgeInteraction, onEdgeClick } = useMemo(
+    () => commGraphEdgeInteraction(handleSelectEdge, nameById),
+    [handleSelectEdge, nameById],
+  );
+
   const nodes = useMemo<ReadonlyArray<CommGraphAgentFlowNode>>(
     () =>
       // Only agents that existed as of the cursor are drawn; the layout above
@@ -273,6 +291,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
         source: edge.agentAId,
         target: edge.agentBId,
         type: COMM_GRAPH_EDGE_TYPE,
+        ...edgeInteraction(edge),
         data: {
           edgeId: edge.id,
           hasOpenThread: edge.hasOpenThread,
@@ -282,7 +301,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           onSelect: handleSelectEdge,
         },
       })),
-    [aggregated, handleSelectEdge, travelFor],
+    [aggregated, edgeInteraction, handleSelectEdge, travelFor],
   );
 
   const selectedEdge =
@@ -301,10 +320,6 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       commGraphEventTouchesAgent(event, selectedAgent.id),
     );
   }, [events, selectedAgent]);
-  const nameById = useMemo(
-    () => new Map(agents.map((agent) => [agent.id, agent.name])),
-    [agents],
-  );
 
   const handleMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
@@ -338,6 +353,11 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
           defaultViewport={view}
+          // A neutral schema viewport means this graph has never been framed by
+          // the user. Let React Flow derive its first viewport from every node;
+          // a persisted pan/zoom still restores exactly as the user left it.
+          fitView={isDefaultView(view)}
+          minZoom={COMM_GRAPH_MIN_ZOOM}
           onMoveEnd={handleMoveEnd}
           // REQUIRED, and not merely as a tidier click path. React Flow's
           // `NodeWrapper` computes
@@ -350,6 +370,10 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           // passed the whole time. Deleting this prop silently breaks the
           // feature again; the node-wrapper test is what guards it.
           onNodeClick={handleNodeClick}
+          // REQUIRED, like `onNodeClick`: without it every edge <g> is
+          // pointer-inert - see `commGraphEdgeInteraction`, which builds this
+          // and the per-edge half together for that reason.
+          onEdgeClick={onEdgeClick}
           nodesDraggable={false}
           nodesConnectable={false}
           // The node wrapper would otherwise take `tabIndex=0` and be a DEAD tab
@@ -361,6 +385,10 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           // leaves our own <button> as the single focus target. It cannot
           // re-inert the node: `hasPointerEvents` is a function of `onClick`,
           // not of `isFocusable`.
+          //
+          // `edgesFocusable` stays ON deliberately: an edge has no inner
+          // control, so its wrapper is the only keyboard route to the pair
+          // panel, and it earns the stop by carrying a real key handler.
           nodesFocusable={false}
           // Kept OFF deliberately, and it does not gate the click: React Flow
           // gates only its INTERNAL selection (`handleNodeClick`) on
@@ -387,8 +415,6 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           onJumpToSender={onJumpToSender}
           canJumpToCreated={canJumpToCreated}
           onJumpToCreated={onJumpToCreated}
-          canJumpToNoticed={canJumpToNoticed}
-          onJumpToNoticed={onJumpToNoticed}
           onOpenAgentId={openAgentById}
           onClose={closePanel}
         />
@@ -405,8 +431,6 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           onJumpToSender={onJumpToSender}
           canJumpToCreated={canJumpToCreated}
           onJumpToCreated={onJumpToCreated}
-          canJumpToNoticed={canJumpToNoticed}
-          onJumpToNoticed={onJumpToNoticed}
           onOpenAgent={onOpenAgent}
           onOpenAgentId={openAgentById}
           onClose={closePanel}

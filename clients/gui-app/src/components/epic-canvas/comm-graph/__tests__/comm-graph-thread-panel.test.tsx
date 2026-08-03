@@ -46,7 +46,6 @@ interface PanelHandles {
   readonly onJump: Mock<(event: CommGraphEvent) => void>;
   readonly onJumpToSender: Mock<(event: CommGraphEvent) => void>;
   readonly onJumpToCreated: Mock<(event: CommGraphEvent) => void>;
-  readonly onJumpToNoticed: Mock<(event: CommGraphEvent) => void>;
   readonly onOpenAgentId: Mock<(agentId: string) => void>;
 }
 
@@ -54,13 +53,11 @@ interface PanelHandles {
 interface PanelCapabilities {
   readonly senderJump: boolean;
   readonly createdJump: boolean;
-  readonly noticedJump: boolean;
 }
 
 const NO_EXTRA_JUMPS: PanelCapabilities = {
   senderJump: false,
   createdJump: false,
-  noticedJump: false,
 };
 
 function renderPanelWithHandles(
@@ -90,7 +87,6 @@ function renderPanelWithCapabilities(
   const onJump = vi.fn<(event: CommGraphEvent) => void>();
   const onJumpToSender = vi.fn<(event: CommGraphEvent) => void>();
   const onJumpToCreated = vi.fn<(event: CommGraphEvent) => void>();
-  const onJumpToNoticed = vi.fn<(event: CommGraphEvent) => void>();
   const onOpenAgentId = vi.fn<(agentId: string) => void>();
   const [edge] = aggregateCommGraphEdges(events, new Set(["a", "b"]));
   render(
@@ -109,10 +105,6 @@ function renderPanelWithCapabilities(
           capabilities.createdJump && event.kind === "agent_created"
         }
         onJumpToCreated={onJumpToCreated}
-        canJumpToNoticed={(event) =>
-          capabilities.noticedJump && event.kind === "a2a_notice"
-        }
-        onJumpToNoticed={onJumpToNoticed}
         onOpenAgentId={onOpenAgentId}
         onClose={onClose}
       />
@@ -123,7 +115,6 @@ function renderPanelWithCapabilities(
     onJump,
     onJumpToSender,
     onJumpToCreated,
-    onJumpToNoticed,
     onOpenAgentId,
   };
 }
@@ -146,8 +137,6 @@ function renderPanel(events: ReadonlyArray<CommGraphEvent>): () => void {
         onJumpToSender={() => undefined}
         canJumpToCreated={() => false}
         onJumpToCreated={() => undefined}
-        canJumpToNoticed={() => false}
-        onJumpToNoticed={() => undefined}
         onOpenAgentId={() => undefined}
         onClose={onClose}
       />
@@ -555,7 +544,7 @@ describe("CommGraphThreadPanel heading links", () => {
         }),
       ],
       true,
-      { senderJump: false, createdJump: true, noticedJump: false },
+      { senderJump: false, createdJump: true },
     );
 
     // The created agent (arrow's receiver) lands at its transcript's start.
@@ -575,10 +564,12 @@ describe("CommGraphThreadPanel heading links", () => {
     expect(handles.onJump).not.toHaveBeenCalled();
   });
 
-  it("jumps a Notice row's idle agent to its transcript tail", async () => {
-    // The idle agent (arrow's sender after the notice reversal) is where the
-    // evidence lives - the blocking question, the error, the last output.
-    const handles = renderPanelWithCapabilities(
+  it("opens a Notice row's idle agent plainly - it anchors on nothing", async () => {
+    // The idle agent (arrow's sender after the notice reversal) never WROTE
+    // this notice: the broker observed it going quiet. Nothing in its
+    // transcript is the row, so the endpoint is the same generic open a
+    // Created row's creator gets - it must not claim a landing.
+    const handles = renderPanelWithHandles(
       [
         event({
           id: 1,
@@ -589,17 +580,14 @@ describe("CommGraphThreadPanel heading links", () => {
         }),
       ],
       false,
-      { senderJump: false, createdJump: false, noticedJump: true },
     );
 
     // Displayed sender = DB receiver "b" (Reviewer), the idle agent.
     const sender = await screen.findByTestId(`${ROW}-sender`);
-    expect(sender.getAttribute("aria-label")).toBe(
-      "Open Reviewer and scroll to the latest activity",
-    );
+    expect(sender.getAttribute("aria-label")).toBe("Open Reviewer");
     fireEvent.click(sender);
-    expect(handles.onJumpToNoticed).toHaveBeenCalledTimes(1);
-    expect(handles.onOpenAgentId).not.toHaveBeenCalled();
+    expect(handles.onOpenAgentId).toHaveBeenCalledWith("b");
+    expect(handles.onJump).not.toHaveBeenCalled();
   });
 
   it("claims no scroll on an anchor-less row - the tile opens, honestly", async () => {
