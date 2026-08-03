@@ -12,6 +12,7 @@ import {
 import { mentionAttachmentFromDragSource } from "@/components/chat/composer/composer-drag-attachment";
 
 const SCOPE = { epicId: "epic-1", viewTabId: "view-1" } as const;
+const TARGET_HOST_ID = "host-1";
 
 describe("mentionAttachmentFromDragSource", () => {
   it("builds the existing file and folder mention shapes", () => {
@@ -31,23 +32,28 @@ describe("mentionAttachmentFromDragSource", () => {
     const folderSource: EpicCanvasDragSourceData = {
       kind: WORKSPACE_FOLDER_DND_TYPE,
       ...SCOPE,
+      hostId: TARGET_HOST_ID,
       workspacePath: "D:\\repo",
       folderPath: "src/components/",
       name: "components",
     };
 
-    expect(mentionAttachmentFromDragSource(fileSource)).toEqual({
-      kind: "mention",
-      contextType: "file",
-      path: "src/components/button.tsx",
-      pathKind: "file",
-      relPath: "src/components/button.tsx",
-      absolutePath: "/repo/src/components/button.tsx",
-      workspacePath: "/repo",
-      label: "button.tsx",
-      description: "src/components",
-    });
-    expect(mentionAttachmentFromDragSource(folderSource)).toEqual({
+    expect(mentionAttachmentFromDragSource(fileSource, TARGET_HOST_ID)).toEqual(
+      {
+        kind: "mention",
+        contextType: "file",
+        path: "src/components/button.tsx",
+        pathKind: "file",
+        relPath: "src/components/button.tsx",
+        absolutePath: "/repo/src/components/button.tsx",
+        workspacePath: "/repo",
+        label: "button.tsx",
+        description: "src/components",
+      },
+    );
+    expect(
+      mentionAttachmentFromDragSource(folderSource, TARGET_HOST_ID),
+    ).toEqual({
       kind: "mention",
       contextType: "folder",
       path: "src/components/",
@@ -59,13 +65,16 @@ describe("mentionAttachmentFromDragSource", () => {
       description: "src",
     });
     expect(
-      mentionAttachmentFromDragSource({
-        ...fileSource,
-        ref: {
-          ...fileSource.ref,
-          filePath: "../../etc/passwd",
+      mentionAttachmentFromDragSource(
+        {
+          ...fileSource,
+          ref: {
+            ...fileSource.ref,
+            filePath: "../../etc/passwd",
+          },
         },
-      }),
+        TARGET_HOST_ID,
+      ),
     ).toMatchObject({
       path: "etc/passwd",
       relPath: "etc/passwd",
@@ -92,17 +101,22 @@ describe("mentionAttachmentFromDragSource", () => {
         type: "terminal-agent",
         name: "Implementation agent",
         hostId: "host-1",
+        harnessId: "claude",
       },
     };
 
-    expect(mentionAttachmentFromDragSource(artifactSource)).toMatchObject({
+    expect(
+      mentionAttachmentFromDragSource(artifactSource, TARGET_HOST_ID),
+    ).toMatchObject({
       contextType: "spec",
       path: "spec:epic-1/spec-1",
       epicId: "epic-1",
       artifactId: "spec-1",
       label: "Composer spec",
     });
-    expect(mentionAttachmentFromDragSource(agentSource)).toMatchObject({
+    expect(
+      mentionAttachmentFromDragSource(agentSource, TARGET_HOST_ID),
+    ).toMatchObject({
       contextType: "terminal-agent",
       path: "terminal-agent:epic-1/agent-1",
       epicId: "epic-1",
@@ -156,13 +170,19 @@ describe("mentionAttachmentFromDragSource", () => {
       },
     };
 
-    expect(mentionAttachmentFromDragSource(gitFileSource)).toMatchObject({
+    expect(
+      mentionAttachmentFromDragSource(gitFileSource, TARGET_HOST_ID),
+    ).toMatchObject({
       contextType: "file",
       path: "src/app.ts",
       label: "app.ts",
     });
-    expect(mentionAttachmentFromDragSource(bundleSource)).toBeNull();
-    expect(mentionAttachmentFromDragSource(terminalSource)).toBeNull();
+    expect(
+      mentionAttachmentFromDragSource(bundleSource, TARGET_HOST_ID),
+    ).toBeNull();
+    expect(
+      mentionAttachmentFromDragSource(terminalSource, TARGET_HOST_ID),
+    ).toBeNull();
   });
 
   it("does not attach draggable canvas tabs themselves", () => {
@@ -173,6 +193,42 @@ describe("mentionAttachmentFromDragSource", () => {
       tabId: "tab-1",
       isPreview: false,
     };
-    expect(mentionAttachmentFromDragSource(tabSource)).toBeNull();
+    expect(
+      mentionAttachmentFromDragSource(tabSource, TARGET_HOST_ID),
+    ).toBeNull();
+  });
+
+  it("rejects host-local paths from a different host and Cursor TUI agents", () => {
+    const fileSource: EpicCanvasDragSourceData = {
+      kind: WORKSPACE_FILE_DND_TYPE,
+      ...SCOPE,
+      ref: {
+        id: "file-tab",
+        instanceId: "file-instance",
+        type: "workspace-file",
+        name: "app.ts",
+        hostId: "host-2",
+        workspacePath: "/repo",
+        filePath: "src/app.ts",
+      },
+    };
+    const cursorAgentSource: EpicCanvasDragSourceData = {
+      kind: ACTIVE_AGENT_DND_TYPE,
+      ...SCOPE,
+      agent: {
+        id: "cursor-agent",
+        type: "terminal-agent",
+        name: "Cursor",
+        hostId: TARGET_HOST_ID,
+        harnessId: "cursor",
+      },
+    };
+
+    expect(
+      mentionAttachmentFromDragSource(fileSource, TARGET_HOST_ID),
+    ).toBeNull();
+    expect(
+      mentionAttachmentFromDragSource(cursorAgentSource, TARGET_HOST_ID),
+    ).toBeNull();
   });
 });

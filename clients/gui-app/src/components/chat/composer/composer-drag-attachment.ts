@@ -18,7 +18,6 @@ import type {
   PathKind,
 } from "@/lib/composer/types";
 import { epicTreeRecordForNodeId } from "@/lib/epic-selectors";
-import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getBasename } from "@/lib/path/cross-platform-path";
 
@@ -78,16 +77,20 @@ function sidebarNodeMention(
     EpicCanvasDragSourceData,
     { readonly kind: typeof SIDEBAR_NODE_DND_TYPE }
   >,
+  targetHostId: string,
 ): MentionAttachment | null {
   const handle = getOpenEpicRegistry().peek(source.epicId);
   if (handle === null) return null;
   const state = handle.store.getState();
-  const record = epicTreeRecordForNodeId(
-    state,
-    source.nodeId,
-    UNKNOWN_HOST_PLACEHOLDER,
-  );
-  if (record === null) return null;
+  const record = epicTreeRecordForNodeId(state, source.nodeId, targetHostId);
+  if (record === null || record.hostId !== targetHostId) return null;
+  if (
+    record.type === "terminal-agent" &&
+    Object.hasOwn(state.tuiAgents.byId, source.nodeId) &&
+    state.tuiAgents.byId[source.nodeId].harnessId === "cursor"
+  ) {
+    return null;
+  }
   return entityMentionAttachment({
     contextType: record.type,
     epicId: source.epicId,
@@ -124,11 +127,13 @@ function pathMentionAttachment(args: {
 /** Convert a root-DnD source into the same attachment shape inserted by @. */
 export function mentionAttachmentFromDragSource(
   source: EpicCanvasDragSourceData,
+  targetHostId: string,
 ): MentionAttachment | null {
   if (source.kind === SIDEBAR_NODE_DND_TYPE) {
-    return sidebarNodeMention(source);
+    return sidebarNodeMention(source, targetHostId);
   }
   if (source.kind === WORKSPACE_FILE_DND_TYPE) {
+    if (source.ref.hostId !== targetHostId) return null;
     return pathMentionAttachment({
       pathKind: "file",
       workspacePath: source.ref.workspacePath,
@@ -137,6 +142,7 @@ export function mentionAttachmentFromDragSource(
     });
   }
   if (source.kind === WORKSPACE_FOLDER_DND_TYPE) {
+    if (source.hostId !== targetHostId) return null;
     return pathMentionAttachment({
       pathKind: "folder",
       workspacePath: source.workspacePath,
@@ -145,7 +151,12 @@ export function mentionAttachmentFromDragSource(
     });
   }
   if (source.kind === GIT_DIFF_TILE_DND_TYPE) {
-    if (source.tile.diff.kind !== "file") return null;
+    if (
+      source.tile.hostId !== targetHostId ||
+      source.tile.diff.kind !== "file"
+    ) {
+      return null;
+    }
     return pathMentionAttachment({
       pathKind: "file",
       workspacePath: source.tile.diff.runningDir,
@@ -154,6 +165,7 @@ export function mentionAttachmentFromDragSource(
     });
   }
   if (source.kind === CHAT_ARTIFACT_DND_TYPE) {
+    if (source.artifact.hostId !== targetHostId) return null;
     return entityMentionAttachment({
       contextType: source.artifact.type,
       epicId: source.epicId,
@@ -163,6 +175,12 @@ export function mentionAttachmentFromDragSource(
     });
   }
   if (source.kind === ACTIVE_AGENT_DND_TYPE) {
+    if (
+      source.agent.hostId !== targetHostId ||
+      source.agent.harnessId === "cursor"
+    ) {
+      return null;
+    }
     return entityMentionAttachment({
       contextType: source.agent.type,
       epicId: source.epicId,

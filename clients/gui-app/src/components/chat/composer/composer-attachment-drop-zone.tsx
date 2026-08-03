@@ -12,6 +12,7 @@ import { ComposerDropOverlay } from "@/components/home/composer/composer-shell";
 
 export function ComposerAttachmentDropZone(props: {
   readonly viewTabId: string | null;
+  readonly hostId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly children: ReactNode;
 }) {
@@ -24,15 +25,15 @@ export function ComposerAttachmentDropZone(props: {
       accepts: (source) =>
         source.viewTabId === viewTabId &&
         props.editorRef.current?.isReady() === true &&
-        mentionAttachmentFromDragSource(source) !== null,
+        mentionAttachmentFromDragSource(source, props.hostId) !== null,
       attach: (source) => {
         if (source.viewTabId !== viewTabId) return;
-        const mention = mentionAttachmentFromDragSource(source);
+        const mention = mentionAttachmentFromDragSource(source, props.hostId);
         if (mention === null) return;
         props.editorRef.current?.insertMentionAttachment(mention);
       },
     };
-  }, [props.editorRef, props.viewTabId]);
+  }, [props.editorRef, props.hostId, props.viewTabId]);
   const occurrenceId = useId();
   const { setNodeRef, isOver } = useDroppable({
     id: `composer-attachment:${occurrenceId}`,

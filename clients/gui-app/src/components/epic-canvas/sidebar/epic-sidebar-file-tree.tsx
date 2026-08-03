@@ -596,18 +596,26 @@ export function FileTreePanelBodyForWorkspace(props: {
         return { kind: WORKSPACE_FILE_DND_TYPE, epicId, viewTabId, ref };
       }
       if (!treePath.endsWith("/")) return null;
+      if (activeHostId === null) return null;
       const name = getBasename(treePath);
       if (name.length === 0) return null;
       return {
         kind: WORKSPACE_FOLDER_DND_TYPE,
         epicId,
         viewTabId,
+        hostId: activeHostId,
         workspacePath: props.workspacePath,
         folderPath: treePath,
         name,
       };
     },
-    [epicId, props.workspacePath, viewTabId, workspaceFileRefForTreePath],
+    [
+      activeHostId,
+      epicId,
+      props.workspacePath,
+      viewTabId,
+      workspaceFileRefForTreePath,
+    ],
   );
   const bridge = usePierreCanvasDragBridge({
     // Pane-scoped: the same workspace file tree can be open in both sides of a

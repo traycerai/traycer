@@ -594,6 +594,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
             <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
             <ComposerAttachmentDropZone
               viewTabId={viewTabId}
+              hostId={tabHostId}
               editorRef={editorRef}
             >
               <ComposerShell

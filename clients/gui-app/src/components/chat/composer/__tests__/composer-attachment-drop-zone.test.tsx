@@ -53,6 +53,7 @@ vi.mock("@dnd-kit/modifiers", async (importOriginal) => {
 });
 
 const VIEW_TAB_ID = "view-1";
+const TARGET_HOST_ID = "host-1";
 
 const FILE_SOURCE: EpicCanvasDragSourceData = {
   kind: WORKSPACE_FILE_DND_TYPE,
@@ -119,6 +120,17 @@ describe("ComposerAttachmentDropZone root DnD contract", () => {
     expect(handleRef.current?.isEmpty()).toBe(true);
     expect(snapCenterToCursorSpy).toHaveBeenCalledWith(TERMINAL_TILE_DND_TYPE);
   });
+
+  it("keeps paths from another host out of a tab-bound composer", async () => {
+    const { handleRef, source, target } = await renderHarness({
+      ...FILE_SOURCE,
+      ref: { ...FILE_SOURCE.ref, hostId: "host-2" },
+    });
+
+    await dragToTarget(source, target, false);
+
+    expect(handleRef.current?.isEmpty()).toBe(true);
+  });
 });
 
 async function renderHarness(sourceData: EpicCanvasDragSourceData): Promise<{
@@ -184,7 +196,11 @@ function EditorDropTarget({
     handleRef.current = handle;
   };
   return (
-    <ComposerAttachmentDropZone viewTabId={VIEW_TAB_ID} editorRef={handleRef}>
+    <ComposerAttachmentDropZone
+      viewTabId={VIEW_TAB_ID}
+      hostId={TARGET_HOST_ID}
+      editorRef={handleRef}
+    >
       <div data-testid="drop-target">
         <ComposerPromptEditor
           ref={setHandle}

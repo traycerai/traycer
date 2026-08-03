@@ -9,6 +9,8 @@ import {
   isWorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { tuiHarnessIdSchema } from "@traycer/protocol/host/index";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import { resolveSplitDropPosition } from "@/components/epic-canvas/dnd/pane-drop-geometry";
@@ -130,6 +132,7 @@ export interface EpicCanvasWorkspaceFolderDragData {
   readonly kind: typeof WORKSPACE_FOLDER_DND_TYPE;
   readonly epicId: string;
   readonly viewTabId: string;
+  readonly hostId: string;
   readonly workspacePath: string;
   readonly folderPath: string;
   readonly name: string;
@@ -176,6 +179,7 @@ export interface EpicCanvasActiveAgentDragData {
     readonly type: "chat" | "terminal-agent";
     readonly name: string;
     readonly hostId: string;
+    readonly harnessId: TuiHarnessId | null;
   };
 }
 
@@ -524,6 +528,7 @@ function readWorkspaceFolderSource(
   const scope = readCanvasSourceScope(value);
   if (
     scope === null ||
+    !isNonEmptyString(value.hostId) ||
     !isNonEmptyString(value.workspacePath) ||
     !isNonEmptyString(value.folderPath) ||
     !value.folderPath.endsWith("/") ||
@@ -534,6 +539,7 @@ function readWorkspaceFolderSource(
   return {
     kind: WORKSPACE_FOLDER_DND_TYPE,
     ...scope,
+    hostId: value.hostId,
     workspacePath: value.workspacePath,
     folderPath: value.folderPath,
     name: value.name,
@@ -581,6 +587,22 @@ function readActiveAgentSource(
   ) {
     return null;
   }
+  if (agent.type === "terminal-agent") {
+    const harnessId = tuiHarnessIdSchema.safeParse(agent.harnessId);
+    if (!harnessId.success) return null;
+    return {
+      kind: ACTIVE_AGENT_DND_TYPE,
+      ...scope,
+      agent: {
+        id: agent.id,
+        type: agent.type,
+        name: agent.name,
+        hostId: agent.hostId,
+        harnessId: harnessId.data,
+      },
+    };
+  }
+  if (agent.harnessId !== null) return null;
   return {
     kind: ACTIVE_AGENT_DND_TYPE,
     ...scope,
@@ -589,6 +611,7 @@ function readActiveAgentSource(
       type: agent.type,
       name: agent.name,
       hostId: agent.hostId,
+      harnessId: null,
     },
   };
 }

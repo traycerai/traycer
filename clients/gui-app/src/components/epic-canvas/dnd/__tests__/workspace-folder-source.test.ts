@@ -8,6 +8,7 @@ const SOURCE = {
   kind: WORKSPACE_FOLDER_DND_TYPE,
   epicId: "epic-1",
   viewTabId: "view-1",
+  hostId: "host-1",
   workspacePath: "/repo",
   folderPath: "src/components/",
   name: "components",
@@ -23,6 +24,15 @@ describe("workspace-folder drag source", () => {
       readEpicCanvasDragSourceData({
         ...SOURCE,
         folderPath: "src/components",
+      }),
+    ).toBeNull();
+  });
+
+  it("requires the host that owns the workspace path", () => {
+    expect(
+      readEpicCanvasDragSourceData({
+        ...SOURCE,
+        hostId: "",
       }),
     ).toBeNull();
   });
