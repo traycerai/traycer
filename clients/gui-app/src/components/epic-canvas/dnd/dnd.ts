@@ -98,6 +98,7 @@ export interface EpicCanvasSidebarNodeDragData {
   readonly kind: typeof SIDEBAR_NODE_DND_TYPE;
   readonly epicId: string;
   readonly viewTabId: string;
+  readonly hostId: string;
   readonly nodeId: string;
 }
 
@@ -489,10 +490,19 @@ function readSidebarNodeSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
   const scope = readCanvasSourceScope(value);
-  if (scope === null || !isNonEmptyString(value.nodeId)) {
+  if (
+    scope === null ||
+    !isNonEmptyString(value.hostId) ||
+    !isNonEmptyString(value.nodeId)
+  ) {
     return null;
   }
-  return { kind: SIDEBAR_NODE_DND_TYPE, ...scope, nodeId: value.nodeId };
+  return {
+    kind: SIDEBAR_NODE_DND_TYPE,
+    ...scope,
+    hostId: value.hostId,
+    nodeId: value.nodeId,
+  };
 }
 
 function readGitDiffTileSource(

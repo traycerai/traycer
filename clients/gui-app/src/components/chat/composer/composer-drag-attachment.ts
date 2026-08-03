@@ -82,11 +82,12 @@ function sidebarNodeMention(
   >,
   targetHostId: string,
 ): MentionAttachment | null {
+  if (source.hostId !== targetHostId) return null;
   const handle = getOpenEpicRegistry().peek(source.epicId);
   if (handle === null) return null;
   const state = handle.store.getState();
-  const record = epicTreeRecordForNodeId(state, source.nodeId, targetHostId);
-  if (record === null || record.hostId !== targetHostId) return null;
+  const record = epicTreeRecordForNodeId(state, source.nodeId, source.hostId);
+  if (record === null || record.hostId !== source.hostId) return null;
   if (
     record.type === "terminal-agent" &&
     Object.hasOwn(state.tuiAgents.byId, source.nodeId) &&

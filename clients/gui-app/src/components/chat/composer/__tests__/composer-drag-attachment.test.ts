@@ -55,6 +55,7 @@ describe("mentionAttachmentFromDragSource", () => {
     const source: EpicCanvasDragSourceData = {
       kind: SIDEBAR_NODE_DND_TYPE,
       ...SCOPE,
+      hostId: TARGET_HOST_ID,
       nodeId: "spec-1",
     };
 
@@ -66,12 +67,19 @@ describe("mentionAttachmentFromDragSource", () => {
       label: "Composer spec",
       description: "Drag attachments",
     });
+    expect(
+      mentionAttachmentFromDragSource(
+        { ...source, hostId: "host-2" },
+        TARGET_HOST_ID,
+      ),
+    ).toBeNull();
   });
 
   it("rejects unavailable sidebar sessions and records", () => {
     const source: EpicCanvasDragSourceData = {
       kind: SIDEBAR_NODE_DND_TYPE,
       ...SCOPE,
+      hostId: TARGET_HOST_ID,
       nodeId: "missing",
     };
 

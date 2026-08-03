@@ -36,6 +36,7 @@ const SIDEBAR_NODE_SOURCE_DATA = {
   kind: "sidebar-node",
   epicId: EPIC_ID,
   viewTabId: VIEW_TAB_ID,
+  hostId: "host-1",
   nodeId: "node-a",
 } as const;
 
@@ -58,6 +59,7 @@ const WORKSPACE_FOLDER_SOURCE_DATA = {
   kind: "workspace-folder",
   epicId: EPIC_ID,
   viewTabId: VIEW_TAB_ID,
+  hostId: "host-1",
   workspacePath: "/repo",
   folderPath: "src/",
   name: "src",
