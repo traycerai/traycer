@@ -47,7 +47,7 @@ const terminalBindingsMock = vi.hoisted(() => ({
   active: {
     data: {
       rows: ACTIVE_ROWS,
-      folderlessCwd: "/work/default-cwd",
+      folderlessCwd: "/work/default-cwd" as string | null,
     },
     isPending: false,
     isError: false,
