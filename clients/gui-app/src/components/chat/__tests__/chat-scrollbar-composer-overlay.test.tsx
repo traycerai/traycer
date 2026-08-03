@@ -159,6 +159,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
           <ChatLowerDock
             snapshotLoaded
             epicId="epic-1"
+            chatId="chat-1"
+            runningManagedCommandCount={0}
             viewTabId="tab-1"
             selfAgent={null}
             activeAgents={[]}
@@ -216,6 +218,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
           <ChatLowerDock
             snapshotLoaded
             epicId="epic-1"
+            chatId="chat-1"
+            runningManagedCommandCount={0}
             viewTabId="tab-1"
             selfAgent={null}
             activeAgents={[]}
