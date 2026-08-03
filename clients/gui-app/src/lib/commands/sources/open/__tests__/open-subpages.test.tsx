@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingSelectorRowV12,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
@@ -20,6 +23,58 @@ const spies = vi.hoisted(() => ({
 }));
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
   current: "default-host",
+}));
+const terminalBindingsMock = vi.hoisted(() => ({
+  active: {
+    data: {
+      rows: [
+        {
+          hostId: "default-host",
+          runningDir: "/work/active-repo",
+          workspacePath: "/work/active-repo",
+          worktreePath: null,
+          mode: "local" as const,
+          isGitRepo: true,
+          repoIdentifier: null,
+          branch: null,
+          isPrimary: true,
+          isImported: false,
+          setupState: "not_required" as const,
+          disabledReason: null,
+          sources: [],
+          isGitResolvePending: false,
+        },
+      ] satisfies WorktreeBindingSelectorRowV12[],
+      folderlessCwd: "/work/default-cwd",
+    },
+    isPending: false,
+    isError: false,
+  },
+  remote: {
+    data: {
+      rows: [
+        {
+          hostId: "terminal-host",
+          runningDir: "/remote/feature-worktree",
+          workspacePath: "/remote/repo",
+          worktreePath: "/remote/feature-worktree",
+          mode: "worktree" as const,
+          isGitRepo: true,
+          repoIdentifier: null,
+          branch: "feature",
+          isPrimary: false,
+          isImported: false,
+          setupState: "not_required" as const,
+          disabledReason: null,
+          sources: [],
+          isGitResolvePending: false,
+        },
+      ] satisfies WorktreeBindingSelectorRowV12[],
+      folderlessCwd: "/remote/default-cwd",
+    },
+    isPending: false,
+    isError: false,
+  },
 }));
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   intent: {
@@ -127,6 +182,18 @@ vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => activeHostIdMock.current,
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string) => ({ mockHostId: hostId }),
+}));
+vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
+  useWorktreeListBindingsForEpic: () => terminalBindingsMock.active,
+  useWorktreeListBindingsForEpicForClient: (args: {
+    readonly client: { readonly mockHostId: string } | null;
+  }) =>
+    args.client?.mockHostId === "terminal-host"
+      ? terminalBindingsMock.remote
+      : terminalBindingsMock.active,
+}));
 // terminals-subpage reads the host client (passed to the mocked useTerminalList
 // below); stub it so the hook does not require a <HostRuntimeProvider>.
 vi.mock("@/lib/host", () => ({
@@ -163,6 +230,14 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         label: "",
         kind: "remote",
         websocketUrl: null,
+        version: null,
+        status: "available",
+      },
+      {
+        hostId: "terminal-host",
+        label: "Remote Terminal Mac",
+        kind: "remote",
+        websocketUrl: "ws://terminal-host.test",
         version: null,
         status: "available",
       },
@@ -216,7 +291,6 @@ import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-s
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { useNewTerminalModalOpenStore } from "@/stores/epics/new-terminal-modal-open-store";
 import {
   recordProviderLoginTerminal,
   useProviderLoginTerminalsStore,
@@ -277,7 +351,6 @@ afterEach(() => {
   activeHostIdMock.current = "default-host";
   useNewConversationModalOpenStore.getState().close();
   useNewConversationModalStore.getState().resetForTests();
-  useNewTerminalModalOpenStore.getState().close();
   useProviderLoginTerminalsStore.setState(
     useProviderLoginTerminalsStore.getInitialState(),
     true,
@@ -392,20 +465,64 @@ describe("Agents opener sub-page", () => {
 });
 
 describe("Terminals opener sub-page", () => {
-  it("Create new terminal opens the palette's terminal-creation dialog for the target group, instead of a folder sub-page", () => {
+  it("keeps new-terminal creation in cmdk and launches from the selected active-host workspace", () => {
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
     expect(newTerminal.id).toBe("open:terminals:new");
     expect(newTerminal.label).toBe("Create new terminal");
-    expect(newTerminal.subpage).toBeNull();
+    expect(newTerminal.subpage?.title).toBe("Create terminal in workspace");
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
 
-    runById(items, "open:terminals:new");
+    const workspaces = renderItems(newTerminal.subpage.useItems);
+    const activeWorkspace = workspaces.find(
+      (item) => item.label === "/work/active-repo",
+    );
+    expect(activeWorkspace?.subpage).toBeNull();
+    runById(workspaces, activeWorkspace?.id ?? "missing");
 
-    expect(useNewTerminalModalOpenStore.getState().request).toEqual({
-      epicId: "epic-1",
-      tabId: "tab-1",
-      groupId: "group-1",
-    });
+    const opened = lastTileOpen();
+    expect(opened.tabId).toBe("tab-1");
+    expect(opened.groupId).toBe("group-1");
+    expect(opened.ref.type).toBe("terminal");
+    expect(opened.ref.hostId).toBe("default-host");
+    if (opened.ref.type !== "terminal") {
+      throw new Error("expected terminal ref");
+    }
+    expect(opened.ref.cwd).toBe("/work/active-repo");
+  });
+
+  it("offers other hosts as fuzzy subpages and launches through their transient client", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const workspaces = renderItems(newTerminal.subpage.useItems);
+    const remoteHost = workspaces.find(
+      (item) => item.label === "Remote Terminal Mac",
+    );
+    expect(remoteHost?.subpage?.title).toBe(
+      "Create terminal on Remote Terminal Mac",
+    );
+    if (remoteHost?.subpage === null || remoteHost?.subpage === undefined) {
+      throw new Error("expected remote-host workspace subpage");
+    }
+
+    const remoteWorkspaces = renderItems(remoteHost.subpage.useItems);
+    const remoteWorkspace = remoteWorkspaces.find(
+      (item) => item.label === "/remote/feature-worktree",
+    );
+    runById(remoteWorkspaces, remoteWorkspace?.id ?? "missing");
+
+    const opened = lastTileOpen();
+    expect(opened.ref.type).toBe("terminal");
+    expect(opened.ref.hostId).toBe("terminal-host");
+    if (opened.ref.type !== "terminal") {
+      throw new Error("expected terminal ref");
+    }
+    expect(opened.ref.cwd).toBe("/remote/feature-worktree");
   });
 
   it("opens an existing terminal into the target group, with no host badge", () => {
