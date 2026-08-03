@@ -353,6 +353,10 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   activeHostIdMock.current = "default-host";
+  terminalBindingsMock.active.isPending = false;
+  terminalBindingsMock.active.isError = false;
+  terminalBindingsMock.remote.isPending = false;
+  terminalBindingsMock.remote.isError = false;
   useNewConversationModalOpenStore.getState().close();
   useNewConversationModalStore.getState().resetForTests();
   useProviderLoginTerminalsStore.setState(
@@ -530,6 +534,60 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected terminal ref");
     }
     expect(opened.ref.cwd).toBe("/remote/feature-worktree");
+  });
+
+  it("keeps reachable remote hosts selectable while no active host is resolved", () => {
+    activeHostIdMock.current = null;
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+
+    const workspaces = renderItems(newTerminal.subpage.useItems);
+    expect(workspaces.map((item) => item.label)).toEqual([
+      "Remote Terminal Mac",
+    ]);
+  });
+
+  it("shows a loading hint while a remote host's workspaces are loading", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const remoteHost = renderItems(newTerminal.subpage.useItems).find(
+      (item) => item.label === "Remote Terminal Mac",
+    );
+    if (remoteHost?.subpage === null || remoteHost?.subpage === undefined) {
+      throw new Error("expected remote-host workspace subpage");
+    }
+
+    terminalBindingsMock.remote.isPending = true;
+    const remoteWorkspaces = renderItems(remoteHost.subpage.useItems);
+    expect(remoteWorkspaces.map((item) => item.label)).toEqual([
+      "Loading workspaces…",
+    ]);
+  });
+
+  it("shows an error hint when a remote host's workspace query fails", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const remoteHost = renderItems(newTerminal.subpage.useItems).find(
+      (item) => item.label === "Remote Terminal Mac",
+    );
+    if (remoteHost?.subpage === null || remoteHost?.subpage === undefined) {
+      throw new Error("expected remote-host workspace subpage");
+    }
+
+    terminalBindingsMock.remote.isError = true;
+    const remoteWorkspaces = renderItems(remoteHost.subpage.useItems);
+    expect(remoteWorkspaces.map((item) => item.label)).toEqual([
+      "Couldn't load workspaces",
+    ]);
   });
 
   it("opens an existing terminal into the target group, with no host badge", () => {

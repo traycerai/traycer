@@ -99,6 +99,45 @@ function terminalWorkspaceLeaves(
   return [];
 }
 
+function terminalWorkspaceStatusHint(
+  hostId: string,
+  status: "loading" | "error",
+): CommandItem {
+  const isLoading = status === "loading";
+  return {
+    id: `open:terminals:new:host:${hostId}:${status}`,
+    label: isLoading ? "Loading workspaces…" : "Couldn't load workspaces",
+    description: isLoading
+      ? "Fetching workspaces for this host"
+      : "Try again after the host reconnects",
+    keywords: ["workspace", status],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
+function terminalWorkspaceQueryItems(
+  ctx: CommandContext,
+  hostId: string,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12> | undefined,
+  folderlessCwd: string | null | undefined,
+  isPending: boolean,
+  isError: boolean,
+): ReadonlyArray<CommandItem> {
+  if (isPending) return [terminalWorkspaceStatusHint(hostId, "loading")];
+  if (isError) return [terminalWorkspaceStatusHint(hostId, "error")];
+  return terminalWorkspaceLeaves(
+    ctx,
+    hostId,
+    rows ?? [],
+    folderlessCwd ?? null,
+  );
+}
+
 function useHostTerminalWorkspaceItems(
   ctx: CommandContext,
   hostId: string,
@@ -111,13 +150,15 @@ function useHostTerminalWorkspaceItems(
   });
   return useMemo(
     () =>
-      terminalWorkspaceLeaves(
+      terminalWorkspaceQueryItems(
         ctx,
         hostId,
-        bindings.data?.rows ?? [],
-        bindings.data?.folderlessCwd ?? null,
+        bindings.data?.rows,
+        bindings.data?.folderlessCwd,
+        bindings.isPending,
+        bindings.isError,
       ),
-    [ctx, hostId, bindings.data],
+    [bindings.data, bindings.isError, bindings.isPending, ctx, hostId],
   );
 }
 
@@ -146,13 +187,17 @@ function useNewTerminalWorkspaceItems(
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
   return useMemo(() => {
-    if (activeHostId === null) return [];
-    const localLeaves = terminalWorkspaceLeaves(
-      ctx,
-      activeHostId,
-      bindings.data?.rows ?? [],
-      bindings.data?.folderlessCwd ?? null,
-    );
+    const localLeaves =
+      activeHostId === null
+        ? []
+        : terminalWorkspaceQueryItems(
+            ctx,
+            activeHostId,
+            bindings.data?.rows,
+            bindings.data?.folderlessCwd,
+            bindings.isPending,
+            bindings.isError,
+          );
     const otherHosts = (directory.data ?? [])
       .filter(
         (entry) =>
@@ -170,7 +215,14 @@ function useNewTerminalWorkspaceItems(
         });
       });
     return [...localLeaves, ...otherHosts];
-  }, [activeHostId, bindings.data, ctx, directory.data]);
+  }, [
+    activeHostId,
+    bindings.data,
+    bindings.isError,
+    bindings.isPending,
+    ctx,
+    directory.data,
+  ]);
 }
 
 const NEW_TERMINAL_WORKSPACE_SUBPAGE: CommandSubpage = {
