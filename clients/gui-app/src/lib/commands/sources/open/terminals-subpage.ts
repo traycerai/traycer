@@ -26,6 +26,7 @@ import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
+import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
 import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import {
   deriveTitleSourceFromSessionTitle,
@@ -84,6 +85,39 @@ function terminalWorkspaceCheckingHint(
   };
 }
 
+function terminalWorkspaceDisabledHint(
+  row: WorktreeBindingSelectorRowV12,
+): CommandItem {
+  const reason = formatWorktreeFolderDisabledReason(row) ?? "unavailable";
+  return {
+    id: `open:terminals:new:${row.hostId}:${encodeURIComponent(row.runningDir)}:disabled`,
+    label: row.runningDir,
+    description: `Workspace unavailable: ${reason}`,
+    keywords: [row.runningDir, "new", "terminal", "workspace", reason],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
+function terminalWorkspaceFolderlessCwdErrorHint(hostId: string): CommandItem {
+  return {
+    id: `open:terminals:new:host:${hostId}:folderless-cwd-error`,
+    label: "Couldn't resolve terminal directory",
+    description: "This host doesn't support folderless terminal directories",
+    keywords: ["workspace", "terminal", "directory", "error"],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
 function terminalWorkspaceLeaves(
   ctx: CommandContext,
   hostId: string,
@@ -100,6 +134,9 @@ function terminalWorkspaceLeaves(
   const checkingRows = visibleRows.filter(
     (row) => row.disabledReason !== null && isWorkspaceResolvePending(row),
   );
+  const disabledRows = visibleRows.filter(
+    (row) => row.disabledReason !== null && !isWorkspaceResolvePending(row),
+  );
   const leaves = selectableRows.map((row) =>
     terminalWorkspaceLeaf(
       ctx,
@@ -108,8 +145,13 @@ function terminalWorkspaceLeaves(
     ),
   );
   const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
-  if (leaves.length > 0 || checkingHints.length > 0) {
-    return [...leaves, ...checkingHints];
+  const disabledHints = disabledRows.map(terminalWorkspaceDisabledHint);
+  if (
+    leaves.length > 0 ||
+    checkingHints.length > 0 ||
+    disabledHints.length > 0
+  ) {
+    return [...leaves, ...checkingHints, ...disabledHints];
   }
   // Match the sidebar picker: the host-owned fallback cwd is valid only when
   // the Epic truly has no live binding rows on any host. Disabled bindings do
@@ -118,6 +160,9 @@ function terminalWorkspaceLeaves(
     return [
       terminalWorkspaceLeaf(ctx, { hostId, cwd: folderlessCwd }, folderlessCwd),
     ];
+  }
+  if (rowsWithoutResolvedMissing.length === 0) {
+    return [terminalWorkspaceFolderlessCwdErrorHint(hostId)];
   }
   return [];
 }

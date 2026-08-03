@@ -635,6 +635,53 @@ describe("Terminals opener sub-page", () => {
     terminalBindingsMock.active.data.rows = originalRows;
   });
 
+  it("keeps setup-disabled workspaces visible as non-actionable rows", () => {
+    const originalRows = terminalBindingsMock.active.data.rows;
+    terminalBindingsMock.active.data.rows = [
+      { ...originalRows[0], disabledReason: "setup_failed" },
+    ];
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+
+    const disabled = renderItems(newTerminal.subpage.useItems).find(
+      (item) => item.label === "/work/active-repo",
+    );
+    if (disabled === undefined) {
+      throw new Error("expected disabled workspace row");
+    }
+    expect(disabled.description).toBe("Workspace unavailable: failed");
+    void disabled.run(CTX);
+    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    terminalBindingsMock.active.data.rows = originalRows;
+  });
+
+  it("shows an error when a folderless terminal directory cannot be resolved", () => {
+    const originalRows = terminalBindingsMock.active.data.rows;
+    const originalFolderlessCwd =
+      terminalBindingsMock.active.data.folderlessCwd;
+    terminalBindingsMock.active.data.rows = [];
+    terminalBindingsMock.active.data.folderlessCwd = null;
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+
+    const error = renderItems(newTerminal.subpage.useItems).find(
+      (item) => item.label === "Couldn't resolve terminal directory",
+    );
+    if (error === undefined) {
+      throw new Error("expected folderless directory error");
+    }
+    void error.run(CTX);
+    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    terminalBindingsMock.active.data.rows = originalRows;
+    terminalBindingsMock.active.data.folderlessCwd = originalFolderlessCwd;
+  });
+
   it("opens an existing terminal into the target group, with no host badge", () => {
     const items = renderItems(useTerminalsOpenerItems);
     const existingItem = items.find((i) => i.id === "open:terminals:term-1");
