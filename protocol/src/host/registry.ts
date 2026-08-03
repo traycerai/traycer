@@ -86,6 +86,8 @@ import {
 import {
   agentInboxAckV10,
   agentInboxReadV10,
+  agentInboxReadV11,
+  agentInboxReadUpgradeV10ToV11,
   agentInboxSubscribeV10,
   agentInboxSubscribeV11,
   agentInboxSubscribeV12,
@@ -3764,11 +3766,15 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "agent.inbox.read": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentInboxReadV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentInboxReadV11,
+          upgradeFromPreviousVersion: agentInboxReadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

@@ -29,7 +29,10 @@
  * sink that is connected at that moment - it is never queued, so a
  * reconnecting monitor never replays a stale broadcast.
  */
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { z } from "zod";
 import { roleAwarenessEventSchema } from "@traycer/protocol/host/agent/roles";
@@ -331,14 +334,15 @@ export const agentInboxSubscribeV12 = defineStreamRpcContract({
 
 // ─── `agent.inbox.read@1.0` - unary recent-inbox read ─────────────────────
 //
-// Lets a TUI agent re-read its recently-delivered inbox messages IN FULL.
+// Lets a TUI agent re-read its recently-delivered inbox messages IN FULL,
+// page by page.
 // The `traycer monitor` stream surfaces each message to the agent through a
 // harness background-output notification, which the harness truncates for
-// large payloads. This unary read returns the broker's retained ring (full
-// bodies, oldest first) so the agent can recover the complete message via a
-// direct `traycer agent inbox` call, whose stdout is not subject to that
-// notification cap. GUI agents have no truncation problem and never route
-// through the broker inbox, so this is a TUI-only recovery path.
+// large payloads. This unary read returns the durable inbox's full bodies,
+// oldest first, through a direct `traycer agent inbox` call, whose stdout is
+// not subject to that notification cap. GUI agents have no truncation problem
+// and never route through the durable TUI inbox, so this is a TUI-only
+// recovery path.
 
 export const agentInboxReadRequestSchema = z.object({
   epicId: z.string(),
@@ -360,6 +364,51 @@ export const agentInboxReadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentInboxReadRequestSchema,
   responseSchema: agentInboxReadResponseSchema,
+});
+
+// ─── `agent.inbox.read@1.1` - bounded durable-inbox page ─────────────────
+//
+// A durable inbox can contain many full 16 MiB prompts while a monitor is
+// disconnected. Keep @1.0 frozen for existing clients, but make the canonical
+// read a single-row cursor page so a recovery read never allocates an entire
+// backlog in the host RPC process.
+export const agentInboxReadCursorSchema = z.object({
+  createdAt: z.number().int(),
+  eventId: z.string(),
+});
+export type AgentInboxReadCursor = z.infer<typeof agentInboxReadCursorSchema>;
+
+export const agentInboxReadRequestSchemaV11 = agentInboxReadRequestSchema.extend({
+  /** Resume after this oldest-first durable inbox row, or start at the head. */
+  after: agentInboxReadCursorSchema.nullable(),
+});
+export type AgentInboxReadRequestV11 = z.infer<
+  typeof agentInboxReadRequestSchemaV11
+>;
+
+export const agentInboxReadResponseSchemaV11 = agentInboxReadResponseSchema.extend({
+  /** Cursor for the following page, or null when this page reached the end. */
+  nextCursor: agentInboxReadCursorSchema.nullable(),
+});
+export type AgentInboxReadResponseV11 = z.infer<
+  typeof agentInboxReadResponseSchemaV11
+>;
+
+export const agentInboxReadV11 = defineRpcContract({
+  method: "agent.inbox.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: agentInboxReadRequestSchemaV11,
+  responseSchema: agentInboxReadResponseSchemaV11,
+});
+
+export const agentInboxReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentInboxReadV10,
+  typeof agentInboxReadV11
+>({
+  from: agentInboxReadV10.schemaVersion,
+  to: agentInboxReadV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, after: null }),
+  upgradeResponse: (response) => ({ ...response, nextCursor: null }),
 });
 
 // ─── `agent.inbox.ack@1.0` - unary durable-inbox acknowledgement ──────────
