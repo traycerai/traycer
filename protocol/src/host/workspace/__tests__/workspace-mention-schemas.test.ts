@@ -187,6 +187,14 @@ describe("workspace mention host schemas", () => {
         error: "changed",
       }).success,
     ).toBe(true);
+    expect(
+      workspaceWriteFileResponseSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        status: "error",
+        error: "write failed",
+      }).success,
+    ).toBe(true);
   });
 
   it("registers single-purpose workspace mention methods at v1.0", () => {
@@ -200,6 +208,10 @@ describe("workspace mention host schemas", () => {
     ).toEqual({ major: 1, minor: 0 });
     expect(
       hostRpcRegistry["workspace.readFile"][1].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 1, minor: 0 });
+    expect(
+      hostRpcRegistry["workspace.writeFile"][1].versions[0].contract
         .schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
     expect(

@@ -104,6 +104,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("<WorkspaceFileRenderer />", () => {
@@ -222,6 +223,87 @@ describe("<WorkspaceFileRenderer />", () => {
     expect(highlightPool.lastEdit).toBe(false);
   });
 
+  it("reveals the target line once its virtualized row exists", async () => {
+    const frames = installAnimationFrameQueue();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const onRevealConsumed = vi.fn();
+
+    render(
+      <WorkspaceFileRenderer
+        content={"line one\nline two\nline three\n"}
+        fileName="source.ts"
+        language="typescript"
+        editing={false}
+        cacheKey="workspace-file:source.ts"
+        editAdapter={createEditAdapter(vi.fn())}
+        revealLine={2}
+        revealNonce={1}
+        findTarget={null}
+        onRevealConsumed={onRevealConsumed}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(activeDiffsContainer()).toBeTruthy();
+    });
+    // Simulates a virtualized row mounting only after the reveal effect's
+    // first (failed) lookup: appended between frames, not before render.
+    const targetLine = document.createElement("div");
+    targetLine.setAttribute("data-line", "");
+    targetLine.setAttribute("data-line-index", "1");
+    activeDiffsContainer()?.shadowRoot?.appendChild(targetLine);
+
+    act(() => {
+      frames.flushFrames();
+    });
+
+    expect(targetLine.getAttribute("data-workspace-file-reveal")).toBe("");
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      behavior: "auto",
+    });
+    expect(onRevealConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after a bounded number of frames when the target line never renders", async () => {
+    const frames = installAnimationFrameQueue();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const onRevealConsumed = vi.fn();
+
+    render(
+      <WorkspaceFileRenderer
+        content={"line one\nline two\nline three\n"}
+        fileName="source.ts"
+        language="typescript"
+        editing={false}
+        cacheKey="workspace-file:source.ts"
+        editAdapter={createEditAdapter(vi.fn())}
+        revealLine={2}
+        revealNonce={1}
+        findTarget={null}
+        onRevealConsumed={onRevealConsumed}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(activeDiffsContainer()).toBeTruthy();
+    });
+
+    // The target row never renders (e.g. scrolled far off-screen). The retry
+    // loop must give up instead of scheduling animation frames forever -
+    // `flushFrames` throws if it doesn't converge within its guard.
+    act(() => {
+      frames.flushFrames();
+    });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(onRevealConsumed).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the mounted file visible while later content prewarms", async () => {
     const primeFileHighlightCache = vi
       .fn()
@@ -293,6 +375,42 @@ function createEditAdapter(
     onKeyDownCapture: vi.fn(),
     onPointerDownCapture: vi.fn(),
     cancelPendingActivation: vi.fn(),
+  };
+}
+
+function installAnimationFrameQueue(): {
+  readonly flushFrames: () => void;
+} {
+  let nextHandle = 1;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    const handle = nextHandle;
+    nextHandle += 1;
+    callbacks.set(handle, callback);
+    return handle;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((handle) => {
+    callbacks.delete(handle);
+  });
+  return {
+    // Drain every pending frame, including frames re-scheduled while
+    // draining (the reveal retry loop), so a test can assert the loop
+    // converges instead of polling forever. Guarded against runaway
+    // re-scheduling.
+    flushFrames: () => {
+      let guard = 0;
+      while (callbacks.size > 0) {
+        guard += 1;
+        if (guard > 50) {
+          throw new Error("Too many pending animation frames.");
+        }
+        const entry = Array.from(callbacks.entries()).at(0);
+        if (entry === undefined) break;
+        const [handle, callback] = entry;
+        callbacks.delete(handle);
+        callback(0);
+      }
+    },
   };
 }
 

@@ -39,6 +39,12 @@ const SAVED_STATE: FileEditRuntimeState = {
   lastSavedAt: 1,
 };
 
+const RECOVERY_UNAVAILABLE_STATE: FileEditRuntimeState = {
+  ...SAVED_STATE,
+  ownerSurfaceId: null,
+  recoveryStatus: "unavailable",
+};
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -143,5 +149,23 @@ describe("<FileAutosaveStatus />", () => {
     expect(pill.className).not.toContain("bg-muted/45");
     expect(pill.className).not.toContain("border-border/70");
     expect(pill.className).not.toContain("shadow-xs");
+  });
+
+  it("stays visible for a recovery-unavailable state even when the file is clean and unowned", () => {
+    render(
+      <LazyMotion features={domMax}>
+        <FileAutosaveStatus
+          appearance="pill"
+          state={RECOVERY_UNAVAILABLE_STATE}
+          onRetry={vi.fn()}
+          onKeepMine={vi.fn()}
+          onUseDisk={vi.fn()}
+        />
+      </LazyMotion>,
+    );
+
+    const status = screen.getByTestId("file-autosave-status");
+    expect(status.getAttribute("data-status")).toBe("recovery-unavailable");
+    expect(screen.getByText("Recovery unavailable")).toBeTruthy();
   });
 });

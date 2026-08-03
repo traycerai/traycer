@@ -41,6 +41,13 @@ interface WorkspaceFileSourceFindTargetWithNonce extends WorkspaceFileSourceFind
   readonly nonce: number;
 }
 
+// `File` virtualizes rows, so a target line's row may not exist yet right
+// after mount/scroll. Retry across a few frames to let virtualization settle,
+// then give up rather than polling forever - matches the retry bound used for
+// the comparable "wait for a virtualized DOM node after a jump" concern in
+// `use-chat-find-controller.ts` (`FIND_REVEAL_ANCHOR_RETRY_LIMIT`).
+const WORKSPACE_FILE_REVEAL_RETRY_LIMIT = 3;
+
 /**
  * The shared Diffs-backed source surface for both reading and editing a
  * workspace file. Canvas find/reveal is projected into Diffs' open shadow DOM
@@ -117,9 +124,15 @@ export function WorkspaceFileRenderer(props: {
     }
     const lineIndex = clampLineIndex(revealLine, content);
     let frameId: number | null = null;
+    let remainingRetries = WORKSPACE_FILE_REVEAL_RETRY_LIMIT;
     const reveal = (): void => {
       const line = findDiffsLine(container, lineIndex);
       if (line === null) {
+        if (remainingRetries <= 0) {
+          onRevealConsumed();
+          return;
+        }
+        remainingRetries -= 1;
         frameId = requestAnimationFrame(reveal);
         return;
       }

@@ -379,7 +379,8 @@ function shouldShowStatus(state: FileEditRuntimeState): boolean {
   return (
     state.ownerSurfaceId !== null ||
     state.isDirty ||
-    state.status === "conflict"
+    state.status === "conflict" ||
+    state.recoveryStatus === "unavailable"
   );
 }
 
