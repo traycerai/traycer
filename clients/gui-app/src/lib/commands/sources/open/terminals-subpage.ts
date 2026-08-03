@@ -86,11 +86,7 @@ function terminalWorkspaceLeaves(
   // degrade to an unrelated default directory.
   if (visibleRows.length === 0 && folderlessCwd !== null) {
     return [
-      terminalWorkspaceLeaf(
-        ctx,
-        { hostId, cwd: folderlessCwd },
-        folderlessCwd,
-      ),
+      terminalWorkspaceLeaf(ctx, { hostId, cwd: folderlessCwd }, folderlessCwd),
     ];
   }
   return [];
