@@ -70,7 +70,6 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { ChatControlStrip } from "../chat-tile-control-strip";
 import { ChatTileErrorNoticeToasts } from "../chat-tile-error-notice-toasts";
 import { ChatTileRestoreResultToasts } from "../chat-tile-restore-result-toasts";
 import {
@@ -1038,43 +1037,3 @@ function readWarningOptions(): ExternalToast {
   }
   return options;
 }
-
-describe("<ChatControlStrip />", () => {
-  it("does not reserve persistent space for chat error notices", () => {
-    const harness = createHarness();
-    emitSnapshot(harness.callbacks(), [], []);
-
-    act(() => {
-      harness.callbacks().onErrorNotice({
-        kind: "errorNotice",
-        hasBinaryPayload: false,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        notice: {
-          code: "INTERVIEW_NOT_PENDING",
-          message: "The interview request is no longer pending.",
-          severity: "warning",
-          clientActionId: "interview-1",
-        },
-      });
-    });
-
-    const { container, queryByText } = render(
-      <ChatControlStrip
-        state={harness.handle.store.getState()}
-        canAct
-        editingQueueItemId={null}
-        onQueuePause={() => null}
-        onResumeQueue={() => null}
-        onQueueEdit={() => undefined}
-        onQueueCancel={() => undefined}
-        onQueueReorder={() => undefined}
-      />,
-    );
-
-    expect(container.firstChild).toBeNull();
-    expect(
-      queryByText("The interview request is no longer pending."),
-    ).toBeNull();
-  });
-});

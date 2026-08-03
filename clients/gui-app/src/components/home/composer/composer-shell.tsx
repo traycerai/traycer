@@ -32,12 +32,15 @@ const FILE_DROP_OVERLAY_CONTENT = {
   }
 >;
 
-function ComposerFileDropOverlay({
-  variant,
+export function ComposerDropOverlay({
+  Icon,
+  title,
+  subtitle,
 }: {
-  readonly variant: FileTransferDragOverlayVariant;
+  readonly Icon: typeof ImageIcon;
+  readonly title: string;
+  readonly subtitle: string;
 }) {
-  const { Icon, title, subtitle } = FILE_DROP_OVERLAY_CONTENT[variant];
   return (
     <div
       aria-hidden
@@ -129,15 +132,15 @@ function ComposerShellImpl(props: ComposerShellProps) {
     toolbar,
   } = props;
 
-  const { ref, isNarrow } = useComposerNarrowObserver();
-  const overlay =
-    dragOverlayVariant === null ? null : (
-      <ComposerFileDropOverlay variant={dragOverlayVariant} />
-    );
+  const { ref: narrowRef, isNarrow } = useComposerNarrowObserver();
+  const overlayContent =
+    dragOverlayVariant === null
+      ? null
+      : FILE_DROP_OVERLAY_CONTENT[dragOverlayVariant];
   return (
     <ComposerNarrowProvider isNarrow={isNarrow}>
       <div
-        ref={ref}
+        ref={narrowRef}
         className="@container"
         onDragOver={onDragOver}
         onDrop={onDrop}
@@ -146,7 +149,11 @@ function ComposerShellImpl(props: ComposerShellProps) {
       >
         <ComposerArea
           pickerStore={pickerStore}
-          overlay={overlay}
+          overlay={
+            overlayContent === null ? null : (
+              <ComposerDropOverlay {...overlayContent} />
+            )
+          }
           utilityRail={utilityRail}
           attachmentsStrip={attachmentsStrip}
           editor={editor}

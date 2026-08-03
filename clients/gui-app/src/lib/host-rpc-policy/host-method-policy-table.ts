@@ -374,6 +374,33 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Monitor/shell lifecycle from the "Monitors & Shells" list and the output
+  // window header. `fifo` is what buys these three the guarantees the
+  // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
+  // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
+  // refuses to cancel one. A delete destroys the command's entire output
+  // history, so it must never be collapsed into another in-flight request or
+  // silently dropped on a host swap - the human pressed it once and it either
+  // happens or reports why.
+  //
+  // (Not for cross-method ordering: the coordinator keys queues by
+  // [hostId, userId, method, params], so a start and a stop never share a
+  // queue and fifo cannot sequence one against the other.)
+  "managedCommand.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "agent.gui.listHarnesses": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("agent.gui.listHarnesses", {

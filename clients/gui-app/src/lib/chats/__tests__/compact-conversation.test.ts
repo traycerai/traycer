@@ -27,6 +27,7 @@ function command(
 
 function queuedItem(queueItemId: string, messageId: string): ChatQueuedItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId,
     message: { kind: "user", content: { type: "doc", content: [] } },

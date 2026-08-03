@@ -322,6 +322,92 @@ export const resourcesSubscribeV13 = defineStreamRpcContract({
   clientFrameSchema: resourcesSubscribeClientFrameSchema,
 });
 
+/**
+ * `@1.4` grows the owner vocabulary by `managed-command` - the host's
+ * supervised long-running commands (Monitors and Shells). Their trees were
+ * always tracked; before `@1.4` the host folded them into `other` because the
+ * wire had no kind for them, and it still does that for any peer negotiated
+ * below `@1.4`. The `@1.0`-`@1.3` enum stays frozen: a kind is not an additive
+ * field, so an old peer must never receive one it cannot name.
+ */
+export const resourceOwnerKindSchemaV14 = z.enum([
+  "chat",
+  "terminal",
+  "terminal-agent",
+  "managed-command",
+]);
+export type ResourceOwnerKindWireV14 = z.infer<
+  typeof resourceOwnerKindSchemaV14
+>;
+
+export const resourceOwnerRefSchemaV14 = z.object({
+  ...resourceOwnerRefSchema.shape,
+  kind: resourceOwnerKindSchemaV14,
+});
+export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
+
+/**
+ * What a `managed-command` owner row needs beyond the generic owner fields:
+ * the kind the UI names ("Monitor …" / "Shell …") and the human description
+ * the command was created with. `commandId` repeats `owner.ownerId` - the same
+ * value by construction - so a client joining this row to the managed-command
+ * list stream does it through a named field rather than a convention.
+ */
+export const managedCommandOwnerSchema = z.object({
+  commandId: z.string(),
+  kind: z.enum(["monitor", "shell"]),
+  description: z.string(),
+});
+export type ManagedCommandOwnerWire = z.infer<typeof managedCommandOwnerSchema>;
+
+/**
+ * Frozen `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind
+ * and `managedCommand`, which is non-null exactly when the kind is
+ * `managed-command`.
+ */
+export const ownerResourceSnapshotSchemaV14 = z.object({
+  ...ownerResourceSnapshotSchemaV13.shape,
+  owner: resourceOwnerRefSchemaV14,
+  managedCommand: managedCommandOwnerSchema.nullable(),
+});
+export type OwnerResourceSnapshotWireV14 = z.infer<
+  typeof ownerResourceSnapshotSchemaV14
+>;
+
+const resourcesProjectionFieldsV14 = {
+  ...resourcesProjectionFieldsV13,
+  owners: z.array(ownerResourceSnapshotSchemaV14),
+} as const;
+
+export const resourcesSubscribeServerFrameSchemaV14 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...resourcesProjectionFieldsV14,
+    }),
+    z.object({
+      kind: z.literal("update"),
+      ...resourcesProjectionFieldsV14,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type ResourcesSubscribeServerFrameV14 = z.infer<
+  typeof resourcesSubscribeServerFrameSchemaV14
+>;
+
+export const resourcesSubscribeV14 = defineStreamRpcContract({
+  method: "resources.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
+  serverFrameSchema: resourcesSubscribeServerFrameSchemaV14,
+  clientFrameSchema: resourcesSubscribeClientFrameSchema,
+});
+
 // ── `resources.kill@1.0` — unary ────────────────────────────────────────────
 // Terminates the entire process subtree beneath each requested pid (graceful
 // SIGTERM, then SIGKILL escalation for survivors). Brand-new method, NOT on the
