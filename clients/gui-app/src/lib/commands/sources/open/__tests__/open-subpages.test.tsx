@@ -25,27 +25,28 @@ const spies = vi.hoisted(() => ({
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
   current: "default-host",
 }));
+const ACTIVE_ROWS = vi.hoisted<WorktreeBindingSelectorRowV12[]>(() => [
+  {
+    hostId: "default-host",
+    runningDir: "/work/active-repo",
+    workspacePath: "/work/active-repo",
+    worktreePath: null,
+    mode: "local",
+    isGitRepo: true,
+    repoIdentifier: null,
+    branch: null,
+    isPrimary: true,
+    isImported: false,
+    setupState: "not_required",
+    disabledReason: null,
+    sources: [],
+    isGitResolvePending: false,
+  },
+]);
 const terminalBindingsMock = vi.hoisted(() => ({
   active: {
     data: {
-      rows: [
-        {
-          hostId: "default-host",
-          runningDir: "/work/active-repo",
-          workspacePath: "/work/active-repo",
-          worktreePath: null,
-          mode: "local" as const,
-          isGitRepo: true,
-          repoIdentifier: null,
-          branch: null,
-          isPrimary: true,
-          isImported: false,
-          setupState: "not_required" as const,
-          disabledReason: null,
-          sources: [],
-          isGitResolvePending: false,
-        },
-      ] satisfies WorktreeBindingSelectorRowV12[],
+      rows: ACTIVE_ROWS,
       folderlessCwd: "/work/default-cwd",
     },
     isPending: false,
@@ -353,6 +354,8 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   activeHostIdMock.current = "default-host";
+  terminalBindingsMock.active.data.rows = ACTIVE_ROWS;
+  terminalBindingsMock.active.data.folderlessCwd = "/work/default-cwd";
   terminalBindingsMock.active.isPending = false;
   terminalBindingsMock.active.isError = false;
   terminalBindingsMock.remote.isPending = false;
@@ -591,9 +594,8 @@ describe("Terminals opener sub-page", () => {
   });
 
   it("does not offer the folderless fallback when another host owns a workspace", () => {
-    const originalRows = terminalBindingsMock.active.data.rows;
     terminalBindingsMock.active.data.rows = [
-      { ...originalRows[0], hostId: "other-host" },
+      { ...ACTIVE_ROWS[0], hostId: "other-host" },
     ];
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
@@ -602,17 +604,15 @@ describe("Terminals opener sub-page", () => {
     }
 
     const workspaces = renderItems(newTerminal.subpage.useItems);
-    expect(workspaces.map((item) => item.label)).not.toContain(
-      "/work/default-cwd",
-    );
-    terminalBindingsMock.active.data.rows = originalRows;
+    expect(workspaces.map((item) => item.label)).toEqual([
+      "Remote Terminal Mac",
+    ]);
   });
 
   it("keeps an unresolved workspace visible as a non-actionable checking row", () => {
-    const originalRows = terminalBindingsMock.active.data.rows;
     terminalBindingsMock.active.data.rows = [
       {
-        ...originalRows[0],
+        ...ACTIVE_ROWS[0],
         disabledReason: "missing_worktree_path",
         isGitResolvePending: true,
       },
@@ -630,15 +630,15 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected checking workspace row");
     }
     expect(checking.description).toBe("Checking workspace…");
+    expect(checking.statusBadge).toBe("Checking workspace…");
+    expect(checking.disabled).toBe(true);
     void checking.run(CTX);
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
-    terminalBindingsMock.active.data.rows = originalRows;
   });
 
   it("keeps setup-disabled workspaces visible as non-actionable rows", () => {
-    const originalRows = terminalBindingsMock.active.data.rows;
     terminalBindingsMock.active.data.rows = [
-      { ...originalRows[0], disabledReason: "setup_failed" },
+      { ...ACTIVE_ROWS[0], disabledReason: "setup_failed" },
     ];
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
@@ -653,15 +653,13 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected disabled workspace row");
     }
     expect(disabled.description).toBe("Workspace unavailable: failed");
+    expect(disabled.statusBadge).toBe("Unavailable: failed");
+    expect(disabled.disabled).toBe(true);
     void disabled.run(CTX);
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
-    terminalBindingsMock.active.data.rows = originalRows;
   });
 
   it("shows an error when a folderless terminal directory cannot be resolved", () => {
-    const originalRows = terminalBindingsMock.active.data.rows;
-    const originalFolderlessCwd =
-      terminalBindingsMock.active.data.folderlessCwd;
     terminalBindingsMock.active.data.rows = [];
     terminalBindingsMock.active.data.folderlessCwd = null;
     const items = renderItems(useTerminalsOpenerItems);
@@ -678,8 +676,6 @@ describe("Terminals opener sub-page", () => {
     }
     void error.run(CTX);
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
-    terminalBindingsMock.active.data.rows = originalRows;
-    terminalBindingsMock.active.data.folderlessCwd = originalFolderlessCwd;
   });
 
   it("opens an existing terminal into the target group, with no host badge", () => {

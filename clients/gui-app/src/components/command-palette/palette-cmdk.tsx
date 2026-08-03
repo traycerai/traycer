@@ -58,6 +58,7 @@ export function SubpageView(props: SubpageViewProps) {
             key={item.id}
             value={buildCmdkValue(item)}
             keywords={[...item.keywords]}
+            disabled={item.disabled === true}
             onSelect={() => onSelect(item)}
           >
             <SubpageItemLabel label={item.label} />
@@ -67,6 +68,14 @@ export function SubpageView(props: SubpageViewProps) {
                 className="ml-auto shrink-0 border-border/70 bg-background/60 text-muted-foreground"
               >
                 {item.hostBadge}
+              </Badge>
+            ) : null}
+            {item.statusBadge !== undefined ? (
+              <Badge
+                variant="outline"
+                className="ml-auto shrink-0 border-border/70 bg-background/60 text-muted-foreground"
+              >
+                {item.statusBadge}
               </Badge>
             ) : null}
           </PaletteItemRow>
@@ -142,9 +151,18 @@ function OpenerDeepRows(props: OpenerDeepRowsProps) {
               ...path.map((segment) => segment.toLowerCase()),
             ]}
             aria-label={deepRowName(path, item.label)}
+            disabled={item.disabled === true}
             onSelect={() => onSelect(item)}
           >
             <DeepPathLabel path={path} label={item.label} />
+            {item.statusBadge !== undefined ? (
+              <Badge
+                variant="outline"
+                className="ml-auto shrink-0 border-border/70 bg-background/60 text-muted-foreground"
+              >
+                {item.statusBadge}
+              </Badge>
+            ) : null}
           </PaletteItemRow>
           {item.subpage !== null && path.length < OPENER_DEEP_MAX_DEPTH ? (
             <OpenerDeepRows
