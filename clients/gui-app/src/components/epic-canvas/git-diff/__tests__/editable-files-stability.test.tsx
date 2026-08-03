@@ -15,12 +15,13 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import type {
   GitChangedFile,
   GitGetFileDiffResponse,
@@ -138,7 +139,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
 
-    const { result } = renderHook(
+    const { result, rerender } = renderHook(
       () =>
         useGitDiffEditing({
           client: null,
@@ -161,6 +162,9 @@ describe("useGitDiffEditing editableFiles stability", () => {
     const lineElement = document.createElement("div");
     lineElement.append("const value = 1;");
     document.body.append(lineElement);
+    onTestFinished(() => {
+      lineElement.remove();
+    });
 
     await act(async () => {
       result.current.editAdapter.diffOptions.onLineClick?.({
@@ -232,6 +236,88 @@ describe("useGitDiffEditing editableFiles stability", () => {
       "const value = 1;\n",
     );
 
-    lineElement.remove();
+    // A re-render for reasons unrelated to a real hydration change - a
+    // discarded render, React re-invoking the component body - must not
+    // read the store a second time and produce a different object: the
+    // `hydration` identity this cycle is keyed on has not changed, so the
+    // captured seed must stay exactly as it was.
+    act(() => {
+      rerender();
+    });
+    expect(result.current.editableFiles).toBe(initial);
+    expect(result.current.editableFiles?.newFile).toBe(initial.newFile);
+  });
+
+  it("captures the same seed under Strict Mode's double-invoked render", async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      </StrictMode>
+    );
+
+    const { result } = renderHook(
+      () =>
+        useGitDiffEditing({
+          client: null,
+          hostId: "host-A",
+          runningDir: "/work/repo",
+          file: FILE,
+          surfaceId: SURFACE_ID,
+          isActive: true,
+          interactionEnabled: true,
+          currentDiff: CURRENT_DIFF,
+          currentComparisonIdentity: "cmp-1",
+          resumeDetachedDraft: false,
+        }),
+      { wrapper },
+    );
+
+    const lineElement = document.createElement("div");
+    lineElement.append("const value = 1;");
+    document.body.append(lineElement);
+    onTestFinished(() => {
+      lineElement.remove();
+    });
+
+    await act(async () => {
+      result.current.editAdapter.diffOptions.onLineClick?.({
+        type: "diff-line",
+        annotationSide: "additions",
+        lineType: "change-addition",
+        lineNumber: 1,
+        lineElement,
+        numberElement: document.createElement("div"),
+        numberColumn: false,
+        event: new PointerEvent("click", { button: 0, clientX: 4 }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.editableFiles).not.toBeNull();
+    });
+    const initial = result.current.editableFiles as EditableDiffFiles;
+    expect(initial.newFile.contents).toBe("const value = 1;\n");
+
+    const draft = { name: "src/app.ts", contents: "const value = 12;\n" };
+    await act(async () => {
+      result.current.editAdapter.editorOptions.onChange?.(draft, undefined, {
+        changes: [],
+        file: draft,
+      });
+      await Promise.resolve();
+    });
+
+    // Strict Mode double-invokes the component body on every render, giving
+    // the render-phase capture two chances per commit to read the store -
+    // both must land on the same seed, not one from before and one from
+    // after the keystroke.
+    expect(result.current.editableFiles).toBe(initial);
+    expect(result.current.editableFiles?.newFile.contents).toBe(
+      "const value = 1;\n",
+    );
   });
 });

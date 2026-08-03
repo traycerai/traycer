@@ -10,6 +10,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -27,6 +28,7 @@ import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferen
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import { DRIFT_RETRY_BASE_DELAY_MS } from "@/components/epic-canvas/git-diff/git-diff-editing";
 
 interface EditTestState {
   readonly refetchContents: Mock;
@@ -444,7 +446,7 @@ describe("<GitDiffTile /> editing", () => {
     ).toBe(true);
   });
 
-  it("retries a failed drift comparison instead of treating it as checked-and-stale", async () => {
+  it("retries a failed drift comparison on a backoff timer, not on every render", async () => {
     const rendered = renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
     expect(
@@ -457,21 +459,98 @@ describe("<GitDiffTile /> editing", () => {
       data: undefined,
     });
     state.worktreeOid = "worktree-2";
-    rendered.rerender(tileElement(NODE, true));
 
-    await waitFor(() => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        rendered.rerender(tileElement(NODE, true));
+        // Flush the failed refetch's own microtask chain (real Promise
+        // scheduling, independent of the fake macrotask/timer queue) so
+        // `scheduleRetry` runs and arms the backoff timer.
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       expect(state.refetchContents).toHaveBeenCalledTimes(2);
-    });
-    expect(screen.queryByText("Worktree changed")).toBeNull();
+      expect(screen.queryByText("Worktree changed")).toBeNull();
 
-    // A later render (still the same, unresolved comparison identity) must
-    // retry rather than staying permanently marked "checked" against a
-    // failed attempt.
-    state.worktreeContent = "const external = true;\n";
-    rendered.rerender(tileElement(NODE, true));
-    await waitFor(() => {
+      // A render alone - the same trigger the old, unbounded retry relied on
+      // - must NOT retry while the backoff timer is still pending, or a
+      // persistently unreachable host would be hit on every render with no
+      // delay at all.
+      act(() => {
+        rendered.rerender(tileElement(NODE, true));
+      });
+      expect(state.refetchContents).toHaveBeenCalledTimes(2);
+
+      // Once the backoff delay elapses, the retry fires on its own - no
+      // render required.
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      state.worktreeContent = "const external = true;\n";
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DRIFT_RETRY_BASE_DELAY_MS);
+      });
       expect(state.refetchContents).toHaveBeenCalledTimes(3);
-    });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const staleStatus = await screen.findByText("Worktree changed");
+    expect(staleStatus).toBeTruthy();
+  });
+
+  it("backs off exponentially across consecutive failures and recovers once the host reconnects", async () => {
+    const rendered = renderTile(NODE, true);
+    fireEvent.click(screen.getByRole("button", { name: "Click code" }));
+    expect(
+      await screen.findByRole("button", { name: "Change draft" }),
+    ).toBeTruthy();
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+
+    const offline = () =>
+      Promise.resolve({
+        error: new Error("worktree read offline"),
+        data: undefined,
+      });
+    state.refetchContents.mockImplementationOnce(offline);
+    state.worktreeOid = "worktree-2";
+
+    vi.useFakeTimers();
+    try {
+      // First failure - schedules a retry at the base delay.
+      await act(async () => {
+        rendered.rerender(tileElement(NODE, true));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(state.refetchContents).toHaveBeenCalledTimes(2);
+
+      // Second consecutive failure - the retry that fires from the base
+      // delay above must itself fail again, arming a longer (2x) delay.
+      state.refetchContents.mockImplementationOnce(offline);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DRIFT_RETRY_BASE_DELAY_MS);
+      });
+      expect(state.refetchContents).toHaveBeenCalledTimes(3);
+
+      // Not enough time has passed for the doubled delay yet - no third
+      // retry - proving the backoff genuinely grows instead of staying flat.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DRIFT_RETRY_BASE_DELAY_MS);
+      });
+      expect(state.refetchContents).toHaveBeenCalledTimes(3);
+
+      // The rest of the doubled delay elapses and the host has reconnected
+      // (the default mock's success path resumes) - drift is still detected
+      // once the check finally gets through.
+      state.worktreeContent = "const external = true;\n";
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DRIFT_RETRY_BASE_DELAY_MS);
+      });
+      expect(state.refetchContents).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+
     const staleStatus = await screen.findByText("Worktree changed");
     expect(staleStatus).toBeTruthy();
   });

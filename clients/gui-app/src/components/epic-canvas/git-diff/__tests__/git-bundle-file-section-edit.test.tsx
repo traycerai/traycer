@@ -322,8 +322,11 @@ describe("<BundleFileSection /> editing", () => {
     expect(diffSurfaceState.unmountCount).toBe(unmounts);
     // Stable oldFile/newFile identity is what DiffContentPrimitive keys its
     // hydration memo on - a new object per render would re-derive the diff
-    // and reintroduce the partial-diff attach bug.
-    expect(diffSurfaceState.editableNewFiles).toEqual([editableNewFile]);
+    // and reintroduce the partial-diff attach bug. `toBe`, not `toEqual`: a
+    // fresh object with identical fields would pass a structural comparison
+    // even though it is exactly the regression this test exists to catch.
+    expect(diffSurfaceState.editableNewFiles).toHaveLength(1);
+    expect(diffSurfaceState.editableNewFiles[0]).toBe(editableNewFile);
   });
 
   it("restores a retained draft when virtualization remounts the file section", async () => {
@@ -385,7 +388,8 @@ describe("<BundleFileSection /> editing", () => {
     expect(currentRuntimeDraft()).toBe("const value = 2;\n");
     expect(diffSurfaceState.mountCount).toBe(mounts);
     expect(diffSurfaceState.unmountCount).toBe(unmounts);
-    expect(diffSurfaceState.editableNewFiles).toEqual([editableNewFile]);
+    expect(diffSurfaceState.editableNewFiles).toHaveLength(1);
+    expect(diffSurfaceState.editableNewFiles[0]).toBe(editableNewFile);
   });
 });
 

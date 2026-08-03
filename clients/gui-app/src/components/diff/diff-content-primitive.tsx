@@ -154,8 +154,17 @@ export function DiffContentPrimitive(
           <FileDiff
             key={fileDiff.name}
             fileDiff={fileDiff}
-            edit={props.editSession !== undefined}
-            editorOptions={props.editSession?.editorOptions}
+            // `hydrateFileDiffForEdit` can leave a file still partial (a
+            // legitimately missing required side for change/rename-changed).
+            // `@pierre/diffs` never re-attempts hydration for a partial diff
+            // once `edit` flips true, so claiming a working editor here would
+            // silently strand it the same way an unhydrated diff always did -
+            // render read-only instead and let the caller's own validation
+            // (see `validateGitEditContents`) surface the unavailable state.
+            edit={props.editSession !== undefined && !fileDiff.isPartial}
+            editorOptions={
+              fileDiff.isPartial ? undefined : props.editSession?.editorOptions
+            }
             options={{
               disableFileHeader: !props.fileHeaders,
               collapsed: false,

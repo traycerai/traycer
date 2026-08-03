@@ -25,7 +25,12 @@ import {
   it,
   vi,
 } from "vitest";
-import { cleanup, render, type RenderResult } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  waitFor,
+  type RenderResult,
+} from "@testing-library/react";
 import {
   FileDiff as FileDiffCore,
   type FileContents,
@@ -189,6 +194,29 @@ async function assertLibraryAcceptsHydratedDiff(
   container.remove();
 }
 
+/**
+ * Prove the real library never attaches for a still-partial diff - the
+ * "legitimately missing required side" case: no `contentEditable` surface
+ * ever attaches, and applying an edit fails the same way it does for a
+ * fresh, never-hydrated diff (`pierre-diffs-partial-diff-hydration.test.ts`'s
+ * untracked/new-file case).
+ */
+async function assertLibraryRejectsPartialDiff(
+  fileDiff: FileDiffMetadata,
+): Promise<void> {
+  expect(fileDiff.isPartial).toBe(true);
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const instance = new FileDiffCore({}, undefined, true);
+  instance.hydrate({ fileDiff, fileContainer: container });
+  const editor = new Editor<undefined>({});
+  const detach = editor.edit(instance);
+  await wait(50);
+  expect(applyEditError(editor)).toBe("Editor is not attached");
+  detach();
+  container.remove();
+}
+
 function renderPrimitive(args: {
   readonly patch: string;
   readonly cacheScope: string;
@@ -232,13 +260,19 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
   });
 
   it("pre-hydrates a change diff so the live→pinned parse swap still attaches", async () => {
-    // Read path: partial metadata from parsePatchFiles.
+    // Read path: partial metadata from parsePatchFiles. `useDiffsDiffHighlightReady`
+    // primes its cache in an effect for this non-edit render (`enabled` is
+    // true whenever there is no `editSession` yet), so the very first paint
+    // can be `DiffHighlightLoading` with nothing captured yet - wait for the
+    // highlight-ready transition instead of asserting synchronously.
     const live = renderPrimitive({
       patch: CHANGE_PATCH,
       cacheScope: "live-oid",
       editSession: undefined,
     });
-    expect(capturedFileDiffs).toHaveLength(1);
+    await waitFor(() => {
+      expect(capturedFileDiffs).toHaveLength(1);
+    });
     const liveDiff = requireCapturedFileDiff();
     expect(liveDiff.isPartial).toBe(true);
     expect(liveDiff.type).toBe("change");
@@ -365,6 +399,52 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
     expect(changed.type).toBe("rename-changed");
     expect(changed.isPartial).toBe(false);
     await assertLibraryAcceptsHydratedDiff(changed, null);
+  });
+
+  it("keeps a change/rename-changed diff partial and read-only when the required old side is missing", async () => {
+    // `hydrateFileDiffForEdit` cannot hydrate a "change"/"rename-changed"
+    // diff without an old side, so it must stay partial - a legitimately
+    // missing required side (e.g. a race between the diff-type computation
+    // and the content fetch) - rather than silently claim a working editor.
+    // The real library never re-attempts hydration for a partial diff once
+    // `edit` is true, so getting this wrong would permanently strand the
+    // editor exactly like the original bug this whole fix closes.
+    const change = renderPrimitive({
+      patch: CHANGE_PATCH,
+      cacheScope: "missing-old-side-change",
+      editSession: { oldFile: null, newFile: CHANGE_NEW },
+    });
+    expect(capturedFileDiffs).toHaveLength(1);
+    const changeFileDiff = requireCapturedFileDiff();
+    expect(changeFileDiff.type).toBe("change");
+    expect(changeFileDiff.isPartial).toBe(true);
+    expect(
+      change.container
+        .querySelector('[data-testid="instrumented-file-diff"]')
+        ?.getAttribute("data-edit"),
+    ).toBe("false");
+    await assertLibraryRejectsPartialDiff(changeFileDiff);
+    change.unmount();
+
+    capturedFileDiffs.length = 0;
+    const renameChanged = renderPrimitive({
+      patch: RENAME_CHANGED_PATCH,
+      cacheScope: "missing-old-side-rename-changed",
+      editSession: {
+        oldFile: null,
+        newFile: { name: "new.ts", contents: "same\nnew\n" },
+      },
+    });
+    expect(capturedFileDiffs).toHaveLength(1);
+    const renameFileDiff = requireCapturedFileDiff();
+    expect(renameFileDiff.type).toBe("rename-changed");
+    expect(renameFileDiff.isPartial).toBe(true);
+    expect(
+      renameChanged.container
+        .querySelector('[data-testid="instrumented-file-diff"]')
+        ?.getAttribute("data-edit"),
+    ).toBe("false");
+    await assertLibraryRejectsPartialDiff(renameFileDiff);
   });
 
   it("also pre-hydrates untracked/new diffs via parseDiffFromFile (isPartial false)", async () => {

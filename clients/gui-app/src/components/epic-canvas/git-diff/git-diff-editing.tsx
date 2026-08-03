@@ -5,11 +5,17 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import type { FileContents } from "@pierre/diffs";
+import type { EditorOptions } from "@pierre/diffs/edit";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   GitChangedFile,
   GitGetFileDiffResponse,
@@ -36,6 +42,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   fileEditIdentityKey,
+  type FileEditRuntime,
   type FileEditRuntimeState,
 } from "@/lib/workspace/file-edit-runtime";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
@@ -50,6 +57,31 @@ interface GitDiffHydration {
   readonly pinnedDiff: GitGetFileDiffResponse;
 }
 
+interface EditSeed {
+  readonly hydration: GitDiffHydration;
+  readonly content: string;
+}
+
+/**
+ * Pure decision for the render-phase `editSeed` state adjustment: whether
+ * `editRuntime`'s current draft should be captured as the frozen seed for
+ * this `hydration` cycle. `null` means no capture is due yet (already
+ * captured for this cycle, or the runtime hasn't attached yet).
+ */
+function computeEditSeedCapture(
+  hydration: GitDiffHydration | null,
+  editRuntime: FileEditRuntime | null,
+  editSeed: EditSeed | null,
+): EditSeed | null {
+  if (hydration === null || editRuntime === null) return null;
+  if (editSeed !== null && editSeed.hydration === hydration) return null;
+  return { hydration, content: editRuntime.store.getState().draftContent };
+}
+
+/** Exponential backoff for the drift-comparison retry, capped at 30s. */
+export const DRIFT_RETRY_BASE_DELAY_MS = 2_000;
+export const DRIFT_RETRY_MAX_DELAY_MS = 30_000;
+
 /**
  * Full baseline file contents for the active edit session, stable for as
  * long as `hydration` doesn't change. Passed to `DiffContentPrimitive` so it
@@ -57,6 +89,13 @@ interface GitDiffHydration {
  * `@pierre/diffs`' own async (and single-attempt) `loadDiffFiles` path.
  */
 export interface EditableDiffFiles {
+  readonly oldFile: FileContents | null;
+  readonly newFile: FileContents;
+}
+
+/** The `editSession` prop shape `DiffContentPrimitive`/`FileDiffContent` expect. */
+export interface GitDiffEditSession {
+  readonly editorOptions: EditorOptions<undefined>;
   readonly oldFile: FileContents | null;
   readonly newFile: FileContents;
 }
@@ -72,6 +111,15 @@ export interface GitDiffEditingModel {
   readonly editAdapter: DiffClickToEditAdapter;
   readonly state: FileEditRuntimeState | null;
   readonly editableFiles: EditableDiffFiles | null;
+  /**
+   * Ready-to-pass `editSession` for `FileDiffContent`/`DiffContentPrimitive`:
+   * `undefined` whenever editing isn't active/hydrated yet, otherwise the
+   * same `editorOptions`/`oldFile`/`newFile` every surface used to construct
+   * itself from `active`/`hydrated`/`editableFiles`. Centralized here so the
+   * gating rule for "is this diff actually editable right now" lives in one
+   * place instead of being duplicated at each rendering surface.
+   */
+  readonly editSession: GitDiffEditSession | undefined;
   readonly retry: () => void;
   readonly keepMine: () => void;
   readonly useDisk: () => void;
@@ -173,7 +221,7 @@ export function useGitDiffEditing(
         request.editorReady,
       ]);
       if (!request.isCurrent()) return { kind: "rejected" };
-      const validated = validateGitEditContents(result);
+      const validated = validateGitEditContents(result, args.file.stage);
       if (validated.kind === "error") {
         setNotice(validated.message);
         return { kind: "rejected" };
@@ -196,6 +244,7 @@ export function useGitDiffEditing(
     [
       args.currentComparisonIdentity,
       args.currentDiff,
+      args.file.stage,
       canOfferEdit,
       contentsQuery,
       fileSession,
@@ -208,7 +257,6 @@ export function useGitDiffEditing(
     beginRef.current = begin;
   }, [begin]);
   const resumeAttemptRef = useRef<string | null>(null);
-  const driftAttemptRef = useRef<string | null>(null);
   const hasCurrentDiff = args.currentDiff !== null;
   useEffect(() => {
     if (
@@ -274,75 +322,15 @@ export function useGitDiffEditing(
     identityKey,
   ]);
 
-  useEffect(() => {
-    if (
-      !active ||
-      hydration === null ||
-      hydration.comparisonIdentity === args.currentComparisonIdentity ||
-      // `contentsQuery` (a TanStack Query result) is not referentially
-      // stable across renders, so this effect can re-run many times before
-      // the refetch below ever resolves and marks `hydration.comparisonIdentity`
-      // caught up. Without this synchronous guard, each of those re-runs
-      // would start another overlapping `git.getFileContents` RPC for the
-      // same stale identity - mirrors `resumeAttemptRef` above.
-      driftAttemptRef.current === args.currentComparisonIdentity
-    ) {
-      return;
-    }
-    const attemptIdentity = args.currentComparisonIdentity;
-    driftAttemptRef.current = attemptIdentity;
-    void contentsQuery
-      .refetch()
-      .then((result) => {
-        // A ref-based check, not a `cancelled` closure torn down by effect
-        // cleanup: `contentsQuery` changing (e.g. its own `isFetching` flip
-        // while THIS refetch is in flight) re-runs this effect and would tear
-        // down a closure-scoped flag long before the request resolves,
-        // discarding a still-relevant result. `driftAttemptRef` only moves
-        // when a genuinely different comparison identity supersedes this one.
-        if (driftAttemptRef.current !== attemptIdentity) return;
-        // A transport failure (`result.error`, the same field
-        // `validateGitEditContents` below checks) or a payload-level error
-        // (RPC succeeded but reported one) means this comparison never
-        // actually ran - `worktreeFile` is absent either way. Treating that
-        // the same as "checked, content differs" would flag a
-        // merely-unreachable host as genuine worktree drift. Leave the ref
-        // unset (not "checked") so the next render - `contentsQuery` is not
-        // referentially stable, so there always is one - retries the same
-        // identity instead of treating a failed check as a completed one.
-        if (result.error !== null || (result.data?.error ?? null) !== null) {
-          driftAttemptRef.current = null;
-          return;
-        }
-        const latestContent = result.data?.worktreeFile?.contents;
-        const matchesBaseline =
-          latestContent !== undefined &&
-          latestContent ===
-            fileSession.runtime?.store.getState().baselineContent;
-        // Mark this comparison identity checked either way. Leaving it unmarked
-        // on a genuine mismatch would keep `hydration.comparisonIdentity` stale
-        // forever, and since this effect's own `refetch()` changes `contentsQuery`
-        // identity, that would re-fire this effect (and re-hit the host) on
-        // every render for as long as the file stays flagged stale.
-        setHydration((current) =>
-          current === null
-            ? null
-            : { ...current, comparisonIdentity: attemptIdentity },
-        );
-        setStaleIdentity(matchesBaseline ? null : attemptIdentity);
-      })
-      .catch(() => {
-        if (driftAttemptRef.current === attemptIdentity) {
-          driftAttemptRef.current = null;
-        }
-      });
-  }, [
+  useGitDiffDriftRetry({
     active,
-    args.currentComparisonIdentity,
-    contentsQuery,
-    fileSession.runtime,
     hydration,
-  ]);
+    currentComparisonIdentity: args.currentComparisonIdentity,
+    contentsQuery,
+    editRuntime: fileSession.runtime,
+    setHydration,
+    setStaleIdentity,
+  });
 
   const invalidatedSaveRef = useRef<number | null>(null);
   useEffect(() => {
@@ -399,18 +387,45 @@ export function useGitDiffEditing(
   const hydratedOldFile = hydration?.oldFile;
   const hydratedNewFile = hydration?.newFile;
   const editRuntime = fileSession.runtime;
+  // Captures the seed `newFile.contents` exactly once per `hydration` object
+  // identity, as a render-phase state adjustment (React's documented
+  // "storing information from previous renders" pattern -
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders)
+  // rather than inside the memo below: reading external mutable state (the
+  // zustand store) inside a `useMemo` body makes it impure, since React may
+  // re-invoke that body for reasons unrelated to the dependency list (a
+  // discarded render, a Strict Mode double-invoke) and observe a different,
+  // now-typed `draftContent` each time. Calling `setState` directly during
+  // render like this - guarded so it only fires when `hydration`/`editRuntime`
+  // genuinely changed since the last capture - lets React restart the render
+  // immediately with the new state before ever committing, so it does not
+  // cost an extra visible frame or cascading effect the way scheduling this
+  // same read from a `useEffect` would. It runs once the runtime is actually
+  // attached (so a resumed detached draft's live content is read correctly,
+  // rather than the disk baseline `begin` fetched before activation
+  // finished), then the state it sets stays fixed until a genuinely new
+  // `hydration` cycle starts.
+  const [editSeed, setEditSeed] = useState<EditSeed | null>(null);
+  const capturedEditSeed = computeEditSeedCapture(
+    hydration,
+    editRuntime,
+    editSeed,
+  );
+  if (capturedEditSeed !== null) setEditSeed(capturedEditSeed);
   const editableFiles = useMemo<EditableDiffFiles | null>(() => {
-    if (hydratedNewFile === undefined) return null;
+    if (hydration === null || hydratedNewFile === undefined) return null;
+    // Activation hasn't attached a runtime yet (the capture above hasn't run
+    // for this cycle) - use the disk baseline for now; the re-render once it
+    // attaches picks up the captured seed instead.
+    const seedContent =
+      editSeed !== null && editSeed.hydration === hydration
+        ? editSeed.content
+        : hydratedNewFile.contents;
     return {
       oldFile: hydratedOldFile ?? null,
-      newFile: {
-        ...hydratedNewFile,
-        contents:
-          editRuntime?.store.getState().draftContent ??
-          hydratedNewFile.contents,
-      },
+      newFile: { ...hydratedNewFile, contents: seedContent },
     };
-  }, [editRuntime, hydratedNewFile, hydratedOldFile]);
+  }, [editSeed, hydration, hydratedNewFile, hydratedOldFile]);
 
   const conflictDiskContent = fileSession.state?.conflict?.diskContent ?? null;
   const readLatestDisk = useCallback(async (): Promise<string> => {
@@ -449,6 +464,13 @@ export function useGitDiffEditing(
       });
   }, [fileSession, readLatestDisk]);
 
+  const gitDiffEditSession = computeGitDiffEditSession(
+    active,
+    hydration !== null,
+    editableFiles,
+    editAdapter.editorOptions,
+  );
+
   return {
     canOfferEdit,
     active,
@@ -460,10 +482,159 @@ export function useGitDiffEditing(
     editAdapter,
     state: fileSession.state,
     editableFiles,
+    editSession: gitDiffEditSession,
     retry: fileSession.retry,
     keepMine,
     useDisk,
   };
+}
+
+/**
+ * Re-checks worktree drift against a new comparison identity in the
+ * background while an edit session is active, retrying a failed check on an
+ * exponential backoff (capped at `DRIFT_RETRY_MAX_DELAY_MS`) instead of on
+ * every incidental render - `contentsQuery` is not referentially stable, so
+ * without the backoff a persistently unreachable host would be hit
+ * continuously with no delay. A successful check still eventually detects
+ * real drift once the host recovers.
+ */
+function useGitDiffDriftRetry(args: {
+  readonly active: boolean;
+  readonly hydration: GitDiffHydration | null;
+  readonly currentComparisonIdentity: string;
+  readonly contentsQuery: UseQueryResult<
+    ResponseOfMethod<HostRpcRegistry, "git.getFileContents">,
+    HostRpcError
+  >;
+  readonly editRuntime: FileEditRuntime | null;
+  readonly setHydration: Dispatch<SetStateAction<GitDiffHydration | null>>;
+  readonly setStaleIdentity: Dispatch<SetStateAction<string | null>>;
+}): void {
+  const {
+    active,
+    hydration,
+    currentComparisonIdentity,
+    contentsQuery,
+    editRuntime,
+    setHydration,
+    setStaleIdentity,
+  } = args;
+  const driftAttemptRef = useRef<string | null>(null);
+  const driftBackoffRef = useRef<{
+    readonly identity: string;
+    readonly attempts: number;
+  }>({ identity: "", attempts: 0 });
+  const driftRetryTimerRef = useRef<number | null>(null);
+  const [driftRetryGeneration, setDriftRetryGeneration] = useState(0);
+
+  useEffect(() => {
+    if (
+      !active ||
+      hydration === null ||
+      hydration.comparisonIdentity === currentComparisonIdentity ||
+      // `contentsQuery` (a TanStack Query result) is not referentially
+      // stable across renders, so this effect can re-run many times before
+      // the refetch below ever resolves and marks `hydration.comparisonIdentity`
+      // caught up. Without this synchronous guard, each of those re-runs
+      // would start another overlapping `git.getFileContents` RPC for the
+      // same stale identity.
+      driftAttemptRef.current === currentComparisonIdentity
+    ) {
+      return;
+    }
+    const attemptIdentity = currentComparisonIdentity;
+    driftAttemptRef.current = attemptIdentity;
+    // A failed check schedules its own bounded retry below instead of
+    // clearing `driftAttemptRef` immediately - clearing it right away would
+    // let ANY subsequent render restart the RPC with no delay. Staleness is
+    // checked purely through `driftAttemptRef`/`driftBackoffRef` (not a
+    // closure-scoped `cancelled` flag torn down by effect cleanup): this
+    // effect's cleanup runs on EVERY re-render `contentsQuery`'s referential
+    // instability causes, including harmless ones that immediately hit the
+    // guard above and never touch these refs - a `cancelled` flag would go
+    // true on one of those and silently swallow the scheduled retry's
+    // eventual generation bump, never firing again.
+    const scheduleRetry = (): void => {
+      const attempts =
+        driftBackoffRef.current.identity === attemptIdentity
+          ? driftBackoffRef.current.attempts + 1
+          : 1;
+      driftBackoffRef.current = { identity: attemptIdentity, attempts };
+      const delayMs = Math.min(
+        DRIFT_RETRY_BASE_DELAY_MS * 2 ** (attempts - 1),
+        DRIFT_RETRY_MAX_DELAY_MS,
+      );
+      if (driftRetryTimerRef.current !== null) {
+        window.clearTimeout(driftRetryTimerRef.current);
+      }
+      driftRetryTimerRef.current = window.setTimeout(() => {
+        driftRetryTimerRef.current = null;
+        // Only clear + retry if this scheduled attempt is still the
+        // relevant one - a genuinely different identity may have since
+        // superseded it and already reset the backoff itself.
+        if (driftBackoffRef.current.identity === attemptIdentity) {
+          driftAttemptRef.current = null;
+          setDriftRetryGeneration((generation) => generation + 1);
+        }
+      }, delayMs);
+    };
+    void contentsQuery
+      .refetch()
+      .then((result) => {
+        // `driftAttemptRef` only moves when a genuinely different comparison
+        // identity supersedes this one, so this correctly ignores a result
+        // that arrived after that happened.
+        if (driftAttemptRef.current !== attemptIdentity) return;
+        // A transport failure (`result.error`, the same field
+        // `validateGitEditContents` checks) or a payload-level error (RPC
+        // succeeded but reported one) means this comparison never actually
+        // ran - `worktreeFile` is absent either way. Treating that the same
+        // as "checked, content differs" would flag a merely-unreachable host
+        // as genuine worktree drift - retry on a backoff timer instead so a
+        // persistently failing check eventually still detects real drift,
+        // without spinning.
+        if (result.error !== null || (result.data?.error ?? null) !== null) {
+          scheduleRetry();
+          return;
+        }
+        driftBackoffRef.current = { identity: "", attempts: 0 };
+        const latestContent = result.data?.worktreeFile?.contents;
+        const matchesBaseline =
+          latestContent !== undefined &&
+          latestContent === editRuntime?.store.getState().baselineContent;
+        // Mark this comparison identity checked either way. Leaving it unmarked
+        // on a genuine mismatch would keep `hydration.comparisonIdentity` stale
+        // forever, and since this effect's own `refetch()` changes `contentsQuery`
+        // identity, that would re-fire this effect (and re-hit the host) on
+        // every render for as long as the file stays flagged stale.
+        setHydration((current) =>
+          current === null
+            ? null
+            : { ...current, comparisonIdentity: attemptIdentity },
+        );
+        setStaleIdentity(matchesBaseline ? null : attemptIdentity);
+      })
+      .catch(() => {
+        if (driftAttemptRef.current === attemptIdentity) scheduleRetry();
+      });
+  }, [
+    active,
+    contentsQuery,
+    currentComparisonIdentity,
+    editRuntime,
+    hydration,
+    setHydration,
+    setStaleIdentity,
+    driftRetryGeneration,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (driftRetryTimerRef.current !== null) {
+        window.clearTimeout(driftRetryTimerRef.current);
+      }
+    };
+  }, []);
 }
 
 export interface EditableGitDiffSurfaceModel {
@@ -578,6 +749,20 @@ export function isGitDiffInteractionEnabled(args: {
   );
 }
 
+function computeGitDiffEditSession(
+  active: boolean,
+  hydrated: boolean,
+  editableFiles: EditableDiffFiles | null,
+  editorOptions: EditorOptions<undefined>,
+): GitDiffEditSession | undefined {
+  if (!active || !hydrated || editableFiles === null) return undefined;
+  return {
+    editorOptions,
+    oldFile: editableFiles.oldFile,
+    newFile: editableFiles.newFile,
+  };
+}
+
 function canOfferGitDiffEdit(args: {
   readonly interactionEnabled: boolean;
   readonly supportsFileContents: boolean;
@@ -622,10 +807,13 @@ interface GitEditReadyContents {
   readonly worktreeFile: FileContents;
 }
 
-function validateGitEditContents(result: {
-  readonly error: unknown;
-  readonly data: GitEditContentsPayload | undefined;
-}): ValidatedGitEditContents {
+function validateGitEditContents(
+  result: {
+    readonly error: unknown;
+    readonly data: GitEditContentsPayload | undefined;
+  },
+  stage: GitChangedFile["stage"],
+): ValidatedGitEditContents {
   if (result.error !== null) {
     return { kind: "error", message: gitEditErrorMessage(result.error) };
   }
@@ -643,6 +831,20 @@ function validateGitEditContents(result: {
     return {
       kind: "error",
       message: "This change has no editable worktree file.",
+    };
+  }
+  // At "untracked" stage a missing old side is the norm (there is no prior
+  // committed/staged version at all). At "unstaged" stage - the only other
+  // stage `canOfferGitDiffEdit` allows - a tracked file always has an index
+  // entry, so a null old side here means the read genuinely failed to
+  // resolve it (a race between the diff computation and this fetch, or a
+  // host-side read failure `readEditableGitObject` couldn't distinguish).
+  // Surface that as an error rather than silently letting the file diff stay
+  // partial and un-editable with no explanation.
+  if (contents.oldFile === null && stage !== "untracked") {
+    return {
+      kind: "error",
+      message: "Couldn't load this change's original content.",
     };
   }
   if (contents.newFile.contents !== contents.worktreeFile.contents) {
