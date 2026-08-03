@@ -20,6 +20,7 @@ import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
+  advanceLegendListFrames,
   installLegendListTestClock,
   installLegendListViewportMetrics,
   restoreLegendListTestClock,
@@ -197,11 +198,7 @@ function renderedSince(
 }
 
 async function flushFrame(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-  });
+  await advanceLegendListFrames(1);
 }
 
 describe("ChatTimeline", () => {
@@ -302,11 +299,7 @@ describe("ChatTimeline", () => {
 
     rerenderMessages(nextMessages, undefined);
 
-    await act(async () => {
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      });
-    });
+    await advanceLegendListFrames(1);
 
     const earlyRowAfter = container.querySelector(
       '[data-message-id="message-0"]',
@@ -660,14 +653,12 @@ describe("ChatTimeline", () => {
     }
   }
 
-  /** One real macrotask tick - empirically the exact window where a
+  /** One virtual macrotask tick - empirically the exact window where a
    *  `useLayoutEffect`-published store settles (verified against a toy
    *  two-component external-store harness) but a `useEffect`-published one
    *  has not yet, when act-environment is off. */
   async function tickOneMacrotask(): Promise<void> {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await vi.advanceTimersByTimeAsync(0);
   }
 
   // Finding 1's "row mounting in the stale window" sub-case was investigated
