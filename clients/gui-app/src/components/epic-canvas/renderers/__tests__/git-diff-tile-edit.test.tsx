@@ -330,7 +330,7 @@ describe("<GitDiffTile /> editing", () => {
   });
 
   it("hydrates on a code click and autosaves the edited worktree text on blur", async () => {
-    renderTile(NODE);
+    renderTile(NODE, true);
 
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
 
@@ -375,7 +375,7 @@ describe("<GitDiffTile /> editing", () => {
       currentRevision: "external-revision",
       error: "The file changed on disk.",
     });
-    renderTile(NODE);
+    renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Change draft" }),
@@ -401,7 +401,7 @@ describe("<GitDiffTile /> editing", () => {
       stage: "staged",
       repositoryContext: null,
     });
-    renderTile(stagedNode);
+    renderTile(stagedNode, true);
 
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
 
@@ -418,7 +418,7 @@ describe("<GitDiffTile /> editing", () => {
       stage: "untracked",
       repositoryContext: null,
     });
-    renderTile(untrackedNode);
+    renderTile(untrackedNode, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
     expect(
       await screen.findByRole("button", { name: "Change draft" }),
@@ -428,14 +428,14 @@ describe("<GitDiffTile /> editing", () => {
     fileEditRuntimeRegistry.resetForTesting();
     state.stage = "unstaged";
     state.supportsEditing = false;
-    renderTile(NODE);
+    renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
     await Promise.resolve();
     expect(screen.queryByRole("button", { name: "Change draft" })).toBeNull();
   });
 
   it("pins the active comparison and marks real background worktree drift stale", async () => {
-    const rendered = renderTile(NODE);
+    const rendered = renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
     expect(
       await screen.findByRole("button", { name: "Change draft" }),
@@ -443,7 +443,7 @@ describe("<GitDiffTile /> editing", () => {
 
     state.worktreeOid = "worktree-2";
     state.worktreeContent = "const external = true;\n";
-    rendered.rerender(tileElement(NODE));
+    rendered.rerender(tileElement(NODE, true));
 
     const staleStatus = await screen.findByText("Worktree changed");
     expect(
@@ -452,7 +452,7 @@ describe("<GitDiffTile /> editing", () => {
   });
 
   it("keeps the editor document, caret, runtime draft, and loader stable through a pending OID rollover", async () => {
-    const rendered = renderTile(NODE);
+    const rendered = renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
     await screen.findByRole("button", { name: "Type draft" });
     await waitFor(() => {
@@ -477,7 +477,7 @@ describe("<GitDiffTile /> editing", () => {
 
     state.worktreeOid = "worktree-2";
     state.diffPending = true;
-    rendered.rerender(tileElement(NODE));
+    rendered.rerender(tileElement(NODE, true));
 
     expect(screen.getByTestId("git-diff-editor-surface")).toBe(
       editorBeforeRollover,
@@ -504,7 +504,7 @@ describe("<GitDiffTile /> editing", () => {
     expect(diffSurfaceState.loaders).toEqual([initialLoader]);
 
     state.diffPending = false;
-    rendered.rerender(tileElement(NODE));
+    rendered.rerender(tileElement(NODE, true));
     expect(screen.getByTestId("git-diff-editor-surface")).toBe(
       editorBeforeRollover,
     );
@@ -534,7 +534,7 @@ describe("<GitDiffTile /> editing", () => {
     state.refetchContents.mockImplementation(() => hydrationPromise);
     preloadState.preload.mockReturnValue(preloadPromise);
 
-    renderTile(NODE);
+    renderTile(NODE, true);
     fireEvent.click(screen.getByRole("button", { name: "Click code" }));
 
     // Both sides of Promise.all must be in flight before either settles.
@@ -589,20 +589,117 @@ describe("<GitDiffTile /> editing", () => {
         ?.store.getState().ownerSurfaceId,
     ).toBe(`git-diff:${NODE.instanceId}`);
   });
+
+  it("releases ownership when an LRU keep-alive tab goes inactive while editing", async () => {
+    const rendered = renderTile(NODE, true);
+    fireEvent.click(screen.getByRole("button", { name: "Click code" }));
+    await waitFor(() => {
+      expect(
+        fileEditRuntimeRegistry
+          .get({
+            userId: null,
+            hostId: "host-A",
+            workspacePath: "/work/repo",
+            filePath: "src/app.ts",
+          })
+          ?.store.getState().ownerSurfaceId,
+      ).toBe(`git-diff:${NODE.instanceId}`);
+    });
+
+    rendered.rerender(tileElement(NODE, false));
+
+    await waitFor(() => {
+      expect(
+        fileEditRuntimeRegistry
+          .get({
+            userId: null,
+            hostId: "host-A",
+            workspacePath: "/work/repo",
+            filePath: "src/app.ts",
+          })
+          ?.store.getState().ownerSurfaceId,
+      ).toBeNull();
+    });
+  });
+
+  it("dedupes the drift refetch across renders while the check is still pending", async () => {
+    const rendered = renderTile(NODE, true);
+    fireEvent.click(screen.getByRole("button", { name: "Click code" }));
+    expect(
+      await screen.findByRole("button", { name: "Change draft" }),
+    ).toBeTruthy();
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+
+    let resolveDrift!: (value: unknown) => void;
+    const driftPromise = new Promise((resolve) => {
+      resolveDrift = resolve;
+    });
+    state.refetchContents.mockImplementation(() => driftPromise);
+    state.worktreeOid = "worktree-2";
+
+    // Two rerenders while the drift check is still pending on the SAME stale
+    // comparison identity. The mocked query result (like TanStack Query's
+    // real one) is a fresh object every render, so without a synchronous
+    // per-identity guard each rerender would start another overlapping
+    // `git.getFileContents` refetch instead of joining the first attempt.
+    rendered.rerender(tileElement(NODE, true));
+    rendered.rerender(tileElement(NODE, true));
+    await Promise.resolve();
+
+    expect(state.refetchContents).toHaveBeenCalledTimes(2);
+
+    resolveDrift({
+      error: null,
+      data: {
+        runningDir: "/work/repo",
+        filePath: "src/app.ts",
+        oldFile: { name: "src/app.ts", contents: "const value = 0;\n" },
+        newFile: {
+          name: "src/app.ts",
+          contents: "const external = true;\n",
+        },
+        worktreeFile: {
+          name: "src/app.ts",
+          contents: "const external = true;\n",
+        },
+        error: null,
+      },
+    });
+
+    const staleStatus = await screen.findByText("Worktree changed");
+    expect(
+      screen.getByTestId("diff-tab-header-accessory").contains(staleStatus),
+    ).toBe(true);
+    expect(state.refetchContents).toHaveBeenCalledTimes(2);
+  });
 });
 
-function renderTile(node: GitDiffTileRef): RenderResult {
-  return render(tileElement(node));
-}
+let activeQueryClient: QueryClient | null = null;
 
-function tileElement(node: GitDiffTileRef): ReactNode {
-  const queryClient = new QueryClient({
+function renderTile(node: GitDiffTileRef, isActive: boolean): RenderResult {
+  activeQueryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  return render(tileElement(node, isActive));
+}
+
+// Reuses the QueryClient created by `renderTile` so `rendered.rerender(...)`
+// calls below replace only the tile's props, not the cache-owning provider -
+// production keeps one client for the tile's lifetime, and a fresh client per
+// call would silently stop these rerender assertions from exercising cache
+// continuity.
+function tileElement(node: GitDiffTileRef, isActive: boolean): ReactNode {
+  const queryClient = activeQueryClient;
+  if (queryClient === null) throw new Error("Render the tile first.");
   return (
     <QueryClientProvider client={queryClient}>
       <TabHostProvider hostId="host-A">
-        <GitDiffTile node={node} viewTabId="view-1" tileId={node.id} isActive />
+        <GitDiffTile
+          node={node}
+          viewTabId="view-1"
+          tileId={node.id}
+          isActive={isActive}
+        />
       </TabHostProvider>
     </QueryClientProvider>
   );
