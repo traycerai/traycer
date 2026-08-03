@@ -305,7 +305,9 @@ export function useGitDiffEditing(
   const loadDiffFiles = useCallback<FileDiffContentsLoader>(
     (fileDiff) => {
       if (hydratedNewFile === undefined) {
-        throw new Error("The edit session ended before the diff was hydrated.");
+        return Promise.reject(
+          new Error("The edit session ended before the diff was hydrated."),
+        );
       }
       const newFile = {
         ...hydratedNewFile,

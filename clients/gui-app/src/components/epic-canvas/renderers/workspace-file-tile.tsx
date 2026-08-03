@@ -197,11 +197,18 @@ function WorkspaceFileTileLive(props: {
     onBlur: editSession.flush,
     onSaveShortcut: editSession.flush,
   });
-  const renderedContent = editSession.state?.draftContent ?? content;
-  const findContent =
-    renderedContent === null
-      ? null
-      : normalizeWorkspaceFileContent(renderedContent);
+  // `editSession.state.draftContent` is raw (Diffs' live buffer, seeded from
+  // disk content) - unlike `content` above, which is already normalized.
+  // Normalize it too before rendering: find offsets are computed against this
+  // same string below, so a raw CRLF/lone-CR draft would make find target the
+  // wrong text relative to what's actually displayed. The write path stays
+  // untouched - `diskContent`, `activate`, and the CAS baseline above all use
+  // `rawContent` directly, never this normalized value.
+  const draftContent = editSession.state?.draftContent ?? null;
+  const renderedContent =
+    draftContent === null
+      ? content
+      : normalizeWorkspaceFileContent(draftContent);
   const markdownPreviewRootRef = useRef<HTMLElement | null>(null);
   const findEnvironmentRef = useRef<WorkspaceFileFindEnvironment | null>(null);
   const [sourceFindTarget, setSourceFindTarget] =
@@ -341,7 +348,7 @@ function WorkspaceFileTileLive(props: {
   useLayoutEffect(() => {
     findEnvironmentRef.current = {
       viewMode: effectiveViewMode,
-      content: findContent,
+      content: renderedContent,
       isLoading: query.isLoading,
       displayError,
       truncated,
@@ -354,7 +361,7 @@ function WorkspaceFileTileLive(props: {
     effectiveViewMode,
     publishFindEnvironment,
     query.isLoading,
-    findContent,
+    renderedContent,
     revealSourceMatch,
     truncated,
   ]);
