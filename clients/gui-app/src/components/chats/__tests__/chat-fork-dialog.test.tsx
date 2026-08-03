@@ -41,6 +41,7 @@ function sampleEvent(): ChatForkEvent {
       {
         taskId: "task-1",
         chatId: "chat-1",
+        publicationChatId: "chat-1",
         incumbent: {
           headSha256: "a".repeat(64),
           parentHeadSha256: null,
@@ -335,6 +336,7 @@ describe("ChatForkDialog + ChatForkIndicatorBanner", () => {
         {
           taskId: "task-1",
           chatId: "chat-1",
+          publicationChatId: "chat-1",
           incumbent: {
             headSha256: "a".repeat(64),
             parentHeadSha256: null,

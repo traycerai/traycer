@@ -69,7 +69,18 @@ export type ChatForkCandidateSummary = z.infer<
 /** Mirrors `ChatForkChatNotice`. */
 export const chatForkChatNoticeSchema = z.object({
   taskId: z.string().min(1),
+  /**
+   * The local chat identity: authoritative for UI, option lookup, and
+   * settlement on the publisher that raised the notice. It never changes when
+   * a losing lineage is redirected.
+   */
   chatId: z.string().min(1),
+  /**
+   * The cloud row whose lineage, repair, and fork occurrence are being
+   * arbitrated. Always populated; equals `chatId` before any redirect and
+   * differs after the local lineage publishes through a fork clone.
+   */
+  publicationChatId: z.string().min(1),
   /** The head the cloud holds - the lineage that would continue by default. */
   incumbent: chatForkCandidateSummarySchema,
   /**
