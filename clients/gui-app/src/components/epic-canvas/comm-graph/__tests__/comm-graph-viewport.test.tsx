@@ -1,6 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 
-const reactFlowMock = vi.hoisted(() => vi.fn(() => null));
+const reactFlowMock = vi.hoisted(() => vi.fn((_props: unknown) => null));
 
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
@@ -53,8 +53,6 @@ function renderCanvas(view: CommGraphTileViewState): void {
       onJumpToSender={vi.fn()}
       canJumpToCreated={() => false}
       onJumpToCreated={vi.fn()}
-      canJumpToNoticed={() => false}
-      onJumpToNoticed={vi.fn()}
       onOpenAgent={vi.fn()}
     />,
   );
