@@ -1552,14 +1552,19 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isSelected,
     onToggleSelection,
   } = props;
-  const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
-    () => ({
-      kind: SIDEBAR_NODE_DND_TYPE,
-      epicId,
-      viewTabId,
-      nodeId,
-    }),
-    [epicId, nodeId, viewTabId],
+  const activeHostId = useReactiveActiveHostId();
+  const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
+    () =>
+      activeHostId === null
+        ? null
+        : {
+            kind: SIDEBAR_NODE_DND_TYPE,
+            epicId,
+            viewTabId,
+            hostId: activeHostId,
+            nodeId,
+          },
+    [activeHostId, epicId, nodeId, viewTabId],
   );
   const {
     attributes,
@@ -1568,8 +1573,8 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isDragging,
   } = useDraggable({
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
-    disabled: selectionMode || openableType === null,
-    data: dragData,
+    disabled: selectionMode || openableType === null || dragData === null,
+    data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {

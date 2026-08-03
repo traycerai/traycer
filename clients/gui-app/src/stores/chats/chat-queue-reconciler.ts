@@ -415,6 +415,9 @@ function queueContainsPendingSend(
   let targetSender: string | null = null;
   let targetSettings: string | null = null;
   return queue.items.some((item) => {
+    // A managed-command item is host-authored and content-free; it can never be
+    // the queue's echo of the user's pending send.
+    if (item.kind !== "prompt") return false;
     if (item.messageId === pendingMessageId) return true;
     if (pendingUser === undefined) return false;
     if (item.messageId === pendingUserMessageId) return true;

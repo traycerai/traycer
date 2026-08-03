@@ -24,16 +24,15 @@ export function fileSuggestionFromSearchResult(
   root: string,
   result: WorkspaceSearchPathResult,
 ): WorkspaceFileMentionSuggestion {
-  const relPath = normalizeRel(result.relPath);
-  const description = mentionDescription(relPath);
+  const fields = mentionPathFields(root, result.relPath, "file");
   return {
     kind: "file",
-    id: `file:${root}:${relPath}`,
+    id: `file:${root}:${fields.relPath}`,
     label: result.name,
-    relPath,
-    absolutePath: joinWithinRoot(root, relPath),
+    relPath: fields.relPath,
+    absolutePath: fields.absolutePath,
     workspacePath: root,
-    description,
+    description: fields.description,
   };
 }
 
@@ -41,18 +40,33 @@ export function folderSuggestionFromSearchResult(
   root: string,
   result: WorkspaceSearchPathResult,
 ): WorkspaceFolderMentionSuggestion {
-  const relPath = normalizeRel(result.relPath);
-  const description = mentionDescription(relPath);
-  // The legacy folder suggestion carries a trailing-slash `relPath`; match it so
-  // the two RPCs produce indistinguishable folder entries.
+  const fields = mentionPathFields(root, result.relPath, "folder");
   return {
     kind: "folder",
-    id: `folder:${root}:${relPath}/`,
+    id: `folder:${root}:${fields.relPath}`,
     label: result.name,
-    relPath: `${relPath}/`,
-    absolutePath: joinWithinRoot(root, relPath),
+    relPath: fields.relPath,
+    absolutePath: fields.absolutePath,
     workspacePath: root,
-    description,
+    description: fields.description,
+  };
+}
+
+/** Canonical path fields shared by @ suggestions and direct attachments. */
+export function mentionPathFields(
+  root: string,
+  rawRelPath: string,
+  kind: "file" | "folder",
+): {
+  readonly relPath: string;
+  readonly absolutePath: string;
+  readonly description: string;
+} {
+  const normalized = normalizeRel(rawRelPath);
+  return {
+    relPath: kind === "folder" ? `${normalized}/` : normalized,
+    absolutePath: joinWithinRoot(root, normalized),
+    description: mentionDescription(normalized),
   };
 }
 

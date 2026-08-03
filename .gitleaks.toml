@@ -10,11 +10,11 @@ title = "Traycer gitleaks config"
 useDefault = true
 
 [[allowlists]]
-description = "Stable scrollStateKey identifiers in chat-messages unit tests. These exact strings are cache-key test IDs, not credentials; require both the precise source path and value."
+description = "Stable scrollStateKey identifiers in the original and split chat-messages unit suites. These exact strings are cache-key test IDs, not credentials; require both the precise source path and value."
 condition = "AND"
 regexTarget = "secret"
 paths = [
-  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages(?:-(?:anchor-engine|core|library-contract|navigation|persistence))?\.test\.tsx$''',
 ]
 regexes = [
   '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|s4b-reachability-key|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup|t18-pin-c-exhaust|t19-hydration-nav-key|t22-pin3-no-double-correction|t22-below-anchor-no-repair|t22-unmount-mid-repair|t22-shrink-above-anchor)$''',
@@ -43,11 +43,11 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Chat transcript scroll-state cache keys in the gui-app chat tests - kebab-case UI state bucket names (e.g. a per-test anchor key) that the generic-api-key rule matches only because the field is literally named `scrollStateKey`. These are UI state keys, never credentials. Path-scoped to the one test file; `fetch-depth: 0` means the PR scan sees them on in-flight branches before they merge, so this cannot wait for the introducing branch to land."
+description = "Chat transcript scroll-state cache keys in the original and split gui-app chat tests - kebab-case UI state bucket names (e.g. a per-test anchor key) that the generic-api-key rule matches only because the field is literally named `scrollStateKey`. These are UI state keys, never credentials. Path-scoped to the monolith and its five split files; `fetch-depth: 0` means the PR scan sees them on in-flight branches before they merge, so this cannot wait for the introducing branch to land."
 condition = "AND"
 regexTarget = "line"
 paths = [
-  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages(?:-(?:anchor-engine|core|library-contract|navigation|persistence))?\.test\.tsx$''',
 ]
 regexes = [
   '''scrollStateKey: "[A-Za-z0-9_-]+"''',

@@ -22,6 +22,8 @@ export const CHAT_TURN_MINIMAP_MIN_ITEMS = 1;
 export const CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS =
   "max(1px, calc(100% - 1rem))";
+/** Matches `chat-timeline.tsx`'s rem-based `max-w-3xl`. */
+export const CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM = 48;
 
 export function resolveChatTurnMinimapHeightStyle(itemCount: number): string {
   const naturalTrackHeight = Math.max(
@@ -88,21 +90,43 @@ export function resolveChatTurnMinimapIndexFromPointer(input: {
   );
 }
 
-/** Always-on edge hit target, including narrow and tiled transcript panes. */
+/** Matches the rem-based `left-3` / `right-3` interaction-region inset. */
+export const CHAT_TURN_MINIMAP_EDGE_INSET_REM = 0.75;
 export const CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
-export const CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH =
-  "min(22rem, calc(100vw - 1rem))";
+/** Matches the widest painted marker (`w-6`) in `chat-turn-minimap.tsx`. */
+export const CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM = 1.5;
 
 /**
- * Once the preview is open, keep the full preview and the space leading to it
- * interactive. The collapsed rail keeps a compact fixed edge target so it
- * remains usable in narrow and tiled panes.
+ * The minimap overlays a viewport edge while the transcript column is
+ * centered. Cap the transparent hit target to the side gutter so it cannot
+ * cover message text; a zero-width result makes the control inert in narrow
+ * and tiled panes where the content column consumes the full viewport.
  */
-export function resolveChatTurnMinimapInteractiveWidth(
-  collapsedWidth: number,
-  expanded: boolean,
-): number | string {
-  return expanded ? CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH : collapsedWidth;
+export function resolveChatTurnMinimapHitStripWidth(input: {
+  readonly rootFontSize: number;
+  readonly viewportWidth: number;
+}): number {
+  if (
+    !Number.isFinite(input.viewportWidth) ||
+    input.viewportWidth <= 0 ||
+    !Number.isFinite(input.rootFontSize) ||
+    input.rootFontSize <= 0
+  ) {
+    return 0;
+  }
+
+  const contentMaxWidth =
+    CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM * input.rootFontSize;
+  const contentWidth = Math.min(input.viewportWidth, contentMaxWidth);
+  const sideGutter = Math.max(0, (input.viewportWidth - contentWidth) / 2);
+  const edgeInset = CHAT_TURN_MINIMAP_EDGE_INSET_REM * input.rootFontSize;
+  return Math.max(
+    0,
+    Math.min(
+      CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
+      Math.floor(sideGutter - edgeInset),
+    ),
+  );
 }
 
 export interface ChatTurnMinimapListState {

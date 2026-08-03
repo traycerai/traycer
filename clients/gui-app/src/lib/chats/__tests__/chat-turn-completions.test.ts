@@ -137,6 +137,7 @@ describe("toChatTurnPhase", () => {
           status: "paused",
           items: [
             {
+              kind: "prompt",
               queueItemId: "queued-after-error",
               messageId: "message-2",
               message: {

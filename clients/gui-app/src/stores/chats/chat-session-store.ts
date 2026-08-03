@@ -60,6 +60,7 @@ import type {
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatQueueDeliveryPolicy,
   ChatQueueState,
   ChatRunSettings,
@@ -2339,8 +2340,11 @@ export function createChatSessionStore(
         // commits on submit), and items already on these settings are skipped.
         // Received A2A responses (agent sender) are system-owned and excluded -
         // the host refuses to restamp them, so they must not live-mirror either.
+        // Managed-command items carry no settings stamp at all (they dispatch on
+        // the chat's current settings), so there is nothing to restamp.
         const pendingItems = get().queue.items.filter(
           (item: ChatQueuedItem) =>
+            item.kind === "prompt" &&
             item.sender.type !== "agent" &&
             item.status === "pending" &&
             item.queueItemId !== excludeQueueItemId &&
@@ -2946,10 +2950,11 @@ type OptimisticQueuedItemForSendInput = {
 
 function optimisticQueuedItemForSend(
   input: OptimisticQueuedItemForSendInput,
-): ChatQueuedItem | null {
+): ChatQueuedPromptItem | null {
   if (!shouldRenderSendAsOptimisticQueuedItem(input.state)) return null;
   const now = Date.now();
   return {
+    kind: "prompt",
     queueItemId: optimisticQueuedItemId(input.clientActionId),
     messageId: input.messageId,
     message: {
