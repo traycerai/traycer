@@ -137,12 +137,18 @@ function installScrollableNodeShim(): ScrollableNodeShim {
 let capturedResizeCallbacks: Array<ResizeObserverCallback>;
 
 class ControllableResizeObserver implements ResizeObserver {
+  private readonly callback: ResizeObserverCallback;
+
   constructor(callback: ResizeObserverCallback) {
-    capturedResizeCallbacks.push(callback);
+    this.callback = callback;
+    capturedResizeCallbacks.push(this.callback);
   }
   observe(): void {}
   unobserve(): void {}
-  disconnect(): void {}
+  disconnect(): void {
+    const callbackIndex = capturedResizeCallbacks.indexOf(this.callback);
+    if (callbackIndex !== -1) capturedResizeCallbacks.splice(callbackIndex, 1);
+  }
 }
 
 const FAKE_RESIZE_OBSERVER: ResizeObserver = {

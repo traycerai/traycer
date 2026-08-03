@@ -1492,8 +1492,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // already-known-good mirror instead of a live read whenever the
       // surface cannot be measured right now.
       const list = chatTimelineRef.current;
+      const scrollableNode =
+        list === null ? null : getScrollableNodeOrNull(list);
       const isMeasurable =
-        list !== null && list.getScrollableNode().clientHeight !== 0;
+        scrollableNode !== null && scrollableNode.clientHeight !== 0;
       const snapshot = isMeasurable
         ? captureLiveChatTabScrollSnapshot()
         : lastVisibleScrollSnapshotRef.current;

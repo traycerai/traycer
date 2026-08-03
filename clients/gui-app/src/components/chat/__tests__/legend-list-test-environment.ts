@@ -45,6 +45,8 @@ export function setLegendListSyntheticScrollEventsEnabled(
  * via `enableLegendListBrowserScrollEvents()`.
  */
 let dispatchBrowserScrollEventsOnProgrammaticScroll = false;
+let browserScrollEventDispatchDepth = 0;
+const MAX_BROWSER_SCROLL_EVENT_DISPATCH_DEPTH = 16;
 
 export function setLegendListScrollContainerScrollHeightOverride(
   heightPx: number | null,
@@ -81,7 +83,17 @@ export function enableLegendListBrowserScrollEvents(): void {
 
 function maybeDispatchBrowserScrollEvent(element: HTMLElement): void {
   if (!dispatchBrowserScrollEventsOnProgrammaticScroll) return;
-  element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  if (
+    browserScrollEventDispatchDepth >= MAX_BROWSER_SCROLL_EVENT_DISPATCH_DEPTH
+  ) {
+    return;
+  }
+  browserScrollEventDispatchDepth += 1;
+  try {
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  } finally {
+    browserScrollEventDispatchDepth -= 1;
+  }
 }
 
 function rectOf(x: number, y: number, width: number, height: number): DOMRect {
@@ -205,8 +217,8 @@ export function installLegendListViewportMetrics(): void {
       const previous = scrollTopByElement.get(this) ?? 0;
       scrollTopByElement.set(this, value);
       // Mirror browsers: only fire when the stored offset actually changed.
-      // Re-entrancy guard via the previous comparison avoids infinite loops if
-      // a scroll listener itself re-writes the same top.
+      // The comparison suppresses same-offset re-entrant writes; divergent
+      // writers are bounded by maybeDispatchBrowserScrollEvent's depth guard.
       if (previous !== value) {
         maybeDispatchBrowserScrollEvent(this);
       }

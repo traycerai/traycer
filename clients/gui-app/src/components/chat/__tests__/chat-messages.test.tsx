@@ -275,33 +275,9 @@ function appendOptimisticUserSend(
   ];
 }
 
-/**
- * Queued auto-flush / A2A host row: arrives with persistentMessageId already
- * set to its own id (decision #9 gated path).
- */
-
-/** Ticket 13 (decision #28): a synthesized setup-card system row, matching
- *  `rendered-messages.ts`'s `buildSetupCardMessage` shape (single-segment
- *  `role: "system"` row, `kind: "setup-card"`). `anchorMessageId` is the id
- *  this card GENUINELY owns (`SetupCardRow.triggeringMessageId` match) -
- *  the resolver now verifies this identity, not just array adjacency
- *  (reviewer-caught bug: a floating card can otherwise land directly above
- *  an unrelated row by `createdAt` coincidence). */
-/** Ticket 13 (decision #27): a synthesized fork-marker system row, matching
- *  `rendered-messages.ts`'s `buildForkedChatLinkMessage` shape. */
 /** Uniform row height under `legend-list-test-environment` (ITEM_HEIGHT_PX). */
 const TICKET_13_ROW_HEIGHT_PX = 90;
 
-/** Many trailing assistant rows so the anchored turn overflows the usable viewport. */
-/**
- * Appends exactly ONE new trailing assistant row with a globally-unique id
- * (`chunkIndex`, not scoped to `messages.length` like
- * `appendStreamingAssistantChunks`) - lets a test drive per-chunk growth
- * through several SEPARATE `rerenderMessages` calls (mirroring real token-
- * by-token streaming, where the reveal-pass effect fires once per delta)
- * instead of one batched jump, which a single effect run cannot expose an
- * indefinite-chase regression through.
- */
 /**
  * Waits for exactly one reveal-pass tick (two rAFs, matching the effect's
  * own two-rAF pass) without the full anchor-settle fallback - used between
@@ -3011,30 +2987,14 @@ describe("ChatMessages scroll policy", () => {
       );
 
       tileLiveness.live = true;
-      const first = render(
-        <StrictMode>
-          <div
-            data-chat-keyboard-scroll-scope
-            data-active="true"
-            style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
-          >
-            <ChatMessages
-              taskTitle="Test chat"
-              taskId={taskId}
-              epicId={epicId}
-              messages={messages}
-              backgroundItems={undefined}
-              getMessageActions={() => null}
-              nextStepActions={null}
-              instanceId={closedInstance}
-              visible
-              systemOverlayActive={false}
-              scrollRequest={null}
-              composerOverlayHeight={80}
-            />
-          </div>
-        </StrictMode>,
-      );
+      const first = renderChatMessages({
+        messages,
+        instanceId: closedInstance,
+        epicId,
+        taskId,
+        composerOverlayHeight: 80,
+        strictMode: true,
+      });
       await settleLegendList();
       await enterFreeScrollingAwayFromEnd();
       fireScrollTopWithoutFlush(RACE_TARGET_SCROLL_TOP);
