@@ -201,11 +201,16 @@ function WorkspaceFileTileLive(props: {
   const renderedContent = editSession.state?.draftContent ?? rawContent;
   // Find offsets are computed against this normalized copy so CRLF/lone-CR
   // don't throw off the match position, but it is never rendered or fed to
-  // Diffs - see `renderedContent` above.
-  const findContent =
-    renderedContent === null
-      ? null
-      : normalizeWorkspaceFileContent(renderedContent);
+  // Diffs - see `renderedContent` above. Memoized: `normalizeWorkspaceFileContent`
+  // scans the whole file with two regexes, and `renderedContent` changes on
+  // every keystroke while actively editing.
+  const findContent = useMemo(
+    () =>
+      renderedContent === null
+        ? null
+        : normalizeWorkspaceFileContent(renderedContent),
+    [renderedContent],
+  );
   const markdownPreviewRootRef = useRef<HTMLElement | null>(null);
   const findEnvironmentRef = useRef<WorkspaceFileFindEnvironment | null>(null);
   const [sourceFindTarget, setSourceFindTarget] =
