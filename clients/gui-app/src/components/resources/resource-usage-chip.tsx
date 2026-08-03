@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Cpu } from "lucide-react";
-import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
+import type { ResourceOwnerKindWireV14 } from "@traycer/protocol/host/resources/subscribe";
 import {
   useEpicResourceUsage,
   useOwnerResourceUsage,
@@ -92,7 +92,7 @@ export function ResourceUsageChip(props: ResourceUsageChipProps) {
 
 export interface OwnerResourceChipProps {
   readonly epicId: string;
-  readonly kind: ResourceOwnerKindWire;
+  readonly kind: ResourceOwnerKindWireV14;
   readonly ownerId: string;
   readonly className: string | undefined;
 }

@@ -118,8 +118,24 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.triggers.items.properties.live",
+      "reason": "Parsed-stream liveness flag on autonomous-resume triggers, .default(false): false IS the pre-feature semantic, because a host that predates the field only ever emitted digests for work it treated as finished - a new client reading false from an old host's frame renders exactly the terminal card it always did, and old clients strip the key on parse. Deliberately an additive field instead of a new `status` enum value, so an older host's whole-chat safeParse of persisted triggers survives (the same wakeTriggers constraint the sibling `mcp` entry cites). It exists because a still-running monitor - or a backgrounded shell streaming mid-run output - has NO terminal outcome, so `status` alone forced the resume divider to claim the command completed; scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.triggers.items.properties.mcp",
       "reason": "Parsed-stream MCP identity on autonomous-resume triggers, nullable/.default(null): null renders the plain command trigger card - exactly what a pre-mcp host produces, and old clients strip the key on parse. Deliberately an additive field instead of a new `kind` enum value so an older host's whole-chat safeParse of persisted triggers survives (the wakeTriggers constraint); scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.triggers.items.properties.managedCommand",
+      "reason": "Parsed-stream managed-command identity (commandId + monitor/shell kind) on autonomous-resume triggers, nullable/.default(null): null IS the pre-feature semantic, because a host that predates the field recorded no linkage between a resume divider and the command that woke it - a new client reading null from an old host's frame renders exactly the generic Monitor card it always did, with no output window to open, and old clients strip the key on parse. Deliberately a keyed property instead of a new `kind` enum value so an older host's whole-chat safeParse of persisted triggers survives (the same wakeTriggers constraint the sibling `mcp` and `live` entries cite) - which also means a Shell's divider keeps `kind: \"monitor\"` and carries its real kind inside this key. It exists because the divider is a door: without the command's id there is nothing for a click to open, and without its kind the terminal copy must say \"Monitor\" for a Shell; scoped by field path."
     },
     {
       "family": "stream",

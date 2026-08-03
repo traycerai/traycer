@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
-  ChatQueuedItem,
+  ChatQueuedManagedCommandItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -132,8 +133,9 @@ function emitSnapshot(harness: Harness): void {
 function queuedItem(
   queueItemId: string,
   settings: ChatRunSettings,
-): ChatQueuedItem {
+): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId: `m-${queueItemId}`,
     message: { kind: "user" as const, content: CONTENT },
@@ -145,6 +147,19 @@ function queuedItem(
     targetTurnId: null,
     steerRequest: null,
     fallbackReason: null,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function managedCommandItem(queueItemId: string): ChatQueuedManagedCommandItem {
+  return {
+    kind: "managed-command",
+    queueItemId,
+    commandId: `${queueItemId}-command`,
+    description: "bun test --watch",
+    commandKind: "monitor",
+    status: "pending" as const,
     createdAt: 1,
     updatedAt: 1,
   };
@@ -234,6 +249,64 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
       throw new Error("Expected queueSettingsRestamp frame");
     }
     expect(frame.settings.profileId).toBe("profile-a");
+  });
+
+  it("a queue holding only a managed-command item sends no restamp frame at all", () => {
+    const harness = createHarness();
+    emitSnapshot(harness);
+
+    harness.callbacks().onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: {
+        status: "running",
+        items: [managedCommandItem("queue-managed")],
+      },
+    });
+
+    harness.handle.store
+      .getState()
+      .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
+
+    // A managed-command chip carries no settings stamp - it dispatches on the
+    // chat's settings at delivery time - so a profile switch has nothing to
+    // restamp and must not wake the wire.
+    expect(harness.sent).toHaveLength(0);
+  });
+
+  it("restamps a stale prompt sibling without counting the managed-command item", () => {
+    const harness = createHarness();
+    emitSnapshot(harness);
+
+    harness.callbacks().onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: {
+        status: "running",
+        items: [
+          managedCommandItem("queue-managed"),
+          queuedItem("queue-1", PROFILE_A_SETTINGS),
+        ],
+      },
+    });
+
+    harness.handle.store
+      .getState()
+      .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
+
+    // The prompt sibling alone trips the gate; the frame is all-or-nothing per
+    // `excludeQueueItemId`, so the chip is never named in it either.
+    expect(harness.sent).toHaveLength(1);
+    const frame = harness.sent[0];
+    if (frame.kind !== "queueSettingsRestamp") {
+      throw new Error("Expected queueSettingsRestamp frame");
+    }
+    expect(frame.settings.profileId).toBe("profile-b");
+    expect(frame.excludeQueueItemId).toBeNull();
   });
 
   it("documents the mixed-queue contract: the GUI has no per-item scoping, only excludeQueueItemId - a profile-only item now trips the gate on its own, and a sibling with an unrelated field change rides along in the SAME frame", () => {

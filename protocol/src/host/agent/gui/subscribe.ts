@@ -1,9 +1,9 @@
 /**
- * `chat.subscribe@1.4` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1`/`@1.2`/`@1.3`
+ * `chat.subscribe@1.6` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.5`
  * (frozen, near the bottom of this file) are the exact shapes shipped in
- * earlier hosts; later minors only add to them, so a `1.4` app still bridges to
- * hosts that only know `1.0`–`1.3`. Streams have no cross-major downgrade
+ * earlier hosts; later minors only add to them, so a `1.6` app still bridges to
+ * hosts that only know `1.0`–`1.5`. Streams have no cross-major downgrade
  * bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a method
  * ships, its major must never move again - only additive minors.
  *
@@ -314,7 +314,16 @@ export const chatQueueSteerRequestSchema = z.object({
 });
 export type ChatQueueSteerRequest = z.infer<typeof chatQueueSteerRequestSchema>;
 
-export const chatQueuedItemSchema = z.object({
+/**
+ * A prompt someone put in the queue - a user send, or an A2A response received
+ * from another agent (the `sender` discriminates). Carries the message content
+ * and the settings tuple its turn will run under.
+ */
+export const chatQueuedPromptItemSchema = z.object({
+  // Defaulted so every pre-`1.6` payload parses as a prompt item with no
+  // migration: persisted `queue.added` metadata written by older hosts, and
+  // frames from a `1.5` host parsed by a newer GUI, both carry no `kind`.
+  kind: z.literal("prompt").default("prompt"),
   queueItemId: z.string(),
   messageId: z.string(),
   message: userMessagePayloadSchema,
@@ -332,6 +341,65 @@ export const chatQueuedItemSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
 });
+export type ChatQueuedPromptItem = z.infer<typeof chatQueuedPromptItemSchema>;
+
+/**
+ * A pending delivery of a managed command's output (a Monitor's log digest, a
+ * backgrounded shell's completion digest) into this chat's next turn.
+ *
+ * Deliberately CONTENT-FREE: the digest is rendered from the command's log and
+ * delivery cursor at dispatch, so the item carries only the durable dispatch
+ * key and a label for the queue chip. There is no `message`/`sender`/
+ * `messageId` to fabricate, and no `settings`/`accountContext` stamp to go
+ * stale - dispatch runs on the chat's *current* settings. No `delivery` or
+ * `steerRequest` either: these are always next-turn and never steerable, and
+ * the variant makes those states unrepresentable rather than merely unused.
+ *
+ * The shared `queueItemId`/`status`/timestamp fields are what keep the
+ * status-only machinery (reorder, queue pause, runnability) working across the
+ * union without narrowing.
+ */
+export const chatQueuedManagedCommandItemSchema = z.object({
+  kind: z.literal("managed-command"),
+  queueItemId: z.string(),
+  // Durable dispatch key: the render is keyed by this, not by a closure, so an
+  // item rehydrated after a host restart dispatches identically.
+  commandId: z.string(),
+  // The command's human label (the Monitor's description / the shell command
+  // line), shown on the queue chip.
+  description: z.string(),
+  // Which kind of managed command this delivery came from, so the chip reads
+  // "Monitor · deploy watcher" rather than a generic badge. Named
+  // `commandKind` because `kind` above is the union's discriminant.
+  //
+  // Nullable and defaulted rather than required even though this line is
+  // unshipped: the queue is DURABLE, so an item written by an earlier build of
+  // this same line must still rehydrate. Absent means "not recorded", which the
+  // chip renders generically - it never stands in for a guessed kind.
+  commandKind: z.enum(["monitor", "shell"]).nullable().default(null),
+  // Narrower than the prompt lifecycle enum on purpose: a delivery is never
+  // steered, so `steer_requested`/`steering`/`injected`/`fallback` are not just
+  // unused here, they are unrepresentable. The `1.6` line that introduces this
+  // variant is unshipped, so tightening costs no compatibility.
+  status: z.enum(["pending", "paused"]).default("pending"),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ChatQueuedManagedCommandItem = z.infer<
+  typeof chatQueuedManagedCommandItemSchema
+>;
+
+// A plain `z.union` with the managed-command arm FIRST - deliberately not a
+// `z.discriminatedUnion`, which rejects a payload missing the discriminant even
+// when the literal is defaulted (verified against this repo's zod). Legacy
+// payloads carry no `kind`: they fail the managed-command arm (whose `kind` is
+// required) and land on the prompt arm, where the default fills the
+// discriminant in. The inferred TS type is still a proper discriminated union
+// on `kind`, so `switch`/narrowing stay exhaustive for consumers.
+export const chatQueuedItemSchema = z.union([
+  chatQueuedManagedCommandItemSchema,
+  chatQueuedPromptItemSchema,
+]);
 export type ChatQueuedItem = z.infer<typeof chatQueuedItemSchema>;
 
 export const chatQueueStateSchema = z.object({
@@ -364,6 +432,40 @@ const chatQueuedItemSchemaPreInReplyTo = z.object({
 const chatQueueStateSchemaPreInReplyTo = z.object({
   status: z.enum(["idle", "running", "paused"]),
   items: z.array(chatQueuedItemSchemaPreInReplyTo),
+});
+
+// Wire-freeze copy of the queue item as `chat.subscribe@1.5` shipped it: a
+// plain object with a mandatory `message`, before `1.6` split it into the
+// `prompt | managed-command` union. Senders here are the LIVE (`inReplyTo`-
+// bearing) shape - `1.4` is the minor that introduced them. Hand-frozen, not
+// derived from the live shape.
+//
+// Unlike the `mcp` background-item downgrade, a managed-command queue item has
+// no sibling shape to degrade into: this schema cannot parse one at all
+// (`message`/`sender`/`settings` are required and there is nothing honest to
+// put in them). That is deliberate, and it is why the host's per-minor frame
+// projection OMITS managed-command items for ≤1.5 peers rather than reshaping
+// them - see `projectManagedCommandQueueItemsForPreV16` in the host's
+// `chat-frame-projection.ts`.
+const chatQueuedItemSchemaPreManagedCommand = z.object({
+  queueItemId: z.string(),
+  messageId: z.string(),
+  message: userMessagePayloadSchema,
+  sender: userMessageSenderSchema,
+  settings: chatRunSettingsSchema,
+  accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+  delivery: chatQueueItemDeliverySchema.default("next_turn"),
+  status: chatQueueItemStatusSchema.default("pending"),
+  targetTurnId: z.string().nullable().default(null),
+  steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
+  fallbackReason: z.string().nullable().default(null),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const chatQueueStateSchemaPreManagedCommand = z.object({
+  status: z.enum(["idle", "running", "paused"]),
+  items: z.array(chatQueuedItemSchemaPreManagedCommand),
 });
 
 /**
@@ -727,6 +829,16 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     message: userMessageSchemaPreInReplyTo,
     queue: chatQueueStateSchemaPreInReplyTo,
     event: chatEventSchemaPreInReplyTo,
+  });
+
+// Frozen common frames bound to `chat.subscribe@1.4–1.5`: live message/event
+// trees (`inReplyTo` shipped in 1.4) but the pre-union queue, so a released
+// 1.4/1.5 `queueChanged` frame can never carry a managed-command item.
+const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchemaPreManagedCommand,
+    event: chatEventSchema,
   });
 
 // Frozen for `chat.subscribe@1.2` and earlier.
@@ -1508,16 +1620,17 @@ export const chatSubscribeV13 = defineStreamRpcContract({
 //
 // `1.4` shipped `inReplyTo` on every agent sender (user-message, assistant,
 // queue item, event `actor`, steer) and the `mcp` background-item kind (CLI
-// auto-backgrounded MCP tool calls) - but PRE-`archivedAt` and
-// PRE-`sameTurnSteeringSupported`. Pinned here so `1.5` can no longer mutate
-// this released line: the frozen snapshot has no `archivedAt` key on `chat`,
-// and `activeTurn` strips the steering-capability field in both the snapshot
-// and `turnStateChanged` frames. The shared frames and client frame are
-// otherwise unchanged.
+// auto-backgrounded MCP tool calls) - but PRE-`archivedAt`,
+// PRE-`sameTurnSteeringSupported`, and PRE-managed-command queue items. Pinned
+// here so no later minor can mutate this released line: the frozen snapshot has
+// no `archivedAt` key on `chat`, `activeTurn` strips the steering-capability
+// field in both the snapshot and `turnStateChanged` frames, and the queue stays
+// the single plain-object prompt shape so a real 1.4 peer can never observe a
+// managed-command item.
 const chatSnapshotSchemaV14 = z.object({
   chat: chatSchemaV14,
   access: chatAccessSchema,
-  queue: chatQueueStateSchema,
+  queue: chatQueueStateSchemaPreManagedCommand,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
@@ -1550,7 +1663,8 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV14 = z.object({
 const chatSubscribeServerFrameSchemaV14 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV14,
   chatSubscribeTurnStateChangedServerFrameSchemaV14,
-  ...chatSubscribeSharedServerFrameSchemas,
+  ...chatSubscribeCommonServerFrameSchemasPreManagedCommand,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
 ]);
 
 export const chatSubscribeV14 = defineStreamRpcContract({
@@ -1561,18 +1675,69 @@ export const chatSubscribeV14 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
-// ─── Live `chat.subscribe@1.5` contract ────────────────────────────────────
+// ─── Frozen `chat.subscribe@1.5` shape (`archivedAt` + steering capability) ─
 //
-// The live snapshot now carries `chat.archivedAt`, and `activeTurn` gains
-// `sameTurnSteeringSupported` so the renderer can gate Cmd+Enter steering
-// without duplicating the harness capability table. Older peers negotiate
-// ≤1.4 and receive the frozen frames above, which strip both additions (see
-// `chat-frame-projection.ts` for the active-turn projection). The client frame
-// is unchanged from `1.4`.
+// `1.5` shipped `chat.archivedAt` on the snapshot and `sameTurnSteeringSupported`
+// on `activeTurn` (so the renderer can gate Cmd+Enter steering without
+// duplicating the harness capability table) - but PRE-managed-command queue
+// items. Pinned here so `1.6` cannot mutate this released line: the queue stays
+// the plain prompt shape. `turnStateChanged` carries no queue and `1.6` changes
+// nothing else it holds, so it reuses the live frame - retro-pin it here if a
+// later minor touches background items again (that is exactly what happened to
+// `1.3` and `1.4`).
+const chatSnapshotSchemaV15 = z.object({
+  chat: chatSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchemaPreManagedCommand,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV15 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV15,
+});
+
+const chatSubscribeServerFrameSchemaV15 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV15,
+  chatSubscribeTurnStateChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasPreManagedCommand,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
+]);
 
 export const chatSubscribeV15 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV15,
+  clientFrameSchema: chatSubscribeClientFrameSchema,
+});
+
+// ─── Live `chat.subscribe@1.6` contract (managed-command queue items) ───────
+//
+// The live serverFrame's queue is the `prompt | managed-command` union: a
+// pending managed-command delivery (Monitor log digest, backgrounded shell
+// completion) is a first-class, content-free queue item the user can see,
+// reorder, and cancel. A released ≤1.5 peer negotiates a frozen line above,
+// which cannot represent the variant at all; the host's frame projection omits
+// those items for such peers rather than fabricating a prompt shape for them.
+// The client frame is unchanged from `1.4` - cancel/reorder of a
+// managed-command item ride the existing `queueCancel`/`queueReorder`
+// actions, which are keyed by `queueItemId` alone.
+
+export const chatSubscribeV16 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

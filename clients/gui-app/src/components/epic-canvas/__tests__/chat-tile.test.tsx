@@ -2300,6 +2300,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     const queueItems: ChatQueuedItem[] = [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-same-turn",
         messageId: "message-same-turn",
         message: {
@@ -2318,6 +2319,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-next-turn",
         messageId: "message-next-turn",
         message: {
@@ -2407,6 +2409,7 @@ describe("<ChatTile />", () => {
     chatHarness.install(
       "owner",
       Array.from({ length: 8 }, (_, index) => ({
+        kind: "prompt" as const,
         queueItemId: `queue-${index}`,
         messageId: `message-${index}`,
         message: {
@@ -2440,6 +2443,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("viewer", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2473,6 +2477,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2546,6 +2551,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2600,6 +2606,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2656,6 +2663,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2674,6 +2682,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-2",
         messageId: "message-queue-2",
         message: {
