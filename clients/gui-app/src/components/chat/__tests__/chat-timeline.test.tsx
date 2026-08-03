@@ -653,12 +653,15 @@ describe("ChatTimeline", () => {
     }
   }
 
-  /** One virtual macrotask tick - empirically the exact window where a
+  /** One virtual browser turn - the queued macrotask plus the following
+   *  animation frame. This is the exact window where a
    *  `useLayoutEffect`-published store settles (verified against a toy
    *  two-component external-store harness) but a `useEffect`-published one
-   *  has not yet, when act-environment is off. */
+   *  has not yet, when act-environment is off. Keep this outside `act`: the
+   *  finding deliberately exercises React's normal asynchronous scheduling. */
   async function tickOneMacrotask(): Promise<void> {
     await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(16);
   }
 
   // Finding 1's "row mounting in the stale window" sub-case was investigated
