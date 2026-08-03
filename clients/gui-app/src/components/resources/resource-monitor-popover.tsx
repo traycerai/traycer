@@ -274,6 +274,7 @@ function noProcessToggle(): void {}
 
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   // While the panel is open, let the header drop its title-bar drag regions so a
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
   useTitleBarDragSuppression("resource-monitor", open);
@@ -306,7 +307,11 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
         </TooltipWrapper>
 
         {open ? (
-          <ResourceMonitorContent onClose={() => setOpen(false)} />
+          <ResourceMonitorContent
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            onClose={() => setOpen(false)}
+          />
         ) : null}
       </Popover>
     </>
@@ -412,9 +417,13 @@ function useResourceKillSelection(
   };
 }
 
-function ResourceMonitorContent(props: { readonly onClose: () => void }) {
+function ResourceMonitorContent(props: {
+  readonly searchQuery: string;
+  readonly onSearchQueryChange: (value: string) => void;
+  readonly onClose: () => void;
+}) {
   const [sortOption, setSortOption] = useState<ResourceSortOption>("tab");
-  const [searchQuery, setSearchQuery] = useState("");
+  const searchQuery = props.searchQuery;
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [expandedOwners, setExpandedOwners] = useState<Set<string>>(
     () => new Set(),
@@ -558,7 +567,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   );
   const updateSearchQuery = (value: string): void => {
     killSelection.clearSelection();
-    setSearchQuery(value);
+    props.onSearchQueryChange(value);
   };
 
   const toggleOwner = (key: string): void => {
