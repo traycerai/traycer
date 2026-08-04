@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -21,6 +22,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { uiQueryKeys } from "@/lib/query-keys";
 
 /**
  * Generic shell-agnostic host picker.
@@ -103,37 +105,41 @@ interface HostPickerListProps {
 
 function HostPickerList(props: HostPickerListProps) {
   const binding = useHostBinding();
+  const queryClient = useQueryClient();
   const directory = binding === null ? null : binding.directory;
   const hostClient = binding === null ? null : binding.hostClient;
-  const [revision, setRevision] = useState<number>(0);
   const directoryId =
     directory === null ? null : registerHostPickerDirectory(directory);
 
   useEffect(() => {
-    if (directory === null) {
+    if (directory === null || directoryId === null) {
       return;
     }
     const subscription = directory.onChange(() => {
-      setRevision((prev) => prev + 1);
+      void queryClient.invalidateQueries({
+        queryKey: uiQueryKeys.hostPicker(directoryId),
+      });
     });
     return () => {
       subscription.dispose();
     };
-  }, [directory]);
+  }, [directory, directoryId, queryClient]);
 
   useEffect(() => {
-    if (hostClient === null) {
+    if (hostClient === null || directoryId === null) {
       return;
     }
     const unsubscribe = hostClient.onChange(() => {
-      setRevision((prev) => prev + 1);
+      void queryClient.invalidateQueries({
+        queryKey: uiQueryKeys.hostPicker(directoryId),
+      });
     });
     return () => {
       unsubscribe();
     };
-  }, [hostClient]);
+  }, [hostClient, directoryId, queryClient]);
 
-  const query = useHostPickerList(directoryId, revision);
+  const query = useHostPickerList(directoryId);
   const remoteRestricted = useRemoteHostsPlanRestricted();
 
   if (directory === null || query.isLoading) {

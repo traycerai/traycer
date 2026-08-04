@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 /**
  * The host picker's paid-plan gating: on a free plan, remote rows are inert
@@ -75,6 +76,19 @@ vi.mock("@/hooks/host/use-host-picker-list", () => ({
 
 import { HostPicker } from "@/components/layout/header/host-picker";
 
+/**
+ * The picker invalidates its own list query on directory / host-client
+ * changes, so it needs a real client even though the list hook itself is
+ * mocked here.
+ */
+function renderPicker(): void {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <HostPicker />
+    </QueryClientProvider>,
+  );
+}
+
 beforeEach(() => {
   mocks.planRestricted.mockReturnValue(false);
 });
@@ -87,7 +101,7 @@ afterEach(() => {
 describe("HostPicker paid-plan gating", () => {
   it("free plan: remote rows are inert with a Paid plan affordance, and the upsell links to subscription management", () => {
     mocks.planRestricted.mockReturnValue(true);
-    render(<HostPicker />);
+    renderPicker();
 
     const remote = screen.getByTestId("host-picker-option-remote-1");
     expect(remote.getAttribute("data-plan-restricted")).toBe("true");
@@ -111,7 +125,7 @@ describe("HostPicker paid-plan gating", () => {
 
   it("paid plan: remote rows select normally and no upsell renders", () => {
     mocks.planRestricted.mockReturnValue(false);
-    render(<HostPicker />);
+    renderPicker();
 
     expect(screen.queryByTestId("host-picker-remote-upsell")).toBeNull();
     const remote = screen.getByTestId("host-picker-option-remote-1");
