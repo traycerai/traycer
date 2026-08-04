@@ -910,6 +910,7 @@ function AssistantSegment({
         <ErrorSegment
           message={segment.message}
           code={segment.code}
+          recoverable={segment.recoverable}
           findUnitId={findUnitId}
         />
       );
