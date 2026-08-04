@@ -644,7 +644,55 @@ export function createOpenEpicStore(
   };
 
   let disposed = false;
+  /**
+   * Local root updates produced while the renderer↔host transport is down.
+   *
+   * Collapsed with `Y.mergeUpdates` once it grows past either threshold below.
+   * The merge is lossless, and a merged update is bounded by the document's
+   * own size rather than by how many edits produced it - so a long offline
+   * stretch costs O(doc) instead of O(edits). Nothing is ever dropped: the
+   * queue is the in-memory propagation path for edits the host has not seen,
+   * and discarding it would lose user work that the reconnect reconcile is
+   * only a backstop for.
+   */
   const unsyncedQueue: Uint8Array[] = [];
+  /** Logical edit count, tracked separately from the buffer because
+   * collapsing must not make the UI under-report how much is unsynced. */
+  let unsyncedOps = 0;
+  let unsyncedBytes = 0;
+  const UNSYNCED_COLLAPSE_BYTES = 4 * 1024 * 1024;
+  const UNSYNCED_COLLAPSE_ENTRIES = 32;
+
+  const clearUnsyncedQueue = (): void => {
+    unsyncedQueue.length = 0;
+    unsyncedOps = 0;
+    unsyncedBytes = 0;
+  };
+
+  /** Hand the buffered bytes to a caller that is about to send them, leaving
+   * the queue empty. */
+  const takeUnsyncedQueue = (): Uint8Array[] => {
+    const pending = unsyncedQueue.slice();
+    clearUnsyncedQueue();
+    return pending;
+  };
+
+  const pushUnsyncedUpdate = (updateBytes: Uint8Array): void => {
+    unsyncedQueue.push(updateBytes);
+    unsyncedOps += 1;
+    unsyncedBytes += updateBytes.byteLength;
+    if (unsyncedQueue.length < 2) return;
+    if (
+      unsyncedBytes <= UNSYNCED_COLLAPSE_BYTES &&
+      unsyncedQueue.length <= UNSYNCED_COLLAPSE_ENTRIES
+    ) {
+      return;
+    }
+    const merged = Y.mergeUpdates(unsyncedQueue);
+    unsyncedQueue.length = 0;
+    unsyncedQueue.push(merged);
+    unsyncedBytes = merged.byteLength;
+  };
   let transportStatus: StreamConnectionStatus = "connecting";
   // Keep the historical optimistic value for functional users of the blended
   // connection status. The sync pill must instead consult
@@ -699,6 +747,11 @@ export function createOpenEpicStore(
      * owner/editor permission.
      */
     pendingUpdates: Uint8Array[];
+    /** Byte size of `pendingUpdates`, so the queue can be collapsed with
+     * `Y.mergeUpdates` before a long offline stretch turns it into O(edits)
+     * of retained buffers. Kept alongside rather than recomputed because the
+     * push path runs on every keystroke-level edit. */
+    pendingBytes: number;
     /**
      * Reconcile bytes computed at `artifactRoomSnapshot` time when the stream was
      * not ready to send (the stream is not `open`, or the current open
@@ -729,6 +782,48 @@ export function createOpenEpicStore(
   const artifactRoomReplicas = new Map<string, ArtifactRoomReplicaEntry>();
   const BIN_STREAM_ORIGIN = Symbol("open-epic/artifact-room-stream");
   const BIN_AWARENESS_REMOTE_ORIGIN = "artifact-room-stream-remote";
+  const ROOM_PENDING_COLLAPSE_BYTES = 2 * 1024 * 1024;
+  const ROOM_PENDING_COLLAPSE_ENTRIES = 32;
+
+  function clearPendingRoomUpdates(entry: ArtifactRoomReplicaEntry): void {
+    entry.pendingUpdates.length = 0;
+    entry.pendingBytes = 0;
+  }
+
+  function takePendingRoomUpdates(
+    entry: ArtifactRoomReplicaEntry,
+  ): Uint8Array[] {
+    const pending = entry.pendingUpdates.slice();
+    clearPendingRoomUpdates(entry);
+    return pending;
+  }
+
+  /**
+   * Queue a local room edit the stream cannot carry yet, collapsing the queue
+   * once it outgrows either threshold. `Y.mergeUpdates` is lossless and its
+   * result is bounded by the room body's own size, so an editor left open
+   * through a long disconnect costs O(body) rather than O(keystrokes).
+   * Nothing is discarded - these bytes are the only outbound path for edits
+   * made during the window.
+   */
+  function pushPendingRoomUpdate(
+    entry: ArtifactRoomReplicaEntry,
+    update: Uint8Array,
+  ): void {
+    entry.pendingUpdates.push(update);
+    entry.pendingBytes += update.byteLength;
+    if (entry.pendingUpdates.length < 2) return;
+    if (
+      entry.pendingBytes <= ROOM_PENDING_COLLAPSE_BYTES &&
+      entry.pendingUpdates.length <= ROOM_PENDING_COLLAPSE_ENTRIES
+    ) {
+      return;
+    }
+    const merged = Y.mergeUpdates(entry.pendingUpdates);
+    entry.pendingUpdates.length = 0;
+    entry.pendingUpdates.push(merged);
+    entry.pendingBytes = merged.byteLength;
+  }
 
   function canSendArtifactRoomBodyWritesNow(): boolean {
     return (
@@ -783,7 +878,7 @@ export function createOpenEpicStore(
         // queued writes that have not been confirmed by a snapshot.
         const replica = artifactRoomReplicas.get(artifactRoomId);
         if (replica !== undefined) {
-          replica.pendingUpdates.length = 0;
+          clearPendingRoomUpdates(replica);
           replica.pendingReconcileUpdate = null;
           replica.dirtyWatermarkStateVectorBase64 = null;
         }
@@ -808,7 +903,7 @@ export function createOpenEpicStore(
       // `pendingReconcileUpdate`) - they never clear the queue without
       // preserving an outbound propagation path.
       if (replica !== undefined) {
-        replica.pendingUpdates.push(update);
+        pushPendingRoomUpdate(replica, update);
       }
     };
     const awarenessUpdateHandler = (
@@ -836,6 +931,7 @@ export function createOpenEpicStore(
       docUpdateHandler,
       awarenessUpdateHandler,
       pendingUpdates: [],
+      pendingBytes: 0,
       pendingReconcileUpdate: null,
       dirtyWatermarkStateVectorBase64: null,
       latestHostStateVectorBase64: null,
@@ -867,7 +963,7 @@ export function createOpenEpicStore(
     if (!hasFreshRootSnapshotForOpenCycle) return;
     const role = currentRole;
     if (!isWritablePermissionRole(role)) {
-      entry.pendingUpdates.length = 0;
+      clearPendingRoomUpdates(entry);
       entry.pendingReconcileUpdate = null;
       entry.dirtyWatermarkStateVectorBase64 = null;
       refreshPublicDirtyState?.();
@@ -884,8 +980,7 @@ export function createOpenEpicStore(
       streamClient?.applyArtifactRoomUpdate(artifactRoomId, reconcile);
     }
     if (entry.pendingUpdates.length === 0) return;
-    const pending = entry.pendingUpdates.slice();
-    entry.pendingUpdates.length = 0;
+    const pending = takePendingRoomUpdates(entry);
     for (const update of pending) {
       streamClient?.applyArtifactRoomUpdate(artifactRoomId, update);
     }
@@ -899,7 +994,7 @@ export function createOpenEpicStore(
 
   function clearAllPendingArtifactRoomUpdates(): void {
     for (const entry of artifactRoomReplicas.values()) {
-      entry.pendingUpdates.length = 0;
+      clearPendingRoomUpdates(entry);
       entry.pendingReconcileUpdate = null;
       entry.dirtyWatermarkStateVectorBase64 = null;
     }
@@ -1056,12 +1151,11 @@ export function createOpenEpicStore(
           if (unsyncedQueue.length === 0) return;
           const role = currentRole ?? get().permissionRole;
           if (!isWritablePermissionRole(role)) {
-            unsyncedQueue.length = 0;
+            clearUnsyncedQueue();
             set({ unsyncedQueueSize: 0 });
             return;
           }
-          const pending = unsyncedQueue.slice();
-          unsyncedQueue.length = 0;
+          const pending = takeUnsyncedQueue();
           set({ unsyncedQueueSize: 0 });
           for (const updateBytes of pending) {
             streamClient?.applyUpdate(updateBytes);
@@ -1121,7 +1215,7 @@ export function createOpenEpicStore(
               ) {
                 client?.applyUpdate(reconcileUpdate);
               }
-              unsyncedQueue.length = 0;
+              clearUnsyncedQueue();
               currentRole = meta.permissionRole;
               hasFreshRootSnapshotForOpenCycle = true;
               const slices = projector.projectFull();
@@ -1266,7 +1360,7 @@ export function createOpenEpicStore(
                 // reconcile subsumes both the queue and any prior
                 // pending reconcile. Convergence is proven by the next
                 // coverage check, not by replaying each queued frame.
-                entry.pendingUpdates.length = 0;
+                clearPendingRoomUpdates(entry);
                 entry.pendingReconcileUpdate = null;
               } else if (
                 reconcileNeeded &&
@@ -1280,12 +1374,12 @@ export function createOpenEpicStore(
                 // reconnect window. The merged-replica reconcile subsumes
                 // those queued frames.
                 entry.pendingReconcileUpdate = reconcileUpdate;
-                entry.pendingUpdates.length = 0;
+                clearPendingRoomUpdates(entry);
               } else {
                 // Either no divergence (reconcile is trivial) or the
                 // role is viewer/null (fail-closed). In both cases
                 // there is nothing safe to send and nothing to retain.
-                entry.pendingUpdates.length = 0;
+                clearPendingRoomUpdates(entry);
                 entry.pendingReconcileUpdate = null;
               }
               if (
@@ -1424,7 +1518,7 @@ export function createOpenEpicStore(
             onPermissionChanged: (permissionRole) => {
               if (disposed || generation !== streamGeneration) return;
               if (permissionRole === null) {
-                unsyncedQueue.length = 0;
+                clearUnsyncedQueue();
                 clearAllPendingArtifactRoomUpdates();
                 replaceHostCoverageDoc(null);
                 currentRole = null;
@@ -1443,7 +1537,7 @@ export function createOpenEpicStore(
                 previous !== "viewer" &&
                 permissionRole === "viewer"
               ) {
-                unsyncedQueue.length = 0;
+                clearUnsyncedQueue();
                 clearAllPendingArtifactRoomUpdates();
                 currentRole = permissionRole;
                 set({
@@ -1637,7 +1731,7 @@ export function createOpenEpicStore(
 
         requestFreshSnapshotImpl = () => {
           if (disposed) return;
-          unsyncedQueue.length = 0;
+          clearUnsyncedQueue();
           transportStatus = "connecting";
           cloudSyncStatus = "connected";
           const cycleDurabilityState = resetDurabilityProofForOpenCycle();
@@ -1947,8 +2041,8 @@ export function createOpenEpicStore(
               streamClient?.applyUpdate(updateBytes);
               return;
             }
-            unsyncedQueue.push(updateBytes);
-            set({ unsyncedQueueSize: unsyncedQueue.length });
+            pushUnsyncedUpdate(updateBytes);
+            set({ unsyncedQueueSize: unsyncedOps });
           },
 
           sendAwareness: (awarenessBytes) => {
@@ -1959,7 +2053,7 @@ export function createOpenEpicStore(
 
           discardUnsyncedEdits: () => {
             if (unsyncedQueue.length === 0 && !get().isDirty) return;
-            unsyncedQueue.length = 0;
+            clearUnsyncedQueue();
             clearAllPendingArtifactRoomUpdates();
             set({
               unsyncedQueueSize: 0,

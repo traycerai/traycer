@@ -381,6 +381,51 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
+  it("collapses a long offline queue on flush without losing edits or under-reporting its size", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().callbacks.onConnectionStatus("reconnecting", null);
+
+    // Past the 32-entry collapse threshold, so the buffer is merged at least
+    // once while the edits are still only in memory.
+    const EDIT_COUNT = 40;
+    for (let index = 0; index < EDIT_COUNT; index += 1) {
+      opened.doc.getMap("epic").set(`k${index}`, `v${index}`);
+    }
+    expect(handle().applied.length).toBe(0);
+    // Collapsing the buffer must not make the UI under-report unsynced work:
+    // the size is a count of edits, not of retained buffers.
+    expect(opened.store.getState().unsyncedQueueSize).toBe(EDIT_COUNT);
+
+    // Recovery runs through the snapshot reconcile, which is derived from the
+    // live doc - so collapsing the buffer cannot cost an edit.
+    handle().callbacks.onConnectionStatus("open", null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+
+    expect(handle().applied.length).toBe(1);
+    const replayed = new Y.Doc();
+    Y.applyUpdate(replayed, handle().applied[0]);
+    for (let index = 0; index < EDIT_COUNT; index += 1) {
+      expect(replayed.getMap("epic").get(`k${index}`)).toBe(`v${index}`);
+    }
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+
+    opened.dispose();
+  });
+
   it("shows reconnecting on cloud sync loss but keeps streaming edits to the local host (durable offline persistence is host-owned)", () => {
     const { factory, handle } = fakeFactory();
     const opened = createOpenEpicStore({
