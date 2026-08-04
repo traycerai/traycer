@@ -36,6 +36,7 @@ const SIDEBAR_NODE_SOURCE_DATA = {
   kind: "sidebar-node",
   epicId: EPIC_ID,
   viewTabId: VIEW_TAB_ID,
+  hostId: "host-1",
   nodeId: "node-a",
 } as const;
 
@@ -52,6 +53,16 @@ const TERMINAL_TILE_SOURCE_DATA = {
     hostId: "host-1",
     cwd: "/repo",
   },
+} as const;
+
+const WORKSPACE_FOLDER_SOURCE_DATA = {
+  kind: "workspace-folder",
+  epicId: EPIC_ID,
+  viewTabId: VIEW_TAB_ID,
+  hostId: "host-1",
+  workspacePath: "/repo",
+  folderPath: "src/",
+  name: "src",
 } as const;
 
 function makeRect(input: {
@@ -293,6 +304,83 @@ describe("epicRootCollisionDetection", () => {
         ),
       ),
     ).toEqual(["tab"]);
+  });
+
+  it("prioritizes an accepting composer over its overlapping pane body", () => {
+    const composer = {
+      id: "composer",
+      data: {
+        kind: "composer-attachment-drop-target",
+        viewTabId: VIEW_TAB_ID,
+        accepts: () => true,
+        attach: () => undefined,
+      },
+      rect: HIT_RECT,
+    };
+    expect(
+      hitIds(
+        epicRootCollisionDetection(
+          makeCollisionArgs({
+            activeData: SIDEBAR_NODE_SOURCE_DATA,
+            droppables: [
+              droppableOfKind("body", "artifact-tab-group-body"),
+              composer,
+            ],
+            pointer: POINTER,
+          }),
+        ),
+      ),
+    ).toEqual(["composer"]);
+
+    expect(
+      hitIds(
+        epicRootCollisionDetection(
+          makeCollisionArgs({
+            activeData: WORKSPACE_FOLDER_SOURCE_DATA,
+            droppables: [composer],
+            pointer: POINTER,
+          }),
+        ),
+      ),
+    ).toEqual(["composer"]);
+  });
+
+  it("defers attachability to the composer target", () => {
+    const rejectingComposer = {
+      id: "composer",
+      data: {
+        kind: "composer-attachment-drop-target",
+        viewTabId: VIEW_TAB_ID,
+        accepts: () => false,
+        attach: () => undefined,
+      },
+      rect: HIT_RECT,
+    };
+    expect(
+      epicRootCollisionDetection(
+        makeCollisionArgs({
+          activeData: SIDEBAR_NODE_SOURCE_DATA,
+          droppables: [rejectingComposer],
+          pointer: POINTER,
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      hitIds(
+        epicRootCollisionDetection(
+          makeCollisionArgs({
+            activeData: TERMINAL_TILE_SOURCE_DATA,
+            droppables: [
+              {
+                ...rejectingComposer,
+                data: { ...rejectingComposer.data, accepts: () => true },
+              },
+            ],
+            pointer: POINTER,
+          }),
+        ),
+      ),
+    ).toEqual(["composer"]);
   });
 
   it("returns no hits for unknown sources or missing pointers", () => {

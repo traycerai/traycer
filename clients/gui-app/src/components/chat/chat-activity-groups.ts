@@ -307,6 +307,14 @@ function buildChatActivityTimelineImpl(
       out.push({ kind: "segment", id: segment.id, segment });
       continue;
     }
+    if (
+      segment.kind === "command" &&
+      shouldPromoteCommandSegment(segment, promotedToolBlockIds)
+    ) {
+      flushRun();
+      out.push({ kind: "segment", id: segment.id, segment });
+      continue;
+    }
     if (isActivitySegment(segment)) {
       run.push(segment);
       continue;
@@ -440,6 +448,21 @@ function shouldPromoteToolSegment(
   return (
     isCommandLikeTool(segment.toolName) && segment.backgroundOutput !== null
   );
+}
+
+// A backgrounded command (Codex yields a long-running exec to the background
+// and keeps it alive past the turn that started it) stays a standalone card for
+// its whole life - running, settled, and after reload - on the same two signals
+// as a backgrounded tool call: the durable block marker, and the transient host
+// `backgroundItems` set that keeps the card live while the host tracks it.
+// There is no `backgroundOutput` fallback here - command stdout is never
+// persisted, so the marker is the only durable evidence.
+function shouldPromoteCommandSegment(
+  segment: CommandSegment,
+  promotedToolBlockIds: ReadonlySet<string>,
+): boolean {
+  if (segment.backgroundTask === true) return true;
+  return promotedToolBlockIds.has(segment.id);
 }
 
 function isCommandLikeTool(toolName: string): boolean {

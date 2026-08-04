@@ -1,13 +1,12 @@
 /**
- * Shared host+folder selection for terminal creation: host section, folder
- * list, and Launch action. Used by both the sidebar "+" popover
- * (`new-terminal-picker.tsx`) and the ⌘K palette's "Create new terminal"
- * dialog (`new-terminal-dialog.tsx`) so host+folder selection logic lives in
- * exactly one place (gui-app AGENTS.md's palette/manual-UI parity rule).
+ * Host+folder selection for terminal creation from the sidebar "+" popover:
+ * host section, folder list, and Launch action. CMD-T's in-pane opener uses
+ * native fuzzy sub-pages instead, while sharing the same host bindings and
+ * terminal tile-ref builder.
  *
- * Callers mount this only while their popover/dialog is open (and unmount it
- * on close), so its state - the explicit row pick and the launch latch -
- * starts fresh every time without needing an imperative reset.
+ * The caller mounts this only while its popover is open (and unmounts it on
+ * close), so its state - the explicit row pick and the launch latch - starts
+ * fresh every time without needing an imperative reset.
  *
  * When the epic has no worktree folders bound at all, there is no row to
  * select from, but a terminal can still be launched "folderless" - bound to

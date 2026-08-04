@@ -85,6 +85,7 @@ import {
   useChatPromptStashSource,
 } from "./use-chat-prompt-stash-adapters";
 import { PromptStashControl } from "./prompt-stash-control";
+import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -249,7 +250,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     [],
   );
   const [pickerStore] = useState(() => createComposerPickerStore());
-
   // The mention/slash menu renders through a body portal. It belongs to the
   // one focused canvas tile, not merely every visible split member, so close
   // its logical picker state whenever the exact focused owner changes. All
@@ -523,8 +523,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     <>
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
-          <div className="bg-canvas px-4 pt-4">
-            <div className="mx-auto w-full max-w-3xl">
+          <div className="pointer-events-none px-4">
+            <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-4">
               {rateLimitPrompt.kind === "visible" ? (
                 <ProfileRateLimitSwitchBanner
                   key={rateLimitPrompt.warningKey}
@@ -550,14 +550,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
           </div>
         </ChatComposerBannerPortal>
       ) : null}
-      <div
-        data-chat-composer=""
-        className={cn(
-          "bg-canvas px-4 pb-4",
-          topSpacing === "normal" ? "pt-4" : "pt-0",
-        )}
-      >
-        <div className="mx-auto w-full max-w-3xl">
+      <div data-chat-composer="" className="pointer-events-none px-4">
+        <div
+          className={cn(
+            "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+            topSpacing === "normal" ? "pt-4" : "pt-0",
+          )}
+        >
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
@@ -593,67 +592,73 @@ function ChatComposerImpl(props: ChatComposerProps) {
             )}
           >
             <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
-            <ComposerShell
-              pickerStore={pickerStore}
-              onDragOver={onDragOver}
-              onDrop={onDrop}
-              onDragEnter={onDragEnter}
-              onDragLeave={onDragLeave}
-              dragOverlayVariant={dragOverlayVariant}
-              utilityRail={
-                <PromptStashControl
-                  controller={promptStash}
-                  pickerStore={pickerStore}
-                />
-              }
-              attachmentsStrip={
-                <ChatComposerAttachmentsStrip
-                  content={draftContent}
-                  editingQueueItemId={editingQueueItemId}
-                  onCancelQueueEdit={onCancelQueueEdit}
-                  onRemoveImage={removeImage}
-                />
-              }
-              editor={
-                <ChatComposerEditorSlot
-                  ref={editorRef}
-                  pickerStore={pickerStore}
-                  initialContent={initialContent}
-                  initialSelection={initialSelection}
-                  slashProviderId={harnessId}
-                  hasPastedImageBytes={hasPastedImageBytes}
-                  ingestPastedComposerImages={null}
-                  isActive={focused}
-                  onDocumentChange={handleDocumentChange}
-                  onSelectionChange={handleSelectionChange}
-                  onSubmit={handleSubmitDraft}
-                  steerHintActive={steerHintActive}
-                  onPaste={onPaste}
-                  onDragOver={onDragOver}
-                  onDrop={onDrop}
-                  onEditorReady={handleEditorReady}
-                />
-              }
-              toolbar={
-                <ChatComposerToolbarSlot
-                  store={toolbarStore}
-                  onAttachImages={attachImageFiles}
-                  canSubmit={canSubmit}
-                  attachmentPending={attachmentPending}
-                  onSubmit={handleSubmitFromButton}
-                  activeTurnStatus={activeTurnStatus}
-                  hasPendingApprovals={hasPendingApprovals}
-                  stopDisabled={stopDisabled}
-                  onStopTurn={onStopTurn}
-                  composerDisabledHint={sendBlockedHint}
-                  dictation={dictationControl}
-                  dictationPreparing={dictationPreparing}
-                  settingsLocked={false}
-                  createProfileHostId={tabHostId}
-                  runTargetHostId={tabHostId}
-                />
-              }
-            />
+            <ComposerAttachmentDropZone
+              viewTabId={viewTabId}
+              hostId={tabHostId}
+              editorRef={editorRef}
+            >
+              <ComposerShell
+                pickerStore={pickerStore}
+                onDragOver={onDragOver}
+                onDrop={onDrop}
+                onDragEnter={onDragEnter}
+                onDragLeave={onDragLeave}
+                dragOverlayVariant={dragOverlayVariant}
+                utilityRail={
+                  <PromptStashControl
+                    controller={promptStash}
+                    pickerStore={pickerStore}
+                  />
+                }
+                attachmentsStrip={
+                  <ChatComposerAttachmentsStrip
+                    content={draftContent}
+                    editingQueueItemId={editingQueueItemId}
+                    onCancelQueueEdit={onCancelQueueEdit}
+                    onRemoveImage={removeImage}
+                  />
+                }
+                editor={
+                  <ChatComposerEditorSlot
+                    ref={editorRef}
+                    pickerStore={pickerStore}
+                    initialContent={initialContent}
+                    initialSelection={initialSelection}
+                    slashProviderId={harnessId}
+                    hasPastedImageBytes={hasPastedImageBytes}
+                    ingestPastedComposerImages={null}
+                    isActive={focused}
+                    onDocumentChange={handleDocumentChange}
+                    onSelectionChange={handleSelectionChange}
+                    onSubmit={handleSubmitDraft}
+                    steerHintActive={steerHintActive}
+                    onPaste={onPaste}
+                    onDragOver={onDragOver}
+                    onDrop={onDrop}
+                    onEditorReady={handleEditorReady}
+                  />
+                }
+                toolbar={
+                  <ChatComposerToolbarSlot
+                    store={toolbarStore}
+                    onAttachImages={attachImageFiles}
+                    canSubmit={canSubmit}
+                    attachmentPending={attachmentPending}
+                    onSubmit={handleSubmitFromButton}
+                    activeTurnStatus={activeTurnStatus}
+                    hasPendingApprovals={hasPendingApprovals}
+                    stopDisabled={stopDisabled}
+                    onStopTurn={onStopTurn}
+                    composerDisabledHint={sendBlockedHint}
+                    dictation={dictationControl}
+                    dictationPreparing={dictationPreparing}
+                    settingsLocked={false}
+                    createProfileHostId={tabHostId}
+                    runTargetHostId={tabHostId}
+                  />
+                }
+              />
+            </ComposerAttachmentDropZone>
             {workspaceControls !== null ? (
               <ComposerWorkspaceRow workspaceControls={workspaceControls} />
             ) : null}

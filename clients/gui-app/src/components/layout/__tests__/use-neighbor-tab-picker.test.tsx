@@ -8,6 +8,7 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import * as TabNav from "@/lib/tab-navigation";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -41,6 +42,7 @@ function resetStores(): void {
   useTabsStore.setState({
     stripOrder: [],
     systemTabs: { history: null, settings: null },
+    activationHistory: [],
   });
 }
 
@@ -83,6 +85,28 @@ describe("useNeighborTabPicker", () => {
     expect(pickNeighborForClose(epicHeaderTab(a, "epic-a", "Alpha"))).toEqual(
       epicHeaderTab(b, "epic-b", "Beta"),
     );
+  });
+
+  it("returns to the previously activated tab instead of the strip neighbor", () => {
+    useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
+    const b = useEpicCanvasStore.getState().openEpicTab("epic-b", "Beta");
+    useEpicCanvasStore.getState().openEpicTab("epic-c", "Gamma");
+    useEpicCanvasStore.getState().openEpicTab("epic-d", "Delta");
+    const startId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("start-page", null);
+    useTabsStore.getState().focusRef({ kind: "epic", id: b });
+    useTabsStore.getState().focusRef({ kind: "draft", id: startId });
+    routerState.pathname = `/draft/${startId}`;
+    const startTab = getHeaderTabs().find(
+      (tab) => tab.kind === "draft" && tab.id === startId,
+    );
+    if (startTab === undefined) throw new Error("Expected start-page tab");
+
+    const { result } = renderHook(() => useNeighborTabPicker());
+    const captured = result.current.capture(startTab);
+
+    expect(captured.neighbor).toEqual(epicHeaderTab(b, "epic-b", "Beta"));
   });
 
   it("captures wasActive=false and neighbor=null when closing a non-active tab", () => {

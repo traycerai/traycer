@@ -19,6 +19,7 @@ import {
   Pencil,
   Play,
   SendHorizontal,
+  Terminal,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -48,6 +49,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
   ChatActiveTurn,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
@@ -62,6 +64,13 @@ import {
   useQueuePauseState,
 } from "@/components/chat/queued-message-utils";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import type { ManagedCommandKind } from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  managedCommandOutputWindowTitle,
+  managedCommandQueuedChipTooltip,
+} from "@/lib/managed-commands/managed-command-copy";
+import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
+import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
@@ -85,6 +94,20 @@ interface QueuedMessageRowActionStateInput {
   readonly hasSteerInFlight: boolean;
 }
 
+interface QueuedMessageRowChrome {
+  readonly showOwnerActions: boolean;
+  readonly showManagedCommandCancel: boolean;
+  readonly canAbortSteer: boolean;
+}
+
+interface QueuedMessageRowChromeInput {
+  readonly promptItem: ChatQueuedPromptItem | null;
+  readonly receivedAgentResponse: boolean;
+  readonly readOnly: boolean;
+  readonly canAct: boolean;
+  readonly isLocked: boolean;
+}
+
 interface QueuedMessageEditActionCopy {
   readonly label: string;
   readonly title: string;
@@ -100,14 +123,19 @@ export interface QueuedMessagePanelProps {
   readonly separated?: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  readonly onEdit: (item: ChatQueuedItem) => void;
+  // Edit / steer are prompt-only by type: a managed-command item carries no
+  // message to load into the composer and is never hand-steerable, so the
+  // compiler - not a runtime guard - is what keeps it out of these paths.
+  // Cancel and reorder stay on the union: both key off `queueItemId` alone and
+  // both are offered for managed-command items.
+  readonly onEdit: (item: ChatQueuedPromptItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedItem) => void;
+  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
   readonly onReorder: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedItem) => void;
+  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
 }
 
 function queueItemAllowsReorder(item: ChatQueuedItem): boolean {
@@ -411,10 +439,10 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     queueItemId: string,
     element: HTMLDivElement | null,
   ) => void;
-  readonly onEdit: (item: ChatQueuedItem) => void;
+  readonly onEdit: (item: ChatQueuedPromptItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedItem) => void;
-  readonly onSteerNow: (item: ChatQueuedItem) => void;
+  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
 }) {
   const {
     item,
@@ -461,18 +489,25 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
       mergeRefs<HTMLDivElement>(rowSortable.setNodeRef, handleRegisteredRowRef),
     [handleRegisteredRowRef, rowSortable.setNodeRef],
   );
+  // The prompt-only affordances (edit / steer / abort-steer) close over the
+  // narrowed item, so a managed-command row cannot reach them even if a future
+  // change accidentally rendered their buttons.
+  const promptItem = item.kind === "prompt" ? item : null;
   const handleEdit = useCallback(() => {
-    onEdit(item);
-  }, [onEdit, item]);
+    if (promptItem === null) return;
+    onEdit(promptItem);
+  }, [onEdit, promptItem]);
   const handleCancel = useCallback(() => {
     onCancel(item);
   }, [onCancel, item]);
   const handleSteerNow = useCallback(() => {
-    onSteerNow(item);
-  }, [onSteerNow, item]);
+    if (promptItem === null) return;
+    onSteerNow(promptItem);
+  }, [onSteerNow, promptItem]);
   const handleAbortSteer = useCallback(() => {
-    onAbortSteer(item);
-  }, [onAbortSteer, item]);
+    if (promptItem === null) return;
+    onAbortSteer(promptItem);
+  }, [onAbortSteer, promptItem]);
   const editActionCopy = queuedMessageEditActionCopy(item);
   const statusLabel = queuedMessageStatusLabel(item);
   const showDropIndicatorBefore = dropPreview?.index === index;
@@ -481,19 +516,13 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     itemCount,
     index,
   });
-  const receivedAgentResponse = isReceivedAgentResponse(item);
-  const showOwnerActions =
-    !receivedAgentResponse && !readOnly && !actionState.isLocked;
-  // Only a user-owned safe-point steer still "Waiting for steer" can be
-  // un-staged: an interrupt_restart ("Restart pending") has already torn the
-  // turn down, and received-agent rows are system-owned. The host re-checks and
-  // rejects if the harness began folding the steer in between render and click.
-  const canAbortSteer =
-    !receivedAgentResponse &&
-    !readOnly &&
-    canAct &&
-    item.status === "steer_requested" &&
-    item.steerRequest?.mode === "safe_point";
+  const chrome = queuedMessageRowChrome({
+    promptItem,
+    receivedAgentResponse: isReceivedAgentResponse(item),
+    readOnly,
+    canAct,
+    isLocked: actionState.isLocked,
+  });
 
   return (
     <div
@@ -526,8 +555,9 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         item={item}
         statusLabel={statusLabel}
         actionState={actionState}
-        showOwnerActions={showOwnerActions}
-        canAbortSteer={canAbortSteer}
+        showOwnerActions={chrome.showOwnerActions}
+        showManagedCommandCancel={chrome.showManagedCommandCancel}
+        canAbortSteer={chrome.canAbortSteer}
         editActionCopy={editActionCopy}
         handleEdit={handleEdit}
         handleCancel={handleCancel}
@@ -547,6 +577,7 @@ function QueuedMessageRowContent(props: {
   readonly statusLabel: string | null;
   readonly actionState: QueuedMessageRowActionState;
   readonly showOwnerActions: boolean;
+  readonly showManagedCommandCancel: boolean;
   readonly canAbortSteer: boolean;
   readonly editActionCopy: { readonly label: string; readonly title: string };
   readonly handleEdit: () => void;
@@ -554,11 +585,13 @@ function QueuedMessageRowContent(props: {
   readonly handleAbortSteer: () => void;
   readonly handleSteerNow: () => void;
 }) {
-  const receivedAgentItem = isReceivedAgentResponse(props.item)
-    ? props.item
-    : null;
-  const showFloatingChrome =
-    props.showOwnerActions || props.canAbortSteer || props.statusLabel !== null;
+  const item = props.item;
+  const receivedAgentItem = isReceivedAgentResponse(item) ? item : null;
+  const framed =
+    props.showOwnerActions ||
+    props.showManagedCommandCancel ||
+    props.canAbortSteer;
+  const showFloatingChrome = framed || props.statusLabel !== null;
 
   return (
     <div className="min-w-0 flex-1">
@@ -567,20 +600,26 @@ function QueuedMessageRowContent(props: {
           <ReceivedAgentBadge sender={receivedAgentItem.sender} />
         </div>
       ) : null}
+      {item.kind === "managed-command" ? (
+        <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
+          <ManagedCommandBadge
+            commandId={item.commandId}
+            commandKind={item.commandKind}
+          />
+        </div>
+      ) : null}
       <div
         className="max-h-[3lh] overflow-y-auto pr-1 text-ui-sm leading-5 wrap-break-word"
         data-testid="queued-message-content-scroll"
         data-native-scrollbar="true"
       >
         {showFloatingChrome ? (
-          <QueuedMessageFloatingChrome
-            framed={props.showOwnerActions || props.canAbortSteer}
-          >
+          <QueuedMessageFloatingChrome framed={framed}>
             {props.statusLabel !== null ? (
               <QueuedMessageStatusBadge
                 label={props.statusLabel}
                 pulsing={props.actionState.isSteering}
-                embedded={props.showOwnerActions || props.canAbortSteer}
+                embedded={framed}
               />
             ) : null}
             {props.showOwnerActions ? (
@@ -594,6 +633,9 @@ function QueuedMessageRowContent(props: {
                 onSteerNow={props.handleSteerNow}
               />
             ) : null}
+            {props.showManagedCommandCancel ? (
+              <ManagedCommandCancelButton onCancel={props.handleCancel} />
+            ) : null}
             {props.canAbortSteer ? (
               <QueuedMessageAbortSteerButton
                 onAbortSteer={props.handleAbortSteer}
@@ -601,14 +643,98 @@ function QueuedMessageRowContent(props: {
             ) : null}
           </QueuedMessageFloatingChrome>
         ) : null}
-        <ComposerContentPreview
-          content={props.item.message.content}
-          emptyLabel="Queued message"
-          testId="queued-message-content-preview"
-          className={undefined}
-        />
+        {item.kind === "managed-command" ? (
+          <span className="text-muted-foreground">{item.description}</span>
+        ) : (
+          <ComposerContentPreview
+            content={item.message.content}
+            emptyLabel="Queued message"
+            testId="queued-message-content-preview"
+            className={undefined}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Provenance marker for a pending managed-command output delivery (a Monitor's
+ * log digest, a backgrounded shell's completion digest). Distinct tone from
+ * `ReceivedAgentBadge` so the two system-owned row kinds stay tellable apart.
+ *
+ * Also a door (`UI.md` §5): clicking it opens or focuses that command's output
+ * window, so a human who wants to see what the agent is about to read does not
+ * have to find the row in the sidebar first. The kind is named whenever the
+ * host reports one; a delivery queued by an older host has none, and the label
+ * stays kind-free rather than guessing.
+ */
+export function ManagedCommandBadge(props: {
+  readonly commandId: string;
+  readonly commandKind: ManagedCommandKind | null;
+}) {
+  const openOutput = useManagedCommandDoor();
+  const label =
+    props.commandKind === null
+      ? "Command output"
+      : managedCommandOutputWindowTitle(props.commandKind);
+
+  return (
+    <TooltipWrapper
+      label={managedCommandQueuedChipTooltip(props.commandKind)}
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <button
+        type="button"
+        className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border/60 bg-muted/60 px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground enabled:hover:text-foreground"
+        data-testid="queued-managed-command-badge"
+        disabled={openOutput === null}
+        onClick={() => {
+          openOutput?.(props.commandId);
+        }}
+      >
+        {props.commandKind === null ? (
+          <Terminal className="size-3" aria-hidden />
+        ) : (
+          <ManagedCommandKindIcon
+            kind={props.commandKind}
+            className={undefined}
+          />
+        )}
+        <span>{label}</span>
+      </button>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * The only affordance a managed-command row offers. Cancelling is not
+ * destructive to the underlying output: the host leaves the delivery cursor
+ * where it is, so the next output from that command re-queues a fresh digest.
+ */
+function ManagedCommandCancelButton(props: { readonly onCancel: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex shrink-0">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-7 shrink-0 text-muted-foreground"
+            aria-label="Cancel queued command output"
+            onClick={props.onCancel}
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent sideOffset={6}>
+        Skip this delivery — later output still arrives
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -642,6 +768,35 @@ function shouldShowDropIndicatorAfter(input: {
   );
 }
 
+/**
+ * Which of the row's mutually exclusive toolbars is offered. A managed-command
+ * row is system-owned like a received A2A row, but it gets its own
+ * single-action toolbar (cancel only) rather than the prompt row's
+ * edit/delete/steer trio.
+ *
+ * Only a user-owned safe-point steer still "Waiting for steer" can be
+ * un-staged: an interrupt_restart ("Restart pending") has already torn the turn
+ * down, and received-agent rows are system-owned. The host re-checks and rejects
+ * if the harness began folding the steer in between render and click.
+ */
+function queuedMessageRowChrome(
+  input: QueuedMessageRowChromeInput,
+): QueuedMessageRowChrome {
+  const { promptItem, readOnly, canAct, isLocked } = input;
+  const userOwned = promptItem !== null && !input.receivedAgentResponse;
+  return {
+    showOwnerActions: userOwned && !readOnly && !isLocked,
+    showManagedCommandCancel:
+      promptItem === null && !readOnly && canAct && !isLocked,
+    canAbortSteer:
+      userOwned &&
+      !readOnly &&
+      canAct &&
+      promptItem.status === "steer_requested" &&
+      promptItem.steerRequest?.mode === "safe_point",
+  };
+}
+
 function queuedMessageRowActionState(
   input: QueuedMessageRowActionStateInput,
 ): QueuedMessageRowActionState {
@@ -671,6 +826,11 @@ function queuedMessageRowActionState(
 
 function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
   if (isOptimisticQueuedItem(item)) return "Queuing";
+  if (item.kind === "managed-command") {
+    // Only "pending" | "paused" ever occur; the badge is the row's provenance
+    // marker, so a pending item needs no additional label.
+    return item.status === "paused" ? "Paused" : null;
+  }
   if (item.status === "steer_requested") {
     return item.steerRequest?.mode === "interrupt_restart"
       ? "Restart pending"
@@ -721,7 +881,7 @@ function QueuedMessageStatusBadge(props: {
  * read-only (reorder only) and naming the agent it came from.
  */
 function ReceivedAgentBadge(props: {
-  readonly sender: Extract<ChatQueuedItem["sender"], { type: "agent" }>;
+  readonly sender: Extract<ChatQueuedPromptItem["sender"], { type: "agent" }>;
 }) {
   const name =
     props.sender.displayName !== null && props.sender.displayName.length > 0
@@ -748,7 +908,7 @@ function ReceivedAgentBadge(props: {
 function queuedMessageEditActionCopy(
   item: ChatQueuedItem,
 ): QueuedMessageEditActionCopy {
-  if (item.delivery !== "same_turn") {
+  if (item.kind !== "prompt" || item.delivery !== "same_turn") {
     return {
       label: "Edit queued message",
       title: "Edit queued message",

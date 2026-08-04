@@ -44,15 +44,7 @@ export type ChatTranscriptJumpTarget =
    * (for an A2A-created child, the first message IS its task). Resolves to
    * the first message once the transcript has one.
    */
-  | { readonly kind: "first-message" }
-  /**
-   * The tail of the transcript - the last thing this agent did. Used by the
-   * communication graph's Notice rows for the IDLE agent: the evidence for
-   * why the notice fired (the blocking question, the error, the final output
-   * before it went quiet) lives at the end of its transcript. Resolves to the
-   * newest message.
-   */
-  | { readonly kind: "last-message" };
+  | { readonly kind: "first-message" };
 
 export interface ChatTranscriptJumpRequest {
   readonly target: ChatTranscriptJumpTarget;

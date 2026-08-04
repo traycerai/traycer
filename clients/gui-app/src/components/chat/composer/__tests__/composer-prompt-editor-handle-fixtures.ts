@@ -108,6 +108,7 @@ export function createFakeComposerPromptEditorHandle(
     setContent,
     syncContent,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,

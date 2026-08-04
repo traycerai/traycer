@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
+  Activity,
   FileDiff,
   FilePlus,
   GitPullRequest,
@@ -57,6 +58,7 @@ import {
   isCommGraphTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
   isPrDetailTileRef,
   isPrDiffTileRef,
@@ -933,6 +935,9 @@ function TabIcon(props: {
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isManagedCommandOutputTileRef(props.tab)) {
+    return <Activity className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   if (isCommGraphTileRef(props.tab)) {
     return <CommGraphTileIcon className="size-3.5" />;

@@ -457,11 +457,9 @@ export const ChatTimeline = memo(function ChatTimeline({
           ? { onMetricsChange: onListMetricsChange }
           : {})}
         showsVerticalScrollIndicator
-        data-native-scrollbar="true"
         className={cn(
-          // The Legend List node is the sole scroll owner. Its native marker
-          // opts out of the app-wide scrollbar theme in index.css; explicit
-          // overflow keeps platform visibility and hit-testing in charge.
+          // The Legend List node is the sole scroll owner. It deliberately uses
+          // the app-wide thin, transparent-track scrollbar theme from index.css.
           "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
           className,
         )}
