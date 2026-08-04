@@ -31,6 +31,7 @@ import {
   TerminalsPanelActions,
   TerminalsPanelBody,
 } from "@/components/epic-canvas/sidebar/epic-terminal-sidebar";
+import { ManagedCommandsPanelBody } from "@/components/epic-canvas/sidebar/managed-command-sidebar";
 import {
   ArtifactFilterMenu,
   ChatFilterMenu,
@@ -365,6 +366,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
       Subtitle: null,
     },
     loading: emptyLoadingSlots(TerminalsLoadingPanelBody),
+  },
+  "managed-commands": {
+    live: {
+      Body: ManagedCommandsPanelBody,
+      Actions: null,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
   artifacts: {
     live: {
@@ -839,7 +848,7 @@ function ResizableSectionRun(props: {
               direction="vertical"
               sizes={fractions}
               minChildPx={SECTION_MIN_PX}
-              className="bg-border/60"
+              className="bg-background before:bg-border/60"
               onCommitSizes={handleCommitSizes}
             />
           ) : null}

@@ -32,8 +32,10 @@ const COMMAND_SEGMENT: CommandSegment = {
   exitCode: 0,
   isStreaming: false,
   endState: null,
+  stopped: false,
   progress: null,
   startedAt: 0,
+  backgroundTask: null,
   parentId: null,
 };
 

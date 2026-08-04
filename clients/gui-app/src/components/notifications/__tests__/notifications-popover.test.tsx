@@ -642,6 +642,124 @@ describe("NotificationsPopover", () => {
     notificationFeedMode.value = "local";
   });
 
+  it("shows loading instead of caught up before the first cloud snapshot", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().setConnectionState("connecting");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const status = await screen.findByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Loading notifications");
+    expect(status.textContent).toContain("Fetching your notification history.");
+    expect(
+      screen.getByTestId("notifications-feed-status-spinner"),
+    ).toBeDefined();
+    expect(screen.queryByText("You're all caught up")).toBeNull();
+  });
+
+  it("shows unavailable instead of caught up when cloud bootstrap fails", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().setConnectionState("unavailable");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const status = await screen.findByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Notifications unavailable");
+    expect(status.textContent).toContain("We’ll keep trying to reconnect.");
+    expect(
+      screen.queryByTestId("notifications-feed-status-spinner"),
+    ).toBeNull();
+    expect(screen.queryByText("You're all caught up")).toBeNull();
+  });
+
+  it("shows reconnecting instead of caught up when an empty cloud snapshot becomes stale", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const status = await screen.findByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Reconnecting to notifications");
+    expect(status.textContent).toContain(
+      "Refreshing your notification history.",
+    );
+    expect(
+      screen.getByTestId("notifications-feed-status-spinner"),
+    ).toBeDefined();
+    expect(screen.queryByText("You're all caught up")).toBeNull();
+  });
+
+  it("keeps the last cloud snapshot visible while showing reconnecting", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud")],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    expect(await screen.findByTestId("notification-entry")).toBeDefined();
+    const status = screen.getByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Reconnecting to notifications");
+  });
+
+  it("shows caught up only after an authoritative empty cloud snapshot", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const empty = await screen.findByTestId("notifications-empty");
+    expect(empty.textContent).toContain("You're all caught up");
+    expect(screen.queryByTestId("notifications-feed-status")).toBeNull();
+  });
+
   it("routes a cloud row through its activation button to the owning chat", async () => {
     notificationFeedMode.value = "cloud";
     bindHostClient();

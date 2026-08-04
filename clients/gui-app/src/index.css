@@ -1120,10 +1120,8 @@
 }
 
 @layer base {
-  /* The chat transcript marks its real scroll owner with
-     `data-native-scrollbar`. Keep that element completely outside the app
-     scrollbar theme so the browser/OS owns its gutter, thumb, visibility,
-     hover behavior, and accessibility. */
+  /* Explicit opt-outs keep a scroll owner outside the compact app theme when
+     a platform-native gutter and thumb are part of that surface's contract. */
   [data-native-scrollbar] {
     scrollbar-width: auto;
     scrollbar-color: auto;
@@ -1328,4 +1326,15 @@
 ::highlight(traycer-find-match-active) {
   background-color: color-mix(in srgb, var(--primary) 75%, transparent);
   color: var(--primary-foreground);
+}
+
+/*
+ * Communication-graph edge focus (`comm-graph-edge-interaction.ts`).
+ * React Flow strips the edge group's outline and paints its own focus stroke
+ * only for a `selectable` edge - which that canvas is not - so a focused edge
+ * would otherwise look identical to an unfocused one.
+ */
+.react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--ring);
+  stroke-width: 2;
 }

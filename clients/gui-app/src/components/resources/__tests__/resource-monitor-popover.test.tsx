@@ -30,7 +30,7 @@ import type {
   AppResourceSnapshotWire,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWireV13,
+  OwnerResourceSnapshotWireV14,
   ResourceProcessSnapshotWire,
 } from "@traycer/protocol/host/resources/subscribe";
 import type {
@@ -306,8 +306,8 @@ function app(): AppResourceSnapshotWire {
 }
 
 function owner(
-  over: Partial<OwnerResourceSnapshotWireV13>,
-): OwnerResourceSnapshotWireV13 {
+  over: Partial<OwnerResourceSnapshotWireV14>,
+): OwnerResourceSnapshotWireV14 {
   return {
     owner: {
       kind: "terminal",
@@ -318,6 +318,7 @@ function owner(
     sampledAt: 1_000,
     rootPids: [100],
     harnessId: null,
+    managedCommand: null,
     activeProcessName: "node",
     processCount: 2,
     cpuPercent: 12,
@@ -573,6 +574,69 @@ describe("ResourceMonitorPopover", () => {
     );
     expect(document.activeElement).toBe(search);
     expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  it("retains the search query after an outside click closes the popover", async () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Alpha" } },
+    );
+    expect(await screen.findByText("Terminal Alpha")).not.toBeNull();
+
+    fireEvent.pointerDown(document.body, {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.mouseDown(document.body, { button: 0 });
+    fireEvent.pointerUp(document.body, {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.click(document.body);
+
+    expect(screen.queryByRole("dialog", { name: "Resources" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(
+      screen.getByRole<HTMLInputElement>("searchbox", {
+        name: "Search resources",
+      }).value,
+    ).toBe("Alpha");
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  it("retains the search query after opening a matching resource", async () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Alpha" } },
+    );
+    fireEvent.click(await screen.findByText("Terminal Alpha"));
+
+    expect(screen.queryByRole("dialog", { name: "Resources" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(
+      screen.getByRole<HTMLInputElement>("searchbox", {
+        name: "Search resources",
+      }).value,
+    ).toBe("Alpha");
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
   });
 
@@ -2490,5 +2554,71 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Traycer Host")).not.toBeNull();
 
     outside.remove();
+  });
+
+  // Copy is kind-explicit wherever the kind is known (CONTEXT.md): a managed
+  // command reads as the Monitor or Shell it is, never as the umbrella term.
+  function managedCommandOwner(
+    kind: "monitor" | "shell",
+    description: string,
+  ): OwnerResourceSnapshotWireV14 {
+    return owner({
+      owner: {
+        kind: "managed-command",
+        hostId: "host-1",
+        epicId: "epic-1",
+        ownerId: "cmd-1",
+      },
+      activeProcessName: "node",
+      managedCommand: { commandId: "cmd-1", kind, description },
+    });
+  }
+
+  it("names a Monitor owner row by its kind and description", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [managedCommandOwner("monitor", "deploy watcher")],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.getByText("Monitor · deploy watcher")).not.toBeNull();
+  });
+
+  it("names a Shell owner row by its kind and description", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [managedCommandOwner("shell", "run migrations")],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.getByText("Shell · run migrations")).not.toBeNull();
+  });
+
+  it("spends the managed-command subtitle on what is running, not the kind again", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [managedCommandOwner("monitor", "deploy watcher")],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.getByText("node")).not.toBeNull();
   });
 });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type {
   EpicResourceSnapshotWire,
-  OwnerResourceSnapshotWireV13,
+  OwnerResourceSnapshotWireV14,
   ResourceProcessSnapshotWire,
   ResourceOwnerKindWire,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -37,13 +37,14 @@ function process(
 function owner(
   kind: ResourceOwnerKindWire,
   ownerId: string,
-  over: Partial<OwnerResourceSnapshotWireV13>,
-): OwnerResourceSnapshotWireV13 {
+  over: Partial<OwnerResourceSnapshotWireV14>,
+): OwnerResourceSnapshotWireV14 {
   return {
     owner: { kind, hostId: "host-1", epicId: "epic-1", ownerId },
     sampledAt: 1_000,
     rootPids: [1],
     harnessId: null,
+    managedCommand: null,
     activeProcessName: "bash",
     processCount: 3,
     cpuPercent: 12,

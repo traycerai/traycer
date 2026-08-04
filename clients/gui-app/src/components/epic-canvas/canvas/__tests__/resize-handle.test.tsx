@@ -2,6 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { SplitResizeHandle } from "@/components/epic-canvas/canvas/resize-handle";
+import { inFlowPointerDragHandleAxisClassName } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
 import { pointerEvent } from "./test-pointer-events";
 
 const GROUP_ID = "group-1";
@@ -102,12 +103,29 @@ describe("<SplitResizeHandle />", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps its pointer region inside an in-flow divider instead of extending over a pane scrollbar gutter", () => {
+  it("keeps a 1px separator inside an in-flow pointer region instead of extending over a pane scrollbar gutter", () => {
     const { handle } = renderHandle([0.5, 0.5], vi.fn());
 
     expect(handle.classList.contains("w-1")).toBe(true);
     expect(handle.classList.contains("w-px")).toBe(false);
+    // Adjacent split children are intentionally not clipped. The canvas fill
+    // masks their overflow inside the safe in-flow footprint while the
+    // centered pseudo-element remains the only visible separator line.
+    expect(handle.classList.contains("bg-canvas")).toBe(true);
+    expect(handle.classList.contains("bg-border")).toBe(false);
+    expect(handle.className).toContain("before:w-px");
+    expect(handle.className).toContain("before:bg-border");
     expect(handle.className).not.toContain("after:");
+  });
+
+  it("uses the same centered 1px visual for horizontal pane stacks", () => {
+    const className = inFlowPointerDragHandleAxisClassName("vertical");
+
+    expect(className).toContain("h-1");
+    expect(className).toContain("before:h-px");
+    expect(className).toContain("before:top-1/2");
+    expect(className).toContain("before:bg-border");
+    expect(className).not.toContain("after:");
   });
 
   it("mutates the adjacent pair's flexGrow per frame and commits once on release", () => {

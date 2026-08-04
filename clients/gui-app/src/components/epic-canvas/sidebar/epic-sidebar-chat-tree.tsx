@@ -2056,14 +2056,21 @@ function ChatRowButton(props: ChatRowButtonProps) {
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
   const openDialog = useAppDialogStore((state) => state.openDialog);
   const roleClaims = useEpicAgentRoleClaims(nodeId);
-  const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
-    () => ({
-      kind: SIDEBAR_NODE_DND_TYPE,
-      epicId,
-      viewTabId,
-      nodeId,
-    }),
-    [epicId, nodeId, viewTabId],
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const activeHostId = useReactiveActiveHostId();
+  const sourceHostId = ownerHostId ?? activeHostId;
+  const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
+    () =>
+      sourceHostId === null
+        ? null
+        : {
+            kind: SIDEBAR_NODE_DND_TYPE,
+            epicId,
+            viewTabId,
+            hostId: sourceHostId,
+            nodeId,
+          },
+    [epicId, nodeId, sourceHostId, viewTabId],
   );
   const {
     attributes,
@@ -2072,8 +2079,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
     isDragging,
   } = useDraggable({
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
-    disabled: selectionMode,
-    data: dragData,
+    disabled: selectionMode || dragData === null,
+    data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
@@ -2103,7 +2110,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
   );
-  const ownerHostId = useEpicNodeHostId(nodeId);
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
   // Only the "⋯" more menu now reveals on hover (the standalone "+" moved into

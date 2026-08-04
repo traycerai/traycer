@@ -219,7 +219,7 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 4 },
       params: {
         epicId: "epic-1",
         scope: { kind: "epic", epicId: "epic-1" },
@@ -297,6 +297,86 @@ describe("ResourcesStreamClient", () => {
     });
 
     expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].owners[0].harnessId).toBeNull();
+    client.close();
+  });
+
+  it("surfaces a managed-command owner from an @1.4 frame", () => {
+    const { factory, sockets } = makeFactory();
+    const snapshots: ResourcesProjectionPayload[] = [];
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onSnapshot: (p) => snapshots.push(p),
+        onUpdate: () => {},
+        onConnectionStatus: () => {},
+      },
+    });
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: APP,
+      owners: [
+        {
+          ...OWNER,
+          owner: { ...OWNER.owner, kind: "managed-command", ownerId: "cmd-1" },
+          managedCommand: {
+            commandId: "cmd-1",
+            kind: "monitor",
+            description: "deploy watcher",
+          },
+        },
+      ],
+      epic: EPIC,
+      hostTree: HOST_TREE,
+      other: OTHER,
+    });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].owners[0].owner.kind).toBe("managed-command");
+    expect(snapshots[0].owners[0].managedCommand).toEqual({
+      commandId: "cmd-1",
+      kind: "monitor",
+      description: "deploy watcher",
+    });
+    client.close();
+  });
+
+  it("backfills managedCommand to null for a pre-1.4 frame", () => {
+    const { factory, sockets } = makeFactory();
+    const snapshots: ResourcesProjectionPayload[] = [];
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onSnapshot: (p) => snapshots.push(p),
+        onUpdate: () => {},
+        onConnectionStatus: () => {},
+      },
+    });
+    completeHandshake(sockets[0]);
+
+    // A `@1.3` host emits owners without `managedCommand` - and folds any
+    // running command's tree into `other` rather than naming it as an owner.
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: APP,
+      owners: [OWNER],
+      epic: EPIC,
+      hostTree: HOST_TREE,
+      other: OTHER,
+    });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].owners[0].managedCommand).toBeNull();
     expect(snapshots[0].owners[0].harnessId).toBeNull();
     client.close();
   });

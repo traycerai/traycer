@@ -199,6 +199,7 @@ export function makeEditorHandle(options: {
       setContents.push({ content: next, selection: nextSelection });
     },
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,

@@ -162,6 +162,8 @@ vi.mock(
       syncContent: (content, selection) =>
         instance.syncContent(content, selection),
       insertImageAttachments: (attrs) => instance.insertImageAttachments(attrs),
+      insertMentionAttachment: (mention) =>
+        instance.insertMentionAttachment(mention),
       beginPathInsertion: () => instance.beginPathInsertion(),
       removeImageAttachmentById: (id) => instance.removeImageAttachmentById(id),
       rewriteImageAttachmentHashById: (id, hash) => {

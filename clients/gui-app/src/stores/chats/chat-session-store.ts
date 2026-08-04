@@ -60,6 +60,7 @@ import type {
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatQueueDeliveryPolicy,
   ChatQueueState,
   ChatRunSettings,
@@ -2339,8 +2340,11 @@ export function createChatSessionStore(
         // commits on submit), and items already on these settings are skipped.
         // Received A2A responses (agent sender) are system-owned and excluded -
         // the host refuses to restamp them, so they must not live-mirror either.
+        // Managed-command items carry no settings stamp at all (they dispatch on
+        // the chat's current settings), so there is nothing to restamp.
         const pendingItems = get().queue.items.filter(
           (item: ChatQueuedItem) =>
+            item.kind === "prompt" &&
             item.sender.type !== "agent" &&
             item.status === "pending" &&
             item.queueItemId !== excludeQueueItemId &&
@@ -2946,10 +2950,11 @@ type OptimisticQueuedItemForSendInput = {
 
 function optimisticQueuedItemForSend(
   input: OptimisticQueuedItemForSendInput,
-): ChatQueuedItem | null {
+): ChatQueuedPromptItem | null {
   if (!shouldRenderSendAsOptimisticQueuedItem(input.state)) return null;
   const now = Date.now();
   return {
+    kind: "prompt",
     queueItemId: optimisticQueuedItemId(input.clientActionId),
     messageId: input.messageId,
     message: {
@@ -3100,9 +3105,10 @@ function applyBlockDelta(
 // The block id whose OWNING message a detached backgrounded-subagent event
 // targets, plus whether routing to that owner is MANDATORY:
 //   - `subagent.*`             → the subagent block (`event.blockId`).
-//   - a terminal `tool_call.*` → its non-empty `parentBlockId` when it is a
-//     subagent CHILD; otherwise its own `blockId` (a genuinely top-level
-//     background command/Monitor terminal).
+//   - a terminal `tool_call.*` / `command.completed` → its non-empty
+//     `parentBlockId` when it is a subagent CHILD; otherwise its own `blockId`
+//     (a genuinely top-level background terminal - Claude backgrounds through a
+//     `tool_call`, Codex through a plain `command`).
 //   - any other nested event  → its `parentBlockId`.
 // `mandatory` is set whenever the owner comes from `parentBlockId` or from a
 // parentless background tool terminal: such an event belongs to an older row
@@ -3128,7 +3134,8 @@ function detachedSubagentOwnerTarget(
   }
   if (
     event.type === "tool_call.completed" ||
-    event.type === "tool_call.errored"
+    event.type === "tool_call.errored" ||
+    event.type === "command.completed"
   ) {
     if (parentBlockId !== null) {
       return { ownerBlockId: parentBlockId, mandatory: true };

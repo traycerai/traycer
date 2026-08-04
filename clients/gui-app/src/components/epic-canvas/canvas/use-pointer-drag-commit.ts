@@ -138,16 +138,17 @@ export function pointerDragHandleAxisClassName(axis: PointerDragAxis): string {
 }
 
 /**
- * In-flow split divider footprint. The whole pointer region consumes layout
- * space; it never extends over either adjacent pane's content or native
- * scrollbar gutter.
+ * In-flow split divider footprint with the original 1px separator painted in
+ * its center. The whole 4px pointer region consumes layout space, so the old
+ * visual returns without extending an invisible hit target over either
+ * adjacent pane's content or native scrollbar gutter.
  */
 export function inFlowPointerDragHandleAxisClassName(
   axis: PointerDragAxis,
 ): string {
   return axis === "horizontal"
-    ? "w-1 cursor-col-resize touch-none"
-    : "h-1 cursor-row-resize touch-none";
+    ? "w-1 cursor-col-resize touch-none before:pointer-events-none before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border before:content-['']"
+    : "h-1 cursor-row-resize touch-none before:pointer-events-none before:inset-x-0 before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-border before:content-['']";
 }
 
 export function usePointerDragCommit(

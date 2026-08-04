@@ -23,6 +23,7 @@ import {
   resizeSplit,
   separateSplit,
   swapSplitSides,
+  tabActivationHistory,
   tabItemId,
   tabRefKey,
   type CanSplitRef,
@@ -218,6 +219,9 @@ function assertLayoutInvariants(layout: PersistedTabStripLayout): void {
 
   const ids = layout.items.map((item) => item.id);
   expect(new Set(ids).size).toBe(ids.length);
+  const historyKeys = tabActivationHistory(layout).map(tabRefKey);
+  expect(new Set(historyKeys).size).toBe(historyKeys.length);
+  expect(historyKeys.every((key) => keys.includes(key))).toBe(true);
   expect(layout.version).toBe(2);
 }
 
@@ -345,6 +349,27 @@ describe("TAB_KINDS surface exhaustiveness", () => {
       );
       expect(entry.surface.newWindow).toBe(entry.expectedNewWindow);
     });
+  });
+});
+
+describe("tabs store transaction layout", () => {
+  afterEach(() => {
+    resetTabsStore();
+  });
+
+  it("preserves activation history through transaction replacement and finalization", () => {
+    let layout = withTabs([EPIC_A, EPIC_B, EPIC_C]);
+    layout = focusLayoutRef(layout, EPIC_A);
+    layout = focusLayoutRef(layout, EPIC_C);
+
+    useTabsStore.getState().replaceLayoutForTransaction(layout);
+    useTabsStore.getState().finalizeTransactionLayout();
+
+    expect(tabActivationHistory(useTabsStore.getState())).toEqual([
+      EPIC_C,
+      EPIC_A,
+      EPIC_B,
+    ]);
   });
 });
 
@@ -838,8 +863,11 @@ describe("layout reducers preserve invariants", () => {
       expect(cleared.activeItemId).toBeNull();
     });
 
-    it("selects the normal neighbor after removing the active leftmost, middle, or rightmost item", () => {
-      const base = withTabs([EPIC_A, EPIC_B, EPIC_C]);
+    it("selects the normal neighbor without activation history", () => {
+      const base = {
+        ...withTabs([EPIC_A, EPIC_B, EPIC_C]),
+        activationHistory: [],
+      };
       const leftmost = removeLayoutRef(
         { ...base, activeItemId: tabItemId(EPIC_A) },
         EPIC_A,
@@ -857,6 +885,22 @@ describe("layout reducers preserve invariants", () => {
       expect(leftmost.activeItemId).toBe(tabItemId(EPIC_B));
       expect(middle.activeItemId).toBe(tabItemId(EPIC_A));
       expect(rightmost.activeItemId).toBe(tabItemId(EPIC_B));
+    });
+
+    it("falls back to the most recently activated surviving tab", () => {
+      let layout = withTabs([EPIC_A, EPIC_B, EPIC_C, EPIC_D]);
+      layout = focusLayoutRef(layout, EPIC_B);
+      layout = focusLayoutRef(layout, EPIC_D);
+
+      const afterClose = removeLayoutRef(layout, EPIC_D);
+
+      expect(afterClose.activeItemId).toBe(tabItemId(EPIC_B));
+      expect(tabActivationHistory(afterClose)).toEqual([
+        EPIC_B,
+        EPIC_C,
+        EPIC_A,
+      ]);
+      assertLayoutInvariants(afterClose);
     });
   });
 
@@ -1170,7 +1214,25 @@ describe("migrateTabsPersistedState", () => {
     ]);
     expect(flattenLayoutRefs(migrated)).toEqual([EPIC_A, DRAFT_A, HISTORY]);
     expect(migrated.activeItemId).toBe(tabItemId(HISTORY));
+    expect(tabActivationHistory(migrated)).toEqual([HISTORY, DRAFT_A, EPIC_A]);
     expect(migrated.systemTabs.history?.lastPath).toBe("/epics");
+  });
+
+  it("persists and repairs top-level activation history", () => {
+    const migrated = migrateTabsPersistedState({
+      version: 2,
+      items: [
+        defaultTabItem(EPIC_A),
+        defaultTabItem(EPIC_B),
+        defaultTabItem(EPIC_C),
+      ],
+      activeItemId: tabItemId(EPIC_B),
+      activationHistory: [EPIC_B, EPIC_C, EPIC_B, EPIC_D, EPIC_A],
+      systemTabs: emptySystemTabs(),
+    });
+
+    expect(tabActivationHistory(migrated)).toEqual([EPIC_B, EPIC_C, EPIC_A]);
+    assertLayoutInvariants(migrated);
   });
 
   it("wraps the real v1 tabs payload without inventing source-owned active fields", () => {

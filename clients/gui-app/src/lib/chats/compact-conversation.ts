@@ -98,8 +98,11 @@ export function promoteQueuedMessageToFront<
     // until the host names it, and an optimistic row belonging to some other
     // in-flight send is an invalid `beforeQueueItemId` to aim at.
     const settledItems = state.queue.items.filter(isAuthoritative);
+    // Only prompt items carry a `messageId`; a managed-command delivery is
+    // content-free and can never be the compaction message we are hunting for.
+    // It stays in `settledItems` because it is still a valid reorder TARGET.
     const index = settledItems.findIndex(
-      (item) => item.messageId === input.messageId,
+      (item) => item.kind === "prompt" && item.messageId === input.messageId,
     );
     if (index === -1) return false;
     // Index >= 1 guarantees a distinct item at 0 to insert ahead of, right
