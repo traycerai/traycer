@@ -128,9 +128,14 @@ export class CommGraphCloudSubscriptionManager {
   setRelayReadinessKey(readinessKey: string): void {
     if (this.disposed || readinessKey === this.relayReadinessKey) return;
     this.relayReadinessKey = readinessKey;
-    if (!this.attached || this.relayHostId !== null) return;
+    if (!this.attached) return;
     this.rejectedRelayHostIds.clear();
     this.unsupportedRelayHostIds.clear();
+    // A re-enrollment can keep the same host ID while rotating the relay's
+    // transport identity. Reopen an active stream as well as retrying failed
+    // candidates so it renegotiates with the new key rather than retaining a
+    // stale authenticated channel.
+    this.closeCurrent();
     this.openNextRelay();
     this.publish();
   }

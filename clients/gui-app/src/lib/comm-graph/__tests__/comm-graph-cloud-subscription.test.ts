@@ -278,6 +278,34 @@ describe("CommGraphCloudSubscriptionManager", () => {
     expect(requests[0].hostId).toBe("relay-a");
   });
 
+  it("reopens an active relay when its directory readiness rotates", () => {
+    const requests: CommGraphCloudSubscriptionRequest[] = [];
+    let firstClosed = false;
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      (request) => {
+        requests.push(request);
+        return {
+          close: () => {
+            if (requests.length === 1) firstClosed = true;
+          },
+        };
+      },
+      () => undefined,
+    );
+
+    manager.setRelayHostIds(["relay-a"]);
+    manager.setRelayReadinessKey("relay-a:available:v1");
+    manager.attach();
+    expect(requests).toHaveLength(1);
+
+    manager.setRelayReadinessKey("relay-a:available:v2");
+
+    expect(firstClosed).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[1].hostId).toBe("relay-a");
+  });
+
   it("retries retained relays after a detached surface reattaches", () => {
     const recorded = recordedOpener();
     const manager = new CommGraphCloudSubscriptionManager(
