@@ -93,11 +93,11 @@ interface SharedSubscription {
    * `reconcileMethodSchemaVersion` reached first and can therefore belong to
    * another repo entirely.
    *
-   * `null` before the first frame; readers fall back to the client-wide value
-   * there, which is today's behaviour exactly, so the stamp can only ever
-   * improve on it. The host forces an immediate tick for a new subscriber and
-   * replays its cached snapshot, so that window is one frame wide even on a
-   * repo that never changes.
+   * `null` before the first frame; ownership readers fall back past it (see
+   * `entrySchemaVersion`), which is today's behaviour exactly, so the stamp can
+   * only ever improve on it. The host forces an immediate tick for a new
+   * subscriber and replays its cached snapshot, so that window is one frame
+   * wide even on a repo that never changes.
    */
   negotiatedVersion: SchemaVersion | null;
   /**
@@ -108,6 +108,21 @@ interface SharedSubscription {
    * next delivered frame.
    */
   session: IStreamSession | null;
+  /**
+   * Whether this entry's stream has gone TERMINAL - distinct from "no session
+   * yet", and they must fall back differently.
+   *
+   * Before a first handshake, deferring to the client-wide value is right: this
+   * stream is about to negotiate and fill the slot, so handing ownership to the
+   * unary query would buy a redundant fetch on every mount to close a window
+   * the first frame closes anyway.
+   *
+   * After a terminal close nothing will ever arrive again, and the client-wide
+   * value is NOT empty just because this session died - a sibling repo's live
+   * stream keeps it populated. Falling back there would report an owner that
+   * cannot write, leaving the panel with no writer at all.
+   */
+  terminated: boolean;
   consumers: Map<symbol, () => void>;
   sessionGeneration: number;
   closeCurrentSession: () => void;
@@ -528,6 +543,7 @@ function createSharedSubscription(
     lastWatcherStatus: null,
     negotiatedVersion: null,
     session: null,
+    terminated: false,
     consumers: new Map(),
     sessionGeneration: 0,
     closeCurrentSession: () => undefined,
@@ -638,6 +654,9 @@ function entrySchemaVersion(
   shared: SharedSubscription | undefined,
   client: IHostStreamClient<HostStreamRpcRegistry>,
 ): SchemaVersion | null {
+  // A dead stream owns nothing, and says so instead of deferring. Everything
+  // below this line describes a stream that may still write.
+  if (shared?.terminated === true) return null;
   const live = shared?.session?.getNegotiatedSchemaVersion() ?? null;
   if (live !== null) return live;
   const stamped = shared?.negotiatedVersion ?? null;
@@ -674,6 +693,8 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     freshNonce,
   });
   shared.session = session;
+  // A new session means this entry is live again, whatever became of the last.
+  shared.terminated = false;
   let sessionClosed = false;
   shared.closeCurrentSession = () => {
     sessionClosed = true;
@@ -714,6 +735,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     // version away, which is how this case used to resolve itself.
     shared.session = null;
     shared.negotiatedVersion = null;
+    shared.terminated = true;
     settleSharedRefresh(shared, subscriptionKeyFor(wsStreamClient, args));
     notifyEntryChanged(subscriptionKeyFor(wsStreamClient, args));
     notifyConsumers(shared);

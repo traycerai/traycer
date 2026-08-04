@@ -2199,5 +2199,45 @@ describe("useGitListChangedFilesSubscription", () => {
       // next peer may not be able to echo.
       expect(mockWsStreamClient.subscribeCallCount).toBe(before);
     });
+
+    it("does not answer a TERMINATED stream from a live sibling's version", async () => {
+      // Clearing the closed session and its stamp is not enough on its own: the
+      // fallback below them is the client-wide value, and with repo B still
+      // live at >= 1.1 that value is not empty - it is B's. Repo A would go on
+      // reporting the stream owns its rich slot, with A's stream dead and no
+      // way to refill it.
+      //
+      // The single-repo case hides this, because reconciliation empties the
+      // client-wide value when the only session closes. A sibling keeps it
+      // populated, which is exactly the skew this PR is about.
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
+      const repoA = await renderRepo("/repo-a");
+      repoA.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+      const repoB = await renderRepo("/repo-b");
+      repoB.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+
+      const ownership = renderHook(
+        () =>
+          useGitSubscriptionOwnsRichSlot({
+            wsStreamClient: mockWsStreamClient,
+            hostId: "host1",
+            runningDir: "/repo-a",
+            ignoreWhitespace: false,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() => expect(ownership.result.current).toBe(true));
+
+      // A dies; B lives, so the client-wide value STAYS at 1.1 throughout.
+      repoA.session.emitFrame(
+        { type: "error", message: "fatal git error", isFatal: true },
+        null,
+      );
+
+      await waitFor(() => expect(ownership.result.current).toBe(false));
+      expect(
+        mockWsStreamClient.getMethodSchemaVersion("git.subscribeStatus"),
+      ).toEqual({ major: 1, minor: 1 });
+    });
   });
 });
