@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useMemo,
   useEffect,
   useReducer,
@@ -7,8 +8,12 @@ import {
 } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type {
+  IStreamSession,
+  StreamCloseReason,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   gitSubscribeStatusEventSchema,
@@ -82,6 +87,27 @@ interface SharedSubscription {
    * the panel is showing stale data and the user most wants to know why.
    */
   lastWatcherStatus: GitWatcherStatus | null;
+  /**
+   * The version negotiated by the session that delivered the last frame - NOT
+   * the client-wide value, which describes whichever stream for this method
+   * `reconcileMethodSchemaVersion` reached first and can therefore belong to
+   * another repo entirely.
+   *
+   * `null` before the first frame; readers fall back to the client-wide value
+   * there, which is today's behaviour exactly, so the stamp can only ever
+   * improve on it. The host forces an immediate tick for a new subscriber and
+   * replays its cached snapshot, so that window is one frame wide even on a
+   * repo that never changes.
+   */
+  negotiatedVersion: SchemaVersion | null;
+  /**
+   * The session currently bound to this entry, so a reader with no session of
+   * its own can still ask THE RIGHT ONE rather than the client-wide value.
+   * Preferred over `negotiatedVersion` wherever the caller can sample at will:
+   * it is live, so a renegotiation is visible immediately instead of at the
+   * next delivered frame.
+   */
+  session: IStreamSession | null;
   consumers: Map<symbol, () => void>;
   sessionGeneration: number;
   closeCurrentSession: () => void;
@@ -127,7 +153,7 @@ interface NonceCorrelatedFrameHandlerArgs {
  * entry against the new client.
  */
 const subscriptions = new Map<string, SharedSubscription>();
-const refreshStateListeners = new Map<string, Set<() => void>>();
+const entryListeners = new Map<string, Set<() => void>>();
 
 function subscriptionKeyFor(
   client: IHostStreamClient<HostStreamRpcRegistry>,
@@ -164,41 +190,109 @@ export function __resetSubscriptionsForTesting(): void {
     sub.unsubscribeFromStream();
   }
   subscriptions.clear();
-  refreshStateListeners.clear();
+  entryListeners.clear();
+}
+
+function entryKeyFor(args: GitSubscriptionRefreshStateArgs): string | null {
+  if (
+    args.wsStreamClient === null ||
+    args.hostId === null ||
+    args.runningDir === null
+  ) {
+    return null;
+  }
+  return subscriptionKeyFor(args.wsStreamClient, {
+    hostId: args.hostId,
+    runningDir: args.runningDir,
+    ignoreWhitespace: args.ignoreWhitespace,
+  });
+}
+
+/** `useSyncExternalStore` subscriber for one entry's change channel. */
+function subscribeToEntry(
+  key: string | null,
+): (listener: () => void) => () => void {
+  return (onStoreChange) => {
+    if (key === null) return () => undefined;
+    let listeners = entryListeners.get(key);
+    if (listeners === undefined) {
+      listeners = new Set();
+      entryListeners.set(key, listeners);
+    }
+    listeners.add(onStoreChange);
+    return () => {
+      const current = entryListeners.get(key);
+      if (current === undefined) return;
+      current.delete(onStoreChange);
+      if (current.size === 0) entryListeners.delete(key);
+    };
+  };
 }
 
 /** Shared replacement state for every refresh surface addressing one stream. */
 export function useGitSubscriptionRefreshState(
   args: GitSubscriptionRefreshStateArgs,
 ): boolean {
-  const key =
-    args.wsStreamClient === null ||
-    args.hostId === null ||
-    args.runningDir === null
-      ? null
-      : subscriptionKeyFor(args.wsStreamClient, {
-          hostId: args.hostId,
-          runningDir: args.runningDir,
-          ignoreWhitespace: args.ignoreWhitespace,
-        });
+  const key = entryKeyFor(args);
   return useSyncExternalStore(
-    (onStoreChange) => {
-      if (key === null) return () => undefined;
-      let listeners = refreshStateListeners.get(key);
-      if (listeners === undefined) {
-        listeners = new Set();
-        refreshStateListeners.set(key, listeners);
-      }
-      listeners.add(onStoreChange);
-      return () => {
-        const current = refreshStateListeners.get(key);
-        if (current === undefined) return;
-        current.delete(onStoreChange);
-        if (current.size === 0) refreshStateListeners.delete(key);
-      };
-    },
+    subscribeToEntry(key),
     () =>
       key === null ? false : (subscriptions.get(key)?.isRefreshing ?? false),
+    () => false,
+  );
+}
+
+/**
+ * Whether the stream owns the rich slot FOR THIS REPO - the reactive read the
+ * unary nested-snapshot query disables itself on.
+ *
+ * Worktree-scoped by construction, which is the point. The client-wide
+ * `getMethodSchemaVersion` cannot answer this: with two repos open, repo A
+ * negotiating >= 1.1 would disable repo B's unary query, and if B's own session
+ * is at 1.0 the stream never writes B's rich slot either - leaving that panel
+ * with no writer at all.
+ *
+ * Reactive through the entry's change channel, which delivery notifies when the
+ * stamp moves. Before the first frame this falls back to the client-wide value
+ * (see `entrySchemaVersion`), so a cold mount behaves exactly as it did before
+ * the stamp existed.
+ */
+export function useGitSubscriptionOwnsRichSlot(
+  args: GitSubscriptionRefreshStateArgs,
+): boolean {
+  const key = entryKeyFor(args);
+  const client = args.wsStreamClient;
+  // BOTH signals, deliberately. The entry channel carries the stamp, but the
+  // stamp only lands with the first frame; `subscribeMethodSupport` is what
+  // re-renders when the handshake settles, which is when the fallback value
+  // this hook starts on becomes meaningful. Dropping it would leave the unary
+  // query enabled - and fetching - until the first frame on every mount.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const unsubscribeEntry = subscribeToEntry(key)(onStoreChange);
+      const unsubscribeSupport =
+        client === null
+          ? () => undefined
+          : client.subscribeMethodSupport(onStoreChange);
+      return () => {
+        unsubscribeEntry();
+        unsubscribeSupport();
+      };
+    },
+    [key, client],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () => {
+      if (client === null) return false;
+      const negotiated = entrySchemaVersion(
+        key === null ? undefined : subscriptions.get(key),
+        client,
+      );
+      return (
+        negotiated !== null && negotiated.major === 1 && negotiated.minor >= 1
+      );
+    },
     () => false,
   );
 }
@@ -218,10 +312,6 @@ export function refreshGitSubscriptionWithFreshNonce(args: {
   if (client === null || args.hostId === null || args.runningDir === null) {
     return null;
   }
-  const version = client.getMethodSchemaVersion("git.subscribeStatus");
-  if (version === null || version.major !== 1 || version.minor < 2) {
-    return null;
-  }
   const subscriptionArgs: ActiveSubscriptionArgs = {
     hostId: args.hostId,
     runningDir: args.runningDir,
@@ -230,6 +320,15 @@ export function refreshGitSubscriptionWithFreshNonce(args: {
   const key = subscriptionKeyFor(client, subscriptionArgs);
   const shared = subscriptions.get(key);
   if (shared === undefined) return null;
+  // The entry is looked up BEFORE the version gate so the gate can read this
+  // stream's own stamp. Asking the client-wide value would let a sibling repo
+  // that negotiated 1.2 authorize a fresh-nonce replacement against a session
+  // that cannot correlate the nonce - and nothing would then settle the refresh
+  // except its 10s timeout.
+  const version = entrySchemaVersion(shared, client);
+  if (version === null || version.major !== 1 || version.minor < 2) {
+    return null;
+  }
   if (shared.refreshPromise !== null) return shared.refreshPromise;
 
   const freshNonce = crypto.randomUUID();
@@ -237,7 +336,7 @@ export function refreshGitSubscriptionWithFreshNonce(args: {
   shared.refreshPromise = new Promise<void>((resolve) => {
     shared.settleRefresh = resolve;
   });
-  notifyRefreshState(key);
+  notifyEntryChanged(key);
   replaceStreamSession({
     shared,
     wsStreamClient: client,
@@ -310,7 +409,7 @@ export function useGitListChangedFilesSubscription(args: {
         activeArgs,
       );
       subscriptions.set(key, shared);
-      notifyRefreshState(key);
+      notifyEntryChanged(key);
     }
 
     // Increment ref count and register local consumer.
@@ -325,12 +424,13 @@ export function useGitListChangedFilesSubscription(args: {
     // to refill it. Slot writes only; per-path diff invalidation is not
     // replayed for a frame that already invalidated on delivery.
     if (shared.lastEvent !== null) {
-      replayLastEventIntoCache(
+      replayLastEventIntoCache({
+        shared,
         wsStreamClient,
         queryClient,
-        activeArgs,
-        shared.lastEvent,
-      );
+        args: activeArgs,
+        event: shared.lastEvent,
+      });
       forceRender();
     }
 
@@ -343,7 +443,7 @@ export function useGitListChangedFilesSubscription(args: {
       if (shared.refCount === 0) {
         shared.unsubscribeFromStream();
         subscriptions.delete(key);
-        notifyRefreshState(key);
+        notifyEntryChanged(key);
       }
     };
   }, [stableArgs, queryClient, wsStreamClient, consumerId]);
@@ -415,6 +515,8 @@ function createSharedSubscription(
     unsubscribeFromStream: () => undefined,
     lastEvent: null,
     lastWatcherStatus: null,
+    negotiatedVersion: null,
+    session: null,
     consumers: new Map(),
     sessionGeneration: 0,
     closeCurrentSession: () => undefined,
@@ -465,66 +567,65 @@ function recordDeliveredFrame(
 }
 
 /**
- * v1.3 parse that DEGRADES to v1.2 instead of dropping the frame.
+ * Which frame shape a negotiated version corresponds to, as one value instead
+ * of a ladder of independent booleans.
  *
- * The tier is chosen from a client-wide, per-method schema version, but the
- * frame arrives on one specific session - and those can disagree while a host
- * restart renegotiates one repo's stream and not another's. A strict v1.3 parse
- * of a genuine v1.2 frame fails on the required `watcher`, and the caller's
- * `return` would then freeze that repo's changes until it reconnects.
- *
- * Degrading is safe in the direction that matters: the v1.2 schema is
- * non-strict, so any v1.3 field present is stripped rather than trusted, and
- * the absent `watcher` is recorded as UNKNOWN - never as healthy.
- */
-function tolerantV13Parse(value: unknown):
-  | {
-      success: true;
-      data: GitSubscribeStatusEventV12 | GitSubscribeStatusEventV13;
-    }
-  | { success: false } {
-  const strict = gitSubscribeStatusEventSchemaV13.safeParse(value);
-  if (strict.success) return { success: true, data: strict.data };
-  // ONLY the version-skew shape gets the fallback: a frame that has no
-  // `watcher` at all. A frame that HAS one and still fails v1.3 is malformed -
-  // an unknown `state`, say - and the v1.2 schema would "rescue" it by
-  // stripping the offending field, quietly recording the watcher as UNKNOWN and
-  // accepting a payload the wire contract rejects. Dropping it is the point of
-  // having the contract. (`git-submodule-compat.test.ts` asserts v1.3 rejects
-  // exactly that.)
-  if (!isFrameMissingWatcher(value)) return { success: false };
-  const relaxed = gitSubscribeStatusEventSchemaV12.safeParse(value);
-  if (relaxed.success) return { success: true, data: relaxed.data };
-  return { success: false };
-}
-
-/**
- * Whether a decoded frame carries no `watcher` key at all - the signature of a
- * peer that negotiated below 1.3, as distinct from one that sent a broken value.
- */
-function isFrameMissingWatcher(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  return !("watcher" in value);
-}
-
-/**
- * Which frame shape this connection negotiated, as one value instead of a
- * ladder of independent booleans.
+ * Callers must source that version from the SESSION that delivered the frame,
+ * never from the client-wide `getMethodSchemaVersion` - with two repos open on
+ * one client the latter can report the sibling stream's minor (see
+ * `IStreamSession.getNegotiatedSchemaVersion`). Parsing repo A's frame at repo
+ * B's minor silently strips fields A's host did send, or demands fields B's
+ * host cannot send.
  *
  * Unknown or non-major-1 collapses to the FROZEN v1.0 tier, which is the only
  * safe default: a client that guessed high would parse with a schema the peer
  * never agreed to and could write fields into the rich slot the host does not
- * own on that connection.
+ * own on that connection. `null` (no handshake yet) takes that same default -
+ * never the client-wide value, which is the skew this function exists to avoid.
  */
-function negotiatedFrameTier(
-  client: IHostStreamClient<HostStreamRpcRegistry>,
+function frameTierOf(
+  negotiated: SchemaVersion | null,
 ): "v13" | "v12" | "rich" | "frozen" {
-  const negotiated = client.getMethodSchemaVersion("git.subscribeStatus");
   if (negotiated === null || negotiated.major !== 1) return "frozen";
   if (negotiated.minor >= 3) return "v13";
   if (negotiated.minor >= 2) return "v12";
   if (negotiated.minor >= 1) return "rich";
   return "frozen";
+}
+
+function sameSchemaVersion(
+  left: SchemaVersion | null,
+  right: SchemaVersion | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return left.major === right.major && left.minor === right.minor;
+}
+
+/**
+ * The version to answer a question about THIS repo's stream with, in falling
+ * order of authority: the live session, the last delivered stamp, the
+ * client-wide value.
+ *
+ * - The LIVE session is exact and needs no frame to become true, so a
+ *   renegotiation is visible the moment it happens.
+ * - The STAMP covers the gap while a session is mid-reconnect and reports
+ *   `null`: ownership genuinely is unknown then, and the last value this
+ *   stream actually delivered under beats thrashing the slot over a blip.
+ * - The CLIENT-WIDE value is the cold-start fallback only. Answering "unknown"
+ *   before anything has negotiated would hand the rich slot back to the unary
+ *   query on every mount - a redundant fetch per panel to close a window the
+ *   handshake closes on its own. It is also exactly what this code read before
+ *   any of this existed, so the fallback cannot regress a cold mount.
+ */
+function entrySchemaVersion(
+  shared: SharedSubscription | undefined,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
+): SchemaVersion | null {
+  const live = shared?.session?.getNegotiatedSchemaVersion() ?? null;
+  if (live !== null) return live;
+  const stamped = shared?.negotiatedVersion ?? null;
+  if (stamped !== null) return stamped;
+  return client.getMethodSchemaVersion("git.subscribeStatus");
 }
 
 function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
@@ -540,6 +641,10 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   // incarnation, before its first frame lands. `markTerminal` covers the
   // terminal path; this covers replacement, which bypasses it.
   shared.lastWatcherStatus = null;
+  // Same reasoning for the stamped version: it describes the session being
+  // retired. Holding it across the replacement would answer for a session that
+  // is gone, which is the whole failure mode the stamp exists to end.
+  shared.negotiatedVersion = null;
   // Clearing the field is not enough on its own - the render-time value is read
   // through the store snapshot, so without a notify the notice stays on screen
   // until some later frame happens to publish.
@@ -551,10 +656,15 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     ignoreWhitespace: args.ignoreWhitespace,
     freshNonce,
   });
+  shared.session = session;
   let sessionClosed = false;
   shared.closeCurrentSession = () => {
     sessionClosed = true;
     session.close();
+    // Only ever clears the handle it installed: `replaceStreamSession` may
+    // already have swapped a newer session in, and dropping that one would
+    // send every entry-scoped reader back to the client-wide value.
+    if (shared.session === session) shared.session = null;
   };
   const awaitingFreshNonce = { current: freshNonce };
 
@@ -585,8 +695,19 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     // The negotiated version is read AT DELIVERY TIME (never from a
     // render-stale closure): the handshake can settle after the subscribe,
     // and ownership of the rich slot must flip with the version, not with a
-    // React render.
-    const tier = negotiatedFrameTier(wsStreamClient);
+    // React render. It is read off the DELIVERING SESSION, so a sibling repo's
+    // stream sitting at another minor cannot decide how this frame is parsed.
+    const negotiated = session.getNegotiatedSchemaVersion();
+    // Delivery is also where the value gets STAMPED for the readers that have
+    // no session in scope - the fresh-nonce refresh entry point, the replay a
+    // joining consumer triggers, and the rich-slot ownership the submodule hook
+    // renders from. Notifying on change is what makes that last one reactive;
+    // it rides the per-key channel the refresh indicator already listens on.
+    if (!sameSchemaVersion(shared.negotiatedVersion, negotiated)) {
+      shared.negotiatedVersion = negotiated;
+      notifyEntryChanged(subscriptionKeyFor(wsStreamClient, args));
+    }
+    const tier = frameTierOf(negotiated);
     const v13Frames = tier === "v13";
     const v12Frames = tier === "v13" || tier === "v12";
     const richFrames = v12Frames || tier === "rich";
@@ -598,21 +719,20 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     // the negotiated minor is what keeps a v1.3-only field off a connection
     // that negotiated 1.2, independently of the host projecting correctly.
     if (v12Frames) {
-      // `getMethodSchemaVersion` is CLIENT-WIDE per method, not per session:
-      // `reconcileMethodSchemaVersion` rebuilds it from the first still-live
-      // session for that method. Two repo streams on one client can therefore
-      // sit at different minors - a host restart mid-session renegotiates one
-      // and not the other - and this frame's session may be the v1.2 one while
-      // the client-wide value reads v1.3.
+      // STRICT at both minors: `watcher` is required at v1.3, and this session
+      // is the one that agreed to send it, so a v1.3 frame without it is
+      // malformed rather than skewed.
       //
-      // `watcher` is REQUIRED at v1.3, so a strict v1.3-only parse would reject
-      // every frame from that session and `return` would drop it silently:
-      // the repo's changes freeze until it reconnects. Falling back to the v1.2
-      // schema costs nothing and cannot leak - a non-strict zod parse strips
-      // unknown keys, and a frame with no `watcher` is recorded as UNKNOWN
-      // rather than as healthy.
+      // This used to degrade a failed v1.3 parse to the v1.2 schema, because
+      // the tier came from the client-wide version and could belong to a
+      // sibling repo's stream - a genuine v1.2 frame would then fail the v1.3
+      // parse and be dropped, freezing that repo's changes. Reading the
+      // delivering session removes the skew, and with it the only benign reason
+      // that fallback could fire. Keeping it would leave a lenient re-parse
+      // standing in front of the contract for malformed frames alone, which is
+      // exactly the bypass it was already narrowed once to avoid.
       const parsed = v13Frames
-        ? tolerantV13Parse(envelope.value)
+        ? gitSubscribeStatusEventSchemaV13.safeParse(envelope.value)
         : gitSubscribeStatusEventSchemaV12.safeParse(envelope.value);
       if (!parsed.success) return;
       handleNonceCorrelatedFrame({
@@ -751,11 +871,11 @@ function settleSharedRefresh(shared: SharedSubscription, key: string): void {
   if (!shared.isRefreshing && settle === null) return;
   shared.isRefreshing = false;
   settle?.();
-  notifyRefreshState(key);
+  notifyEntryChanged(key);
 }
 
-function notifyRefreshState(key: string): void {
-  for (const listener of refreshStateListeners.get(key) ?? []) listener();
+function notifyEntryChanged(key: string): void {
+  for (const listener of entryListeners.get(key) ?? []) listener();
 }
 
 function notifyConsumers(shared: SharedSubscription): void {
@@ -987,20 +1107,24 @@ function writeRichEventIntoCache(
  * delivery, and an unchanged repo emits no later frame to refill it. The
  * negotiated version is re-read at replay time - a rich event replays into
  * the rich slot only while the stream still owns it.
+ *
+ * OWNERSHIP, not provenance: this asks who writes the rich slot NOW, so it
+ * reads the entry's current stamp rather than any tier recorded on the event
+ * itself. The two questions look alike and must not share a field.
  */
-function replayLastEventIntoCache(
-  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
-  queryClient: QueryClient,
-  args: ActiveSubscriptionArgs,
-  event: GitSubscribeStatusStreamEvent,
-): void {
+function replayLastEventIntoCache(opts: {
+  readonly shared: SharedSubscription;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly args: ActiveSubscriptionArgs;
+  readonly event: GitSubscribeStatusStreamEvent;
+}): void {
+  const { shared, wsStreamClient, queryClient, args, event } = opts;
   if (event.type === "error") {
     return;
   }
   if ("nestedFingerprint" in event) {
-    const negotiated = wsStreamClient.getMethodSchemaVersion(
-      "git.subscribeStatus",
-    );
+    const negotiated = entrySchemaVersion(shared, wsStreamClient);
     const richOwned =
       negotiated !== null && negotiated.major === 1 && negotiated.minor >= 1;
     writeRichEventIntoCache(queryClient, args, event, {

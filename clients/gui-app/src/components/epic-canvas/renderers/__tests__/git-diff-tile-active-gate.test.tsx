@@ -1,3 +1,4 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,6 +69,11 @@ class MockStreamSession implements IStreamSession {
   sendClientFrame(): void {
     // Not exercised here.
   }
+  /** Never negotiates: this fake exercises no version-dependent path. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return null;
+  }
+
   requestReconnect(): void {
     // Not exercised here.
   }
