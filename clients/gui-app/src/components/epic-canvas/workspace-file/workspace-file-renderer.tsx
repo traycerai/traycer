@@ -110,14 +110,25 @@ export function WorkspaceFileRenderer(props: {
     setWasEditing(editing);
     setCacheKeyGeneration((generation) => generation + 1);
   }
+  // Only an attached editing session needs a key at all (`persistState`'s
+  // own requirement, above) - a read-only render supplies none, so Diffs
+  // falls back to its own identity/content comparison
+  // (`lineCache.file === file && lineCache.sourceContents === file.contents`)
+  // and rebuilds the line cache on every real content change (e.g. an
+  // external disk edit picked up by a reactivation refetch, which changes
+  // `content` without ever flipping `editing`). A stable explicit key here
+  // would keep telling `isLineCacheForFile` to trust a cache the content
+  // comparison would have invalidated.
   const file = useMemo<FileContents>(
     () => ({
       name: fileName,
       contents: content,
       lang: language,
-      cacheKey: `${fileName}:${String(cacheKeyGeneration)}`,
+      cacheKey: editing
+        ? `${fileName}:${String(cacheKeyGeneration)}`
+        : undefined,
     }),
-    [content, fileName, language, cacheKeyGeneration],
+    [content, fileName, language, cacheKeyGeneration, editing],
   );
   const highlightReady = useDiffsFileHighlightReady({
     file,
