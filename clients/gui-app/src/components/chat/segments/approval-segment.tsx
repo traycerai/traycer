@@ -17,6 +17,11 @@ interface ResolvedApprovalSegmentProps {
   decision: ApprovalDecision;
   variant: "card" | "row";
   headerFindUnitId: string | null;
+  // Seeds the disclosure at mount, once. Open state is local here, so the copy
+  // of this row inside the bounded live activity window cannot hand its own
+  // over: a click there promotes, and this is how the copy that replaces it
+  // knows it was the row asked for.
+  initiallyOpen: boolean;
 }
 
 /**
@@ -34,7 +39,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
     decision,
     variant,
   } = props;
-  const [open, setOpen] = useState<boolean>(false);
+  const [open, setOpen] = useState<boolean>(props.initiallyOpen);
   const label = toolName ?? description ?? "approval";
   const header = (
     <ResolvedApprovalHeader

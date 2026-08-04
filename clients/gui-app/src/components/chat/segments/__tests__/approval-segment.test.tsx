@@ -17,6 +17,7 @@ describe("<ResolvedApprovalSegment />", () => {
         inputDetail={null}
         decision={{ approved: false, reason: null }}
         variant="card"
+        initiallyOpen={false}
       />,
     );
 
