@@ -39,4 +39,29 @@ describe("comm-graph cloud subscription registry", () => {
     expect(opened).toHaveBeenNthCalledWith(2, "relay-b");
     expect(closed).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps a render-selected manager alive through same-flush cleanup and acquire", async () => {
+    const opener: CommGraphCloudSubscriptionOpener = () => ({
+      close: vi.fn(),
+    });
+    const claims = Array.from({ length: 4 }, () => ({}));
+    const retained = getCommGraphCloudSubscriptionManager("epic-1");
+
+    for (const [index, claim] of claims.entries()) {
+      const epicId = `epic-${index + 1}`;
+      getCommGraphCloudSubscriptionManager(epicId);
+      acquireCommGraphCloudSubscription(epicId, claim, opener, ["relay-a"]);
+      releaseCommGraphCloudSubscription(epicId, claim);
+    }
+
+    // Releasing the fourth detached manager schedules epic-1 for eviction.
+    // React may already have selected that retained instance during render,
+    // then run the old tree's cleanup before the new tree's acquire effect.
+    expect(getCommGraphCloudSubscriptionManager("epic-1")).toBe(retained);
+    acquireCommGraphCloudSubscription("epic-1", claims[0], opener, ["relay-a"]);
+    await Promise.resolve();
+
+    expect(retained.isDisposed()).toBe(false);
+    expect(getCommGraphCloudSubscriptionManager("epic-1")).toBe(retained);
+  });
 });

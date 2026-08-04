@@ -19,6 +19,7 @@ interface CloudRegistryEntry {
 
 const entriesByEpicId = new Map<string, CloudRegistryEntry>();
 const detachedEpicIds: string[] = [];
+const pendingEvictionsByEpicId = new Map<string, object>();
 
 function newestLiveClaim(
   epicId: string,
@@ -72,6 +73,7 @@ export function acquireCommGraphCloudSubscription(
 ): void {
   const entry = entriesByEpicId.get(epicId);
   if (entry === undefined) return;
+  pendingEvictionsByEpicId.delete(epicId);
   const detachedIndex = detachedEpicIds.indexOf(epicId);
   if (detachedIndex >= 0) detachedEpicIds.splice(detachedIndex, 1);
   entry.openersByClaim.set(claim, opener);
@@ -100,10 +102,18 @@ export function releaseCommGraphCloudSubscription(
   while (detachedEpicIds.length > DETACHED_CLOUD_MANAGER_LIMIT) {
     const evictedEpicId = detachedEpicIds.shift();
     if (evictedEpicId === undefined) break;
-    const evicted = entriesByEpicId.get(evictedEpicId);
-    if (evicted === undefined) continue;
-    evicted.manager.dispose();
-    entriesByEpicId.delete(evictedEpicId);
+    const evictionToken = {};
+    pendingEvictionsByEpicId.set(evictedEpicId, evictionToken);
+    queueMicrotask(() => {
+      if (pendingEvictionsByEpicId.get(evictedEpicId) !== evictionToken) {
+        return;
+      }
+      pendingEvictionsByEpicId.delete(evictedEpicId);
+      const evicted = entriesByEpicId.get(evictedEpicId);
+      if (evicted === undefined || evicted.openersByClaim.size > 0) return;
+      evicted.manager.dispose();
+      entriesByEpicId.delete(evictedEpicId);
+    });
   }
 }
 
@@ -111,4 +121,5 @@ export function __resetCommGraphCloudRegistryForTests(): void {
   for (const entry of entriesByEpicId.values()) entry.manager.dispose();
   entriesByEpicId.clear();
   detachedEpicIds.length = 0;
+  pendingEvictionsByEpicId.clear();
 }

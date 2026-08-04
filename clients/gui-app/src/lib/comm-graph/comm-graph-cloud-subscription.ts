@@ -14,6 +14,8 @@ import { appLogger } from "@/lib/logger";
 export type CommGraphCloudAvailability =
   "pending" | "available" | "unsupported";
 
+const RECONNECTING_RELAY_FAILOVER_MS = 15_000;
+
 export function selectCommGraphAuthoritativeSnapshot(
   availability: CommGraphCloudAvailability,
   cloud: CommGraphSnapshot,
@@ -75,6 +77,7 @@ export class CommGraphCloudSubscriptionManager {
   private events: CommGraphEvent[] = [];
   private lastArrival: CommGraphEvent | null = null;
   private handle: CommGraphCloudSubscriptionHandle | null = null;
+  private reconnectingFailoverTimer: number | null = null;
   private generation = 0;
   private attached = false;
   private disposed = false;
@@ -114,7 +117,10 @@ export class CommGraphCloudSubscriptionManager {
         next.includes(hostId),
       ),
     );
-    if (this.relayHostId !== null && next.includes(this.relayHostId)) return;
+    if (this.relayHostId !== null && next.includes(this.relayHostId)) {
+      this.scheduleReconnectingFailover(this.relayHostId);
+      return;
+    }
     this.closeCurrent();
     if (this.attached) this.openNextRelay();
     this.publish();
@@ -148,14 +154,14 @@ export class CommGraphCloudSubscriptionManager {
     // candidates so it renegotiates with the new key rather than retaining a
     // stale authenticated channel. An unrelated host's directory update must
     // not interrupt a healthy relay.
-    if (
-      this.relayHostId !== null &&
-      changedHostIds.has(this.relayHostId)
-    ) {
+    if (this.relayHostId !== null && changedHostIds.has(this.relayHostId)) {
       this.closeCurrent();
       this.openNextRelay();
     } else if (this.handle === null) {
       this.openNextRelay();
+    }
+    if (this.relayHostId !== null) {
+      this.scheduleReconnectingFailover(this.relayHostId);
     }
     this.publish();
   }
@@ -399,6 +405,7 @@ export class CommGraphCloudSubscriptionManager {
 
   private applyStatus(hostId: string, status: CommGraphHostStatus): void {
     this.relayStatus = status;
+    if (status !== "reconnecting") this.clearReconnectingFailover();
     if (status === "unsupported" || status === "unreachable") {
       this.rejectedRelayHostIds.add(hostId);
       if (status === "unsupported") this.unsupportedRelayHostIds.add(hostId);
@@ -406,10 +413,48 @@ export class CommGraphCloudSubscriptionManager {
       this.openNextRelay();
       return;
     }
+    if (status === "reconnecting") {
+      this.scheduleReconnectingFailover(hostId);
+    }
     this.publish();
   }
 
+  private scheduleReconnectingFailover(hostId: string): void {
+    if (
+      this.relayStatus !== "reconnecting" ||
+      this.reconnectingFailoverTimer !== null ||
+      !this.relayHostIds.some(
+        (candidate) =>
+          candidate !== hostId && !this.rejectedRelayHostIds.has(candidate),
+      )
+    ) {
+      return;
+    }
+    this.reconnectingFailoverTimer = window.setTimeout(() => {
+      this.reconnectingFailoverTimer = null;
+      if (
+        !this.attached ||
+        this.disposed ||
+        this.relayHostId !== hostId ||
+        this.relayStatus !== "reconnecting"
+      ) {
+        return;
+      }
+      this.rejectedRelayHostIds.add(hostId);
+      this.closeCurrent();
+      this.openNextRelay();
+      this.publish();
+    }, RECONNECTING_RELAY_FAILOVER_MS);
+  }
+
+  private clearReconnectingFailover(): void {
+    if (this.reconnectingFailoverTimer === null) return;
+    window.clearTimeout(this.reconnectingFailoverTimer);
+    this.reconnectingFailoverTimer = null;
+  }
+
   private closeCurrent(): void {
+    this.clearReconnectingFailover();
     this.generation += 1;
     const handle = this.handle;
     this.handle = null;

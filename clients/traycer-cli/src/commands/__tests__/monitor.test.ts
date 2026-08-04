@@ -634,13 +634,13 @@ describe("mixed-version inbox message frames", () => {
   });
 
   it("acks when a stdout write confirms successfully after the bounded timeout", async () => {
-    let writeCallback: ((error: Error | undefined) => void) | null = null;
+    const writeCallbacks: Array<(error: Error | undefined) => void> = [];
     const stdoutSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation((...args: unknown[]) => {
-        writeCallback = args.find((arg) => typeof arg === "function") as
-          | ((error: Error | undefined) => void)
-          | null;
+        const writeCallback = args.find((arg) => typeof arg === "function") as
+          ((error: Error | undefined) => void) | null;
+        if (writeCallback !== null) writeCallbacks.push(writeCallback);
         return true;
       });
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
@@ -663,7 +663,7 @@ describe("mixed-version inbox message frames", () => {
     await flush(10_000);
     expect(callHostRpcMock).not.toHaveBeenCalled();
 
-    writeCallback?.(undefined);
+    writeCallbacks[0]?.(undefined);
     await flush(0);
     await flush(0);
 

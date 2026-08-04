@@ -272,9 +272,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
     );
 
     manager.setRelayHostIds(["relay-a"]);
-    manager.setRelayReadinessKeys(
-      new Map([["relay-a", "missing-endpoint"]]),
-    );
+    manager.setRelayReadinessKeys(new Map([["relay-a", "missing-endpoint"]]));
     manager.attach();
     expect(requests).toHaveLength(0);
 
@@ -380,6 +378,33 @@ describe("CommGraphCloudSubscriptionManager", () => {
     expect(manager.getAvailability()).toBe("available");
     expect(recorded.requests).toHaveLength(2);
     expect(recorded.requests[1].hostId).toBe("relay-b");
+  });
+
+  it("fails over when a relay remains reconnecting past the bounded deadline", () => {
+    vi.useFakeTimers();
+    const recorded = recordedOpener();
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      recorded.opener,
+      () => undefined,
+    );
+    try {
+      manager.setRelayHostIds(["relay-a", "relay-b"]);
+      manager.attach();
+      recorded.requests[0].handlers.onAvailability("available");
+      recorded.requests[0].handlers.onStatus("reconnecting");
+
+      vi.advanceTimersByTime(14_999);
+      expect(recorded.requests).toHaveLength(1);
+
+      vi.advanceTimersByTime(1);
+      expect(manager.getAvailability()).toBe("available");
+      expect(recorded.requests).toHaveLength(2);
+      expect(recorded.requests[1].hostId).toBe("relay-b");
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("projects a cloud feed status to every origin host", () => {

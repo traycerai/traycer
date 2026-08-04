@@ -676,6 +676,7 @@ async function handleServerFrame(
       await printed.confirmation;
       return;
     }
+    const eventId = frame.eventId;
     // The durable row must only be acknowledged once THIS write was
     // CONFIRMED to reach the OS - not merely handed to `process.stdout`
     // (asynchronous whenever stdout is a pipe - see `std-write.ts`), and not
@@ -687,7 +688,7 @@ async function handleServerFrame(
     const delivered = await printed.confirmation;
     if (!delivered) {
       void printed.eventualOutcome.then((eventuallyDelivered) => {
-        if (eventuallyDelivered) acknowledgements.enqueue(frame.eventId);
+        if (eventuallyDelivered) acknowledgements.enqueue(eventId);
       });
       logger.warn(
         "Monitor: stdout write for inbox message did not confirm before the timeout; waiting for its eventual outcome",
@@ -695,12 +696,12 @@ async function handleServerFrame(
           environment: config.environment,
           agentId: target.agentId,
           epicId: target.epicId,
-          eventId: frame.eventId,
+          eventId,
         },
       );
       return;
     }
-    acknowledgements.enqueue(frame.eventId);
+    acknowledgements.enqueue(eventId);
     return;
   }
   if (frame.kind === "notice") {
