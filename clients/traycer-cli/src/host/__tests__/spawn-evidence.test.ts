@@ -405,6 +405,53 @@ describe("spawn-evidence substrate", () => {
       expect(await reader.read()).toHaveLength(0);
     });
 
+    it("reads the era from the whole file, not just the post-baseline slice", async () => {
+      // The verified marker sits BEFORE the baseline - a service-managed
+      // start writes no CLI marker for this attempt. Deciding the era from
+      // the slice alone would call this log legacy and promote the host's
+      // stderr line to `starting-marker` evidence.
+      await writeFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:05.000Z] phase=starting\n",
+      );
+
+      expect(await readPostBaselineMarkers(baseline)).toHaveLength(0);
+      const evidence = await collectSpawnEvidence(
+        {
+          log: baseline,
+          pidMetadata: await capturePidMetadataBaseline(
+            mocks.pidPath,
+            "production",
+          ),
+        },
+        "production",
+      );
+      expect(evidence?.kind).not.toBe("starting-marker");
+    });
+
+    it("seeds the incremental reader's era from the pre-baseline region", async () => {
+      await writeFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:05.000Z] phase=starting\n",
+      );
+
+      // Reading only forward would never see the verified marker.
+      expect(await reader.read()).toHaveLength(0);
+    });
+
     it("demotes earlier unverified lines when a verified marker arrives later", async () => {
       const baseline = await captureLogFileBaseline(mocks.logPath);
       const reader = createPostBaselineMarkerReader(baseline);

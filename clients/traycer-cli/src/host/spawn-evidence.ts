@@ -180,6 +180,57 @@ function offsetForBaseline(baseline: LogFileBaseline, info: Stats): number {
   return info.size < baseline.size ? 0 : baseline.size;
 }
 
+interface BaselineSlicedLog {
+  /** Everything in the file, for deciding the writer-identity era. */
+  readonly fullText: string;
+  /** Only what was appended after the baseline, the evidence window. */
+  readonly postBaselineText: string;
+}
+
+/**
+ * Reads the whole log and the post-baseline slice from ONE open.
+ *
+ * The era must be decided over the full file while evidence is drawn only
+ * from the slice: the supervisor's `writer=supervisor` marker can sit
+ * BEFORE the baseline (a service-managed start writes no CLI marker for
+ * this attempt), which would leave the slice looking like a legacy log and
+ * promote a marker-shaped host stderr line to `starting-marker` evidence.
+ *
+ * Both come from a single handle so a rotation between two opens cannot
+ * pair one file's era with another file's slice - the same reason `offset`
+ * is taken from the opened handle's stat rather than a path stat.
+ */
+async function readBaselineSlicedLog(
+  baseline: LogFileBaseline,
+): Promise<BaselineSlicedLog> {
+  let handle: FileHandle;
+  try {
+    handle = await spawnEvidenceFileDeps.openRead(baseline.path);
+  } catch {
+    return { fullText: "", postBaselineText: "" };
+  }
+  try {
+    const info = await handle.stat();
+    // Identity and offset must come from the opened handle. A path stat before
+    // open can observe the old log while open lands on a rotated replacement.
+    const offset = offsetForBaseline(baseline, info);
+    if (info.size === 0) return { fullText: "", postBaselineText: "" };
+    const buffer = Buffer.alloc(info.size);
+    const { bytesRead } = await handle.read(buffer, 0, info.size, 0);
+    const read = buffer.subarray(0, bytesRead);
+    return {
+      fullText: read.toString("utf8"),
+      // Slice the BUFFER, not the decoded string: `offset` is a byte
+      // offset, and slicing the string would mis-cut any multi-byte
+      // sequence ahead of it.
+      postBaselineText:
+        bytesRead <= offset ? "" : read.subarray(offset).toString("utf8"),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * Read the host log slice written after the baseline, identity-aware.
  * Handles rotation that lands new markers at offset 0 of a fresh file.
@@ -187,25 +238,7 @@ function offsetForBaseline(baseline: LogFileBaseline, info: Stats): number {
 export async function readPostBaselineLogText(
   baseline: LogFileBaseline,
 ): Promise<string> {
-  let handle: FileHandle;
-  try {
-    handle = await spawnEvidenceFileDeps.openRead(baseline.path);
-  } catch {
-    return "";
-  }
-  try {
-    const info = await handle.stat();
-    // Identity and offset must come from the opened handle. A path stat before
-    // open can observe the old log while open lands on a rotated replacement.
-    const offset = offsetForBaseline(baseline, info);
-    if (info.size <= offset) return "";
-    const length = info.size - offset;
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, offset);
-    return buffer.toString("utf8");
-  } finally {
-    await handle.close();
-  }
+  return (await readBaselineSlicedLog(baseline)).postBaselineText;
 }
 
 export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
@@ -222,6 +255,12 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   // retained window would let a burst of marker-shaped host output evict
   // the verified marker and reopen the hole.
   let writerIdentified = false;
+  // The era also has to account for what came BEFORE the baseline, which
+  // this reader never otherwise looks at: the verified marker can sit in
+  // the pre-baseline region (a service-managed start writes no CLI marker
+  // for this attempt), and reading only forward would call that log legacy.
+  // Seeded once per observed file; seeding can only turn the bit ON.
+  let seeded = false;
 
   return {
     read: async (): Promise<readonly BootstrapLogEntry[]> => {
@@ -249,6 +288,26 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
           // `writerIdentified` deliberately survives a replaced file:
           // capability belongs to the WRITER, and rotation hands the same
           // supervisor a fresh file it will keep identifying itself in.
+          // The seed is per-file, so a replacement re-seeds from its own
+          // pre-baseline region.
+          seeded = false;
+        }
+        if (!seeded) {
+          seeded = true;
+          if (readOffset > 0) {
+            const head = Buffer.alloc(readOffset);
+            const { bytesRead: headBytes } = await handle.read(
+              head,
+              0,
+              readOffset,
+              0,
+            );
+            writerIdentified =
+              writerIdentified ||
+              markersIdentifyWriter(
+                parseMarkerLines(head.subarray(0, headBytes).toString("utf8")),
+              );
+          }
         }
         dev = info.dev;
         ino = info.ino;
@@ -299,8 +358,15 @@ export function parseBootstrapMarkersFromText(
 export async function readPostBaselineMarkers(
   baseline: LogFileBaseline,
 ): Promise<readonly BootstrapLogEntry[]> {
-  const text = await readPostBaselineLogText(baseline);
-  return parseBootstrapMarkersFromText(text);
+  // Era from the whole file, evidence from the slice. Deciding both from
+  // the slice would let a pre-baseline `writer=supervisor` marker fall
+  // outside the window, read the log as legacy, and hand
+  // `collectSpawnEvidence` a host stderr line as a `starting-marker`.
+  const { fullText, postBaselineText } = await readBaselineSlicedLog(baseline);
+  return retainAuthenticMarkers(
+    parseMarkerLines(postBaselineText),
+    markersIdentifyWriter(parseMarkerLines(fullText)),
+  );
 }
 
 /**
