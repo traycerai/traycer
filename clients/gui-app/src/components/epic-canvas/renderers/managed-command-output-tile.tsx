@@ -249,7 +249,7 @@ function ManagedCommandOutputTileBody(props: {
     restoredReadingAnchor,
   );
   const restoredReadingPositionRef = useRef(false);
-  const [following, setFollowing] = useState(
+  const [following, setFollowing] = useState(() =>
     initialManagedCommandFollowing(restoredReadingAnchor),
   );
   // What the timeline looked like at the last moment we could measure it:

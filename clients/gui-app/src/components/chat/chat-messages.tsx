@@ -6,6 +6,7 @@ import {
   ChatTimeline,
   type ChatTimelineInitialScrollAnchor,
 } from "@/components/chat/chat-timeline";
+import type { ChatTimelineFollowLatch } from "@/components/chat/chat-timeline-follow-latch";
 import {
   acceptExhaustedPersistedRestoreFallback,
   buildMessageIdToIndex,
@@ -134,7 +135,6 @@ export interface ChatMessageScrollRequest {
 }
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
-const PILL_SHOW_DEBOUNCE_MS = 150;
 const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 /** `awaitScrollSettle`'s fallback timeout when `scrollend` never fires
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
@@ -871,8 +871,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     useRef<PendingMeasuredFreeRestore | null>(
       resolvePendingMeasuredFreeRestore(restoredTabState),
     );
+  const resolvePendingRestoreEndLandingRef = useRef<(() => boolean) | null>(
+    null,
+  );
+  const isFollowCorrectionSuppressed = useCallback(
+    (): boolean => pendingHydrationRestoreAnchorIdRef.current !== null,
+    [],
+  );
 
   const chatTimelineRef = useRef<LegendListRef | null>(null);
+  const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef(messages);
@@ -1006,25 +1014,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // not returned since - drives the pill's "New reply" state. Reset on
   // returning to the tail.
   const [hasUnseenTurnCompletion, setHasUnseenTurnCompletion] = useState(false);
-  const pillShowTimeoutRef = useRef<number | null>(null);
-
-  const cancelPillShow = useCallback((): void => {
-    if (pillShowTimeoutRef.current !== null) {
-      window.clearTimeout(pillShowTimeoutRef.current);
-      pillShowTimeoutRef.current = null;
-    }
-  }, []);
-  // 150ms debounced pill *show*; hiding is always immediate. LegendList fires
-  // scroll events with isAtEnd=false while `initialScrollAtEnd` is settling,
-  // so showing eagerly would flash the pill during thread/tab opens.
-  const maybeShowPillDebounced = useCallback((): void => {
-    if (pillShowTimeoutRef.current !== null) return;
-    pillShowTimeoutRef.current = window.setTimeout(() => {
-      pillShowTimeoutRef.current = null;
-      setShowScrollToBottom(true);
-    }, PILL_SHOW_DEBOUNCE_MS);
-  }, []);
-
   // Ref-only (no React state): the minimap derives in-view highlighting from
   // list state, not a stored active id, so nothing renders off this value
   // anymore - only the ticket-5 unmount-save effect reads it imperatively. A
@@ -1046,25 +1035,27 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // pending id before reaching here, or never gated it in the first place).
   const setTimelineMode = useCallback(
     (next: ChatTimelineScrollMode, releasePersistenceGate: boolean): void => {
+      followLatchRef.current?.setFollowIntent(next === "following-end");
       timelineScrollModeRef.current = next;
       isAtEndRef.current = next === "following-end";
       if (next === "following-end") {
         if (releasePersistenceGate) {
           restorePersistencePendingRef.current = false;
         }
-        pendingMeasuredFreeRestoreRef.current = null;
-        cancelPillShow();
+        if (pendingHydrationRestoreAnchorIdRef.current === null) {
+          pendingMeasuredFreeRestoreRef.current = null;
+        }
         setShowScrollToBottom(false);
         // Reaching the tail "sees" everything.
         setHasUnseenTurnCompletion(false);
       }
       setScrollMode(next);
     },
-    [cancelPillShow],
+    [],
   );
 
-  // Geometry-only mode reconciliation - the sole caller is `onIsAtEndChange`'s
-  // pure `isAtEnd` report. Must NOT clear `pendingHydrationRestoreAnchorIdRef`:
+  // Geometry-only mode reconciliation - the sole caller is the latch's
+  // strict-end intent report. Must NOT clear `pendingHydrationRestoreAnchorIdRef`:
   // a temporary hydration-clamp restore landing at the current (still
   // partial) end reports the same `isAtEnd=true` as a genuine reader
   // reaching the tail, but is not reader intent and must not discard an
@@ -1076,6 +1067,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // release below: a passive geometry report must not publish the temporary
   // tail as durably authoritative while that coordinate is still pending.
   const setFollowingEndFromTimelinePosition = useCallback((): void => {
+    const resolvePendingEndLanding = resolvePendingRestoreEndLandingRef.current;
+    if (
+      pendingHydrationRestoreAnchorIdRef.current !== null &&
+      pendingMeasuredFreeRestoreRef.current !== null &&
+      resolvePendingEndLanding !== null
+    ) {
+      // A partial transcript can clamp the measured bootstrap to its own end.
+      // Stop that placeholder restore before its valid/exhausted callbacks
+      // normalize durable state; the raw hydration coordinate remains armed
+      // for the later full snapshot.
+      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current = null;
+      resolvePendingRestoreEndLandingRef.current = null;
+      resolvePendingEndLanding();
+      pendingMeasuredFreeRestoreRef.current = null;
+    }
     setTimelineMode(
       "following-end",
       pendingHydrationRestoreAnchorIdRef.current === null,
@@ -1089,7 +1096,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // a still-animating scroll (e.g. the pill's own `scrollToEnd`) must not be
   // trusted once that animation is cancelled mid-flight. The subsequent real
   // scroll event (if any) is what actually determines follow via
-  // `onIsAtEndChange`; this only corrects the ownership bookkeeping for an
+  // latch report; this only corrects the ownership bookkeeping for an
   // operation a real gesture just superseded.
   const cancelTimelineLiveFollowForUserNavigation = useCallback(
     ({
@@ -1103,35 +1110,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // to a newer operation.
       activeAnimatedImperativeScrollGenerationRef.current = null;
       anchorUserScrollGenerationRef.current += 1;
+      followLatchRef.current?.noteReaderGesture();
       pendingMeasuredFreeRestoreRef.current = null;
       if (publishesReaderPosition) {
         pendingHydrationRestoreAnchorIdRef.current = null;
         forgetPendingHydrationRestore(identity);
         restorePersistencePendingRef.current = false;
       }
-      // Mode publication is geometry-only (behavior contract: "geometry, not
-      // a mode machine") - separate from the operation cancellation above,
-      // which always runs. A pointerdown/navigation preflight that never
-      // actually moved the viewport (a disclosure click, an already-visible
-      // navigation target, a stale/no-op request) must not publish the
-      // impossible `{mode: free-scrolling, isAtEnd: true}` state: reaching
-      // the strict edge stays following-end regardless of what triggered
-      // this cancel.
-      const liveIsAtEnd =
-        chatTimelineRef.current?.getState().isAtEnd ?? isAtEndRef.current;
-      if (liveIsAtEnd) {
-        // `publishesReaderPosition` already cleared the pending id above
-        // when true, so this naturally releases the gate for a real
-        // gesture/explicit navigation and preserves it for a bare
-        // pointerdown/nav preflight that lands at the edge while hydration
-        // is still unresolved (fixup: hydration-transaction).
-        setTimelineMode(
-          "following-end",
-          pendingHydrationRestoreAnchorIdRef.current === null,
-        );
-      } else {
-        setTimelineMode("free-scrolling", false);
-      }
+      // A preflight is not a departure. The latch remains authoritative and
+      // publishes a mode change only after the gesture/navigation produces a
+      // measurable scroll, so a disclosure click cannot detach a reader and
+      // an owned under-landing cannot be mistaken for reader motion.
       // A real gesture (or a fresh navigation, which calls this first) wins
       // immediately over a still-in-flight programmatic-scroll operation,
       // regardless of what that operation was in the middle of doing.
@@ -1147,7 +1136,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         }
       }
     },
-    [identity, setTimelineMode],
+    [identity],
   );
   const cancelTimelineLiveFollowForRealUserGesture = useCallback(
     (intent: ChatLiveFollowCancelIntent): void => {
@@ -1175,9 +1164,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   const reconcileInvalidTimelineLanding = useCallback((): void => {
     setTimelineMode("free-scrolling", true);
-    cancelPillShow();
     setShowScrollToBottom(true);
-  }, [cancelPillShow, setTimelineMode]);
+  }, [setTimelineMode]);
 
   // scrollToEnd reset (pill click / any future explicit "go live" action).
   // Ticket 10: this is an explicit user action - the `setTimelineMode`
@@ -1238,22 +1226,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ],
   );
 
-  // The controller's ONE automatic-scroll rule (behavior contract): a
-  // content/layout change follows the bottom only when the viewport was
-  // already at the strict edge before the mutation. LegendList's own
-  // `onScroll` -> strict `isAtEnd` is the sole input; there is no direction,
-  // wheel, touch, pointer, or provenance/generation-token classifier.
-  const onIsAtEndChange = useCallback(
-    (isAtEnd: boolean): void => {
+  // Render/persistence mirror of the latch's ONE live follow authority.
+  // LegendList's cached `isAtEnd` never writes this state.
+  const onFollowIntentChange = useCallback(
+    (isFollowing: boolean): void => {
       // Cross-check the rendered mode, not just the cached ref, before
       // taking the fast path: `setTimelineMode` always keeps both in sync,
       // but this guards against any future path that could otherwise leave
       // them briefly out of step (behavior contract: an equality fast path
       // must never let `{mode: free-scrolling, isAtEnd: true}` stand).
       const modeAlreadyMatches =
-        (timelineScrollModeRef.current === "following-end") === isAtEnd;
-      if (isAtEndRef.current === isAtEnd && modeAlreadyMatches) return;
-      if (isAtEnd) {
+        (timelineScrollModeRef.current === "following-end") === isFollowing;
+      if (isAtEndRef.current === isFollowing && modeAlreadyMatches) return;
+      if (isFollowing) {
         setFollowingEndFromTimelinePosition();
       } else {
         // Fixup (remove-passive-supersession): a following-to-free
@@ -1268,14 +1253,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // supersede - only a validated landing or a recognized reader/
         // explicit-navigation path (their own direct clears) may.
         setTimelineMode("free-scrolling", true);
-        maybeShowPillDebounced();
+        setShowScrollToBottom(true);
       }
     },
-    [
-      maybeShowPillDebounced,
-      setFollowingEndFromTimelinePosition,
-      setTimelineMode,
-    ],
+    [setFollowingEndFromTimelinePosition, setTimelineMode],
   );
 
   // --- Keyboard scrolling (existing window-level claiming survives) ---------
@@ -1291,7 +1272,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // Freeze an owned native smooth-scroll at its current pixel first, then
       // apply this key's deterministic step as the replacement movement. The
       // resulting native `scroll` event is what determines follow, via
-      // `onIsAtEndChange` - no separate reattach check needed here.
+      // the latch's geometry observer - no separate reattach check needed here.
       cancelTimelineLiveFollowForRealUserGesture({
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
@@ -1696,7 +1677,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Explicit navigation (find/minimap/deep-link/restoration) is programmatic,
   // not a gesture. It never itself grants or removes follow - a landing at
   // the strict bottom resumes follow the same way any other scroll reaching
-  // the edge does, via the ordinary `onIsAtEndChange` report the settled
+  // the edge does, via the latch's ordinary strict-end report the settled
   // scroll produces; a landing away from it simply stays free-scrolling.
   //
   // Ticket 10: settle/re-issue against the CURRENT geometry - an ANIMATED
@@ -1884,6 +1865,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           }
         },
         onSettledValid: () => {
+          // This operation restores a persisted free-reading coordinate.
+          // Publish that semantic result through the latch explicitly so a
+          // temporary partial-transcript end report cannot remain the live
+          // follow authority after the saved row has actually landed.
+          setTimelineMode("free-scrolling", false);
           acceptExhaustedPersistedRestoreFallback(
             restorePersistencePendingRef,
             pendingMeasuredFreeRestoreRef,
@@ -1909,7 +1895,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       });
       return true;
     },
-    [captureLiveChatTabScrollSnapshot],
+    [captureLiveChatTabScrollSnapshot, setTimelineMode],
   );
 
   useLayoutEffect(() => {
@@ -1939,6 +1925,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       messages: messagesRef.current,
       geometry: measureFreeRestoreGeometry(list, issuedIndex),
     };
+    const resolvePendingEndLanding = (): boolean => {
+      const isPastTarget = isDemonstrablyPastIssuedFreeRestoreTarget(
+        issuedTarget,
+        messagesRef.current,
+        measureFreeRestoreGeometry(chatTimelineRef.current, issuedIndex),
+      );
+      if (isPastTarget) {
+        pendingHydrationRestoreAnchorIdRef.current = null;
+        forgetPendingHydrationRestore(identity);
+        restorePersistencePendingRef.current = false;
+      }
+      return isPastTarget;
+    };
+    resolvePendingRestoreEndLandingRef.current = resolvePendingEndLanding;
 
     // `initialScrollIndex` is only an estimate-driven first-paint bootstrap.
     // The React commit that mounts restored reserve geometry owns the final
@@ -1946,6 +1946,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // is legitimately paused for background/unfocused Electron renderers.
     restorePersistedTimelineLocation(pending.messageId, pending.viewOffset, {
       isAborted: () => {
+        // A scrollbar/manual strict-end landing can be observed by the
+        // restoration settle before the browser publishes its native scroll
+        // event. Reconcile that fresh DOM geometry through the latch (the
+        // sole authority) before deciding whether the restore still owns the
+        // viewport.
+        followLatchRef.current?.observeLiveGeometry();
         if (timelineScrollModeRef.current === "free-scrolling") return false;
         // Fixup (internal-tab-bottom-follow): `settleChatTimelineNavigation`'s
         // own abort path (`if (input.isAborted()) return;`) calls neither
@@ -1966,11 +1972,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // saved row, not this transient tail).
         // `isDemonstrablyPastIssuedFreeRestoreTarget` distinguishes the two
         // against the frozen `issuedTarget` above, not a recomputed one.
-        const isPastTarget = isDemonstrablyPastIssuedFreeRestoreTarget(
-          issuedTarget,
-          messagesRef.current,
-          measureFreeRestoreGeometry(chatTimelineRef.current, issuedIndex),
-        );
+        const isPastTarget = resolvePendingEndLanding();
         if (isPastTarget) {
           // Atomic reader-supersession: resolve the WHOLE pending
           // hydration transaction as one transition, not just the
@@ -1987,10 +1989,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           forgetPendingHydrationRestore(identity);
           restorePersistencePendingRef.current = false;
         }
+        resolvePendingRestoreEndLandingRef.current = null;
+        pendingMeasuredFreeRestoreRef.current = null;
         return true;
       },
-      onValidated: () => undefined,
+      onValidated: () => {
+        resolvePendingRestoreEndLandingRef.current = null;
+      },
       onExhausted: () => {
+        resolvePendingRestoreEndLandingRef.current = null;
         // The bounded restore has accepted the browser-clamped position as
         // its safe fallback. Publish that real viewport from now on rather
         // than retaining/replaying an unreachable saved coordinate across
@@ -2292,9 +2299,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     lastAssistantMessage.completedAt === null;
   const contextWorkingVerb = use(WorkingVerbContext);
   const workingVerb = contextWorkingVerb ?? pickWorkingVerb(taskId);
-  // Behavior contract: pill visibility is strict `!isAtEnd`. `showScrollToBottom`
-  // already implements exactly that (immediate hide at the edge, debounced
-  // show away from it, in `setTimelineMode`/`onIsAtEndChange`).
+  // Behavior contract: pill visibility mirrors the latch's single live
+  // follow authority: immediate hide at the edge and immediate show on the
+  // first confirmed reader departure.
   const scrollToEndPillState = resolveScrollToEndPillState({
     visible: showScrollToBottom,
     turnRunning,
@@ -2322,7 +2329,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             initialScrollAtEnd={scrollMode === "following-end"}
             initialScrollIndex={initialScrollIndexAnchor}
             contentInsetEndAdjustment={endInset}
-            onIsAtEndChange={onIsAtEndChange}
+            onFollowIntentChange={onFollowIntentChange}
+            followLatchRef={followLatchRef}
+            isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
             navigationHighlightedMessageId={navigationHighlightedMessageId}
             onItemSizeChanged={onTimelineItemSizeChanged}
             onListMetricsChange={onListMetricsChange}

@@ -50,6 +50,27 @@ export interface ChatTimelineFollowLatch {
    * from a component's render body.
    */
   readonly followEndIfPermitted: () => void;
+  /** Explicit controller transition (pill click / navigation fallback). */
+  readonly setFollowIntent: (isFollowing: boolean) => void;
+  /** Cancels any app-owned correction before a real reader gesture. */
+  readonly noteReaderGesture: () => void;
+  /** Routes every native or library scroll report through this authority. */
+  readonly observeLiveGeometry: () => void;
+}
+
+interface ActiveEndCorrection {
+  readonly generation: number;
+  readonly readerGestureGeneration: number;
+  attempts: number;
+  animationFrameId: number | null;
+}
+
+/** One immediate issue plus four measured reissues, each after two frames. */
+export const CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS = 5;
+
+interface ChatTimelineFollowLatchOptions {
+  readonly onFollowIntentChange: ((isFollowing: boolean) => void) | undefined;
+  readonly isCorrectionSuppressed: (() => boolean) | undefined;
 }
 
 function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
@@ -88,21 +109,15 @@ function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
  * triggers, independent of render timing or cache freshness. Bottom-follow is
  * reimplemented here instead, owned entirely by the app:
  *
- * - `permissionRef` is a plain ref (not React state) holding the single
- *   question this whole mechanism answers: "as of the last REAL geometry
- *   observation, was the reader at the strict edge?" It is written ONLY by a
- *   direct, own `passive` native `scroll` listener attached straight to the
- *   scrollable DOM node (not the library's `onScroll` prop - that path can be
- *   internally deferred by the library, per its own `shouldDeferPublicOnScroll`
- *   gate, so it is not a reliable synchronous signal) and by a `ResizeObserver`
- *   on that same node (the viewport-layout trigger). Every write recomputes
- *   fresh from LIVE `scrollTop`/`scrollHeight`/`clientHeight` - there is no
- *   baseline, no direction heuristic, no memory of any past position. This is
- *   what makes it sound: permission can only ever be exactly what the last
- *   real measurement said, so a reader who scrolls downward but stops short of
- *   the edge, or is nudged by a fraction of a pixel while still far away, or
- *   gets remapped by MVCP/virtualization, is read correctly every single time
- *   - there is nothing stale to be fooled by.
+ * - `permissionRef` is the single live follow authority. Native and LegendList
+ *   scroll delivery both route through the same fresh DOM geometry observer;
+ *   the latter closes bootstrap ordering gaps without introducing another
+ *   state owner. `initialScrollAtEnd` seeds the ref once and never resets it.
+ * - An app-owned correction carries a generation and reader-gesture token.
+ *   Its intermediate non-bottom scroll reports cannot revoke permission;
+ *   validation reissues after two-frame measurement windows with a bounded
+ *   retry budget. A real gesture cancels that ownership before its scroll
+ *   report, so reader departure still revokes immediately.
  * - `followEndIfPermitted` is the ONE place that turns permission into an
  *   actual scroll: read the ref, and if true, call the list's own imperative
  *   `scrollToEnd`. Every real maintain trigger funnels through this same
@@ -121,16 +136,65 @@ export function useChatTimelineFollowLatch(
   listRef: RefObject<LegendListRef | null>,
   initialScrollAtEnd: boolean,
   hasRows: boolean,
+  options: ChatTimelineFollowLatchOptions,
 ): ChatTimelineFollowLatch {
+  const { onFollowIntentChange, isCorrectionSuppressed } = options;
   const permissionRef = useRef(initialScrollAtEnd);
   const [scrollNode, setScrollNode] = useState<HTMLElement | null>(null);
+  const onFollowIntentChangeRef = useRef(onFollowIntentChange);
+  const correctionGenerationRef = useRef(0);
+  const readerGestureGenerationRef = useRef(0);
+  const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
 
   useLayoutEffect(() => {
-    permissionRef.current = initialScrollAtEnd;
-  }, [initialScrollAtEnd]);
+    onFollowIntentChangeRef.current = onFollowIntentChange;
+  }, [onFollowIntentChange]);
+
+  const cancelActiveCorrection = useCallback((): void => {
+    const correction = activeCorrectionRef.current;
+    if (correction !== null && correction.animationFrameId !== null) {
+      cancelAnimationFrame(correction.animationFrameId);
+    }
+    activeCorrectionRef.current = null;
+  }, []);
+
+  const setFollowIntent = useCallback(
+    (isFollowing: boolean): void => {
+      if (!isFollowing) cancelActiveCorrection();
+      if (permissionRef.current === isFollowing) return;
+      permissionRef.current = isFollowing;
+      onFollowIntentChangeRef.current?.(isFollowing);
+    },
+    [cancelActiveCorrection],
+  );
+
+  const noteReaderGesture = useCallback((): void => {
+    readerGestureGenerationRef.current += 1;
+    cancelActiveCorrection();
+  }, [cancelActiveCorrection]);
+
+  const observeLiveGeometry = useCallback((): void => {
+    const node = listRef.current?.getScrollableNode();
+    if (!node) return;
+    const geometry = readScrollGeometry(node);
+    if (!isChatTimelineGeometryMeasurable(geometry)) return;
+    if (isChatTimelineAtStrictBottom(geometry)) {
+      cancelActiveCorrection();
+      setFollowIntent(true);
+      return;
+    }
+
+    const correction = activeCorrectionRef.current;
+    const isOwnedIntermediateReport =
+      correction !== null &&
+      correction.readerGestureGeneration === readerGestureGenerationRef.current;
+    if (isOwnedIntermediateReport) return;
+    setFollowIntent(false);
+  }, [cancelActiveCorrection, listRef, setFollowIntent]);
 
   const followEndIfPermitted = useCallback((): void => {
     if (!permissionRef.current) return;
+    if (isCorrectionSuppressed?.() === true) return;
     // Skip when a fresh read shows the reader is ALREADY at the edge -
     // e.g. a destructive deletion the UA itself already clamped to the new
     // max. `scrollToEnd()` there would be a geometric no-op but still reads
@@ -138,18 +202,66 @@ export function useChatTimelineFollowLatch(
     // list's own imperative API, which the destructive-mutation contract
     // ("no invented destination") explicitly forbids - passive landings are
     // not reader-earned follow, but they also need no correction.
-    const node = listRef.current?.getScrollableNode();
-    if (node) {
-      const geometry = readScrollGeometry(node);
-      if (
-        isChatTimelineGeometryMeasurable(geometry) &&
-        isChatTimelineAtStrictBottom(geometry)
-      ) {
+    const list = listRef.current;
+    const node = list?.getScrollableNode();
+    if (!list || !node) return;
+    const geometry = readScrollGeometry(node);
+    if (!isChatTimelineGeometryMeasurable(geometry)) return;
+    if (isChatTimelineAtStrictBottom(geometry)) {
+      cancelActiveCorrection();
+      return;
+    }
+
+    cancelActiveCorrection();
+    const correction: ActiveEndCorrection = {
+      generation: correctionGenerationRef.current + 1,
+      readerGestureGeneration: readerGestureGenerationRef.current,
+      attempts: 0,
+      animationFrameId: null,
+    };
+    correctionGenerationRef.current = correction.generation;
+    activeCorrectionRef.current = correction;
+
+    const isCurrent = (): boolean =>
+      activeCorrectionRef.current?.generation === correction.generation &&
+      permissionRef.current &&
+      readerGestureGenerationRef.current === correction.readerGestureGeneration;
+
+    const validateAndReissue = (): void => {
+      correction.animationFrameId = null;
+      if (!isCurrent()) return;
+      const liveGeometry = readScrollGeometry(node);
+      if (!isChatTimelineGeometryMeasurable(liveGeometry)) {
+        cancelActiveCorrection();
         return;
       }
-    }
-    void listRef.current?.scrollToEnd({ animated: false });
-  }, [listRef]);
+      if (isChatTimelineAtStrictBottom(liveGeometry)) {
+        cancelActiveCorrection();
+        return;
+      }
+      issue();
+    };
+
+    const scheduleValidation = (): void => {
+      correction.animationFrameId = requestAnimationFrame(() => {
+        if (!isCurrent()) return;
+        correction.animationFrameId = requestAnimationFrame(validateAndReissue);
+      });
+    };
+
+    const issue = (): void => {
+      if (!isCurrent()) return;
+      if (correction.attempts >= CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS) {
+        cancelActiveCorrection();
+        return;
+      }
+      correction.attempts += 1;
+      void list.scrollToEnd({ animated: false });
+      scheduleValidation();
+    };
+
+    issue();
+  }, [cancelActiveCorrection, isCorrectionSuppressed, listRef]);
 
   // The empty state does not mount LegendList. Re-resolve when the rendered
   // timeline crosses that boundary so the first row attaches the listener,
@@ -163,13 +275,7 @@ export function useChatTimelineFollowLatch(
     const node = scrollNode;
     if (!node) return;
 
-    const refreshPermissionFromLiveGeometry = (): void => {
-      const geometry = readScrollGeometry(node);
-      if (!isChatTimelineGeometryMeasurable(geometry)) return;
-      permissionRef.current = isChatTimelineAtStrictBottom(geometry);
-    };
-
-    node.addEventListener("scroll", refreshPermissionFromLiveGeometry, {
+    node.addEventListener("scroll", observeLiveGeometry, {
       passive: true,
     });
     // Viewport-layout trigger (divider drag / pane resize): fires with no
@@ -185,12 +291,32 @@ export function useChatTimelineFollowLatch(
       followEndIfPermitted();
     });
     resizeObserver.observe(node);
+    followEndIfPermitted();
 
     return () => {
-      node.removeEventListener("scroll", refreshPermissionFromLiveGeometry);
+      node.removeEventListener("scroll", observeLiveGeometry);
       resizeObserver.disconnect();
+      cancelActiveCorrection();
     };
-  }, [scrollNode, followEndIfPermitted]);
+  }, [
+    scrollNode,
+    cancelActiveCorrection,
+    followEndIfPermitted,
+    observeLiveGeometry,
+  ]);
 
-  return useMemo(() => ({ followEndIfPermitted }), [followEndIfPermitted]);
+  return useMemo(
+    () => ({
+      followEndIfPermitted,
+      setFollowIntent,
+      noteReaderGesture,
+      observeLiveGeometry,
+    }),
+    [
+      followEndIfPermitted,
+      noteReaderGesture,
+      observeLiveGeometry,
+      setFollowIntent,
+    ],
+  );
 }

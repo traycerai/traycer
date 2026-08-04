@@ -403,7 +403,7 @@ function dispatchKeyInScope(key: string): void {
 
 /**
  * Enter free-scrolling and leave the strict end so the Jump-to-latest pill can
- * show after the 150ms debounce. Drives a scrollTop departure and waits for
+ * show immediately. Drives a scrollTop departure and waits for
  * the isAtEnd=false -> free-scrolling mode flip (the only automatic path after
  * anchor removal). Does not assert a specific scrollTop - callers that need a
  * known park should call fireScrollTopAndFlush afterward and re-check mode.
@@ -890,8 +890,8 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  describe("pill debounce", () => {
-    it("does not show the Jump-to-latest chip immediately on leaving the end, then shows after 150ms", async () => {
+  describe("pill departure feedback", () => {
+    it("shows Jump to latest on the first confirmed reader departure", async () => {
       const messages = makeTranscript(20);
       renderChatMessages({ messages, scrollStateKey: "pill-debounce-key" });
       await settleLegendList();
@@ -899,25 +899,6 @@ describe("ChatMessages scroll policy", () => {
       expect(isJumpPillVisible()).toBe(false);
 
       await enterFreeScrollingAwayFromEnd();
-
-      // Debounced show: still hidden before 150ms.
-      expect(isJumpPillVisible()).toBe(false);
-
-      // Real (not fake) wall-clock timers - margin wide enough to absorb
-      // scheduling jitter under load without weakening what this proves
-      // (still well short of the 150ms debounce).
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS - 60);
-        });
-      });
-      expect(isJumpPillVisible()).toBe(false);
-
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 90);
-        });
-      });
       expect(isJumpPillVisible()).toBe(true);
     });
 
