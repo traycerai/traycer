@@ -1,10 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  LIVE_ACTIVITY_WINDOW_EXIT_MS,
-  LiveActivityWindow,
-} from "@/components/chat/segments/live-activity-window";
+import { LiveActivityWindow } from "@/components/chat/segments/live-activity-window";
+import { LIVE_ACTIVITY_WINDOW_EXIT_MS } from "@/components/chat/segments/live-activity-window-mount";
 
 /**
  * jsdom does no layout, so `scrollHeight`/`clientHeight` are 0 and the window
