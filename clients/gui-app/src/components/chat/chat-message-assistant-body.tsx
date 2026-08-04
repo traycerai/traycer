@@ -762,6 +762,7 @@ function ApprovalSegmentCard({
       decision={segment.decision}
       variant="card"
       headerFindUnitId={findUnitId}
+      initiallyOpen={false}
     />
   );
 }
@@ -799,6 +800,8 @@ function AssistantSegment({
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
           bodyBoundedByParent={false}
+          headerless={false}
+          initiallyExpanded={false}
         />
       );
     case "tool": {
@@ -832,6 +835,7 @@ function AssistantSegment({
           segment={segment}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
     case "file_change_group":
@@ -861,6 +865,7 @@ function AssistantSegment({
           startedAt={segment.startedAt}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
     }
