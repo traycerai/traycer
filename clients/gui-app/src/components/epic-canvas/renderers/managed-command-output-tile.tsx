@@ -13,6 +13,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -43,6 +44,13 @@ import {
 } from "@/lib/managed-commands/managed-command-copy";
 import type { ManagedCommandOutputTileRef } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
+import {
+  readReadingPosition,
+  readingPositionIdentityForTileInstance,
+  registerReadingPositionCapture,
+  saveReadingPosition,
+} from "@/lib/reading-position";
 
 /**
  * How close to the newest line still counts as "following". A few pixels of
@@ -52,6 +60,55 @@ import { cn } from "@/lib/utils";
 const FOLLOW_SLACK_PX = 24;
 /** Distance from the top that asks for the next page of older lines. */
 const LOAD_OLDER_THRESHOLD_PX = 48;
+
+let nextManagedOutputSessionIdentity = 1;
+const managedOutputSessionIdentityByStore = new WeakMap<object, string>();
+
+function managedOutputSessionViewKey(
+  tileInstanceId: string,
+  store: object,
+): string {
+  const existing = managedOutputSessionIdentityByStore.get(store);
+  if (existing !== undefined) return `${tileInstanceId}:${existing}`;
+  const minted = `managed-output-session-${String(nextManagedOutputSessionIdentity)}`;
+  nextManagedOutputSessionIdentity += 1;
+  managedOutputSessionIdentityByStore.set(store, minted);
+  return `${tileInstanceId}:${minted}`;
+}
+
+interface ManagedCommandReadingAnchor {
+  readonly following: boolean;
+  readonly scrollTop: number;
+  readonly scrollHeight: number;
+}
+
+function isManagedCommandReadingAnchor(
+  value: unknown,
+): value is ManagedCommandReadingAnchor {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  if (
+    !("following" in value) ||
+    !("scrollTop" in value) ||
+    !("scrollHeight" in value)
+  ) {
+    return false;
+  }
+  return (
+    typeof value.following === "boolean" &&
+    typeof value.scrollTop === "number" &&
+    Number.isFinite(value.scrollTop) &&
+    typeof value.scrollHeight === "number" &&
+    Number.isFinite(value.scrollHeight)
+  );
+}
+
+function initialManagedCommandFollowing(
+  anchor: ManagedCommandReadingAnchor | null,
+): boolean {
+  return anchor === null ? true : anchor.following;
+}
 
 export interface ManagedCommandOutputTileProps {
   readonly node: ManagedCommandOutputTileRef;
@@ -170,8 +227,31 @@ function ManagedCommandOutputTileBody(props: {
   const unsupported =
     useStreamMethodSupport("managedCommand.subscribeOutput") === "unsupported";
 
+  const visible = useTileBodyVisible();
+  const readingIdentity = useMemo(
+    () => ({
+      ...readingPositionIdentityForTileInstance(node.instanceId),
+      viewKey: managedOutputSessionViewKey(node.instanceId, store),
+    }),
+    [node.instanceId, store],
+  );
+  const restoredReadingAnchor = useMemo(
+    () =>
+      readReadingPosition(
+        readingIdentity,
+        "managed-command",
+        isManagedCommandReadingAnchor,
+      ),
+    [readingIdentity],
+  );
   const viewRef = useRef<HTMLDivElement>(null);
-  const [following, setFollowing] = useState(true);
+  const lastReadingAnchorRef = useRef<ManagedCommandReadingAnchor | null>(
+    restoredReadingAnchor,
+  );
+  const restoredReadingPositionRef = useRef(false);
+  const [following, setFollowing] = useState(() =>
+    initialManagedCommandFollowing(restoredReadingAnchor),
+  );
   // What the timeline looked like at the last moment we could measure it:
   // the oldest row's identity, and how tall the document was. A page of older
   // lines prepends content ABOVE the viewport, which slides everything the
@@ -186,6 +266,63 @@ function ManagedCommandOutputTileBody(props: {
     if (view === null) return;
     view.scrollTop = view.scrollHeight;
   }, []);
+
+  const captureReadingPosition = useCallback((): void => {
+    const view = viewRef.current;
+    const anchor =
+      view !== null && view.clientHeight !== 0
+        ? {
+            following,
+            scrollTop: view.scrollTop,
+            scrollHeight: view.scrollHeight,
+          }
+        : lastReadingAnchorRef.current;
+    if (anchor === null) return;
+    lastReadingAnchorRef.current = anchor;
+    saveReadingPosition(readingIdentity, "managed-command", anchor);
+  }, [following, readingIdentity]);
+
+  useLayoutEffect(
+    () =>
+      registerReadingPositionCapture({
+        captureKey: node.instanceId,
+        identity: readingIdentity,
+        capture: captureReadingPosition,
+      }),
+    [captureReadingPosition, node.instanceId, readingIdentity],
+  );
+
+  useLayoutEffect(() => {
+    if (!visible) {
+      captureReadingPosition();
+      restoredReadingPositionRef.current = false;
+      return;
+    }
+    if (restoredReadingPositionRef.current || lines.length === 0) return;
+    // Read again after a hidden interval: that path captures a newer anchor
+    // without changing `readingIdentity`, so the mount seed can be stale.
+    const anchor = readReadingPosition(
+      readingIdentity,
+      "managed-command",
+      isManagedCommandReadingAnchor,
+    );
+    if (anchor === null || anchor.following) {
+      restoredReadingPositionRef.current = true;
+      return;
+    }
+    const view = viewRef.current;
+    if (view === null || view.clientHeight === 0) return;
+    const max = Math.max(0, view.scrollHeight - view.clientHeight);
+    const proportional =
+      anchor.scrollHeight <= 0
+        ? 0
+        : Math.round(
+            (anchor.scrollTop / anchor.scrollHeight) * view.scrollHeight,
+          );
+    view.scrollTop =
+      anchor.scrollTop <= max ? anchor.scrollTop : Math.min(proportional, max);
+    restoredReadingPositionRef.current = true;
+  }, [captureReadingPosition, lines.length, readingIdentity, visible]);
 
   // Runs before paint, so the correction is never a visible jump. Browsers do
   // have native scroll anchoring, but the spec suppresses it at scrollTop 0 -
@@ -224,10 +361,17 @@ function ManagedCommandOutputTileBody(props: {
     const distanceFromBottom =
       view.scrollHeight - view.scrollTop - view.clientHeight;
     setFollowing(distanceFromBottom <= FOLLOW_SLACK_PX);
+    const nextAnchor = {
+      following: distanceFromBottom <= FOLLOW_SLACK_PX,
+      scrollTop: view.scrollTop,
+      scrollHeight: view.scrollHeight,
+    };
+    lastReadingAnchorRef.current = nextAnchor;
+    saveReadingPosition(readingIdentity, "managed-command", nextAnchor);
     if (view.scrollTop <= LOAD_OLDER_THRESHOLD_PX) {
       loadOlder();
     }
-  }, [loadOlder]);
+  }, [loadOlder, readingIdentity]);
 
   if (unsupported) {
     return (
