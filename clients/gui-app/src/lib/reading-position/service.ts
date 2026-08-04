@@ -11,6 +11,7 @@ const SCHEMA_VERSION = 1;
 const PERSIST_DELAY_MS = 160;
 const MAX_STORED_RECORDS = 1_000;
 const TOMBSTONE_LIMIT = 500;
+const PRESERVED_VIEW_TTL_MS = 5_000;
 
 type ReadingPositionSlot = "view" | "content";
 
@@ -24,8 +25,16 @@ interface ReadingPositionRecord {
 }
 
 interface CaptureRegistration {
+  readonly captureKey: string;
   readonly identity: ReadingPositionIdentity;
   readonly capture: () => void;
+}
+
+interface ReadingPositionSubscription {
+  readonly identity: ReadingPositionIdentity;
+  readonly surfaceKind: ReadingPositionSurfaceKind;
+  readonly listener: () => void;
+  boundKeys: ReadonlyArray<string>;
 }
 
 let activeAccountId: string | null = null;
@@ -35,10 +44,12 @@ let warnedForStorageFailure = false;
 const records = new Map<string, ReadingPositionRecord>();
 const pendingWrites = new Map<string, ReadingPositionRecord>();
 const captures = new Map<string, CaptureRegistration>();
-const listeners = new Map<string, Set<() => void>>();
+const listeners = new Map<string, Set<ReadingPositionSubscription>>();
+const subscriptions = new Set<ReadingPositionSubscription>();
 const tombstonedEpics = new Set<string>();
 const tombstonedDeletionKeys = new Set<string>();
-const preservedViewDeletions = new Set<string>();
+const preservedViewDeletions = new Map<string, number>();
+let nextPreservedViewGeneration = 1;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -398,7 +409,19 @@ export function deleteReadingPositionView(viewKey: string): void {
 export function preserveReadingPositionViewsForMove(
   viewKeys: ReadonlyArray<string>,
 ): void {
-  viewKeys.forEach((viewKey) => preservedViewDeletions.add(viewKey));
+  const generation = nextPreservedViewGeneration;
+  nextPreservedViewGeneration += 1;
+  viewKeys.forEach((viewKey) =>
+    preservedViewDeletions.set(viewKey, generation),
+  );
+  if (typeof window === "undefined") return;
+  window.setTimeout(() => {
+    for (const viewKey of viewKeys) {
+      if (preservedViewDeletions.get(viewKey) === generation) {
+        preservedViewDeletions.delete(viewKey);
+      }
+    }
+  }, PRESERVED_VIEW_TTL_MS);
 }
 
 export function flushPendingReadingPositionWrites(): void {
@@ -414,14 +437,15 @@ export function flushPendingReadingPositionWrites(): void {
 }
 
 export function registerReadingPositionCapture(args: {
+  readonly captureKey: string;
   readonly identity: ReadingPositionIdentity;
   readonly capture: () => void;
 }): () => void {
-  captures.set(args.identity.viewKey, args);
+  captures.set(args.captureKey, args);
   return () => {
-    const current = captures.get(args.identity.viewKey);
+    const current = captures.get(args.captureKey);
     if (current?.capture === args.capture) {
-      captures.delete(args.identity.viewKey);
+      captures.delete(args.captureKey);
     }
   };
 }
@@ -461,7 +485,43 @@ export function flushLiveReadingPositionViews(
 }
 
 function notifyKey(key: string): void {
-  listeners.get(key)?.forEach((listener) => listener());
+  listeners.get(key)?.forEach((registration) => registration.listener());
+}
+
+function bindReadingPositionSubscription(
+  registration: ReadingPositionSubscription,
+): void {
+  const keys = (["view", "content"] as const).flatMap((slot) => {
+    const key = storageKey(
+      registration.identity,
+      registration.surfaceKind,
+      slot,
+    );
+    return key === null ? [] : [key];
+  });
+  registration.boundKeys = keys;
+  for (const key of keys) {
+    const bucket = listeners.get(key) ?? new Set<ReadingPositionSubscription>();
+    bucket.add(registration);
+    listeners.set(key, bucket);
+  }
+}
+
+function unbindReadingPositionSubscription(
+  registration: ReadingPositionSubscription,
+): void {
+  for (const key of registration.boundKeys) {
+    const bucket = listeners.get(key);
+    if (bucket === undefined) continue;
+    bucket.delete(registration);
+    if (bucket.size === 0) listeners.delete(key);
+  }
+  registration.boundKeys = [];
+}
+
+function rebindReadingPositionSubscriptions(): void {
+  listeners.clear();
+  subscriptions.forEach(bindReadingPositionSubscription);
 }
 
 export function subscribeReadingPosition(
@@ -470,22 +530,17 @@ export function subscribeReadingPosition(
   listener: () => void,
 ): () => void {
   ensureCurrentAccount();
-  const keys = (["view", "content"] as const).flatMap((slot) => {
-    const key = storageKey(identity, surfaceKind, slot);
-    return key === null ? [] : [key];
-  });
-  for (const key of keys) {
-    const bucket = listeners.get(key) ?? new Set<() => void>();
-    bucket.add(listener);
-    listeners.set(key, bucket);
-  }
+  const registration: ReadingPositionSubscription = {
+    identity,
+    surfaceKind,
+    listener,
+    boundKeys: [],
+  };
+  subscriptions.add(registration);
+  bindReadingPositionSubscription(registration);
   return () => {
-    for (const key of keys) {
-      const bucket = listeners.get(key);
-      if (bucket === undefined) continue;
-      bucket.delete(listener);
-      if (bucket.size === 0) listeners.delete(key);
-    }
+    unbindReadingPositionSubscription(registration);
+    subscriptions.delete(registration);
   };
 }
 
@@ -564,7 +619,7 @@ export function activateReadingPositionAccount(accountId: string): void {
   activeAccountId = accountId;
   records.clear();
   pendingWrites.clear();
-  listeners.clear();
+  rebindReadingPositionSubscriptions();
   tombstonedEpics.clear();
   tombstonedDeletionKeys.clear();
   preservedViewDeletions.clear();
@@ -594,7 +649,7 @@ export function deactivateReadingPositionAccount(
   activeAccountId = null;
   records.clear();
   pendingWrites.clear();
-  listeners.clear();
+  rebindReadingPositionSubscriptions();
   tombstonedEpics.clear();
   tombstonedDeletionKeys.clear();
   preservedViewDeletions.clear();
@@ -697,6 +752,7 @@ export function resetReadingPositionServiceForTests(): void {
   pendingWrites.clear();
   captures.clear();
   listeners.clear();
+  subscriptions.clear();
   tombstonedEpics.clear();
   tombstonedDeletionKeys.clear();
   preservedViewDeletions.clear();
@@ -707,9 +763,7 @@ function handleStorageEvent(event: StorageEvent): void {
   const prefix = accountPrefix(activeAccountId);
   if (event.key === null) {
     records.clear();
-    [...listeners.values()].forEach((bucket) =>
-      bucket.forEach((listener) => listener()),
-    );
+    subscriptions.forEach((registration) => registration.listener());
     return;
   }
   if (!event.key.startsWith(prefix)) return;

@@ -17,6 +17,7 @@ export function registerChatTabViewportCapture(
   identity: ReadingPositionIdentity,
 ): () => void {
   return registerReadingPositionCapture({
+    captureKey: instanceId,
     identity: { ...identity, viewKey: instanceId },
     capture,
   });

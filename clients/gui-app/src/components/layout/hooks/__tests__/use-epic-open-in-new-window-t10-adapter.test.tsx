@@ -364,13 +364,16 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
     const windows = createControllableWindowsBridge();
     setDesktopEpicOwnershipBridge(windows.bridge);
     const persistence = installControllableDesktopTabsPersistence();
-    const order: string[] = [];
+    const projectionWrite: { resolve: (() => void) | null } = {
+      resolve: null,
+    };
     const projection = createDebouncedDesktopPerWindowProjectionBridge(
       {
         update: (patch) => {
-          order.push("canvas-projection");
           expect(patch.canvasByTabId?.[MOVING.id]).toBeDefined();
-          return Promise.resolve();
+          return new Promise<void>((resolve) => {
+            projectionWrite.resolve = resolve;
+          });
         },
       },
       60_000,
@@ -395,9 +398,17 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
       persistence.resolve({ capabilities: CAPABILITIES, revision: 1 });
     });
     await flush();
-    if (windows.openInNewWindowCalls.length > 0) order.push("move-ipc");
-
-    expect(order).toEqual(["canvas-projection", "move-ipc"]);
+    expect(windows.openInNewWindowCalls).toEqual([]);
+    act(() => {
+      if (projectionWrite.resolve === null) {
+        throw new Error("Expected a pending canvas projection write");
+      }
+      projectionWrite.resolve();
+    });
+    await flush();
+    expect(windows.openInNewWindowCalls).toEqual([
+      { epicId: "epic-moving", title: "Moving", tabId: MOVING.id },
+    ]);
   });
 
   it("aborts cleanly and never calls the move IPC if the tab is closed while the flush is in flight", async () => {

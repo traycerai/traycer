@@ -149,7 +149,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (8) ────────────────────────────────────────────
+  // ── Scoped zustand stores (9) ────────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",

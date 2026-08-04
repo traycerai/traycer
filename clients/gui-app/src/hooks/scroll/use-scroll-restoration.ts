@@ -123,7 +123,12 @@ export function useScrollRestoration(
   }, [identity]);
 
   useLayoutEffect(
-    () => registerReadingPositionCapture({ identity, capture: commit }),
+    () =>
+      registerReadingPositionCapture({
+        captureKey: identity.viewKey,
+        identity,
+        capture: commit,
+      }),
     [commit, identity],
   );
 

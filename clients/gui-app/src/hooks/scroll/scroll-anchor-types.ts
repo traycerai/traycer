@@ -36,5 +36,8 @@ export function isTileScrollAnchor(value: unknown): value is TileScrollAnchor {
   if (value.kind !== "bundle-diff" || !isRecord(value.virtuosoState)) {
     return false;
   }
-  return isFiniteNumber(value.virtuosoState.scrollTop);
+  return (
+    isFiniteNumber(value.virtuosoState.scrollTop) &&
+    Array.isArray(value.virtuosoState.ranges)
+  );
 }

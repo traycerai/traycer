@@ -55,4 +55,21 @@ describe("xterm host viewport continuity", () => {
     expect(reacquired).toBe(entry);
     expect(reacquired.term).toBe(entry.term);
   });
+
+  it("refuses to rekey an engine that is still mounted", () => {
+    const entry = acquireXtermHost("mounted-source", makeEntry);
+
+    expect(rekeyXtermHost("mounted-source", "new-instance")).toBe(false);
+    expect(acquireXtermHost("mounted-source", makeEntry)).toBe(entry);
+  });
+
+  it("refuses an occupied destination without losing the warm source", () => {
+    const source = acquireXtermHost("warm-source", makeEntry);
+    releaseXtermHost("warm-source", true);
+    const destination = acquireXtermHost("occupied-target", makeEntry);
+
+    expect(rekeyXtermHost("warm-source", "occupied-target")).toBe(false);
+    expect(acquireXtermHost("warm-source", makeEntry)).toBe(source);
+    expect(acquireXtermHost("occupied-target", makeEntry)).toBe(destination);
+  });
 });

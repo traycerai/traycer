@@ -285,10 +285,11 @@ function ManagedCommandOutputTileBody(props: {
   useLayoutEffect(
     () =>
       registerReadingPositionCapture({
+        captureKey: node.instanceId,
         identity: readingIdentity,
         capture: captureReadingPosition,
       }),
-    [captureReadingPosition, readingIdentity],
+    [captureReadingPosition, node.instanceId, readingIdentity],
   );
 
   useLayoutEffect(() => {
@@ -298,13 +299,17 @@ function ManagedCommandOutputTileBody(props: {
       return;
     }
     if (restoredReadingPositionRef.current || lines.length === 0) return;
-    restoredReadingPositionRef.current = true;
+    // Read again after a hidden interval: that path captures a newer anchor
+    // without changing `readingIdentity`, so the mount seed can be stale.
     const anchor = readReadingPosition(
       readingIdentity,
       "managed-command",
       isManagedCommandReadingAnchor,
     );
-    if (anchor === null || anchor.following) return;
+    if (anchor === null || anchor.following) {
+      restoredReadingPositionRef.current = true;
+      return;
+    }
     const view = viewRef.current;
     if (view === null || view.clientHeight === 0) return;
     const max = Math.max(0, view.scrollHeight - view.clientHeight);
@@ -316,6 +321,7 @@ function ManagedCommandOutputTileBody(props: {
           );
     view.scrollTop =
       anchor.scrollTop <= max ? anchor.scrollTop : Math.min(proportional, max);
+    restoredReadingPositionRef.current = true;
   }, [captureReadingPosition, lines.length, readingIdentity, visible]);
 
   // Runs before paint, so the correction is never a visible jump. Browsers do

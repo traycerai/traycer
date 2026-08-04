@@ -4,9 +4,12 @@ import {
   clearReadingPositionTombstones,
   deactivateReadingPositionAccount,
   deleteReadingPositionView,
+  flushLiveReadingPositionViews,
   flushPendingReadingPositionWrites,
   preserveReadingPositionViewsForMove,
+  readExactReadingPosition,
   readReadingPosition,
+  registerReadingPositionCapture,
   resetReadingPositionServiceForTests,
   saveReadingPosition,
   subscribeReadingPosition,
@@ -58,6 +61,7 @@ describe("reading-position service", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetReadingPositionServiceForTests();
     window.localStorage.clear();
     vi.restoreAllMocks();
@@ -110,15 +114,28 @@ describe("reading-position service", () => {
   });
 
   it("removes the active account bucket on sign-out", () => {
-    const view = identity("sign-out-view");
-    saveReadingPosition(view, "native", { offset: 91 });
+    const accountOneView = identity("sign-out-view");
+    saveReadingPosition(accountOneView, "native", { offset: 91 });
     flushPendingReadingPositionWrites();
     expect(window.localStorage.length).toBe(2);
 
+    activateReadingPositionAccount("account-2");
+    const accountTwoView = identity("preserved-account-view");
+    saveReadingPosition(accountTwoView, "native", { offset: 92 });
+    flushPendingReadingPositionWrites();
+    expect(window.localStorage.length).toBe(4);
+
+    activateReadingPositionAccount("account-1");
     deactivateReadingPositionAccount(true);
 
-    expect(window.localStorage.length).toBe(0);
-    expect(readReadingPosition(view, "native", isTestAnchor)).toBeNull();
+    expect(window.localStorage.length).toBe(2);
+    expect(
+      readReadingPosition(accountOneView, "native", isTestAnchor),
+    ).toBeNull();
+    activateReadingPositionAccount("account-2");
+    expect(readReadingPosition(accountTwoView, "native", isTestAnchor)).toEqual(
+      { offset: 92 },
+    );
   });
 
   it("publishes a matching storage event to live subscribers", () => {
@@ -155,6 +172,35 @@ describe("reading-position service", () => {
     expect(readReadingPosition(view, "native", isTestAnchor)).toEqual({
       offset: 44,
     });
+    unsubscribe();
+  });
+
+  it("rebinds live subscribers when the active account changes", () => {
+    const view = identity("account-switch-subscriber");
+    const listener = vi.fn();
+    const unsubscribe = subscribeReadingPosition(view, "native", listener);
+
+    deactivateReadingPositionAccount(false);
+    activateReadingPositionAccount("account-2");
+    saveReadingPosition(view, "native", { offset: 45 });
+    flushPendingReadingPositionWrites();
+    const key = Object.keys(window.localStorage).find(
+      (candidate) =>
+        candidate.includes(encodeURIComponent("account-2")) &&
+        candidate.includes(encodeURIComponent(view.viewKey)),
+    );
+    expect(key).toBeDefined();
+    if (key === undefined) throw new Error("Expected account-2 exact-view key");
+
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key,
+        newValue: window.localStorage.getItem(key),
+        storageArea: window.localStorage,
+      }),
+    );
+
+    expect(listener).toHaveBeenCalledOnce();
     unsubscribe();
   });
 
@@ -248,12 +294,50 @@ describe("reading-position service", () => {
   it("keeps every tombstone in one oversized access-loss batch fenced", () => {
     const epicIds = Array.from({ length: 501 }, (_, index) => `epic-${index}`);
     tombstoneReadingPositionEpics(epicIds);
-    const first = { ...identity("batch-view"), epicId: epicIds[0] };
+    const last = { ...identity("batch-view"), epicId: epicIds[500] };
 
-    saveReadingPosition(first, "native", { offset: 41 });
+    saveReadingPosition(last, "native", { offset: 41 });
     flushPendingReadingPositionWrites();
 
     expect(window.localStorage.length).toBe(0);
+  });
+
+  it("expires unused move preservation without deleting a newer token", () => {
+    vi.useFakeTimers();
+    const view = identity("expiring-move-view");
+    saveReadingPosition(view, "native", { offset: 65 });
+
+    preserveReadingPositionViewsForMove([view.viewKey]);
+    vi.advanceTimersByTime(4_000);
+    preserveReadingPositionViewsForMove([view.viewKey]);
+    vi.advanceTimersByTime(1_000);
+
+    // The first token's timeout must not consume the newer move token.
+    deleteReadingPositionView(view.viewKey);
+    expect(readExactReadingPosition(view, "native", isTestAnchor)).toEqual({
+      offset: 65,
+    });
+
+    preserveReadingPositionViewsForMove([view.viewKey]);
+    vi.advanceTimersByTime(5_000);
+    deleteReadingPositionView(view.viewKey);
+    expect(readExactReadingPosition(view, "native", isTestAnchor)).toBeNull();
+  });
+
+  it("flushes captures by structural tile key, independent of storage view key", () => {
+    const capture = vi.fn();
+    const unregister = registerReadingPositionCapture({
+      captureKey: "tile-instance",
+      identity: rendererIdentity("session-specific-view"),
+      capture,
+    });
+
+    flushLiveReadingPositionViews(["tile-instance"]);
+    expect(capture).toHaveBeenCalledOnce();
+    flushLiveReadingPositionViews(["session-specific-view"]);
+    expect(capture).toHaveBeenCalledOnce();
+
+    unregister();
   });
 
   it("preserves exact state for one successful move removal only", () => {
