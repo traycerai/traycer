@@ -60,7 +60,7 @@ export class CommGraphCloudSubscriptionManager {
   private readonly onRowsPruned: (rowKeys: ReadonlySet<string>) => void;
   private readonly listeners = new Set<() => void>();
   private relayHostIds: ReadonlyArray<string> = [];
-  private relayReadinessKey: string | null = null;
+  private relayReadinessKeys = new Map<string, string>();
   /** Every host whose agents this epic projects. The cloud feed is shared
    * across them, so its state must not be shown only on the transport relay. */
   private originHostIds: ReadonlyArray<string> = [];
@@ -125,18 +125,38 @@ export class CommGraphCloudSubscriptionManager {
    * identity of a relay without changing its host ID. This lets a host that
    * published late, restarted, or upgraded get another cloud-feed attempt.
    */
-  setRelayReadinessKey(readinessKey: string): void {
-    if (this.disposed || readinessKey === this.relayReadinessKey) return;
-    this.relayReadinessKey = readinessKey;
+  setRelayReadinessKeys(readinessKeys: ReadonlyMap<string, string>): void {
+    if (this.disposed) return;
+    const changedHostIds = new Set<string>();
+    for (const hostId of new Set([
+      ...this.relayReadinessKeys.keys(),
+      ...readinessKeys.keys(),
+    ])) {
+      if (this.relayReadinessKeys.get(hostId) !== readinessKeys.get(hostId)) {
+        changedHostIds.add(hostId);
+      }
+    }
+    if (changedHostIds.size === 0) return;
+    this.relayReadinessKeys = new Map(readinessKeys);
     if (!this.attached) return;
-    this.rejectedRelayHostIds.clear();
-    this.unsupportedRelayHostIds.clear();
+    for (const hostId of changedHostIds) {
+      this.rejectedRelayHostIds.delete(hostId);
+      this.unsupportedRelayHostIds.delete(hostId);
+    }
     // A re-enrollment can keep the same host ID while rotating the relay's
     // transport identity. Reopen an active stream as well as retrying failed
     // candidates so it renegotiates with the new key rather than retaining a
-    // stale authenticated channel.
-    this.closeCurrent();
-    this.openNextRelay();
+    // stale authenticated channel. An unrelated host's directory update must
+    // not interrupt a healthy relay.
+    if (
+      this.relayHostId !== null &&
+      changedHostIds.has(this.relayHostId)
+    ) {
+      this.closeCurrent();
+      this.openNextRelay();
+    } else if (this.handle === null) {
+      this.openNextRelay();
+    }
     this.publish();
   }
 

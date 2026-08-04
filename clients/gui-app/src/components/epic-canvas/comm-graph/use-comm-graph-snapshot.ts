@@ -137,33 +137,35 @@ export function useCommGraphSnapshot(
   // upgrades in place. Keep that transport identity separately so a retained
   // cloud manager can retry a prior dial/compatibility failure for the same
   // host ID, without reopening on an equivalent directory re-emit.
-  const relayReadinessKey = useMemo(
-    () =>
-      hostDirectory.data === undefined
-        ? "directory-pending"
-        : hostDirectory.data
-            .map(
-              (entry) =>
-                [
-                  hostTransportKey(entry) ??
-                    [
-                      entry.hostId,
-                      entry.status,
-                      entry.version ?? "",
-                      entry.websocketUrl ?? "",
-                    ].join("\u0000"),
-                  // A remote host can be re-enrolled without changing its ID,
-                  // endpoint, or version. That rotates its Noise key and must
-                  // clear a retained failed-relay verdict, but deliberately
-                  // stays out of hostTransportKey so live transports do not
-                  // churn on a same-endpoint directory re-emit.
-                  isRemoteHostDirectoryEntry(entry) ? entry.publicKey : "",
-                ].join("\u0000"),
-            )
-            .sort()
-            .join("\u0001"),
-    [hostDirectory.data],
-  );
+  const relayReadinessKeys = useMemo(() => {
+    const entriesByHostId = new Map(
+      hostDirectory.data?.map((entry) => [entry.hostId, entry]),
+    );
+    return new Map(
+      relayHostIds.map((hostId) => {
+        const entry = entriesByHostId.get(hostId);
+        if (entry === undefined) {
+          return [hostId, "directory-pending"] as const;
+        }
+        return [
+          hostId,
+          [
+            hostTransportKey(entry) ??
+              [
+                entry.hostId,
+                entry.status,
+                entry.version ?? "",
+                entry.websocketUrl ?? "",
+              ].join("\u0000"),
+            // A remote host can be re-enrolled without changing its ID,
+            // endpoint, or version. That rotates its Noise key and must clear
+            // this relay's retained verdict without redialing other relays.
+            isRemoteHostDirectoryEntry(entry) ? entry.publicKey : "",
+          ].join("\u0000"),
+        ] as const;
+      }),
+    );
+  }, [hostDirectory.data, relayHostIds]);
 
   // Read through a ref so acquiring does not re-run (and re-claim) every time
   // the host set changes - the claim only needs the set that is current at the
@@ -178,8 +180,8 @@ export function useCommGraphSnapshot(
   }, [relayHostIds]);
 
   useEffect(() => {
-    cloudManager.setRelayReadinessKey(relayReadinessKey);
-  }, [cloudManager, relayReadinessKey]);
+    cloudManager.setRelayReadinessKeys(relayReadinessKeys);
+  }, [cloudManager, relayReadinessKeys]);
 
   useEffect(() => {
     acquireCommGraphCloudSubscription(

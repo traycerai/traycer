@@ -102,11 +102,11 @@ export function writeStderr(text: string): void {
 }
 
 /**
- * Writes to stdout and resolves to whether THIS write's own completion
- * callback confirmed success - `false` on a write error, or on hitting the
- * same bounded fallback `flushStdio` uses (a callback that never arrives
- * must never be read as success). Still chains into the shared `stdoutTail`
- * so `flushStdio`'s process-teardown ordering is unaffected.
+ * Writes to stdout and exposes both a bounded confirmation and THIS write's
+ * eventual callback outcome. The bounded result is `false` on a write error
+ * or when the callback has not arrived in time; the eventual result lets a
+ * durable caller distinguish a late success from a permanent stall. Still
+ * chains into the shared `stdoutTail` so `flushStdio` ordering is unaffected.
  *
  * For callers that must know a SPECIFIC write actually reached the OS
  * before doing something durable in response - e.g. the inbox monitor
@@ -117,14 +117,20 @@ export function writeStderr(text: string): void {
  * "this write succeeded" - conflating the two is exactly how an ack could
  * previously fire for text that was never written.
  */
-export async function writeStdoutForAck(text: string): Promise<boolean> {
+export function writeStdoutForAck(text: string): {
+  readonly confirmation: Promise<boolean>;
+  readonly eventualOutcome: Promise<boolean>;
+} {
   const { settled, outcome } = trackedWithOutcome(
     process.stdout,
     text,
     stdoutTail,
   );
   stdoutTail = settled;
-  return boundedOutcome(outcome);
+  return {
+    confirmation: boundedOutcome(outcome),
+    eventualOutcome: outcome,
+  };
 }
 
 function boundedOutcome(outcome: Promise<boolean>): Promise<boolean> {

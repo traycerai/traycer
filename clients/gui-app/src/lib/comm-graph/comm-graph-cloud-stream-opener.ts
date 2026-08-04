@@ -45,14 +45,17 @@ function openCommGraphCloudSubscription(
       }
       const frame = parsed.data;
       if (frame.kind === "availability") {
+        handlers.onStatus("live");
         handlers.onAvailability(frame.availability);
       } else if (frame.kind === "snapshot") {
+        handlers.onStatus("live");
         handlers.onSnapshot(
           frame.events,
           frame.headVersion,
           frame.frontier ?? null,
         );
       } else if (frame.kind === "event") {
+        handlers.onStatus("live");
         handlers.onEvent(frame.event);
       } else if (frame.kind === "connectionState") {
         handlers.onStatus("reconnecting");

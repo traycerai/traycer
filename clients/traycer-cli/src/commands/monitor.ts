@@ -673,7 +673,7 @@ async function handleServerFrame(
       // Negotiated below @1.2 - no eventId to ack; the host retires this
       // row itself (server-side compatibility ack). Still await the print
       // so this frame's output has landed before the next one is handled.
-      await printed;
+      await printed.confirmation;
       return;
     }
     // The durable row must only be acknowledged once THIS write was
@@ -684,10 +684,13 @@ async function handleServerFrame(
     // write still incomplete or failed, which previously let an ack fire for
     // text that was never actually written. `writeStdoutForAck` reports
     // this exact write's own outcome instead.
-    const delivered = await printed;
+    const delivered = await printed.confirmation;
     if (!delivered) {
+      void printed.eventualOutcome.then((eventuallyDelivered) => {
+        if (eventuallyDelivered) acknowledgements.enqueue(frame.eventId);
+      });
       logger.warn(
-        "Monitor: stdout write for inbox message did not confirm; leaving durable row unacked for redelivery",
+        "Monitor: stdout write for inbox message did not confirm before the timeout; waiting for its eventual outcome",
         {
           environment: config.environment,
           agentId: target.agentId,
@@ -776,12 +779,14 @@ function logEndpointResolution(
 }
 
 /**
- * Returns whether this write was CONFIRMED to reach the OS (no error, and
- * within `writeStdoutForAck`'s bounded wait) - the caller uses this to
- * decide whether acknowledging the durable row is safe, not `flushStdio()`
- * (see that function's doc comment for why it cannot answer that).
+ * Returns both the bounded confirmation used for timely diagnostics and the
+ * write's eventual outcome. A callback that succeeds after the bound still
+ * permits the caller to acknowledge the durable row; an error never does.
  */
-function printInboxMessage(item: AgentInboxMessage): Promise<boolean> {
+function printInboxMessage(item: AgentInboxMessage): {
+  readonly confirmation: Promise<boolean>;
+  readonly eventualOutcome: Promise<boolean>;
+} {
   const output = formatAgentMessage({
     receiverChannel: "cli",
     sender: {

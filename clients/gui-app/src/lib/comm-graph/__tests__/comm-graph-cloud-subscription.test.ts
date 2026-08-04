@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
 import {
   CommGraphCloudSubscriptionManager,
@@ -267,12 +267,14 @@ describe("CommGraphCloudSubscriptionManager", () => {
     );
 
     manager.setRelayHostIds(["relay-a"]);
-    manager.setRelayReadinessKey("relay-a:missing-endpoint");
+    manager.setRelayReadinessKeys(
+      new Map([["relay-a", "missing-endpoint"]]),
+    );
     manager.attach();
     expect(requests).toHaveLength(0);
 
     shouldFail = false;
-    manager.setRelayReadinessKey("relay-a:available:v2");
+    manager.setRelayReadinessKeys(new Map([["relay-a", "available:v2"]]));
 
     expect(requests).toHaveLength(1);
     expect(requests[0].hostId).toBe("relay-a");
@@ -295,15 +297,48 @@ describe("CommGraphCloudSubscriptionManager", () => {
     );
 
     manager.setRelayHostIds(["relay-a"]);
-    manager.setRelayReadinessKey("relay-a:available:v1");
+    manager.setRelayReadinessKeys(new Map([["relay-a", "available:v1"]]));
     manager.attach();
     expect(requests).toHaveLength(1);
 
-    manager.setRelayReadinessKey("relay-a:available:v2");
+    manager.setRelayReadinessKeys(new Map([["relay-a", "available:v2"]]));
 
     expect(firstClosed).toBe(true);
     expect(requests).toHaveLength(2);
     expect(requests[1].hostId).toBe("relay-a");
+  });
+
+  it("keeps an active relay open when another host's readiness changes", () => {
+    const requests: CommGraphCloudSubscriptionRequest[] = [];
+    const close = vi.fn();
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      (request) => {
+        requests.push(request);
+        return { close };
+      },
+      () => undefined,
+    );
+
+    manager.setRelayHostIds(["relay-a", "relay-b"]);
+    manager.setRelayReadinessKeys(
+      new Map([
+        ["relay-a", "available:v1"],
+        ["relay-b", "available:v1"],
+      ]),
+    );
+    manager.attach();
+
+    manager.setRelayReadinessKeys(
+      new Map([
+        ["relay-a", "available:v1"],
+        ["relay-b", "available:v2"],
+      ]),
+    );
+
+    expect(close).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].hostId).toBe("relay-a");
   });
 
   it("retries retained relays after a detached surface reattaches", () => {

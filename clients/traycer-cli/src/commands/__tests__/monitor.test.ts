@@ -632,4 +632,48 @@ describe("mixed-version inbox message frames", () => {
     stdoutSpy.mockRestore();
     void result;
   });
+
+  it("acks when a stdout write confirms successfully after the bounded timeout", async () => {
+    let writeCallback: ((error?: Error) => void) | null = null;
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((...args: unknown[]) => {
+        writeCallback = args.find((arg) => typeof arg === "function") as
+          | ((error?: Error) => void)
+          | null;
+        return true;
+      });
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    sessions[0].serverFrame?.({
+      kind: "message",
+      hasBinaryPayload: false,
+      item: {
+        reply: { expectsReply: false },
+        fromAgentId: "peer-1",
+        senderTitle: null,
+        senderHarnessId: null,
+        epicId: "e1",
+        prompt: "slow but successful stdout",
+        enqueuedAt: 123,
+        eventId: "evt-late-write",
+      },
+    });
+    await flush(10_000);
+    expect(callHostRpcMock).not.toHaveBeenCalled();
+
+    writeCallback?.();
+    await flush(0);
+    await flush(0);
+
+    expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
+      epicId: "e1",
+      agentId: "a1",
+      eventIds: ["evt-late-write"],
+    });
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
 });
