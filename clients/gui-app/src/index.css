@@ -1172,6 +1172,15 @@
     border: 0 !important;
     background-clip: padding-box !important;
   }
+
+  /* xterm draws its own slider div rather than a native scrollbar, so the
+     `::-webkit-scrollbar-thumb` rule above never reaches it. Width and colors
+     are matched where xterm accepts them (options + ITheme); the radius has
+     nowhere to go but here. xterm inline-styles only position/size/background,
+     so this is uncontested. */
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
+    border-radius: var(--radius-sm);
+  }
 }
 
 /*
