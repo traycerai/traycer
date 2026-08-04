@@ -28,7 +28,6 @@ import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
   useEpicArtifactBodyAwareness,
-  useEpicArtifactBodyLease,
   useEpicArtifactFragment,
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
@@ -105,9 +104,8 @@ const GUEST_COLLAB_USER: CollabUser = deriveCollabUser({
  * locks the surface.
  */
 export function CollabTileBody(props: CollabTileBodyProps) {
-  // Must precede the fragment read: artifact-room docs are only materialized
-  // while something leases them, so an unleased body has no fragment to bind.
-  useEpicArtifactBodyLease(props.node.id);
+  // `useEpicArtifactFragment` takes the artifact-room lease itself, which is
+  // what materializes the room and pins it for this editor's lifetime.
   const fragment = useEpicArtifactFragment(props.node.id);
   const artifactRoomAwareness = useEpicArtifactBodyAwareness(props.node.id);
   const bodyAvailability = useEpicArtifactBodyAvailability(props.node.id);

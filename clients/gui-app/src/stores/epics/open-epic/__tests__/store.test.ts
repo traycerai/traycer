@@ -2771,51 +2771,34 @@ describe("createOpenEpicStore", () => {
       }
     });
 
-    it("cools a room that was materialized by a read with no lease behind it", () => {
-      // `getArtifactFragment` materializes on read so a caller that does not
-      // know to lease (preview, search indexer, print path) still gets a live
-      // fragment. Materializing cancels the pending cooldown, so without an
-      // explicit re-arm each such read would strand a `Y.Doc` for the rest of
-      // the session and browsing a large epic would rebuild the accretion the
-      // cold cache exists to prevent.
+    it("leaves the fragment accessor pure - reading never materializes", () => {
+      // These accessors run inside Zustand selectors. Materializing there let
+      // an unrelated store update extend a room's lifetime, and let cap
+      // enforcement destroy an unpinned `Y.Doc` while a component rendered
+      // earlier in the same pass still held its fragment. Materialization
+      // belongs to the lease path.
       vi.useFakeTimers();
       try {
-        const { opened } = openWithReadyRoom("epic-unleased-read", "read me");
+        const { opened } = openWithReadyRoom("epic-pure-read", "read me");
+
+        expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+        expect(
+          opened.store.getState().getArtifactBodyAwareness("art-1"),
+        ).toBeNull();
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
-        const fragment = opened.store.getState().getArtifactFragment("art-1");
-        expect(fragment?.toJSON()).toContain("read me");
-        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
-          "artifact-room-0",
-        ]);
-
-        vi.advanceTimersByTime(61_000);
+        // Repeated reads must not touch cooldown or LRU state either.
+        vi.advanceTimersByTime(120_000);
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
-        opened.dispose();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("keeps a read-materialized room hot while a lease is taken over it", () => {
-      vi.useFakeTimers();
-      try {
-        const { opened } = openWithReadyRoom("epic-read-then-lease", "hold me");
-        opened.store.getState().getArtifactFragment("art-1");
         const release = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
-
-        vi.advanceTimersByTime(10 * 60_000);
-        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
-          "artifact-room-0",
-        ]);
+        expect(
+          opened.store.getState().getArtifactFragment("art-1")?.toJSON(),
+        ).toContain("read me");
 
         release();
-        vi.advanceTimersByTime(61_000);
-        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
-
         opened.dispose();
       } finally {
         vi.useRealTimers();

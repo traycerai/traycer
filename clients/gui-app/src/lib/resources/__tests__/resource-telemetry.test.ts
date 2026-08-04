@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createResourceTelemetrySampler,
+  RESOURCE_FIRST_SAMPLE_DELAY_MS,
+  RESOURCE_SAMPLE_INTERVAL_MS,
   heapSlopeMbPerHour,
   pressureTierFor,
   sessionAgeBucket,
@@ -255,6 +257,40 @@ describe("createResourceTelemetrySampler", () => {
       dispose();
       vi.advanceTimersByTime(60 * 60_000);
       expect(readJsHeap).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("createResourceTelemetrySampler timer schedule", () => {
+  it("samples once at the first-delay boundary and again each interval", () => {
+    vi.useFakeTimers();
+    try {
+      const readJsHeap = vi.fn(() => ({ usedMb: 100, limitMb: 4096 }));
+      const sampler = createResourceTelemetrySampler({
+        now: () => 0,
+        startedAtMs: 0,
+        readJsHeap,
+        collectContext: () => ({ openTabs: 0 }),
+        emit: { sample: () => {}, pressure: () => {} },
+      });
+      const dispose = sampler.start();
+
+      // Nothing before the first-sample delay: the point of that delay is to
+      // skip the hydration transient rather than measure it.
+      vi.advanceTimersByTime(RESOURCE_FIRST_SAMPLE_DELAY_MS - 1);
+      expect(readJsHeap).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(readJsHeap).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(RESOURCE_SAMPLE_INTERVAL_MS);
+      expect(readJsHeap).toHaveBeenCalledTimes(2);
+
+      dispose();
+      vi.advanceTimersByTime(RESOURCE_SAMPLE_INTERVAL_MS * 3);
+      expect(readJsHeap).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

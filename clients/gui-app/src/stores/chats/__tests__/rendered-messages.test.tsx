@@ -5867,8 +5867,15 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(first.blocks).toBe(firstBlocksRef);
     expect(first.blocks).toHaveLength(1);
     expect(second.blocks).toHaveLength(1);
-    // ...and the rendered turn still carries both records' content.
-    expect(result.current.length).toBeGreaterThan(0);
+    // ...and the rendered turn still carries both records' content, in order.
+    // `length > 0` alone passed even if merging dropped `second half`.
+    expect(
+      collectAssistantReplyText(
+        result.current.flatMap((row) =>
+          row.role === "assistant" ? row.segments : [],
+        ),
+      ),
+    ).toBe("first half\n\nsecond half");
   });
 });
 describe("assistant turn render cache invalidation", () => {

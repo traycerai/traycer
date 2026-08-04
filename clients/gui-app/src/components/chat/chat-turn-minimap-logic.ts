@@ -247,10 +247,25 @@ function sliceWholeCodePoints(text: string, maxUnits: number): string {
  */
 const WHITESPACE_RE = /\s/;
 
+/**
+ * Hard ceiling on how much source the preview scan will read.
+ *
+ * The output budget alone does not bound the loop: a whitespace-only turn, or
+ * one with a very long whitespace prefix, emits nothing and would walk the
+ * entire message. This runs for every user and assistant preview, so a single
+ * large message would cost renderer work proportional to its whole length.
+ *
+ * Generous enough that no realistic leading-whitespace run reaches it - which
+ * is the case the scan was widened for in the first place - while keeping the
+ * worst case constant.
+ */
+const PREVIEW_SOURCE_SCAN_LIMIT = 16_384;
+
 function collapseWhitespaceUpTo(text: string, maxOut: number): string {
   let out = "";
   let pendingSpace = false;
-  for (let index = 0; index < text.length; index += 1) {
+  const scanLimit = Math.min(text.length, PREVIEW_SOURCE_SCAN_LIMIT);
+  for (let index = 0; index < scanLimit; index += 1) {
     const ch = text[index];
     if (WHITESPACE_RE.test(ch)) {
       if (out.length > 0) pendingSpace = true;

@@ -1330,20 +1330,14 @@ export function createOpenEpicStore(
   }
 
   /**
-   * Re-arm the linger after a materialization that no lease is holding.
-   *
-   * Materializing cancels the pending cooldown, which is correct while
-   * something is about to pin the room - but `getArtifactFragment` and
-   * `getArtifactBodyAwareness` materialize on READ, deliberately, so that a
-   * reader which does not know to lease (a preview, a search indexer, a print
-   * path) still gets a live fragment. Without re-arming, each such read would
-   * leave a `Y.Doc` resident for the rest of the session and browsing a large
-   * epic would rebuild exactly the accretion the cold cache exists to prevent.
+   * Re-arm the linger after materializing, in case nothing pinned the room.
    *
    * `scheduleArtifactRoomCooldown` no-ops while the room is pinned, and
-   * `acquireArtifactBodyLease` increments its count BEFORE materializing, so a
-   * leased materialization is unaffected. Repeated reads simply push the
-   * linger out, which is the intended "still being looked at" semantics.
+   * `acquireArtifactBodyLease` increments its count BEFORE materializing, so
+   * this is inert on the lease path - which is the only caller today. It stays
+   * as the guarantee for any future one: a materialization cancels the pending
+   * cooldown, so a caller that does not pin the room would otherwise strand a
+   * live `Y.Doc` for the rest of the session.
    */
   function armCooldownForUnleasedMaterialization(artifactRoomId: string): void {
     scheduleArtifactRoomCooldown(artifactRoomId);
@@ -2637,22 +2631,22 @@ export function createOpenEpicStore(
             // replica. Returns `null` until the artifactRoom transitions to
             // `ready` and a `artifactRoomSnapshot` has seeded the replica.
             //
-            // Materializes a cold room on read rather than requiring the
-            // caller to have taken a lease first. Keeping the lease as a
-            // PRECONDITION made the cold cache a trap: any reader that did not
-            // know to lease - a preview, a search indexer, a print path - got
-            // `null` for a room that is perfectly available and rendered a
-            // permanent loading state with no error anywhere. The lease is now
-            // purely a pin that keeps the room from cooling underneath a
-            // long-lived reader; correctness no longer depends on taking one.
+            // PURE. This runs inside Zustand selectors, so it must not
+            // materialize, touch the LRU, reset a cooldown, or evict: an
+            // earlier attempt did all four and made an unrelated store update
+            // able to extend a room's lifetime, and made cap enforcement able
+            // to destroy an unpinned `Y.Doc` while a component rendered
+            // earlier in the same pass was still holding its fragment.
+            // Materialization belongs to `acquireArtifactBodyLease`, which
+            // `useEpicArtifactFragment` takes for the caller.
             const artifactRoomId = readArtifactArtifactRoomId(artifactId);
             if (artifactRoomId === null) return null;
             const availability =
               get().artifactRooms.stateByArtifactRoomId[artifactRoomId] ??
               "unavailable";
             if (availability !== "ready") return null;
-            const entry = materializeArtifactRoomReplica(artifactRoomId);
-            if (entry === null) return null;
+            const entry = artifactRoomReplicas.get(artifactRoomId);
+            if (entry === undefined) return null;
             return entry.doc.getXmlFragment(
               artifactBodyFragmentName(artifactId),
             );
@@ -2665,11 +2659,9 @@ export function createOpenEpicStore(
               get().artifactRooms.stateByArtifactRoomId[artifactRoomId] ??
               "unavailable";
             if (availability !== "ready") return null;
-            // Materialize-on-read for the same reason as `getArtifactFragment`
-            // - and it must be the SAME call, so the caret binds to the
-            // awareness paired with the doc the editor just bound to.
-            const entry = materializeArtifactRoomReplica(artifactRoomId);
-            if (entry === null) return null;
+            // Pure, for the same reason as `getArtifactFragment`.
+            const entry = artifactRoomReplicas.get(artifactRoomId);
+            if (entry === undefined) return null;
             return entry.awareness;
           },
 

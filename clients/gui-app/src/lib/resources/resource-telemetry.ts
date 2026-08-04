@@ -288,7 +288,13 @@ export function startResourceTelemetry(
   // one axis the event exists to correlate heap against - and makes the slope
   // regression's x-axis non-monotonic, which can flip its sign and report a
   // leaking session as releasing memory.
-  const startedAtMs = performance.now();
+  //
+  // Anchored at 0, the document's time origin, NOT at `performance.now()` when
+  // this bridge mounts. The event reports the age of the renderer session, so
+  // it has to include app boot - and anchoring at mount would additionally
+  // reset the age to zero on any remount, which is precisely when a long-lived
+  // window is most interesting.
+  const startedAtMs = 0;
   const sampler = createResourceTelemetrySampler({
     now: () => performance.now(),
     startedAtMs,

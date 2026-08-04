@@ -858,6 +858,13 @@ export function useEpicArtifactFragment(
   artifactId: string | null,
 ): Y.XmlFragment | null {
   const handle = useOpenEpicHandle();
+  // Takes the lease itself. The store's accessor is a pure read - it cannot
+  // materialize a cold room, because it runs inside a selector - so a caller
+  // that read without pinning would sit in a loading state forever. Bundling
+  // the two makes the hook correct by construction; `getArtifactFragment` on
+  // the store stays the escape hatch for non-React callers, which must lease
+  // explicitly (see `useEpicExportArtifacts`).
+  useEpicArtifactBodyLease(artifactId);
   return useStore(handle.store, (s) => {
     if (artifactId === null) return null;
     return s.getArtifactFragment(artifactId);
@@ -879,6 +886,9 @@ export function useEpicArtifactBodyAwareness(
   artifactId: string | null,
 ): Awareness | null {
   const handle = useOpenEpicHandle();
+  // Same reasoning as `useEpicArtifactFragment`; lease counts are refcounted,
+  // so a component using both hooks simply holds two.
+  useEpicArtifactBodyLease(artifactId);
   return useStore(handle.store, (s) => {
     if (artifactId === null) return null;
     return s.getArtifactBodyAwareness(artifactId);
@@ -902,14 +912,14 @@ export function useEpicArtifactBodyAvailability(
 }
 
 /**
- * Holds `artifactId`'s artifact-room materialized for as long as the calling
- * component is mounted.
+ * Materializes `artifactId`'s artifact-room and holds it materialized for as
+ * long as the calling component is mounted.
  *
- * Rooms the host opens are cached as encoded update bytes; only a leased room
- * has a live `Y.Doc`, and therefore only a leased room has a fragment for
- * {@link useEpicArtifactFragment} to return. Any component that binds an
- * editor to an artifact body must call this - without it the tile renders its
- * loading skeleton forever.
+ * Rooms the host opens are cached as encoded update bytes; taking a lease is
+ * what builds the live `Y.Doc`, and holding it is what stops the room cooling
+ * back down underneath a mounted editor. {@link useEpicArtifactFragment} and
+ * {@link useEpicArtifactBodyAwareness} call this for you - use it directly
+ * only to pin a room whose fragment this component does not itself read.
  *
  * The lease is re-taken when the resolved room id changes rather than only
  * when the artifact id does: an artifact reassigned between two rooms that are
@@ -921,10 +931,10 @@ export function useEpicArtifactBodyLease(artifactId: string | null): void {
   const artifactRoomId = useStore(handle.store, (s) =>
     artifactId === null ? null : s.getArtifactRoomId(artifactId),
   );
-  // Layout, not passive: the lease is what keeps the room from cooling under a
-  // mounted editor, and a passive effect runs after paint. `getArtifactFragment`
-  // materializes on read so the first render already has its fragment - this
-  // only has to pin it before the browser paints.
+  // Layout, not passive: this is what materializes the room, and a passive
+  // effect runs after paint - the tile would show its skeleton for a frame
+  // before the fragment resolved. A layout effect lands the lease, and the
+  // resulting store update, before the browser paints.
   useLayoutEffect(() => {
     if (artifactId === null || artifactRoomId === null) return;
     return handle.store.getState().acquireArtifactBodyLease(artifactId);
