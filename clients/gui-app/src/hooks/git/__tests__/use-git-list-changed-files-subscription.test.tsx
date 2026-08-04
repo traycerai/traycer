@@ -1812,6 +1812,38 @@ describe("useGitListChangedFilesSubscription", () => {
       expect(result.current.watcherStatus).toBeNull();
     });
 
+    it("DROPS a malformed watcher rather than downgrading it into a v1.2 parse", async () => {
+      // The skew fallback must not become a bypass for the wire contract. A
+      // frame that CARRIES a watcher and still fails v1.3 is malformed - an
+      // unknown `state`, say - and the non-strict v1.2 schema would happily
+      // "rescue" it by stripping the offending field, recording the watcher as
+      // UNKNOWN and accepting a payload the contract exists to reject. Only a
+      // frame with no `watcher` key at all is version skew.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-1"),
+      );
+
+      const malformed = {
+        ...v13Snapshot({ state: "degraded-capacity", detail: null }),
+        fingerprint: "parent-malformed",
+        watcher: { state: "not-a-real-state", detail: null },
+      };
+      session.emitFrame(malformed, null);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Neither the payload nor the watcher moved: the frame was dropped.
+      expect(result.current.data?.fingerprint).toBe("parent-1");
+      expect(result.current.watcherStatus).toEqual({
+        state: "degraded-capacity",
+        detail: "over budget",
+      });
+    });
+
     it("drops watcher health when the session is REPLACED, not only when it terminates", async () => {
       // Replacement retires the generation and makes the old session's
       // callbacks inert, so nothing downstream can clear the value on its

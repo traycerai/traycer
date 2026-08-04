@@ -516,6 +516,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
         <GitWatcherStatusNotice
           status={subscription.watcherStatus}
           className={undefined}
+          compact={false}
         />
       </div>
       <CapabilityGate

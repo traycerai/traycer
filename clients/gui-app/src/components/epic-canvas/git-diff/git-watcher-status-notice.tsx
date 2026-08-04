@@ -11,6 +11,16 @@ export interface GitWatcherStatusNoticeProps {
   /** `null` when the host predates `git.subscribeStatus@1.3`, or pre-first-frame. */
   readonly status: GitWatcherStatus | null;
   readonly className: string | undefined;
+  /**
+   * Icon-only. For toolbars that share a narrow pane - a diff tile can be
+   * dragged to a 240px minimum, where a non-shrinking two-word label next to
+   * three or four icon controls overflows and clips them.
+   *
+   * Nothing is lost: the tooltip still carries the whole explanation and the
+   * remedy, and the trigger keeps an accessible name, so keyboard and
+   * assistive-tech users read exactly what the wide form says.
+   */
+  readonly compact: boolean;
 }
 
 interface NoticeCopy {
@@ -81,9 +91,12 @@ export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
         )}
         data-testid="git-watcher-status-notice"
         data-watcher-state={status.state}
+        // Carries the label when the text is not rendered, so the compact form
+        // is not an unnamed button to assistive tech.
+        aria-label={props.compact ? copy.label : undefined}
       >
         <Icon className="size-3.5 text-muted-foreground/60" />
-        {copy.label}
+        {props.compact ? null : copy.label}
       </TooltipTrigger>
       {/* No width cap here: `TooltipContent` already applies `w-fit max-w-xs`,
           so this was a redundant restatement of the primitive's own value.

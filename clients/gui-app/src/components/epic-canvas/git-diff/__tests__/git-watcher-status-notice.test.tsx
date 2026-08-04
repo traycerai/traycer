@@ -8,7 +8,20 @@ import { GitWatcherStatusNotice } from "../git-watcher-status-notice";
 function renderNotice(status: GitWatcherStatus | null): void {
   render(
     <TooltipProvider>
-      <GitWatcherStatusNotice status={status} className={undefined} />
+      <GitWatcherStatusNotice
+        status={status}
+        className={undefined}
+        compact={false}
+      />
+    </TooltipProvider>,
+  );
+}
+
+/** Icon-only form used in the narrow diff-tile toolbar. */
+function renderCompactNotice(status: GitWatcherStatus | null): void {
+  render(
+    <TooltipProvider>
+      <GitWatcherStatusNotice status={status} className={undefined} compact />
     </TooltipProvider>,
   );
 }
@@ -79,6 +92,27 @@ describe("<GitWatcherStatusNotice />", () => {
     expect(detail.parentElement).toBe(explanation.parentElement);
     expect(detail.parentElement?.getAttribute("data-slot")).toBeNull();
     expect(detail.closest("[data-slot='tooltip-content']")).not.toBeNull();
+  });
+
+  it("drops the label but not the accessible name in compact form", async () => {
+    // A diff tile can be dragged to a 240px pane and `DiffTabShell` marks the
+    // whole toolbar `shrink-0`, so a non-shrinking two-word label next to three
+    // or four icon controls pushes them out of the pane. Icon-only there - but
+    // the button must still NAME itself, or the compact form is an unlabelled
+    // control to assistive tech and the explanation becomes pointer-only.
+    const user = userEvent.setup();
+    renderCompactNotice({ state: "degraded-capacity", detail: null });
+
+    const trigger = screen.getByTestId(NOTICE);
+    expect(trigger.textContent).not.toContain("Periodic refresh");
+    expect(trigger.getAttribute("aria-label")).toBe("Periodic refresh");
+    expect(trigger.tagName).toBe("BUTTON");
+
+    // And the full explanation is still one hover/focus away.
+    await user.hover(trigger);
+    expect(
+      await screen.findByText(/watch limit|refresh on a timer/u),
+    ).toBeTruthy();
   });
 
   it("exposes a keyboard-focusable trigger", () => {

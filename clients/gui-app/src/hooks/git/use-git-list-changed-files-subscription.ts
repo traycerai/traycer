@@ -485,9 +485,26 @@ function tolerantV13Parse(value: unknown):
   | { success: false } {
   const strict = gitSubscribeStatusEventSchemaV13.safeParse(value);
   if (strict.success) return { success: true, data: strict.data };
+  // ONLY the version-skew shape gets the fallback: a frame that has no
+  // `watcher` at all. A frame that HAS one and still fails v1.3 is malformed -
+  // an unknown `state`, say - and the v1.2 schema would "rescue" it by
+  // stripping the offending field, quietly recording the watcher as UNKNOWN and
+  // accepting a payload the wire contract rejects. Dropping it is the point of
+  // having the contract. (`git-submodule-compat.test.ts` asserts v1.3 rejects
+  // exactly that.)
+  if (!isFrameMissingWatcher(value)) return { success: false };
   const relaxed = gitSubscribeStatusEventSchemaV12.safeParse(value);
   if (relaxed.success) return { success: true, data: relaxed.data };
   return { success: false };
+}
+
+/**
+ * Whether a decoded frame carries no `watcher` key at all - the signature of a
+ * peer that negotiated below 1.3, as distinct from one that sent a broken value.
+ */
+function isFrameMissingWatcher(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  return !("watcher" in value);
 }
 
 /**

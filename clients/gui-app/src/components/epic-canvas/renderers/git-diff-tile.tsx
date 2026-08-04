@@ -176,9 +176,13 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
         <>
           {/* Renders only while degraded, so the toolbar is unchanged in the
               healthy case rather than carrying a permanent empty slot. */}
+          {/* Compact here, full-width in the panel header: a tile pane can be
+              dragged to 240px and `DiffTabShell` makes the toolbar `shrink-0`,
+              so a non-shrinking label would push the icon controls out. */}
           <GitWatcherStatusNotice
             status={subscription.watcherStatus}
             className={undefined}
+            compact
           />
           <GitDiffTileToolbar
             node={props.node}
