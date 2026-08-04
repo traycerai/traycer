@@ -2263,6 +2263,21 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "backgroundTask": {
+                                              "default": false,
+                                              "anyOf": [
+                                                {
+                                                  "type": "boolean"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "stopped": {
+                                              "default": false,
+                                              "type": "boolean"
                                             }
                                           },
                                           "required": [
@@ -2272,7 +2287,9 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "type",
                                             "command",
                                             "cwd",
-                                            "exitCode"
+                                            "exitCode",
+                                            "backgroundTask",
+                                            "stopped"
                                           ],
                                           "additionalProperties": false
                                         },
@@ -3332,6 +3349,38 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                         "type": "null"
                                                       }
                                                     ]
+                                                  },
+                                                  "live": {
+                                                    "default": false,
+                                                    "type": "boolean"
+                                                  },
+                                                  "managedCommand": {
+                                                    "default": null,
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "commandId": {
+                                                            "type": "string"
+                                                          },
+                                                          "kind": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                              "monitor",
+                                                              "shell"
+                                                            ]
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "commandId",
+                                                          "kind"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
                                                   }
                                                 },
                                                 "required": [
@@ -3341,7 +3390,9 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "summary",
                                                   "blockId",
                                                   "outputFile",
-                                                  "mcp"
+                                                  "mcp",
+                                                  "live",
+                                                  "managedCommand"
                                                 ],
                                                 "additionalProperties": false
                                               }
