@@ -8,6 +8,8 @@ import type {
   GitSubscribeStatusEvent,
   GitSubscribeStatusEventV11,
   GitSubscribeStatusEventV12,
+  GitSubscribeStatusEventV13,
+  GitWatcherStatus,
 } from "@traycer/protocol/host/git-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
@@ -1569,5 +1571,177 @@ describe("useGitListChangedFilesSubscription", () => {
     } finally {
       randomUuid.mockRestore();
     }
+  });
+
+  describe("watcher health (v1.3)", () => {
+    function v13Snapshot(
+      watcher: GitWatcherStatus,
+    ): GitSubscribeStatusEventV13 {
+      return {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "head",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-1",
+        nestedFingerprint: "nested-1",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_000,
+        freshNonce: null,
+        watcher,
+      };
+    }
+
+    async function renderAtMinor(minor: number) {
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor };
+      const rendered = renderHook(
+        () =>
+          useGitListChangedFilesSubscription({
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() =>
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1),
+      );
+      const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+        ...(minor >= 2 ? { freshNonce: null } : {}),
+      });
+      if (session === undefined) throw new Error("Expected session");
+      return { result: rendered.result, session };
+    }
+
+    it("surfaces watcher health from a v1.3 frame", async () => {
+      const { result, session } = await renderAtMinor(3);
+      expect(result.current.watcherStatus).toBeNull();
+
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() =>
+        expect(result.current.watcherStatus).toEqual({
+          state: "degraded-capacity",
+          detail: "over budget",
+        }),
+      );
+      // The frame still populates the cache exactly as a v1.2 frame would -
+      // watcher health rides ALONGSIDE the changeset, it does not replace it.
+      expect(result.current.data?.fingerprint).toBe("parent-1");
+
+      session.emitFrame(v13Snapshot({ state: "watching", detail: null }), null);
+      await waitFor(() =>
+        expect(result.current.watcherStatus).toEqual({
+          state: "watching",
+          detail: null,
+        }),
+      );
+    });
+
+    it("reports UNKNOWN, not healthy, against a host negotiated below 1.3", async () => {
+      // The distinction matters: a released host emits no watcher field at
+      // all, and rendering that as "watching" would assert live updates this
+      // client has no evidence for.
+      const { result, session } = await renderAtMinor(2);
+      const v12: GitSubscribeStatusEventV12 = {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "head",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-1",
+        nestedFingerprint: "nested-1",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_000,
+        freshNonce: null,
+      };
+      session.emitFrame(v12, null);
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-1"),
+      );
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("ignores a watcher field arriving on a connection negotiated at 1.2", async () => {
+      // Defence in depth against a host that projects incorrectly: the v1.2
+      // schema parse strips the field, so it can never reach the UI.
+      const { result, session } = await renderAtMinor(2);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-1"),
+      );
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("holds watcher health across a git error frame", async () => {
+      // Error frames carry no watcher field, and a git-compute failure says
+      // nothing about the watcher. Dropping the value here would hide the
+      // notice for the whole error backoff - precisely when the panel is
+      // showing stale data and the staleness needs explaining.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      session.emitFrame(
+        { type: "error", message: "transient", isFatal: false },
+        null,
+      );
+      await waitFor(() => expect(result.current.error).not.toBeNull());
+      expect(result.current.watcherStatus).toEqual({
+        state: "degraded-error",
+        detail: "boom",
+      });
+    });
+
+    it("clears watcher health when the connection renegotiates below 1.3", async () => {
+      // Cold-review finding: writing `lastWatcherStatus` only when the field
+      // is PRESENT makes it a latch. The same client instance can reconnect to
+      // a restarted or rolled-back host and negotiate down, and then no frame
+      // is able to clear a notice describing a host generation that is gone.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
+      const downgraded: GitSubscribeStatusEventV12 = {
+        type: "updated",
+        runningDir: "/repo",
+        headSha: "head-2",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-2",
+        nestedFingerprint: "nested-2",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        changedPaths: [],
+        submodules: [],
+        pollStartedAtMs: 2_000,
+        freshNonce: null,
+      };
+      session.emitFrame(downgraded, null);
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-2"),
+      );
+      expect(result.current.watcherStatus).toBeNull();
+    });
   });
 });

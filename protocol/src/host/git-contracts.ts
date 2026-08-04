@@ -24,6 +24,7 @@ import {
   gitSubscribeStatusEventSchema,
   gitSubscribeStatusEventSchemaV11,
   gitSubscribeStatusEventSchemaV12,
+  gitSubscribeStatusEventSchemaV13,
 } from "./git-schemas";
 
 /**
@@ -188,5 +189,30 @@ export const gitSubscribeStatusV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: gitSubscribeStatusRequestSchemaV12,
   serverFrameSchema: gitSubscribeStatusEventSchemaV12,
+  clientFrameSchema: noClientFramesSchema,
+});
+
+/**
+ * `git.subscribeStatus@1.3` adds `watcher` health to snapshot/updated frames -
+ * whether the host is watching the filesystem for this repo or has fallen back
+ * to adaptive polling, and if so whether that fallback is user-fixable
+ * (capacity) or terminal for the host process (error). See
+ * `gitWatcherStatusSchema` for why the states are what they are.
+ *
+ * The open request is the v1.2 schema VERBATIM. This is deliberately NOT a
+ * client-subscribable option: watcher health rides every frame or none, because
+ * a client that opted out could never learn its updates went stale. The cost is
+ * two enum-ish fields on frames that already carry the full changed-file set.
+ *
+ * COMPAT POSTURE: streams have no version bridges, so the host resolver
+ * projects v1.3 frames down for every lower negotiated minor with explicit
+ * field picks. Released clients' non-strict zod parse is the independent second
+ * guard. Both are load-bearing; see the note on `gitSubscribeStatusV11`.
+ */
+export const gitSubscribeStatusV13 = defineStreamRpcContract({
+  method: "git.subscribeStatus",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: gitSubscribeStatusRequestSchemaV12,
+  serverFrameSchema: gitSubscribeStatusEventSchemaV13,
   clientFrameSchema: noClientFramesSchema,
 });

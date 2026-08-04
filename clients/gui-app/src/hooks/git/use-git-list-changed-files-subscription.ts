@@ -14,11 +14,14 @@ import {
   gitSubscribeStatusEventSchema,
   gitSubscribeStatusEventSchemaV11,
   gitSubscribeStatusEventSchemaV12,
+  gitSubscribeStatusEventSchemaV13,
   type GitListChangedFilesResponse,
   type GitListChangedFilesResponseV11,
   type GitSubscribeStatusEvent,
   type GitSubscribeStatusEventV11,
   type GitSubscribeStatusEventV12,
+  type GitSubscribeStatusEventV13,
+  type GitWatcherStatus,
   type RepoMode,
   type RepoState,
 } from "@traycer/protocol/host/git-schemas";
@@ -40,7 +43,8 @@ import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 type GitSubscribeStatusStreamEvent =
   | GitSubscribeStatusEvent
   | GitSubscribeStatusEventV11
-  | GitSubscribeStatusEventV12;
+  | GitSubscribeStatusEventV12
+  | GitSubscribeStatusEventV13;
 
 export interface GitListChangedFilesSubscriptionResult {
   readonly data: GitListChangedFilesResponse | null;
@@ -49,6 +53,13 @@ export interface GitListChangedFilesSubscriptionResult {
   readonly repoState: RepoState | null;
   readonly repoMode: RepoMode | null;
   readonly pollStartedAtMs: number | null;
+  /**
+   * Whether the host is watching the filesystem for this repo or has fallen
+   * back to periodic polling. `null` means UNKNOWN, not healthy: the host
+   * negotiated a minor below 1.3, or no frame has arrived yet. Callers must
+   * treat `null` as "say nothing" - never as a green light.
+   */
+  readonly watcherStatus: GitWatcherStatus | null;
 }
 
 interface ActiveSubscriptionArgs {
@@ -61,6 +72,16 @@ interface SharedSubscription {
   refCount: number;
   unsubscribeFromStream: () => void;
   lastEvent: GitSubscribeStatusStreamEvent | null;
+  /**
+   * Watcher health from the last frame that CARRIED it - deliberately not
+   * derived from `lastEvent`.
+   *
+   * Error frames carry no watcher field, and a git-compute failure is not
+   * evidence the watcher recovered or died. Reading this off `lastEvent` made
+   * the notice vanish for the duration of a non-fatal git error - exactly when
+   * the panel is showing stale data and the user most wants to know why.
+   */
+  lastWatcherStatus: GitWatcherStatus | null;
   consumers: Map<symbol, () => void>;
   sessionGeneration: number;
   closeCurrentSession: () => void;
@@ -85,8 +106,9 @@ interface ReplaceStreamSessionArgs {
   readonly freshNonce: string | null;
 }
 
-interface V12FrameHandlerArgs {
-  readonly value: unknown;
+interface NonceCorrelatedFrameHandlerArgs {
+  /** Already parsed against the negotiated minor's schema. */
+  readonly event: GitSubscribeStatusEventV12 | GitSubscribeStatusEventV13;
   readonly shared: SharedSubscription;
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly queryClient: QueryClient;
@@ -345,22 +367,41 @@ export function useGitListChangedFilesSubscription(args: {
 
   const subscription = activeSubscriptionFor(wsStreamClient, stableArgs);
 
-  const lastEvent = subscription?.lastEvent ?? null;
-  const errorEvent = lastEvent?.type === "error" ? lastEvent : null;
-  const pollStartedAtMs =
-    lastEvent !== null && lastEvent.type !== "error"
-      ? lastEvent.pollStartedAtMs
-      : null;
-
+  const frame = frameFacts(subscription);
   const data = queryData ?? null;
 
   return {
     data,
-    error: errorEvent,
-    isPending: data === null && errorEvent === null,
+    error: frame.error,
+    isPending: data === null && frame.error === null,
     repoState: data?.repoState ?? null,
     repoMode: data?.repoMode ?? null,
-    pollStartedAtMs,
+    pollStartedAtMs: frame.pollStartedAtMs,
+    watcherStatus: frame.watcherStatus,
+  };
+}
+
+/**
+ * The render-time reads off the shared entry, in one place.
+ *
+ * Note the asymmetry, which is the point: `error` and `pollStartedAtMs` come
+ * from the LAST frame, while `watcherStatus` comes from the last frame that
+ * actually carried watcher health. Error frames carry none, and a git-compute
+ * failure is not evidence about the watcher - see `lastWatcherStatus`.
+ */
+function frameFacts(subscription: SharedSubscription | undefined): {
+  readonly error: GitSubscribeStatusEvent | null;
+  readonly pollStartedAtMs: number | null;
+  readonly watcherStatus: GitWatcherStatus | null;
+} {
+  const lastEvent = subscription?.lastEvent ?? null;
+  return {
+    error: lastEvent?.type === "error" ? lastEvent : null,
+    pollStartedAtMs:
+      lastEvent !== null && lastEvent.type !== "error"
+        ? lastEvent.pollStartedAtMs
+        : null,
+    watcherStatus: subscription?.lastWatcherStatus ?? null,
   };
 }
 
@@ -373,6 +414,7 @@ function createSharedSubscription(
     refCount: 0,
     unsubscribeFromStream: () => undefined,
     lastEvent: null,
+    lastWatcherStatus: null,
     consumers: new Map(),
     sessionGeneration: 0,
     closeCurrentSession: () => undefined,
@@ -395,6 +437,51 @@ function createSharedSubscription(
     freshNonce: null,
   });
   return shared;
+}
+
+/**
+ * Records a NON-TERMINAL delivered frame on the shared entry.
+ *
+ * `lastWatcherStatus` is written on every non-error frame, including frames
+ * that carry no `watcher` field - those set it back to `null` (UNKNOWN). It is
+ * tempting to only write when the field is present, but that turns the value
+ * into a latch: a connection that renegotiates DOWN from 1.3 (the same client
+ * instance reconnecting to a restarted or rolled-back host, which
+ * `WsStreamClient` treats as a possible new incarnation) would keep showing a
+ * degraded notice sourced from a host generation that no longer exists, with
+ * no event able to clear it.
+ *
+ * Error frames are the deliberate exception and never reach here for the
+ * watcher: they carry no watcher field, but a git-compute failure is not
+ * evidence the watcher changed, so the previous value must survive them.
+ */
+function recordDeliveredFrame(
+  shared: SharedSubscription,
+  event: GitSubscribeStatusStreamEvent,
+): void {
+  shared.lastEvent = event;
+  if (event.type === "error") return;
+  shared.lastWatcherStatus = "watcher" in event ? event.watcher : null;
+}
+
+/**
+ * Which frame shape this connection negotiated, as one value instead of a
+ * ladder of independent booleans.
+ *
+ * Unknown or non-major-1 collapses to the FROZEN v1.0 tier, which is the only
+ * safe default: a client that guessed high would parse with a schema the peer
+ * never agreed to and could write fields into the rich slot the host does not
+ * own on that connection.
+ */
+function negotiatedFrameTier(
+  client: IHostStreamClient<HostStreamRpcRegistry>,
+): "v13" | "v12" | "rich" | "frozen" {
+  const negotiated = client.getMethodSchemaVersion("git.subscribeStatus");
+  if (negotiated === null || negotiated.major !== 1) return "frozen";
+  if (negotiated.minor >= 3) return "v13";
+  if (negotiated.minor >= 2) return "v12";
+  if (negotiated.minor >= 1) return "rich";
+  return "frozen";
 }
 
 function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
@@ -437,19 +524,26 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     // render-stale closure): the handshake can settle after the subscribe,
     // and ownership of the rich slot must flip with the version, not with a
     // React render.
-    const negotiated = wsStreamClient.getMethodSchemaVersion(
-      "git.subscribeStatus",
-    );
-    const v12Frames =
-      negotiated !== null && negotiated.major === 1 && negotiated.minor >= 2;
-    const richFrames =
-      negotiated !== null && negotiated.major === 1 && negotiated.minor >= 1;
+    const tier = negotiatedFrameTier(wsStreamClient);
+    const v13Frames = tier === "v13";
+    const v12Frames = tier === "v13" || tier === "v12";
+    const richFrames = v12Frames || tier === "rich";
 
     // Server wraps the event as `envelope.value` per the host's
     // SendServerFrame contract (see git-stream-resolvers.ts).
+    //
+    // Minors 2 and 3 share one handler but NOT one schema: parsing against
+    // the negotiated minor is what keeps a v1.3-only field off a connection
+    // that negotiated 1.2, independently of the host projecting correctly.
     if (v12Frames) {
-      handleV12ServerFrame({
-        value: envelope.value,
+      const parsed = (
+        v13Frames
+          ? gitSubscribeStatusEventSchemaV13
+          : gitSubscribeStatusEventSchemaV12
+      ).safeParse(envelope.value);
+      if (!parsed.success) return;
+      handleNonceCorrelatedFrame({
+        event: parsed.data,
         shared,
         wsStreamClient,
         queryClient,
@@ -472,7 +566,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
         markTerminal(event);
         return;
       }
-      shared.lastEvent = event;
+      recordDeliveredFrame(shared, event);
       notifyConsumers(shared);
       writeRichEventIntoCache(queryClient, args, event, {
         parentSlotWrite: "always",
@@ -493,7 +587,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
       return;
     }
 
-    shared.lastEvent = event;
+    recordDeliveredFrame(shared, event);
     notifyConsumers(shared);
 
     // Minor 0 / unknown: today's behavior verbatim - the frame writes ONLY
@@ -521,10 +615,15 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   });
 }
 
-function handleV12ServerFrame(args: V12FrameHandlerArgs): void {
-  const parseResult = gitSubscribeStatusEventSchemaV12.safeParse(args.value);
-  if (!parseResult.success) return;
-  const event = parseResult.data;
+/**
+ * Shared by minors 2 and 3: both carry `freshNonce`, so the replacement
+ * correlation is identical. The caller parses against its own minor's schema,
+ * which is what keeps `watcher` off a v1.2 frame.
+ */
+function handleNonceCorrelatedFrame(
+  args: NonceCorrelatedFrameHandlerArgs,
+): void {
+  const event = args.event;
   if (event.type === "error" && event.isFatal) {
     args.markTerminal(event);
     return;
@@ -542,7 +641,7 @@ function handleV12ServerFrame(args: V12FrameHandlerArgs): void {
       subscriptionKeyFor(args.wsStreamClient, args.args),
     );
   }
-  args.shared.lastEvent = event;
+  recordDeliveredFrame(args.shared, event);
   notifyConsumers(args.shared);
   writeRichEventIntoCache(args.queryClient, args.args, event, {
     parentSlotWrite: "always",

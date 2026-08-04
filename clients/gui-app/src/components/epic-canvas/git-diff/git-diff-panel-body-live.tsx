@@ -48,6 +48,7 @@ import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
 import { GitRootsUnavailable } from "./empty-states/git-roots-unavailable";
 import { NoGitWorktrees } from "./empty-states/no-git-worktrees";
 import { GitDiffRepoSwitcher } from "./git-diff-repo-switcher";
+import { GitWatcherStatusNotice } from "./git-watcher-status-notice";
 import { SelectedRepoChanges } from "./selected-repo-changes";
 
 const GIT_REFERENCE_REFRESH_TIMEOUT_MS = 10_000;
@@ -481,7 +482,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border/60 px-2 pt-1.5 pb-1">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 pt-1.5 pb-1">
         <WorkspacePickerWithOpener
           picker={
             <GitDiffRepoSwitcher
@@ -503,6 +504,12 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
             workspacePath: selectedRootRow.runningDir,
             hostId: selectedRootRow.hostId,
           }}
+        />
+        {/* Sits beside the repo switcher because it qualifies THIS repo's
+            freshness - watcher health is per-repo, not per-host. */}
+        <GitWatcherStatusNotice
+          status={subscription.watcherStatus}
+          className="ml-auto"
         />
       </div>
       <CapabilityGate
