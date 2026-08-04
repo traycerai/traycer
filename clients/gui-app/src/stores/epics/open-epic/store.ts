@@ -1312,7 +1312,10 @@ export function createOpenEpicStore(
     touchArtifactRoom(artifactRoomId);
     cancelArtifactRoomCooldown(artifactRoomId);
     const hot = artifactRoomReplicas.get(artifactRoomId);
-    if (hot !== undefined) return hot;
+    if (hot !== undefined) {
+      armCooldownForUnleasedMaterialization(artifactRoomId);
+      return hot;
+    }
     const cold = coldArtifactRooms.get(artifactRoomId);
     if (cold === undefined) return null;
     const entry = getOrCreateArtifactRoomReplica(artifactRoomId);
@@ -1322,7 +1325,28 @@ export function createOpenEpicStore(
     Y.applyUpdate(entry.doc, Y.mergeUpdates(cold.updates), BIN_STREAM_ORIGIN);
     entry.latestHostStateVectorBase64 = cold.latestHostStateVectorBase64;
     enforceHotArtifactRoomCap();
+    armCooldownForUnleasedMaterialization(artifactRoomId);
     return entry;
+  }
+
+  /**
+   * Re-arm the linger after a materialization that no lease is holding.
+   *
+   * Materializing cancels the pending cooldown, which is correct while
+   * something is about to pin the room - but `getArtifactFragment` and
+   * `getArtifactBodyAwareness` materialize on READ, deliberately, so that a
+   * reader which does not know to lease (a preview, a search indexer, a print
+   * path) still gets a live fragment. Without re-arming, each such read would
+   * leave a `Y.Doc` resident for the rest of the session and browsing a large
+   * epic would rebuild exactly the accretion the cold cache exists to prevent.
+   *
+   * `scheduleArtifactRoomCooldown` no-ops while the room is pinned, and
+   * `acquireArtifactBodyLease` increments its count BEFORE materializing, so a
+   * leased materialization is unaffected. Repeated reads simply push the
+   * linger out, which is the intended "still being looked at" semantics.
+   */
+  function armCooldownForUnleasedMaterialization(artifactRoomId: string): void {
+    scheduleArtifactRoomCooldown(artifactRoomId);
   }
 
   function flushPendingArtifactRoomUpdates(artifactRoomId: string): void {

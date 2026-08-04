@@ -2771,6 +2771,57 @@ describe("createOpenEpicStore", () => {
       }
     });
 
+    it("cools a room that was materialized by a read with no lease behind it", () => {
+      // `getArtifactFragment` materializes on read so a caller that does not
+      // know to lease (preview, search indexer, print path) still gets a live
+      // fragment. Materializing cancels the pending cooldown, so without an
+      // explicit re-arm each such read would strand a `Y.Doc` for the rest of
+      // the session and browsing a large epic would rebuild the accretion the
+      // cold cache exists to prevent.
+      vi.useFakeTimers();
+      try {
+        const { opened } = openWithReadyRoom("epic-unleased-read", "read me");
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        const fragment = opened.store.getState().getArtifactFragment("art-1");
+        expect(fragment?.toJSON()).toContain("read me");
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        vi.advanceTimersByTime(61_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps a read-materialized room hot while a lease is taken over it", () => {
+      vi.useFakeTimers();
+      try {
+        const { opened } = openWithReadyRoom("epic-read-then-lease", "hold me");
+        opened.store.getState().getArtifactFragment("art-1");
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+
+        vi.advanceTimersByTime(10 * 60_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        release();
+        vi.advanceTimersByTime(61_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("never hands out a fragment for a room that is ready but unseeded", () => {
       // `artifactRoomState` reports `ready` on first observation and on every
       // recovery transition, independently of `artifactRoomSnapshot`, so there
