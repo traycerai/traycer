@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReasoningSegment } from "@/components/chat/segments/reasoning-segment";
 import { LiveActivityPromoteContext } from "@/components/chat/segments/live-activity-promote-context";
@@ -573,7 +579,13 @@ describe("<ReasoningSegment />", () => {
   // into the trace. Indistinguishable from a removal blur at dispatch time,
   // which is why the layout effect re-reads real focus ownership every commit
   // and corrects the latch while the control still exists.
-  it("does not reclaim focus after the reader clicks away to nothing", () => {
+  // NO intervening render between the click-away and the completion that
+  // removes the control. The first version of this test put a streaming rerender
+  // in between, which is what the then-current fix needed to observe the blur -
+  // so the test passed for a reason the product could not rely on, and the bug
+  // it claimed to cover still reproduced without that extra commit. The latch is
+  // now settled off the event itself, not off the next render.
+  it("does not reclaim focus after the reader clicks away to nothing", async () => {
     const props = {
       findUnitId: null,
       markdown: "Detailed chain of thought",
@@ -594,24 +606,154 @@ describe("<ReasoningSegment />", () => {
     fireEvent.blur(control, { relatedTarget: null });
     expect(document.activeElement).toBe(document.body);
 
-    // A streaming commit - the transcript is producing these constantly - is
-    // what lets the sampler observe that the control no longer holds focus.
-    rerender(
-      <ReasoningSegment {...props} isStreaming markdown="More thought" />,
-    );
+    // Let the microtask that settles the ambiguous blur run. This is the only
+    // thing standing between the click and the completion - no re-render.
+    await act(async () => {});
 
     rerender(
-      <ReasoningSegment
-        {...props}
-        isStreaming={false}
-        durationMs={3000}
-        markdown="More thought"
-      />,
+      <ReasoningSegment {...props} isStreaming={false} durationMs={3000} />,
     );
 
     // Control gone, and focus left where the reader put it.
     expect(screen.queryByRole("button")).toBeNull();
     expect(document.activeElement).toBe(document.body);
+  });
+
+  // The click-to-toggle listener spans the whole body, and reasoning markdown
+  // renders real controls into it - a code block's copy button, links, reference
+  // chips. Without a guard the control's own click ALSO promotes: the copy runs,
+  // and then the group opens, scrolls and takes focus for a gesture that asked
+  // for none of it.
+  it("does not promote when an interactive element inside the trace is clicked", () => {
+    const promote = vi.fn();
+    render(
+      <LiveActivityPromoteContext.Provider value={promote}>
+        <ReasoningSegment
+          findUnitId={null}
+          markdown="Consider `code`\n\n[a link](https://example.com)"
+          isStreaming
+          durationMs={null}
+          bodyBoundedByParent
+          headerless
+          initiallyExpanded={false}
+        />
+      </LiveActivityPromoteContext.Provider>,
+    );
+
+    const link = screen.getByRole("link");
+    fireEvent.click(link);
+    expect(promote).not.toHaveBeenCalled();
+
+    // ...and the body still toggles for a click on ordinary prose, so the guard
+    // suppressed the control's click rather than the whole listener.
+    fireEvent.click(screen.getByText(/Consider/));
+    expect(promote).toHaveBeenCalledTimes(1);
+  });
+
+  // `<summary>` is the interactive element that looks least like one: no ARIA
+  // role, not focusable by default, styled as prose. But `<details>` is
+  // supported end to end - `MERGEABLE_HTML_CONTAINERS` exists precisely to keep
+  // a blank-line-split disclosure in a single block - so a trace can ship one,
+  // and its summary is a real control the reader clicks to open the nested
+  // section, not to fold the reasoning around it.
+  const DETAILS_TRACE = [
+    "Before the disclosure.",
+    "",
+    "<details>",
+    "<summary>Show the sub-trace</summary>",
+    "",
+    "Nested detail.",
+    "",
+    "</details>",
+  ].join("\n");
+
+  it("does not collapse the trace when a nested <summary> is clicked", () => {
+    render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown={DETAILS_TRACE}
+        isStreaming={false}
+        durationMs={3000}
+        bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: "Thought for 3s" });
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // The disclosure really rendered - otherwise this test proves nothing about
+    // a control it never showed.
+    const summary = screen.getByText("Show the sub-trace");
+    expect(summary.tagName).toBe("SUMMARY");
+
+    fireEvent.click(summary);
+
+    // Opening the nested section left the reasoning block the reader is reading
+    // exactly where it was.
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // ...and the guard suppressed the control's click, not the whole listener.
+    fireEvent.click(screen.getByText("Before the disclosure."));
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("does not promote when a nested <summary> is clicked in the live window", () => {
+    const promote = vi.fn();
+    render(
+      <LiveActivityPromoteContext.Provider value={promote}>
+        <ReasoningSegment
+          findUnitId={null}
+          markdown={DETAILS_TRACE}
+          isStreaming
+          durationMs={null}
+          bodyBoundedByParent
+          headerless
+          initiallyExpanded={false}
+        />
+      </LiveActivityPromoteContext.Provider>,
+    );
+
+    fireEvent.click(screen.getByText("Show the sub-trace"));
+    expect(promote).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Before the disclosure."));
+    expect(promote).toHaveBeenCalledTimes(1);
+  });
+
+  // The companion to "keeps a trace the reader opened when the header appears".
+  // That pin is deliberate, but on a COMPLETED headerless block the gesture is
+  // invisible - the body is already fully shown - so a second click un-pinning
+  // it means two identical, equally invisible gestures produce opposite results.
+  // Where the click cannot be seen it only ever pins.
+  it("does not un-pin a completed headerless trace on a second invisible click", () => {
+    const props = {
+      findUnitId: null,
+      markdown: "Detailed chain of thought",
+      isStreaming: false,
+      durationMs: 3000,
+      bodyBoundedByParent: false,
+      initiallyExpanded: false,
+    } as const;
+    const { rerender } = render(<ReasoningSegment {...props} headerless />);
+
+    // Body on screen, no header of its own - so neither click changes a pixel.
+    expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+
+    const trace = screen.getByText("Detailed chain of thought");
+    fireEvent.click(trace);
+    fireEvent.click(trace);
+
+    // A sibling segment arrives and the block gets its header back. The trace
+    // the reader was reading stays put; the second click did not undo the first.
+    rerender(<ReasoningSegment {...props} headerless={false} />);
+
+    const header = screen.getByRole("button", { name: "Thought for 3s" });
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
   });
 
   // jsdom dispatches NO blur when a focused element is removed; Chromium - the
@@ -622,6 +764,17 @@ describe("<ReasoningSegment />", () => {
   //
   // This test simulates the browser jsdom is not, so it fails only for the code
   // under test and not for the environment.
+  //
+  // KNOWN UNTESTABLE HERE: the `control.isConnected` check inside the blur's
+  // microtask. Removing it leaves every test in this file green, and that is the
+  // environment, not a gap. In Chromium the removal blur fires during the
+  // commit, the microtask flushes before React's passive effects, and the
+  // control is already detached - so the check preserves the latch and the
+  // handoff below runs. Clearing unconditionally would put the latch at false
+  // before the effect reads it and silently kill the handoff again. jsdom
+  // dispatches no removal blur at all, so that ordering never occurs here and no
+  // assertion can reach it. Do not delete the check on the strength of a
+  // surviving mutant.
   it("still hands off when removal itself blurs the control", () => {
     const props = {
       findUnitId: null,
