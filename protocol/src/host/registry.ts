@@ -287,6 +287,8 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
+  hostNotificationsIndicatorStateUpgradeV10ToV11,
+  hostNotificationsIndicatorStateV10,
   hostNotificationsListDowngradeV21ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
@@ -3199,11 +3201,16 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   "host.notifications.indicatorState": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: hostNotificationsIndicatorState,
+          contract: hostNotificationsIndicatorStateV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsIndicatorState,
+          upgradeFromPreviousVersion:
+            hostNotificationsIndicatorStateUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

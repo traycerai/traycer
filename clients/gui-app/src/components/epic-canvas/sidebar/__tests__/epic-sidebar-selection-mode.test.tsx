@@ -18,6 +18,7 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 
 interface TestTreeNode {
   readonly id: string;
@@ -41,6 +42,7 @@ interface TestRecord {
 
 interface TestIndicatorState {
   readonly unreadFailure: boolean;
+  readonly pendingFork: boolean;
   readonly pendingApproval: boolean;
   readonly pendingInterview: boolean;
   readonly unreadDone: boolean;
@@ -850,6 +852,7 @@ describe("epic sidebar selection mode", () => {
     testState.sessionHandleByChatId = {};
     useNewConversationModalStore.getState().resetForTests();
     useNewConversationModalOpenStore.getState().close();
+    useAppDialogStore.getState().closeDialog();
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
@@ -2032,12 +2035,27 @@ describe("chat descendant status rollup", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
       ...overrides,
     };
   }
+
+  it("opens fork resolution from the affected chat's indicator without selecting the row", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-root": indicator({ pendingFork: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByTestId("chat-sidebar-spinner-fork-chat-root"));
+
+    expect(useAppDialogStore.getState().activeDialog).toBe("chat-fork");
+    expect(testState.activeArtifactId).toBeNull();
+  });
 
   it("bubbles a hidden grandchild's needs-attention status onto the collapsed root", () => {
     seedNestedChatTree();
@@ -2365,6 +2383,7 @@ describe("chat row leading status icon", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
@@ -2507,6 +2526,7 @@ describe("chat row read-only arm", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
@@ -2593,6 +2613,7 @@ describe("status survives selection mode and rename", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
@@ -3213,6 +3234,7 @@ describe("chat row archive", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,

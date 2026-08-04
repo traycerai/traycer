@@ -8,6 +8,7 @@ import {
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
+  mergeHostPendingForkIntoCloudIndicators,
   selectCloudNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
@@ -24,9 +25,10 @@ import {
  * store the popover renders also makes the icon and the row it represents
  * incapable of disagreeing, including while the cloud is degraded.
  *
- * In local mode this is exactly today's host path: old/methodless hosts and
- * the local-only product keep the v1 RPC, which is not issued at all in cloud
- * mode.
+ * Fork pending state is the exception: it is authoritative on the connected
+ * host's fork notice board rather than in any feed row. The host RPC therefore
+ * runs in both modes; cloud mode imports only `pendingFork` from it and keeps
+ * every feed-derived bit attached to the cloud snapshot.
  *
  * App-local failure rows contribute in BOTH modes - they are client-side
  * state, neither host nor cloud state - and are folded in downstream by
@@ -40,7 +42,7 @@ export function useNotificationIndicators(
   const hostIndicators = useHostNotificationIndicators({
     epicIds: args.epicIds,
     chatIds: args.chatIds,
-    enabled: args.enabled && !isCloud,
+    enabled: args.enabled,
   });
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   const cloudIndicators = useMemo(
@@ -54,5 +56,10 @@ export function useNotificationIndicators(
         : EMPTY_INDICATOR_STATE_RESPONSE,
     [isCloud, args.enabled, cloudRows, args.epicIds, args.chatIds],
   );
-  return isCloud ? cloudIndicators : hostIndicators.data;
+  return isCloud
+    ? mergeHostPendingForkIntoCloudIndicators(
+        cloudIndicators,
+        hostIndicators.data,
+      )
+    : hostIndicators.data;
 }

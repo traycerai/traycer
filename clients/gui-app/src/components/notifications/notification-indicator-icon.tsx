@@ -95,6 +95,7 @@ function IndicatorStatus(props: {
     <IndicatorSpan
       indicatorProps={props.indicatorProps}
       tooltip={props.tone.title}
+      action={props.tone.testId === "fork" ? "chat-fork" : undefined}
     >
       <Icon
         aria-hidden
@@ -113,6 +114,7 @@ function IndicatorDot(props: {
     <IndicatorSpan
       indicatorProps={props.indicatorProps}
       tooltip={props.tone.title}
+      action={props.tone.testId === "fork" ? "chat-fork" : undefined}
     >
       <AgentSpinningDots
         className={props.tone.className}
@@ -138,6 +140,7 @@ function IndicatorSpan(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
   readonly tooltip: string;
   readonly children: ReactNode;
+  readonly action?: "chat-fork";
 }): ReactNode {
   return (
     <TooltipWrapper
@@ -149,8 +152,10 @@ function IndicatorSpan(props: {
       <span
         role="status"
         aria-label={props.tooltip}
+        data-notification-indicator-action={props.action}
         className={cn(
           "inline-flex size-3.5 shrink-0 items-center justify-center",
+          props.action !== undefined && "cursor-pointer",
           props.indicatorProps.className,
         )}
         style={props.indicatorProps.style}
