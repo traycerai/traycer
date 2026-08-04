@@ -3,6 +3,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import type { Readable } from "node:stream";
@@ -25,6 +26,19 @@ import {
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import { withHostNodeOptions } from "../service/host-node-options";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  CRASH_REPORT_SPAWN_SLACK_MS,
+  MAX_KEPT_CRASH_REPORTS,
+  STDERR_FLUSH_TIMEOUT_MS,
+  StderrLogTee,
+  type CrashReportMatch,
+  crashReportsDirFor,
+  describeExitCode,
+  describeFatalSignal,
+  findCrashReportSince,
+  prepareCrashReportsDir,
+} from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
 import {
   attestLaunchdSupervisorPid,
@@ -245,6 +259,16 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     environment: Environment,
     marker: ProbeMarker,
   ) => Promise<void>;
+  // Crash-diagnostics operations. Injected so tests never touch the real
+  // host data dir: the defaults create/prune/scan real directories and tee
+  // real bytes into host.log.
+  readonly prepareCrashReportsDir: (dir: string) => Promise<readonly string[]>;
+  readonly findCrashReport: (
+    dir: string,
+    sinceMs: number,
+    excludeNames: ReadonlySet<string>,
+  ) => Promise<CrashReportMatch | null>;
+  readonly createStderrTee: (environment: Environment) => StderrLogTee;
 }
 
 const defaultRunDeps: RunHostStartDeps = {
@@ -269,6 +293,10 @@ const defaultRunDeps: RunHostStartDeps = {
   readLayer0Frame,
   attestProbeSupervisor: attestLaunchdSupervisorPid,
   writeProbeMarker: writeProbeMarkerAtomically,
+  prepareCrashReportsDir: (dir) =>
+    prepareCrashReportsDir(dir, MAX_KEPT_CRASH_REPORTS),
+  findCrashReport: findCrashReportSince,
+  createStderrTee: (environment) => new StderrLogTee(environment),
 };
 
 // Long-running entrypoint invoked by the OS service manager. Resolves
@@ -434,14 +462,19 @@ export async function runHostStart(
       await deps.writeMarker(
         opts.environment,
         "failed-to-spawn",
-        markerFields(attemptId, supervisorPid, {
-          shell: undefined,
-          args: undefined,
-          bundle: undefined,
-          exitCode: undefined,
-          signal: undefined,
-          error: `${err.code}: ${err.message}`,
-        }),
+        markerFields(
+          attemptId,
+          supervisorPid,
+          {
+            shell: undefined,
+            args: undefined,
+            bundle: undefined,
+            exitCode: undefined,
+            signal: undefined,
+            error: `${err.code}: ${err.message}`,
+          },
+          null,
+        ),
       );
       await writeProbeTerminalIfAttested({
         context: probeContext,
@@ -510,17 +543,31 @@ export async function runHostStart(
     rotation,
   });
 
+  // Create + prune the diagnostic-report destination BEFORE the spawn: the
+  // relative `--report-directory=crash-reports` in NODE_OPTIONS resolves
+  // against the child cwd, and a crash before the host's own runtime arming
+  // must still have somewhere to land. Never throws.
+  const crashReportsDirPath = crashReportsDirFor(target.cwd);
+  const preexistingReportNames = new Set(
+    await deps.prepareCrashReportsDir(crashReportsDirPath),
+  );
+
   await deps.writeMarker(
     opts.environment,
     "starting",
-    markerFields(attemptId, supervisorPid, {
-      shell: undefined,
-      args: target.args,
-      bundle: target.executable,
-      exitCode: undefined,
-      signal: undefined,
-      error: undefined,
-    }),
+    markerFields(
+      attemptId,
+      supervisorPid,
+      {
+        shell: undefined,
+        args: target.args,
+        bundle: target.executable,
+        exitCode: undefined,
+        signal: undefined,
+        error: undefined,
+      },
+      null,
+    ),
   );
 
   const logFd = await deps.openLogFd(opts.environment);
@@ -552,17 +599,25 @@ export async function runHostStart(
   // the executable directly.
   const launch = resolveSpawnInvocation(target.executable, hostArgs);
 
+  // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
+  // report before any post-spawn statement runs, and the report scan treats
+  // this as its lower bound (with additional slack for mtime granularity).
+  const childSpawnedAtMs = Date.now();
   let child: ChildProcess;
   try {
     child = deps.spawn(launch.command, launch.args, {
       cwd: target.cwd,
       env,
       // Index LAYER0_STATUS_FD of this vector IS the descriptor named by
-      // `--layer0-status-fd` above; the two must not drift apart.
+      // `--layer0-status-fd` above; the two must not drift apart. stdout
+      // stays on the log fd; stderr is piped so the supervisor can tee it -
+      // byte-for-byte into `host.log` BY PATH (a host-side log rotation
+      // strands an fd-bound copy in `host.log.1`) plus a bounded in-memory
+      // tail for the crash marker.
       stdio:
         probeContext === null
-          ? ["ignore", logFd, logFd]
-          : ["ignore", logFd, logFd, "pipe"],
+          ? ["ignore", logFd, "pipe"]
+          : ["ignore", logFd, "pipe", "pipe"],
       windowsHide: process.platform === "win32",
       ...(launch.windowsVerbatimArguments
         ? { windowsVerbatimArguments: true }
@@ -578,14 +633,19 @@ export async function runHostStart(
     await deps.writeMarker(
       opts.environment,
       "failed-to-spawn",
-      markerFields(attemptId, supervisorPid, {
-        shell: undefined,
-        args: undefined,
-        bundle: target.executable,
-        exitCode: undefined,
-        signal: undefined,
-        error: message,
-      }),
+      markerFields(
+        attemptId,
+        supervisorPid,
+        {
+          shell: undefined,
+          args: undefined,
+          bundle: target.executable,
+          exitCode: undefined,
+          signal: undefined,
+          error: message,
+        },
+        null,
+      ),
     );
     await writeProbeTerminalIfAttested({
       context: probeContext,
@@ -600,6 +660,14 @@ export async function runHostStart(
     );
     return deps.exit(66);
   }
+
+  // Stderr tee (see the stdio comment above): bounded path-addressed mirror
+  // into host.log plus the head+tail capture for the crash marker. Failures
+  // are swallowed - a diagnostics write must never take the supervisor down.
+  const stderrTee = deps.createStderrTee(opts.environment);
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderrTee.append(chunk);
+  });
 
   const probeObservation =
     probeContext === null
@@ -648,6 +716,10 @@ export async function runHostStart(
       supervisorPid,
       bundle: target.executable,
       probeObservation,
+      childSpawnedAtMs,
+      stderrTee,
+      crashReportsDirPath,
+      preexistingReportNames,
     });
   };
   const finalizeChildSpawnError = (cause: Error): void => {
@@ -712,14 +784,19 @@ async function persistAsyncChildSpawnFailure(input: {
   await input.deps.writeMarker(
     input.environment,
     "failed-to-spawn",
-    markerFields(input.attemptId, input.supervisorPid, {
-      shell: undefined,
-      args: undefined,
-      bundle: input.bundle,
-      exitCode: undefined,
-      signal: undefined,
-      error: message,
-    }),
+    markerFields(
+      input.attemptId,
+      input.supervisorPid,
+      {
+        shell: undefined,
+        args: undefined,
+        bundle: input.bundle,
+        exitCode: undefined,
+        signal: undefined,
+        error: message,
+      },
+      null,
+    ),
   );
   await writeProbeTerminalIfAttested({
     context: input.probeContext,
@@ -745,6 +822,10 @@ async function persistChildExit(input: {
   readonly supervisorPid: number;
   readonly bundle: string;
   readonly probeObservation: Promise<ProbeObservation> | null;
+  readonly childSpawnedAtMs: number;
+  readonly stderrTee: StderrLogTee;
+  readonly crashReportsDirPath: string;
+  readonly preexistingReportNames: ReadonlySet<string>;
 }): Promise<void> {
   if (input.probeObservation !== null) {
     try {
@@ -783,29 +864,69 @@ async function persistChildExit(input: {
     bundle,
     deps,
   } = input;
+  // Drain queued stderr tee writes (bounded) before any terminal marker:
+  // `process.exit()` below abandons pending appends, and the fatal text they
+  // carry is the evidence this whole path exists to keep.
+  await input.stderrTee.flush(STDERR_FLUSH_TIMEOUT_MS);
   // `process.exit()` is synchronous. Terminal markers are therefore written
   // synchronously before exit rather than scheduling an append that the
   // process could abandon. Desktop uses these as fail-now readiness evidence.
   if (signal !== null) {
+    // A fatal signal is a CRASH, not a shutdown: a Node fatal abort surfaces
+    // on macOS/Linux as `code=null, signal=SIGABRT`, and routing it through
+    // the bare killed path would discard the report and stderr evidence
+    // exactly where it matters most. Forwarded shutdown signals stay bare.
+    const fatalMeaning = describeFatalSignal(signal);
+    const crashReport =
+      fatalMeaning === null ? null : await boundedCrashReportScan(input);
     logger.warn("Host child exited by signal", {
       environment,
       signal,
       exitCode: 128 + signalNumber(signal),
       attemptId,
     });
+    if (fatalMeaning !== null) {
+      // Same support-log line as the nonzero-exit crash branch: a POSIX
+      // fatal is the same event wearing a signal, and cli.log is where a
+      // support pull reads the OOM-vs-native answer.
+      logger.error(
+        "Host crash diagnostics",
+        {
+          environment,
+          attemptId,
+          exitMeaning: fatalMeaning,
+          report: crashReport?.filename ?? "none",
+          reportSummary: crashReport?.summary ?? "none",
+        },
+        null,
+      );
+    }
     return persistTerminalMarkerAndExit({
       deps,
       logger,
       environment,
       phase: "killed",
-      fields: markerFields(attemptId, supervisorPid, {
-        shell: undefined,
-        args: undefined,
-        bundle,
-        exitCode: undefined,
-        signal,
-        error: undefined,
-      }),
+      fields: markerFields(
+        attemptId,
+        supervisorPid,
+        {
+          shell: undefined,
+          args: undefined,
+          bundle,
+          exitCode: undefined,
+          signal,
+          error: undefined,
+        },
+        fatalMeaning === null
+          ? null
+          : {
+              exitMeaning: fatalMeaning,
+              report: crashReport?.filename,
+              stderrTail: input.stderrTee.capture.isEmpty()
+                ? undefined
+                : input.stderrTee.capture.escapedForMarker(),
+            },
+      ),
       exitCode: 128 + signalNumber(signal),
     });
   }
@@ -820,14 +941,19 @@ async function persistChildExit(input: {
       logger,
       environment,
       phase: "exited",
-      fields: markerFields(attemptId, supervisorPid, {
-        shell: undefined,
-        args: undefined,
-        bundle,
-        exitCode: code,
-        signal: undefined,
-        error: undefined,
-      }),
+      fields: markerFields(
+        attemptId,
+        supervisorPid,
+        {
+          shell: undefined,
+          args: undefined,
+          bundle,
+          exitCode: code,
+          signal: undefined,
+          error: undefined,
+        },
+        null,
+      ),
       exitCode: code ?? 0,
     });
   }
@@ -840,21 +966,81 @@ async function persistChildExit(input: {
     },
     null,
   );
+  // Crash enrichment: decode the exit status, reference the diagnostic
+  // report this child wrote (if any), and attach the stderr capture - the
+  // fatal-error text that used to be stranded in a rotated-away log
+  // generation. All best-effort and time-bounded; the marker must be
+  // written regardless.
+  const exitMeaning = describeExitCode(code) ?? undefined;
+  const crashReport = await boundedCrashReportScan(input);
+  if (exitMeaning !== undefined || crashReport !== null) {
+    logger.error(
+      "Host crash diagnostics",
+      {
+        environment,
+        attemptId,
+        exitMeaning: exitMeaning ?? "unknown",
+        report: crashReport?.filename ?? "none",
+        reportSummary: crashReport?.summary ?? "none",
+      },
+      null,
+    );
+  }
   return persistTerminalMarkerAndExit({
     deps,
     logger,
     environment,
     phase: "crashed",
-    fields: markerFields(attemptId, supervisorPid, {
-      shell: undefined,
-      args: undefined,
-      bundle,
-      exitCode: code,
-      signal: undefined,
-      error: undefined,
-    }),
+    fields: markerFields(
+      attemptId,
+      supervisorPid,
+      {
+        shell: undefined,
+        args: undefined,
+        bundle,
+        exitCode: code,
+        signal: undefined,
+        error: undefined,
+      },
+      {
+        exitMeaning,
+        report: crashReport?.filename,
+        stderrTail: input.stderrTee.capture.isEmpty()
+          ? undefined
+          : input.stderrTee.capture.escapedForMarker(),
+      },
+    ),
     exitCode: code,
   });
+}
+
+/**
+ * Report scan bounded by {@link CRASH_REPORT_SCAN_TIMEOUT_MS}: the terminal
+ * marker is readiness authority and must not be lost to a slow disk - past
+ * the budget the marker goes out without a `report=` field. The lower bound
+ * gets {@link CRASH_REPORT_SPAWN_SLACK_MS} of slack for loader-phase crashes
+ * and mtime granularity.
+ */
+function boundedCrashReportScan(input: {
+  readonly deps: RunHostStartDeps;
+  readonly crashReportsDirPath: string;
+  readonly childSpawnedAtMs: number;
+  readonly preexistingReportNames: ReadonlySet<string>;
+}): Promise<CrashReportMatch | null> {
+  return Promise.race([
+    input.deps.findCrashReport(
+      input.crashReportsDirPath,
+      input.childSpawnedAtMs - CRASH_REPORT_SPAWN_SLACK_MS,
+      input.preexistingReportNames,
+    ),
+    new Promise<null>((resolve) => {
+      const timer = setTimeout(
+        () => resolve(null),
+        CRASH_REPORT_SCAN_TIMEOUT_MS,
+      );
+      timer.unref?.();
+    }),
+  ]);
 }
 
 /**
@@ -975,6 +1161,13 @@ function markerFields(
     readonly signal: string | null | undefined;
     readonly error: string | undefined;
   },
+  // Crash-only enrichment (decoded exit status, diagnostic-report reference,
+  // stderr tail). `null` everywhere except the `phase=crashed` writer.
+  diagnostics: {
+    readonly exitMeaning: string | undefined;
+    readonly report: string | undefined;
+    readonly stderrTail: string | undefined;
+  } | null,
 ): BootstrapMarkerFields {
   return {
     shell: fields.shell,
@@ -983,12 +1176,25 @@ function markerFields(
     exitCode: fields.exitCode,
     signal: fields.signal,
     error: fields.error,
+    exitMeaning: diagnostics?.exitMeaning,
+    report: diagnostics?.report,
+    stderrTail: diagnostics?.stderrTail,
     attemptId,
     supervisorPid,
   };
 }
 
 function signalNumber(signal: NodeJS.Signals): number {
+  // The platform's own table first: the newly crash-classified fatal signals
+  // (SIGABRT, SIGSEGV, ...) must map to their real numbers - reporting
+  // SIGABRT as the generic 15 fallback (exit 143 instead of 134) misfiles
+  // the crash for every consumer of the supervisor's exit code. Some numbers
+  // are platform-dependent (SIGBUS is 7 on Linux, 10 on macOS), which is why
+  // this is a lookup, not a table.
+  const known = osConstants.signals[signal];
+  if (typeof known === "number") {
+    return known;
+  }
   if (signal === "SIGINT") return 2;
   if (signal === "SIGTERM") return 15;
   if (signal === "SIGHUP") return 1;

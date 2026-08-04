@@ -37,6 +37,21 @@ export interface BootstrapMarkerFields {
   readonly exitCode: number | null | undefined;
   readonly signal: string | null | undefined;
   readonly error: string | undefined;
+  /**
+   * Decoded meaning of a high-bit `exitCode` (hex + NTSTATUS name, see
+   * `crash-diagnostics.ts`). Additive: old parsers ignore unknown keys.
+   */
+  readonly exitMeaning: string | undefined;
+  /**
+   * Filename of the Node diagnostic report written by this child (newest
+   * report younger than the spawn), for `phase=crashed` markers.
+   */
+  readonly report: string | undefined;
+  /**
+   * Newline-escaped tail of the child's stderr - the V8/native fatal text
+   * that used to be stranded in a rotated-away `host.log.1`.
+   */
+  readonly stderrTail: string | undefined;
   readonly attemptId: string | undefined;
   readonly supervisorPid: number | undefined;
 }
@@ -68,6 +83,12 @@ function formatFields(fields: BootstrapMarkerFields): string {
     parts.push(`signal=${fields.signal}`);
   if (fields.error !== undefined)
     parts.push(`error=${escapeValue(fields.error)}`);
+  if (fields.exitMeaning !== undefined)
+    parts.push(`exitMeaning=${escapeValue(fields.exitMeaning)}`);
+  if (fields.report !== undefined)
+    parts.push(`report=${escapeValue(fields.report)}`);
+  if (fields.stderrTail !== undefined)
+    parts.push(`stderrTail=${escapeValue(fields.stderrTail)}`);
   // Identity fields last so pre-existing key=value parsers that only
   // walk known keys keep working, and so a human reading the line still
   // sees the diagnostic payload first.

@@ -21,18 +21,50 @@
 // into third-party binaries.
 export const HOST_V8_FLAGS = "--max-semi-space-size=16";
 
-// Appends the host's required V8 flags to an inherited NODE_OPTIONS value.
-// Any pre-existing `--max-semi-space-size` token is stripped first so the
-// host always lands on the canonical cap - whether the inherited value is the
-// macOS plist's identical `=16` (a true no-op) or some larger value an operator
-// set in their shell, which would otherwise silently defeat the cap.
+// Diagnostic-report flags for the host process. `--report-on-fatalerror`
+// makes Node write a JSON report on a V8 fatal (OOM and friends) - the class
+// of abort that otherwise leaves nothing but `phase=crashed` in the log
+// (0xC0000409 on Windows). All tokens are in Node's NODE_OPTIONS allowlist
+// and space-free on purpose: the report directory is RELATIVE, resolved
+// against the spawn cwd (the host data dir), so a Windows profile path with
+// spaces never needs NODE_OPTIONS quoting - and a crash BEFORE the host's
+// own runtime arming still lands in the exact directory the supervisor
+// creates, prunes, and scans. The host entrypoint re-anchors the same
+// `<cwd>/crash-reports` absolutely at boot; the two always agree because
+// both derive from the spawn cwd.
+export const HOST_DIAGNOSTIC_REPORT_FLAGS =
+  "--report-on-fatalerror --report-compact --report-directory=crash-reports";
+
+const HOST_APPENDED_FLAGS = `${HOST_V8_FLAGS} ${HOST_DIAGNOSTIC_REPORT_FLAGS}`;
+
+// Appends the host's required creation-time flags to an inherited
+// NODE_OPTIONS value. Any pre-existing token this helper canonically appends
+// (`--max-semi-space-size`, the report flags, `--report-directory`) is
+// stripped first so the host always lands on the canonical set - whether the
+// inherited value is the macOS plist's identical copy (a true no-op) or some
+// other value an operator set in their shell, which would otherwise silently
+// defeat or duplicate it. Unrelated operator tokens are preserved.
 export function withHostNodeOptions(existing: string | undefined): string {
   if (existing === undefined || existing.length === 0) {
-    return HOST_V8_FLAGS;
+    return HOST_APPENDED_FLAGS;
   }
   const stripped = existing
     .replace(/(^|\s)--max-semi-space-size(?:=\S+)?(?=\s|$)/g, " ")
+    .replace(/(^|\s)--report-on-fatalerror(?=\s|$)/g, " ")
+    .replace(/(^|\s)--report-compact(?=\s|$)/g, " ")
+    // Quote-aware, and covers both `=value` and space-separated forms:
+    // NODE_OPTIONS values may be double-quoted (`--report-directory="/path
+    // with spaces"`), and a naive \S+ strip would leave `with spaces"`
+    // behind - an unterminated NODE_OPTIONS that kills Node before any user
+    // code runs. The space-separated arm refuses to swallow a following
+    // `--flag` so a malformed value-less token cannot eat its neighbor.
+    .replace(
+      /(^|\s)--report-directory(?:=(?:"[^"]*"|\S+)|\s+(?:"[^"]*"|(?!--)\S+))?(?=\s|$)/g,
+      " ",
+    )
     .trim()
     .replace(/\s+/g, " ");
-  return stripped.length > 0 ? `${stripped} ${HOST_V8_FLAGS}` : HOST_V8_FLAGS;
+  return stripped.length > 0
+    ? `${stripped} ${HOST_APPENDED_FLAGS}`
+    : HOST_APPENDED_FLAGS;
 }
