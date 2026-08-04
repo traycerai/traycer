@@ -72,6 +72,28 @@ describe("chat-tile lowerSurfacesHeight → composerOverlayHeight (ticket 18 rid
       /composerOverlayHeight=\{\s*lowerSurfacesElement === null \? 0 : lowerSurfacesHeight\s*\}/,
     );
   });
+
+  it("owns an opaque backdrop and overdraws the bottom compositing seam", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, "../chat-tile.tsx"), "utf8");
+
+    const overlayMatch = source.match(
+      /className="([^"]*bg-canvas[^"]*after:-bottom-px[^"]*after:bg-canvas[^"]*)"\s*\n\s*data-chat-lower-surfaces-overlay=""/,
+    );
+    expect(overlayMatch).not.toBeNull();
+
+    const overlayClasses = overlayMatch?.[1].split(/\s+/) ?? [];
+    expect(
+      overlayClasses.some(
+        (token) => token.startsWith("bg-") && token !== "bg-canvas",
+      ),
+    ).toBe(false);
+    expect(
+      overlayClasses.some(
+        (token) => token.startsWith("after:bg-") && token !== "after:bg-canvas",
+      ),
+    ).toBe(false);
+  });
 });
 
 function approval(

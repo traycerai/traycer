@@ -32,7 +32,7 @@ import * as chatTabViewportHandoff from "@/stores/chats/chat-tab-viewport-handof
 import {
   evictChatTabState,
   evictChatTabStateForChat,
-  hasSavedChatTabState,
+  peekSavedChatTabState,
   restoreChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
@@ -2562,13 +2562,12 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(
       findPaneById(requireCanvas("tab-capture-isolation").root, "pane-gone"),
     ).toBeNull();
-    expect(hasSavedChatTabState(identity)).toBe(false);
+    expect(peekSavedChatTabState(identity) !== null).toBe(false);
     expect(restoreChatTabState(identity, [])).toEqual({
       mode: "following-end",
       anchorMessageId: null,
       anchorIndex: null,
       offset: 0,
-      replyReserveMessageId: null,
     });
   });
 });

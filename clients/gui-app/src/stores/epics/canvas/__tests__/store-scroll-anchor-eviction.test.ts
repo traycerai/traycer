@@ -8,7 +8,7 @@ import {
 import {
   evictChatTabState,
   evictChatTabStateForEpic,
-  hasSavedChatTabState,
+  peekSavedChatTabState,
   restoreChatTabState,
   saveChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
@@ -36,6 +36,11 @@ import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { useTileFindStore } from "@/stores/tile-find";
 import type { TileFindCapability, TileFindUiState } from "@/stores/tile-find";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import {
+  pendingHydrationRestore,
+  rememberPendingHydrationRestore,
+  resetPendingHydrationRestoreForTesting,
+} from "@/stores/chats/chat-tab-pending-hydration-restore";
 import { evictTileFindUiForEpic } from "@/stores/tile-find/tile-find-store";
 import {
   evictChatTurnMinimapActiveEntries,
@@ -104,6 +109,12 @@ function seedTicket5PerTabState(epicId: string): void {
     anchorIndex: 0,
     offset: 24,
   });
+  rememberPendingHydrationRestore(identity, {
+    mode: "free-scrolling",
+    anchorMessageId: "msg-pending",
+    anchorIndex: 1,
+    offset: 12,
+  });
   getOrCreateActivityGroupOpenStore(identity)
     .getState()
     .setOpen("activity-g1", true);
@@ -131,7 +142,7 @@ function seedTicket5PerTabState(epicId: string): void {
 
 function expectTicket5PerTabStatePresent(epicId: string): void {
   const identity = identityFor(epicId);
-  expect(hasSavedChatTabState(identity)).toBe(true);
+  expect(peekSavedChatTabState(identity) !== null).toBe(true);
   expect(restoreChatTabState(identity, []).mode).toBe("free-scrolling");
   expect(
     getOrCreateActivityGroupOpenStore(identity)
@@ -155,6 +166,9 @@ function expectTicket5PerTabStatePresent(epicId: string): void {
     useTileFindStore.getState().uiByTileInstanceId[CHAT_A.instanceId],
   ).toEqual(SEEDED_TILE_FIND_UI);
   expect(restoreChatTurnMinimapActiveEntry(identity)).toBe("msg-seed");
+  expect(pendingHydrationRestore(identity)?.anchorMessageId).toBe(
+    "msg-pending",
+  );
 }
 
 function expectTicket5TabKeysEvicted(epicId: string): void {
@@ -178,9 +192,10 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
     useTileFindStore.getState().uiByTileInstanceId[CHAT_A.instanceId],
   ).toBeUndefined();
   // Durable scroll + minimap still restore via chat-key after tab-key eviction.
-  expect(hasSavedChatTabState(identity)).toBe(true);
+  expect(peekSavedChatTabState(identity) !== null).toBe(true);
   expect(restoreChatTabState(identity, []).mode).toBe("free-scrolling");
   expect(restoreChatTurnMinimapActiveEntry(identity)).toBe("msg-seed");
+  expect(pendingHydrationRestore(identity)).toBeNull();
   // A2A / activity-group registries: getOrCreate after tab-key eviction
   // builds a fresh store seeded from the durable snapshot the sweep wrote.
   expect(
@@ -235,6 +250,7 @@ beforeEach(() => {
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
   useTileFindStore.getState().resetForTests();
+  resetPendingHydrationRestoreForTesting();
 });
 
 afterEach(() => {
@@ -249,6 +265,7 @@ afterEach(() => {
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
   useTileFindStore.getState().resetForTests();
+  resetPendingHydrationRestoreForTesting();
 });
 
 describe("canvas store scroll-anchor sweep", () => {

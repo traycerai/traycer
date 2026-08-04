@@ -1,11 +1,10 @@
 import { Box, ChevronRight } from "lucide-react";
-import { useCallback, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
 import { deriveActivityGroupCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
   chatFindActivityGroupChildHeaderUnitId,
@@ -59,8 +58,6 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
     },
     [collapsibleKey, group.id, setFindForcedOpen, setOpen],
   );
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const handleOpenChange = useChatMeasuredOpenChange(updateOpen, triggerRef);
   // Computed here rather than inline in the JSX: `jsx-no-leaked-render`
   // rewrites an inline `&&` into `? … : null`, which is right for children and
   // wrong for a boolean prop.
@@ -90,11 +87,10 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   return (
     <Collapsible
       open={open}
-      onOpenChange={handleOpenChange}
+      onOpenChange={updateOpen}
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger
-        ref={triggerRef}
         data-find-include="true"
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}

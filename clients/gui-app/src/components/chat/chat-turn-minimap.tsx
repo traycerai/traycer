@@ -167,11 +167,27 @@ function resolveChatTurnMinimapPassiveHoverState(input: {
   };
 }
 
-function useChatTurnMinimapPassiveHover(input: {
+function resolveChatTurnMinimapPassiveClickProximity(
+  hitStripWidth: number | null,
+  uiFontSize: number,
+): number {
+  const markerWidth = uiFontSize * CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM;
+  return hitStripWidth !== null && hitStripWidth < markerWidth
+    ? markerWidth
+    : 0;
+}
+
+function useChatTurnMinimapPassiveInteraction(input: {
   readonly active: boolean;
+  readonly clickHorizontalProximity: number;
   readonly closeInteraction: () => void;
   readonly horizontalProximity: number;
   readonly interactionRegionRef: RefObject<HTMLDivElement | null>;
+  readonly onClickGeometry: (
+    pointerY: number,
+    railTop: number,
+    railHeight: number,
+  ) => void;
   readonly onPointerGeometry: (
     pointerY: number,
     railTop: number,
@@ -182,9 +198,11 @@ function useChatTurnMinimapPassiveHover(input: {
 }): void {
   const {
     active,
+    clickHorizontalProximity,
     closeInteraction,
     horizontalProximity,
     interactionRegionRef,
+    onClickGeometry,
     onPointerGeometry,
     side,
     viewportRef,
@@ -255,11 +273,43 @@ function useChatTurnMinimapPassiveHover(input: {
       cancelMoveFrame();
       closeInteraction();
     };
+    const handleClick = (event: MouseEvent): void => {
+      if (
+        clickHorizontalProximity <= 0 ||
+        chatTurnMinimapHasActiveTextSelection() ||
+        chatTurnMinimapEventTargetsPreview(event.target) ||
+        (event.target instanceof Element &&
+          event.target.closest("[data-chat-turn-minimap-hit-strip]") !== null)
+      ) {
+        return;
+      }
+      const interactionRegion = interactionRegionRef.current;
+      if (interactionRegion === null) return;
+      const rect = interactionRegion.getBoundingClientRect();
+      const horizontalDistance =
+        side === "left"
+          ? event.clientX - rect.left
+          : rect.right - event.clientX;
+      const withinPaintedMarkerWidth =
+        horizontalDistance >= 0 &&
+        horizontalDistance <= clickHorizontalProximity;
+      const withinVerticalRail =
+        event.clientY >= rect.top && event.clientY <= rect.bottom;
+      if (!withinPaintedMarkerWidth || !withinVerticalRail) return;
+
+      // The zero/partial-gutter marker deliberately does not own pointerdown,
+      // so transcript text can still be selected through it. Claim only the
+      // resulting clean click once selection has remained collapsed.
+      event.preventDefault();
+      event.stopPropagation();
+      onClickGeometry(event.clientY, rect.top, rect.height);
+    };
 
     viewport.addEventListener("pointermove", handlePointerMove);
     viewport.addEventListener("pointerdown", handlePointerDown);
     viewport.addEventListener("pointerup", handlePointerUp);
     viewport.addEventListener("pointerleave", handlePointerLeave);
+    viewport.addEventListener("click", handleClick, true);
     return () => {
       cancelMoveFrame();
       if (pointerUpFrame !== null) cancelAnimationFrame(pointerUpFrame);
@@ -267,12 +317,15 @@ function useChatTurnMinimapPassiveHover(input: {
       viewport.removeEventListener("pointerdown", handlePointerDown);
       viewport.removeEventListener("pointerup", handlePointerUp);
       viewport.removeEventListener("pointerleave", handlePointerLeave);
+      viewport.removeEventListener("click", handleClick, true);
     };
   }, [
     active,
+    clickHorizontalProximity,
     closeInteraction,
     horizontalProximity,
     interactionRegionRef,
+    onClickGeometry,
     onPointerGeometry,
     side,
     viewportRef,
@@ -766,11 +819,33 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     [items.length],
   );
 
-  useChatTurnMinimapPassiveHover({
+  const selectFromPointerGeometry = useCallback(
+    (pointerY: number, railTop: number, railHeight: number): void => {
+      const nextIndex = resolveChatTurnMinimapIndexFromPointer({
+        itemCount: items.length,
+        railTop,
+        railHeight,
+        pointerY,
+      });
+      const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
+      if (nextItem === null) return;
+      setInteractionStarted(true);
+      setActiveIndex(nextIndex);
+      onSelect(nextItem.id);
+    },
+    [items, onSelect],
+  );
+
+  useChatTurnMinimapPassiveInteraction({
     active: passiveHoverActive,
+    clickHorizontalProximity: resolveChatTurnMinimapPassiveClickProximity(
+      hitStripWidth,
+      uiFontSize,
+    ),
     closeInteraction,
     horizontalProximity: passiveHorizontalProximity,
     interactionRegionRef,
+    onClickGeometry: selectFromPointerGeometry,
     onPointerGeometry: updateActiveIndexFromPointerGeometry,
     side,
     viewportRef,
@@ -985,6 +1060,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
               isInert ? "pointer-events-none" : "pointer-events-auto",
             )}
             data-chat-turn-minimap-interactive-width={resolvedHitStripWidth}
+            data-chat-turn-minimap-hit-strip=""
             data-testid="chat-turn-minimap-hit-strip"
             {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
             inert={isInert}

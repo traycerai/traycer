@@ -1,11 +1,10 @@
 import { ChevronDown } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
 import { cn } from "@/lib/utils";
 
 interface SegmentCardProps {
@@ -97,15 +96,10 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
     bodyFindUnitId,
     className,
   } = props;
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const measuredOpenChange = useChatMeasuredOpenChange(
-    onOpenChange,
-    triggerRef,
-  );
   return (
     <Collapsible
       open={open}
-      onOpenChange={measuredOpenChange}
+      onOpenChange={onOpenChange}
       className={cn(
         "rounded-md border text-ui-sm",
         TONE_CLASS[tone],
@@ -123,7 +117,6 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
         )}
       >
         <CollapsibleTrigger
-          ref={triggerRef}
           data-find-include="true"
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(

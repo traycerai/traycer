@@ -338,7 +338,10 @@ export function openCloudNotificationsStream(
 
   function openSession(): void {
     if (disposed) return;
-    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    const cloudState = useCloudNotificationsStore.getState();
+    cloudState.setConnectionState(
+      cloudState.hasSnapshot ? "reconnecting" : "connecting",
+    );
     const session = wsStreamClient.subscribe(
       "host.notifications.cloudFeed.subscribe",
       {},
@@ -387,9 +390,10 @@ export function openCloudNotificationsStream(
           .setConnectionState(cloudCloseState(reason));
         reopenScheduler.scheduleAfterClose(reason);
       } else if (status !== "open") {
-        useCloudNotificationsStore
-          .getState()
-          .setConnectionState("reconnecting");
+        const currentState = useCloudNotificationsStore.getState();
+        currentState.setConnectionState(
+          currentState.hasSnapshot ? "reconnecting" : "connecting",
+        );
       }
       if (
         reason?.kind === "fatalError" &&

@@ -725,6 +725,57 @@ describe("<NotificationsSessionProvider />", () => {
     expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
   });
 
+  it("reopens cloud notifications and activity on a replacement local-host client", async () => {
+    const queryClient = new QueryClient();
+    const firstClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = firstClient;
+    streamState.cloudFeedSupport = "supported";
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(firstClient.subscribedMethods).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+
+    const secondClient = new MockWsStreamClient();
+    act(() => {
+      streamState.client = secondClient;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(secondClient.subscribedMethods).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+    expect(firstClient.sessionFor("agent.activity.subscribe").closeCount).toBe(
+      1,
+    );
+    expect(
+      firstClient.sessionFor("host.notifications.cloudFeed.subscribe")
+        .closeCount,
+    ).toBe(1);
+  });
+
   it("reopens activity after a recoverable terminal close", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
@@ -914,7 +965,7 @@ describe("<NotificationsSessionProvider />", () => {
       ]);
       expect(useCloudNotificationsStore.getState().hasSnapshot).toBe(false);
       expect(useCloudNotificationsStore.getState().connectionState).toBe(
-        "unavailable",
+        "connecting",
       );
     });
   });
@@ -967,7 +1018,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(cloud.hasSnapshot).toBe(false);
       expect(cloud.rows).toEqual({});
       expect(cloud.version).toBeNull();
-      expect(cloud.connectionState).toBe("unavailable");
+      expect(cloud.connectionState).toBe("connecting");
     });
   });
 

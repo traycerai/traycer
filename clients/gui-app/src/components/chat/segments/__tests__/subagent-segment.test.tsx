@@ -6,7 +6,6 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatMeasuredItemChangeContext } from "@/components/chat/chat-measured-item-change-context";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveSubagentCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindSubagentHeaderUnitId } from "@/components/chat/chat-find";
@@ -343,72 +342,60 @@ describe("<SubagentSegment /> promoted feed", () => {
     ).not.toBeNull();
   });
 
-  it("requests measured item-change when promoted card toggles", () => {
-    const requestMeasuredItemChange = vi.fn(
-      (_anchorElement: HTMLElement | null, mutate: () => void) => {
-        mutate();
-      },
-    );
+  it("toggles open and closed when the promoted card trigger is clicked", () => {
     render(
-      <ChatMeasuredItemChangeContext.Provider value={requestMeasuredItemChange}>
-        <SubagentSegment
-          id="test-segment-measured-change"
-          name="reviewer"
-          task="Review the implementation"
-          progressUpdates={["one", "two"]}
-          result={null}
-          isStreaming
-          endState={null}
-          stopped={false}
-          startedAt={null}
-          durationMs={null}
-          agentType={null}
-          workflowMeta={null}
-          nested={[]}
-          variant="promoted"
-        />
-      </ChatMeasuredItemChangeContext.Provider>,
+      <SubagentSegment
+        id="test-segment-measured-change"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={["one", "two"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
     );
 
     const trigger = screen.getByRole("button", { name: /Subagent/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(trigger);
-
-    expect(requestMeasuredItemChange).toHaveBeenCalledTimes(2);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("requests measured item-change through the shared card shell", () => {
-    const requestMeasuredItemChange = vi.fn(
-      (_anchorElement: HTMLElement | null, mutate: () => void) => {
-        mutate();
-      },
-    );
+  it("toggles open and closed through the shared card shell", () => {
     render(
-      <ChatMeasuredItemChangeContext.Provider value={requestMeasuredItemChange}>
-        <SubagentSegment
-          id="test-segment-card-measured-change"
-          name="reviewer"
-          task="Review the implementation"
-          progressUpdates={["one", "two"]}
-          result={null}
-          isStreaming
-          endState={null}
-          stopped={false}
-          startedAt={null}
-          durationMs={null}
-          agentType={null}
-          workflowMeta={null}
-          nested={[]}
-          variant="card"
-        />
-      </ChatMeasuredItemChangeContext.Provider>,
+      <SubagentSegment
+        id="test-segment-card-measured-change"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={["one", "two"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        workflowMeta={null}
+        nested={[]}
+        variant="card"
+      />,
     );
 
     const trigger = screen.getByRole("button", { name: /reviewer/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(trigger);
-
-    expect(requestMeasuredItemChange).toHaveBeenCalledTimes(2);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("shows the cleaned task only when expanded, never as the collapsed line", () => {

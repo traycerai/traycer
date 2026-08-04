@@ -11,7 +11,10 @@ import {
   within,
 } from "@testing-library/react";
 import {
+  advanceLegendListTime,
+  installLegendListTestClock,
   installLegendListViewportMetrics,
+  restoreLegendListTestClock,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 
@@ -886,6 +889,7 @@ function registerWaitingChatHandoff(): void {
 describe("<ChatTile />", () => {
   beforeEach(() => {
     installLegendListViewportMetrics();
+    installLegendListTestClock();
     window.localStorage.clear();
     useAuthStore.setState({
       status: "signed-in",
@@ -928,6 +932,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    restoreLegendListTestClock();
     vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
@@ -961,9 +966,7 @@ describe("<ChatTile />", () => {
 
     renderChatTile();
     // Flush the epic snapshot (fired via setTimeout(0)) + effects.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
@@ -1845,9 +1848,7 @@ describe("<ChatTile />", () => {
       );
     });
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     act(() => {
       emitChatSnapshotWithMessages({
@@ -2119,9 +2120,7 @@ describe("<ChatTile />", () => {
     renderChatTile();
     expect(chatHarness.sent).toHaveLength(0);
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
@@ -2170,9 +2169,7 @@ describe("<ChatTile />", () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
@@ -2213,9 +2210,7 @@ describe("<ChatTile />", () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
