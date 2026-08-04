@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
@@ -295,6 +295,8 @@ export function useHostStreamClientBindingFor(
       : null;
 
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
+  const [rebuildNonce, setRebuildNonce] = useState(0);
+  const teardownInProgressRef = useRef(false);
 
   // Builds AND owns the client's lifecycle inside this ONE effect, rather
   // than a `useMemo` (as this hook did before S1's session cache) - see
@@ -375,7 +377,9 @@ export function useHostStreamClientBindingFor(
     });
 
     return () => {
+      teardownInProgressRef.current = true;
       client.close("transient-host-client-teardown");
+      teardownInProgressRef.current = false;
     };
   }, [
     auth,
@@ -385,6 +389,7 @@ export function useHostStreamClientBindingFor(
     endpointPublicKey,
     endpointWebsocketUrl,
     globalClient,
+    rebuildNonce,
     transportKey,
     userId,
   ]);
@@ -404,7 +409,20 @@ export function useHostStreamClientBindingFor(
     });
   }, [client, globalClient]);
 
-  return binding;
+  useEffect(() => {
+    if (client === null) return;
+    const rebuild = (): void => {
+      if (teardownInProgressRef.current) return;
+      setRebuildNonce((nonce) => nonce + 1);
+    };
+    if (client.isClosed()) {
+      rebuild();
+      return;
+    }
+    return client.onClosed(rebuild);
+  }, [client]);
+
+  return binding?.client.isClosed() === true ? null : binding;
 }
 
 export function useHostStreamClientFor(
