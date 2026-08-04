@@ -34,20 +34,30 @@ export function useEpicExportArtifacts() {
         throw new Error("Select at least one artifact to export.");
       }
       const state = epicHandle.store.getState();
-      const artifacts = input.artifacts.map((artifact) => {
-        const fragment = state.getArtifactFragment(artifact.id);
-        if (fragment === null) {
-          throw new Error(`“${artifact.title}” is still loading.`);
-        }
-        return { ...artifact, fragment };
-      });
-      const output = await createArtifactExport({
-        artifacts,
-        format: input.format,
-        archive: input.archive,
-        archiveTitle: input.archiveTitle ?? firstArtifact.title,
-      });
-      return saveBlobToDisk(output.blob, output.suggestedName);
+      // Artifact-room docs are only materialized while leased, and export is
+      // the one fragment reader with no editor mounted behind it. Take a lease
+      // per artifact for the duration of the read - without one, exporting a
+      // body nobody has opened in this session reads as "still loading".
+      const releases: Array<() => void> = [];
+      try {
+        const artifacts = input.artifacts.map((artifact) => {
+          releases.push(state.acquireArtifactBodyLease(artifact.id));
+          const fragment = state.getArtifactFragment(artifact.id);
+          if (fragment === null) {
+            throw new Error(`“${artifact.title}” is still loading.`);
+          }
+          return { ...artifact, fragment };
+        });
+        const output = await createArtifactExport({
+          artifacts,
+          format: input.format,
+          archive: input.archive,
+          archiveTitle: input.archiveTitle ?? firstArtifact.title,
+        });
+        return await saveBlobToDisk(output.blob, output.suggestedName);
+      } finally {
+        releases.forEach((release) => release());
+      }
     },
     onSuccess: (saved, input) => {
       if (saved !== null) {

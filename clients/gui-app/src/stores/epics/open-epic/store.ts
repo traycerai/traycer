@@ -478,6 +478,30 @@ export interface OpenEpicState {
   getArtifactBodyAvailability: (
     artifactId: string,
   ) => EpicArtifactRoomAvailability;
+  /**
+   * Resolves the artifact-room hosting `artifactId`'s body, or `null` when the
+   * artifact does not exist or has not been assigned a room yet. Exposed so a
+   * lease holder can re-acquire when the artifact's room changes underneath
+   * it, which is not always visible in {@link getArtifactBodyAvailability}.
+   */
+  getArtifactRoomId: (artifactId: string) => string | null;
+  /**
+   * Materialize the artifact-room backing `artifactId`'s body and hold it
+   * materialized until the returned release is called.
+   *
+   * Rooms the host opens are cached as encoded update bytes, not as live
+   * `Y.Doc`s - a Yjs doc keeps one `Item` struct per edit forever, so a room
+   * an agent has rewritten many times is orders of magnitude larger
+   * materialized than encoded. {@link getArtifactFragment} therefore returns
+   * `null` for a room with no lease: every caller that needs a live fragment
+   * (editors, export) must take one first.
+   *
+   * Release is idempotent, and safe to call after the store is disposed. The
+   * room is not demoted immediately on the last release - it lingers so tile
+   * remounts do not pay to re-materialize - and never while local edits are
+   * still unacknowledged by the host.
+   */
+  acquireArtifactBodyLease: (artifactId: string) => () => void;
   /** Snapshot-read the title for optimistic-rename rollback. */
   readArtifactTitle: (artifactId: string) => string | null;
 }
@@ -780,10 +804,58 @@ export function createOpenEpicStore(
     latestHostStateVectorBase64: string | null;
   };
   const artifactRoomReplicas = new Map<string, ArtifactRoomReplicaEntry>();
+
+  /**
+   * A room the host has sent us, held as encoded update bytes with no live
+   * `Y.Doc` behind it.
+   *
+   * This is the memory-shaped half of the artifact-room cache. Yjs retains one
+   * `Item` struct per edit for the lifetime of a doc - garbage collection only
+   * collapses deleted *content*, never the structs - so a room an agent has
+   * rewritten a few hundred times costs O(edits) live objects while it is
+   * materialized, but only O(body) bytes once it is encoded back down. A
+   * renderer that materialized every room the host opened was paying the
+   * former for rooms nothing was looking at.
+   *
+   * Cold rooms are read-only by construction: the only writer of a room doc is
+   * a bound editor, and a bound editor holds a lease that keeps its room hot.
+   */
+  type ColdArtifactRoomEntry = {
+    /** Host update bytes, collapsed with `Y.mergeUpdates` past the thresholds
+     * below so a chatty room does not accumulate one buffer per frame. */
+    updates: Uint8Array[];
+    bytes: number;
+    latestHostStateVectorBase64: string | null;
+  };
+  const coldArtifactRooms = new Map<string, ColdArtifactRoomEntry>();
+  /** Outstanding materialization leases per room id. A room with a live lease
+   * is never cooled - see `isArtifactRoomPinned`. */
+  const artifactRoomLeases = new Map<string, number>();
+  const artifactRoomCooldownTimers = new Map<string, number>();
+  /** Monotonic touch stamps driving the hot-room LRU. A counter rather than a
+   * clock so eviction order is deterministic under fake timers. */
+  const artifactRoomTouchSeq = new Map<string, number>();
+  let artifactRoomTouchCounter = 0;
   const BIN_STREAM_ORIGIN = Symbol("open-epic/artifact-room-stream");
   const BIN_AWARENESS_REMOTE_ORIGIN = "artifact-room-stream-remote";
   const ROOM_PENDING_COLLAPSE_BYTES = 2 * 1024 * 1024;
   const ROOM_PENDING_COLLAPSE_ENTRIES = 32;
+  const COLD_ROOM_COLLAPSE_BYTES = 1024 * 1024;
+  const COLD_ROOM_COLLAPSE_ENTRIES = 32;
+  /**
+   * How long a room stays materialized after its last editor unmounts. Tile
+   * remounts (tab switches, canvas virtualization, a re-render that swaps the
+   * editor) are common and re-materializing costs a full `Y.applyUpdate` of
+   * the body, so an immediate demote would trade memory for visible latency.
+   */
+  const ARTIFACT_ROOM_COOLDOWN_MS = 60_000;
+  /**
+   * Ceiling on simultaneously materialized rooms. Reached only when more
+   * editors are genuinely open than this, in which case the least recently
+   * leased *unpinned* room is cooled - a pinned room is never evicted, so the
+   * cap can be exceeded by editors that are all actually in use.
+   */
+  const MAX_HOT_ARTIFACT_ROOMS = 8;
 
   function clearPendingRoomUpdates(entry: ArtifactRoomReplicaEntry): void {
     entry.pendingUpdates.length = 0;
@@ -954,6 +1026,172 @@ export function createOpenEpicStore(
     for (const id of Array.from(artifactRoomReplicas.keys())) {
       destroyArtifactRoomReplica(id);
     }
+    for (const timer of artifactRoomCooldownTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    artifactRoomCooldownTimers.clear();
+    coldArtifactRooms.clear();
+    artifactRoomTouchSeq.clear();
+    // Leases are deliberately NOT cleared: they are owned by mounted editors,
+    // which survive a replica swap / resubscribe and will re-materialize their
+    // room from the next snapshot. Clearing them here would leave a mounted
+    // editor holding a release closure for a lease nobody is counting.
+  }
+
+  function isArtifactRoomLeased(artifactRoomId: string): boolean {
+    return (artifactRoomLeases.get(artifactRoomId) ?? 0) > 0;
+  }
+
+  /**
+   * True when the room must stay materialized. Either an editor holds a lease,
+   * or the replica carries local divergence the host has not acknowledged -
+   * cooling a dirty replica would encode away the very bytes the reconnect
+   * reconcile is supposed to ship, silently losing user edits.
+   */
+  function isArtifactRoomPinned(artifactRoomId: string): boolean {
+    if (isArtifactRoomLeased(artifactRoomId)) return true;
+    const entry = artifactRoomReplicas.get(artifactRoomId);
+    if (entry === undefined) return false;
+    return (
+      entry.dirtyWatermarkStateVectorBase64 !== null ||
+      entry.pendingReconcileUpdate !== null ||
+      entry.pendingUpdates.length > 0
+    );
+  }
+
+  function pushColdArtifactRoomUpdate(
+    entry: ColdArtifactRoomEntry,
+    update: Uint8Array,
+  ): void {
+    entry.updates.push(update);
+    entry.bytes += update.byteLength;
+    if (entry.updates.length < 2) return;
+    if (
+      entry.bytes <= COLD_ROOM_COLLAPSE_BYTES &&
+      entry.updates.length <= COLD_ROOM_COLLAPSE_ENTRIES
+    ) {
+      return;
+    }
+    const merged = Y.mergeUpdates(entry.updates);
+    entry.updates.length = 0;
+    entry.updates.push(merged);
+    entry.bytes = merged.byteLength;
+  }
+
+  function recordColdArtifactRoomBytes(
+    artifactRoomId: string,
+    update: Uint8Array,
+    hostStateVectorBase64: string | null,
+  ): void {
+    const existing = coldArtifactRooms.get(artifactRoomId);
+    if (existing === undefined) {
+      coldArtifactRooms.set(artifactRoomId, {
+        updates: [update],
+        bytes: update.byteLength,
+        latestHostStateVectorBase64: hostStateVectorBase64,
+      });
+      return;
+    }
+    pushColdArtifactRoomUpdate(existing, update);
+    if (hostStateVectorBase64 !== null) {
+      existing.latestHostStateVectorBase64 = hostStateVectorBase64;
+    }
+  }
+
+  function touchArtifactRoom(artifactRoomId: string): void {
+    artifactRoomTouchCounter += 1;
+    artifactRoomTouchSeq.set(artifactRoomId, artifactRoomTouchCounter);
+  }
+
+  function cancelArtifactRoomCooldown(artifactRoomId: string): void {
+    const timer = artifactRoomCooldownTimers.get(artifactRoomId);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    artifactRoomCooldownTimers.delete(artifactRoomId);
+  }
+
+  /**
+   * Encode a materialized room back down to update bytes and drop its doc.
+   * Returns false when the room is pinned or was not hot to begin with.
+   */
+  function coolArtifactRoomReplica(artifactRoomId: string): boolean {
+    const entry = artifactRoomReplicas.get(artifactRoomId);
+    if (entry === undefined) return false;
+    if (isArtifactRoomPinned(artifactRoomId)) return false;
+    // Encode the whole replica, not just the frames we happened to receive:
+    // the doc is the merge of the host snapshot plus every update since, and
+    // its state-as-update is the smallest lossless representation of that.
+    const encoded = Y.encodeStateAsUpdate(entry.doc);
+    const latestHostStateVectorBase64 = entry.latestHostStateVectorBase64;
+    destroyArtifactRoomReplica(artifactRoomId);
+    coldArtifactRooms.set(artifactRoomId, {
+      updates: [encoded],
+      bytes: encoded.byteLength,
+      latestHostStateVectorBase64,
+    });
+    return true;
+  }
+
+  /**
+   * Arm the linger timer for a room nothing is holding. No-op while a lease or
+   * local divergence pins the room, and re-armable: the pinned case is
+   * re-tested when the next frame lands, so a room that finishes syncing after
+   * its editor closed still cools rather than staying hot forever.
+   */
+  function scheduleArtifactRoomCooldown(artifactRoomId: string): void {
+    if (disposed) return;
+    if (isArtifactRoomPinned(artifactRoomId)) return;
+    if (!artifactRoomReplicas.has(artifactRoomId)) return;
+    if (artifactRoomCooldownTimers.has(artifactRoomId)) return;
+    const timer = window.setTimeout(() => {
+      artifactRoomCooldownTimers.delete(artifactRoomId);
+      if (disposed) return;
+      coolArtifactRoomReplica(artifactRoomId);
+    }, ARTIFACT_ROOM_COOLDOWN_MS);
+    artifactRoomCooldownTimers.set(artifactRoomId, timer);
+  }
+
+  function enforceHotArtifactRoomCap(): void {
+    while (artifactRoomReplicas.size > MAX_HOT_ARTIFACT_ROOMS) {
+      let victim: string | null = null;
+      let victimSeq = Number.POSITIVE_INFINITY;
+      for (const id of artifactRoomReplicas.keys()) {
+        if (isArtifactRoomPinned(id)) continue;
+        const seq = artifactRoomTouchSeq.get(id) ?? 0;
+        if (seq < victimSeq) {
+          victimSeq = seq;
+          victim = id;
+        }
+      }
+      if (victim === null) return;
+      cancelArtifactRoomCooldown(victim);
+      if (!coolArtifactRoomReplica(victim)) return;
+    }
+  }
+
+  /**
+   * Bring a room back up to a live `Y.Doc`. Returns the hot entry, creating an
+   * empty replica when the room has no bytes yet (a lease taken before the
+   * first snapshot) - the snapshot then lands on the same entry.
+   */
+  function materializeArtifactRoomReplica(
+    artifactRoomId: string,
+  ): ArtifactRoomReplicaEntry {
+    touchArtifactRoom(artifactRoomId);
+    cancelArtifactRoomCooldown(artifactRoomId);
+    const hot = artifactRoomReplicas.get(artifactRoomId);
+    if (hot !== undefined) return hot;
+    const cold = coldArtifactRooms.get(artifactRoomId);
+    const entry = getOrCreateArtifactRoomReplica(artifactRoomId);
+    if (cold !== undefined) {
+      coldArtifactRooms.delete(artifactRoomId);
+      // `BIN_STREAM_ORIGIN` so the replay does not read as a local edit and
+      // get echoed back to the host as an outbound update.
+      Y.applyUpdate(entry.doc, Y.mergeUpdates(cold.updates), BIN_STREAM_ORIGIN);
+      entry.latestHostStateVectorBase64 = cold.latestHostStateVectorBase64;
+    }
+    enforceHotArtifactRoomCap();
+    return entry;
   }
 
   function flushPendingArtifactRoomUpdates(artifactRoomId: string): void {
@@ -1331,6 +1569,31 @@ export function createOpenEpicStore(
               hostArtifactRoomStateVectorBase64,
             ) => {
               if (disposed || generation !== streamGeneration) return;
+              // A room nobody is editing never materializes: keep the bytes
+              // and flip availability so the tile can render its state, and
+              // let the first lease pay for the `Y.Doc`. There is nothing to
+              // reconcile on this path - a cold room has no local edits by
+              // construction - so the whole reconcile/queue dance below is
+              // reachable only for rooms an editor is (or was) bound to.
+              if (
+                !artifactRoomReplicas.has(artifactRoomId) &&
+                !isArtifactRoomLeased(artifactRoomId)
+              ) {
+                recordColdArtifactRoomBytes(
+                  artifactRoomId,
+                  snapshotBytes,
+                  hostArtifactRoomStateVectorBase64,
+                );
+                set((state) => ({
+                  artifactRooms: {
+                    stateByArtifactRoomId: {
+                      ...state.artifactRooms.stateByArtifactRoomId,
+                      [artifactRoomId]: "ready",
+                    },
+                  },
+                }));
+                return;
+              }
               // Reuse any prior replica for this artifactRoom so a snapshot during
               // reconnect/recovery does NOT destroy local in-flight
               // edits. The host is now the merge source - its bytes
@@ -1410,6 +1673,11 @@ export function createOpenEpicStore(
                   ...dirtyState,
                 };
               });
+              // The snapshot may have been what cleared this replica's last
+              // local divergence, so re-test the linger arm here: without it a
+              // room whose editor closed while it was still dirty would stay
+              // materialized for the rest of the session.
+              scheduleArtifactRoomCooldown(artifactRoomId);
             },
             onArtifactRoomUpdate: (
               artifactRoomId,
@@ -1418,7 +1686,18 @@ export function createOpenEpicStore(
             ) => {
               if (disposed || generation !== streamGeneration) return;
               const entry = artifactRoomReplicas.get(artifactRoomId);
-              if (entry === undefined) return;
+              if (entry === undefined) {
+                // Cold room: accumulate the bytes rather than materializing a
+                // doc for a body nothing is displaying. An unknown room is
+                // still skipped - `recordColdArtifactRoomBytes` only extends
+                // rooms the host has already snapshotted.
+                const cold = coldArtifactRooms.get(artifactRoomId);
+                if (cold === undefined) return;
+                pushColdArtifactRoomUpdate(cold, updateBytes);
+                cold.latestHostStateVectorBase64 =
+                  hostArtifactRoomStateVectorBase64;
+                return;
+              }
               Y.applyUpdate(entry.doc, updateBytes, BIN_STREAM_ORIGIN);
               entry.latestHostStateVectorBase64 =
                 hostArtifactRoomStateVectorBase64;
@@ -1431,6 +1710,7 @@ export function createOpenEpicStore(
                 entry.dirtyWatermarkStateVectorBase64 = null;
               }
               refreshPublicDirtyState?.();
+              scheduleArtifactRoomCooldown(artifactRoomId);
             },
             onArtifactRoomAwareness: (artifactRoomId, awarenessBytes) => {
               if (disposed || generation !== streamGeneration) return;
@@ -1452,6 +1732,11 @@ export function createOpenEpicStore(
               if (nextState !== "ready") {
                 // A artifactRoom transitioning out of `ready` invalidates the
                 // local replica - the next `artifactRoomSnapshot` will rebuild.
+                // The cold copy is invalidated with it; leases survive, so a
+                // mounted editor re-materializes from that next snapshot.
+                cancelArtifactRoomCooldown(artifactRoomId);
+                coldArtifactRooms.delete(artifactRoomId);
+                artifactRoomTouchSeq.delete(artifactRoomId);
                 destroyArtifactRoomReplica(artifactRoomId);
               }
               set((prev) => {
@@ -2168,7 +2453,9 @@ export function createOpenEpicStore(
             // Resolve the artifact's artifactRoom via root metadata, then look up
             // the live `artifact-body:{id}` fragment in that artifactRoom's local
             // replica. Returns `null` until the artifactRoom transitions to
-            // `ready` and a `artifactRoomSnapshot` has seeded the replica.
+            // `ready` and a `artifactRoomSnapshot` has seeded the replica -
+            // and, since rooms are cached cold, until something holds a lease
+            // via `acquireArtifactBodyLease`.
             const artifactRoomId = readArtifactArtifactRoomId(artifactId);
             if (artifactRoomId === null) return null;
             const availability =
@@ -2201,6 +2488,40 @@ export function createOpenEpicStore(
               get().artifactRooms.stateByArtifactRoomId[artifactRoomId] ??
               "unavailable"
             );
+          },
+
+          getArtifactRoomId: (artifactId) =>
+            readArtifactArtifactRoomId(artifactId),
+
+          acquireArtifactBodyLease: (artifactId) => {
+            const artifactRoomId = readArtifactArtifactRoomId(artifactId);
+            if (artifactRoomId === null || disposed) return () => {};
+            artifactRoomLeases.set(
+              artifactRoomId,
+              (artifactRoomLeases.get(artifactRoomId) ?? 0) + 1,
+            );
+            const hadReplica = artifactRoomReplicas.has(artifactRoomId);
+            materializeArtifactRoomReplica(artifactRoomId);
+            if (!hadReplica) {
+              // A newly materialized doc is a new fragment identity, so the
+              // editor has to rebind. Availability is unchanged here - the
+              // room was already `ready` - which is exactly why this needs
+              // its own invalidation signal.
+              set((state) => ({ bindingVersion: state.bindingVersion + 1 }));
+            }
+            let released = false;
+            return () => {
+              if (released) return;
+              released = true;
+              const remaining =
+                (artifactRoomLeases.get(artifactRoomId) ?? 1) - 1;
+              if (remaining > 0) {
+                artifactRoomLeases.set(artifactRoomId, remaining);
+                return;
+              }
+              artifactRoomLeases.delete(artifactRoomId);
+              scheduleArtifactRoomCooldown(artifactRoomId);
+            };
           },
 
           readArtifactTitle: (artifactId) => {

@@ -20,7 +20,7 @@
  * to satisfy `@typescript-eslint/no-unnecessary-condition` while keeping
  * runtime safety.
  */
-import { useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { createSelector, lruMemoize } from "reselect";
@@ -899,6 +899,32 @@ export function useEpicArtifactBodyAvailability(
     if (artifactId === null) return "unavailable";
     return s.getArtifactBodyAvailability(artifactId);
   });
+}
+
+/**
+ * Holds `artifactId`'s artifact-room materialized for as long as the calling
+ * component is mounted.
+ *
+ * Rooms the host opens are cached as encoded update bytes; only a leased room
+ * has a live `Y.Doc`, and therefore only a leased room has a fragment for
+ * {@link useEpicArtifactFragment} to return. Any component that binds an
+ * editor to an artifact body must call this - without it the tile renders its
+ * loading skeleton forever.
+ *
+ * The lease is re-taken when the resolved room id changes rather than only
+ * when the artifact id does: an artifact reassigned between two rooms that are
+ * both already `ready` produces no availability transition, so keying the
+ * effect on availability alone would leave the lease on the stale room.
+ */
+export function useEpicArtifactBodyLease(artifactId: string | null): void {
+  const handle = useOpenEpicHandle();
+  const artifactRoomId = useStore(handle.store, (s) =>
+    artifactId === null ? null : s.getArtifactRoomId(artifactId),
+  );
+  useEffect(() => {
+    if (artifactId === null || artifactRoomId === null) return;
+    return handle.store.getState().acquireArtifactBodyLease(artifactId);
+  }, [handle, artifactId, artifactRoomId]);
 }
 
 // ─── Doc reference for editor binding ─────────────────────────────────────
