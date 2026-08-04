@@ -252,7 +252,7 @@ describe("<ActivityGroupSegment /> live window", () => {
       // exact jump this design removes.
       const exiting = screen.getByTestId("activity-live-window");
       expect(exiting.dataset.shown).toBe("false");
-      expect(screen.getByText("echo hi")).toBeTruthy();
+      expect(screen.getByRole("button", { name: /echo hi/ })).toBeTruthy();
 
       act(() => {
         vi.advanceTimersByTime(LIVE_ACTIVITY_WINDOW_EXIT_MS);
@@ -787,6 +787,55 @@ describe("<ActivityGroupSegment /> live window", () => {
     }
   });
 
+  // The group's id is derived from its FIRST member, so removing that member
+  // RENAMES the group. `[command, reasoning]` whose command is promoted out
+  // becomes `[reasoning]` under a different id - and a latch keyed by group id
+  // is orphaned by precisely the move it exists to survive, dropping the header
+  // and unfolding the trace. Keying by segment id is what makes it hold, because
+  // segment ids do not move.
+  //
+  // Note this is the mirror of the shrink case above, which only ever exercised
+  // `[reasoning, X] -> [reasoning]`, where reasoning leads and the id happens
+  // not to change.
+  it("keeps the reasoning header when the group's FIRST member leaves and renames it", () => {
+    const leadingCommandGroup: ActivityGroupModel = {
+      ...TWO_CHILD_GROUP,
+      id: deriveActivityGroupRenderId(COMMAND_SEGMENT.id),
+      segments: [COMMAND_SEGMENT, COMPLETED_REASONING],
+    };
+    const renamedShrunkGroup: ActivityGroupModel = {
+      ...SHRUNK_GROUP,
+      id: deriveActivityGroupRenderId(COMPLETED_REASONING.id),
+      segments: [COMPLETED_REASONING],
+    };
+    // The rename is the whole premise; assert it rather than trusting it.
+    expect(renamedShrunkGroup.id).not.toBe(leadingCommandGroup.id);
+
+    const { rerender } = render(
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <ActivityGroupSegment group={leadingCommandGroup} />
+      </ChatExpansionTestProviders>,
+    );
+    // Opened, so the nested reasoning header is genuinely on screen.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Thought for 2s, ran 1 command/ }),
+    );
+    expect(screen.getByRole("button", { name: "Thought for 2s" })).toBeTruthy();
+
+    rerender(
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <ActivityGroupSegment group={renamedShrunkGroup} />
+      </ChatExpansionTestProviders>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Thought for 2s/ }));
+
+    // Two controls: the group's own, and the child header the reader saw.
+    expect(
+      screen.queryAllByRole("button", { name: "Thought for 2s" }),
+    ).toHaveLength(2);
+    expect(screen.queryByText("Weighing the two approaches")).toBeNull();
+  });
+
   // A latch that can be evicted is not a latch. Sharing `openIds`' 256-entry
   // FIFO meant the 257th mark erased the oldest, so a long transcript would drop
   // the header on its earliest groups and unfold their traces on the next
@@ -810,7 +859,7 @@ describe("<ActivityGroupSegment /> live window", () => {
 
     // Well past MAX_ACTIVITY_GROUP_OPEN_IDS (256).
     for (let index = 0; index < 300; index += 1) {
-      store.getState().markHeaded(`filler-group-${index}`);
+      store.getState().markHeaded([`filler-segment-${index}`]);
     }
 
     render(mount(SHRUNK_GROUP));

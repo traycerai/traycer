@@ -105,7 +105,15 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   // since a headerless body always shows, unfold a completed trace nobody
   // opened. So the header latches - in the store, not in component state, and
   // recorded only when the children were on screen. See `headedIds`.
-  const everHeaded = useActivityGroupEverHeaded(group.id);
+  //
+  // Keyed by the SEGMENT, not the group. The group's id comes from its first
+  // member, so removing that member renames the group: `[command, reasoning]`
+  // whose command is promoted out becomes `[reasoning]` under a new id, and a
+  // group-keyed latch is orphaned by the very move it is supposed to survive.
+  // The earlier note here only reasoned about `[reasoning, X] -> [reasoning]`,
+  // where reasoning is first and the id happens to hold still.
+  const soleReasoningId = shapeHeaderless ? group.segments[0].id : null;
+  const everHeaded = useActivityGroupEverHeaded(soleReasoningId);
   const soleReasoningHeaderless = shapeHeaderless && !everHeaded;
   // The children only EXIST in two containers: the bounded live window, and
   // `CollapsibleContent`, which unmounts its subtree when closed. A settled,
@@ -126,14 +134,25 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   // head. Without this the set filled with command-only groups that never
   // rendered one, which is both meaningless and, when it was capped, actively
   // harmful: unrelated activity spent the budget that a real latch needed.
-  const showsReasoningHeader =
-    !shapeHeaderless &&
-    group.segments.some((segment) => segment.kind === "reasoning");
+  //
+  // EVERY reasoning segment is marked, not just one, because which of them ends
+  // up alone is decided later: any other member can be the one that leaves, so
+  // the survivor is not knowable at the time its header is on screen.
+  const headedReasoningIds = useMemo(
+    () =>
+      shapeHeaderless
+        ? []
+        : group.segments
+            .filter((segment) => segment.kind === "reasoning")
+            .map((segment) => segment.id),
+    [group.segments, shapeHeaderless],
+  );
+  const showsReasoningHeader = headedReasoningIds.length > 0;
   const markHeaded = useMarkActivityGroupHeaded();
   useEffect(() => {
     if (!showsReasoningHeader || !childrenShown) return;
-    markHeaded(group.id);
-  }, [childrenShown, group.id, markHeaded, showsReasoningHeader]);
+    markHeaded(headedReasoningIds);
+  }, [childrenShown, headedReasoningIds, markHeaded, showsReasoningHeader]);
   // The ONLY difference between the two containers is who caps the height. Both
   // render the same rows, with the same headers, the same labels and the same
   // collapse-on-completion - the window is a viewport onto the expanded body,

@@ -8,6 +8,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent,
@@ -254,13 +255,27 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   // runs after commit, and if the reader moved focus somewhere deliberately in
   // between, that is theirs to keep.
   //
-  // The blur only clears the latch when focus went somewhere REAL. Whether an
-  // engine dispatches `blur` for an element removed while focused is not
-  // settled - Chromium does, and jsdom does not - so clearing on every blur
-  // would let removal cancel the handoff it is supposed to trigger, silently,
-  // in the browser this actually ships in, with every test still green.
-  // `relatedTarget` is what separates the two: a reader who tabbed or clicked
-  // away hands focus to an element, removal hands it to nothing.
+  // Three writers, because no single one of them is sufficient.
+  //
+  // `onFocus` sets it, immediately - a commit is not guaranteed between focusing
+  // the control and it being taken away.
+  //
+  // `onBlur` clears it only when focus went somewhere REAL. A blur carrying no
+  // `relatedTarget` is ambiguous: it is what Chromium dispatches when a focused
+  // element is REMOVED (jsdom dispatches nothing at all), and also what a click
+  // on a non-focusable transcript surface produces. Clearing on both would let
+  // removal cancel the handoff it is meant to trigger - invisibly, in the engine
+  // this ships in, with every test still green. Not clearing on either leaves
+  // the opposite bug, where a reader who clicked away has focus pulled into the
+  // trace on completion.
+  //
+  // So the layout effect settles the ambiguous case, and it is the authority
+  // whenever the control exists: it re-reads real focus ownership after every
+  // commit, which corrects a stale latch left by a click-to-nowhere. On the
+  // commit that REMOVES the control React has already detached the ref, so it
+  // bails and preserves the last reading - focus ownership as of the last commit
+  // that still had a button, which is exactly what the handoff needs to know.
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const headerFocusedRef = useRef(false);
   const onHeaderFocus = useCallback((): void => {
     headerFocusedRef.current = true;
@@ -272,6 +287,15 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
     },
     [],
   );
+  useLayoutEffect(() => {
+    const trigger =
+      rootRef.current?.querySelector("[data-activity-row-trigger]") ?? null;
+    // No trigger means this commit is the one that removed it, so the reading
+    // below is left untouched - it is focus ownership as of the last commit
+    // that still had a control, which is what the handoff needs.
+    if (trigger === null) return;
+    headerFocusedRef.current = trigger === document.activeElement;
+  });
   const controlRemoved = headerless && !headerActionable;
   useEffect(() => {
     if (!controlRemoved || !headerFocusedRef.current) return;
@@ -280,7 +304,7 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
     bodyRef.current?.focus({ preventScroll: true });
   }, [controlRemoved]);
   return (
-    <div className="text-ui-sm text-muted-foreground">
+    <div ref={rootRef} className="text-ui-sm text-muted-foreground">
       {headerless && !headerActionable ? null : (
         <ReasoningHeader
           findUnitId={findUnitId}

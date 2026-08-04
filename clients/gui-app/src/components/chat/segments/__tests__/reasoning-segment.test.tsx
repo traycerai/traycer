@@ -567,6 +567,53 @@ describe("<ReasoningSegment />", () => {
     }
   });
 
+  // The other half of the ambiguous blur. A click on a non-focusable transcript
+  // surface ALSO blurs with no `relatedTarget` and leaves focus on the body, and
+  // it is a deliberate departure - so completion must not pull the reader back
+  // into the trace. Indistinguishable from a removal blur at dispatch time,
+  // which is why the layout effect re-reads real focus ownership every commit
+  // and corrects the latch while the control still exists.
+  it("does not reclaim focus after the reader clicks away to nothing", () => {
+    const props = {
+      findUnitId: null,
+      markdown: "Detailed chain of thought",
+      durationMs: null,
+      bodyBoundedByParent: false,
+      headerless: true,
+      initiallyExpanded: false,
+    } as const;
+    const { rerender } = render(<ReasoningSegment {...props} isStreaming />);
+
+    const control = screen.getByRole("button", { name: /Thinking/ });
+    control.focus();
+    expect(document.activeElement).toBe(control);
+
+    // Clicked a non-focusable surface: blurred to nothing, focus on the body,
+    // and the control is still sitting there.
+    control.blur();
+    fireEvent.blur(control, { relatedTarget: null });
+    expect(document.activeElement).toBe(document.body);
+
+    // A streaming commit - the transcript is producing these constantly - is
+    // what lets the sampler observe that the control no longer holds focus.
+    rerender(
+      <ReasoningSegment {...props} isStreaming markdown="More thought" />,
+    );
+
+    rerender(
+      <ReasoningSegment
+        {...props}
+        isStreaming={false}
+        durationMs={3000}
+        markdown="More thought"
+      />,
+    );
+
+    // Control gone, and focus left where the reader put it.
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+
   // jsdom dispatches NO blur when a focused element is removed; Chromium - the
   // engine this actually ships in - does. So a blur handler that cleared the
   // latch unconditionally made the handoff a no-op in the real product while
