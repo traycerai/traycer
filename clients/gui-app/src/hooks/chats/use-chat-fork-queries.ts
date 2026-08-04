@@ -56,7 +56,10 @@ export function useChatForkEventQuery(): UseQueryResult<
   const client = useHostClient();
   const hostId = useReactiveActiveHostId();
   const supportsGet = useHostSupportsMethod(hostId, "host.chatFork.get");
-  const supportsResolve = useHostSupportsMethod(hostId, "host.chatFork.resolve");
+  const supportsResolve = useHostSupportsMethod(
+    hostId,
+    "host.chatFork.resolve",
+  );
   const params = useMemo(() => ({}), []);
   const query = useHostQuery<HostRpcRegistry, "host.chatFork.get">({
     cacheKeyIdentity: undefined,
@@ -103,9 +106,7 @@ interface ObservedForkIndicatorLifecycle {
 
 function useRefreshNotificationIndicatorsOnForkLifecycle(
   hostId: string | null,
-  response:
-    | ResponseOfMethod<HostRpcRegistry, "host.chatFork.get">
-    | undefined,
+  response: ResponseOfMethod<HostRpcRegistry, "host.chatFork.get"> | undefined,
 ): void {
   const queryClient = useQueryClient();
   const previousRef = useRef<ObservedForkIndicatorLifecycle | null>(null);
@@ -114,14 +115,16 @@ function useRefreshNotificationIndicatorsOnForkLifecycle(
     if (hostId === null || response === undefined) return;
     const nextKey = forkIndicatorLifecycleKey(response);
     const previous = previousRef.current;
-    const previousKey =
-      previous?.hostId === hostId ? previous.key : undefined;
+    const previousKey = previous?.hostId === hostId ? previous.key : undefined;
     previousRef.current = { hostId, key: nextKey };
 
     // The initial empty read establishes a baseline. An initial OPEN read is
     // still an edge: indicatorState may have won the mount race with a stale
     // false response immediately before the holder opened.
-    if (previousKey === nextKey || (previousKey === undefined && nextKey === null)) {
+    if (
+      previousKey === nextKey ||
+      (previousKey === undefined && nextKey === null)
+    ) {
       return;
     }
     invalidateNotificationIndicators(queryClient, hostId, null);

@@ -82,8 +82,9 @@ describe("fork lifecycle notification-indicator refresh", () => {
             fork.data === undefined
               ? undefined
               : (fork.data.event?.episodeId ?? null),
-          pendingFork:
-            indicators.data.chats[CHAT_ID]?.pendingFork ?? false,
+          pendingFork: indicators.isPending
+            ? false
+            : indicators.data.chats[CHAT_ID].pendingFork,
           indicatorsPending: indicators.isPending,
           refetchFork: fork.refetch,
         };
@@ -153,8 +154,9 @@ describe("fork lifecycle notification-indicator refresh", () => {
         });
         const resolve = useChatForkResolveMutation();
         return {
-          pendingFork:
-            indicators.data.chats[CHAT_ID]?.pendingFork ?? false,
+          pendingFork: indicators.isPending
+            ? false
+            : indicators.data.chats[CHAT_ID].pendingFork,
           resolve,
         };
       },
@@ -240,11 +242,7 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
 
 function wrapperFor(queryClient: QueryClient) {
   return (props: { readonly children: ReactNode }): ReactNode =>
-    createElement(
-      QueryClientProvider,
-      { client: queryClient },
-      props.children,
-    );
+    createElement(QueryClientProvider, { client: queryClient }, props.children);
 }
 
 function indicatorResponse(
