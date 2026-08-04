@@ -191,6 +191,7 @@ function presentationFromLifecycle(args: {
     localHostState: args.lifecycle.localHostState,
     stage: args.lifecycle.slowStartStage,
     progress: args.lifecycle.provisioning.progress,
+    lastProgress: args.lifecycle.provisioning.lastProgress,
     provisioningError: args.lifecycle.provisioning.error,
     provisioning: args.lifecycle.provisioning.isProvisioning,
     removed: args.lifecycle.provisioning.removed,
@@ -218,6 +219,7 @@ function compatibilityPresentation(
       retry: compatibility.retry,
       degraded: false,
       unreachable: compatibility.unreachable,
+      hostStatus: null,
     };
   }
   if (compatibility.status === "incompatible") {
@@ -228,6 +230,7 @@ function compatibilityPresentation(
       retry: compatibility.retry,
       degraded: false,
       unreachable: false,
+      hostStatus: null,
     };
   }
   if (compatibility.status === "checking") {
@@ -238,6 +241,7 @@ function compatibilityPresentation(
       retry: compatibility.retry,
       degraded: false,
       unreachable: false,
+      hostStatus: null,
     };
   }
   return {
@@ -247,6 +251,7 @@ function compatibilityPresentation(
     retry: compatibility.retry,
     degraded: compatibility.degraded,
     unreachable: false,
+    hostStatus: compatibility.hostStatus,
   };
 }
 
@@ -351,6 +356,10 @@ function SlowHostFallback(props: {
           code: "HOST_UNAVAILABLE",
           source: "Host startup",
           presentation: props.presentation,
+          // This card is reached only with NO live converge error (a live one
+          // routes to `provisioning-error` first), so any retained stage here
+          // belongs to an earlier, already-finished episode.
+          includeRetainedProgress: false,
         }),
         actions: [],
       }}
@@ -613,12 +622,27 @@ function hostFailureReportIssueAction(args: {
   readonly code: string;
   readonly source: string;
   readonly presentation: DefaultHostReadinessPresentation;
+  /**
+   * Whether this report is the one the retained install stage EXPLAINS - i.e.
+   * the provisioning-error card, which by construction only renders while a
+   * converge error is live (`readinessFor...`: `provisioningError !== null`).
+   * Every other failure family passes false: the retained stage outlives its
+   * attempt (it is cleared only by a new attempt or a successful settle), so a
+   * host that failed to install, came up by some other route, and later went
+   * incompatible would otherwise append a dead install stage to a report that
+   * has nothing to do with provisioning - the same wrong-path triage that the
+   * `source` split above exists to prevent.
+   */
+  readonly includeRetainedProgress: boolean;
 }): ReactNode {
   return (
     <ReportIssueAction
       context={createReportIssueContext({
         title: args.title,
-        message: `${args.message} ${describeHostHealth(args.presentation)}`,
+        message: `${args.message} ${describeHostHealth(
+          args.presentation,
+          args.includeRetainedProgress,
+        )}`,
         code: args.code,
         source: args.source,
       })}
@@ -636,6 +660,7 @@ function hostFailureReportIssueAction(args: {
  */
 function describeHostHealth(
   presentation: DefaultHostReadinessPresentation,
+  includeRetainedProgress: boolean,
 ): string {
   const parts: string[] = [
     `host ${presentation.localTarget ? presentation.localHostState : "remote"}`,
@@ -645,7 +670,14 @@ function describeHostHealth(
   if (presentation.removed) parts.push("removed");
   if (presentation.hostBusy) parts.push("busy");
   if (presentation.stage === "slow") parts.push("slow start");
-  const progress = presentation.progress;
+  // Fall back to the retained last event once the mutation has settled: a
+  // failed install's report must still say where it died (traycer#862's
+  // report carried no stage at all because the live value nulls on settle).
+  // Only for the report that failure belongs to - see
+  // `includeRetainedProgress`.
+  const progress =
+    presentation.progress ??
+    (includeRetainedProgress ? presentation.lastProgress : null);
   if (progress !== null) {
     const percent =
       progress.percent === null ? "" : ` ${Math.round(progress.percent)}%`;
@@ -658,6 +690,19 @@ function describeCompatHealth(
   presentation: DefaultHostReadinessPresentation,
 ): string {
   const compatibility = presentation.compatibility;
+  const verdict = compatVerdict(compatibility);
+  // The host's own last answer, not the desktop's converge outcome (that is
+  // the separate `hostBusy` part): a host that reported itself busy serving
+  // turns was up and working, whatever else this report says (traycer#860).
+  const hostStatus = compatibility.hostStatus;
+  if (hostStatus === null || !hostStatus.busy) return verdict;
+  const sessions = hostStatus.busySessionCount === 1 ? "session" : "sessions";
+  return `${verdict}, busy ${hostStatus.busySessionCount} ${sessions}`;
+}
+
+function compatVerdict(
+  compatibility: DefaultHostReadinessPresentation["compatibility"],
+): string {
   if (compatibility.status === "failed") {
     return compatibility.unreachable ? "unreachable" : "rejected";
   }
@@ -723,6 +768,9 @@ function provisioningErrorFallback(
       code: "HOST_PROVISIONING_FAILED",
       source: "Host startup",
       presentation,
+      // The one report the retained stage explains: this card renders only
+      // while the converge error that produced it is still live.
+      includeRetainedProgress: true,
     }),
     actions: [
       {
@@ -774,6 +822,9 @@ function compatibilityErrorFallback(
       // already serving stops answering the probe (traycer#860).
       source: "Host connection",
       presentation,
+      // Same reason the source differs: an install stage on a #860-shaped
+      // report points triage at provisioning, which is the wrong place.
+      includeRetainedProgress: false,
     }),
     actions: [
       {
@@ -799,6 +850,9 @@ function incompatibleFallback(
     // handshake, and the two sides simply disagree on the version.
     source: "Host compatibility",
     presentation,
+    // A host that came up and answered cannot be explained by how some
+    // earlier install attempt died.
+    includeRetainedProgress: false,
   });
   const shared = {
     message: "Host update required",

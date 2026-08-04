@@ -233,6 +233,9 @@ function CompatibilityStatusProbe(): ReactNode {
       <div role="status" aria-label="Host compatibility detail">
         {compatibilityDetail(compatibility)}
       </div>
+      <div role="status" aria-label="Host status snapshot">
+        {hostStatusDetail(compatibility)}
+      </div>
     </>
   );
 }
@@ -252,6 +255,16 @@ function compatibilityDetail(compatibility: HostCompatibility): string {
   return "n/a";
 }
 
+/**
+ * Surfaces the host.status payload fields carried on a `compatible` verdict
+ * (busy / busySessionCount / hostVersion). Non-compatible arms never hold one.
+ */
+function hostStatusDetail(compatibility: HostCompatibility): string {
+  if (compatibility.status !== "compatible") return "none";
+  const snapshot = compatibility.hostStatus;
+  return `busy=${String(snapshot.busy)};count=${String(snapshot.busySessionCount)};version=${snapshot.hostVersion}`;
+}
+
 function getCompatibilityStatusText(): string | null {
   return screen.getByRole("status", {
     name: "Host compatibility status",
@@ -261,6 +274,12 @@ function getCompatibilityStatusText(): string | null {
 function getCompatibilityDetailText(): string | null {
   return screen.getByRole("status", {
     name: "Host compatibility detail",
+  }).textContent;
+}
+
+function getHostStatusSnapshotText(): string | null {
+  return screen.getByRole("status", {
+    name: "Host status snapshot",
   }).textContent;
 }
 
@@ -610,6 +629,90 @@ describe("HostCompatibilityProvider startup consumers", () => {
     });
     // The verdict - and therefore every mounted host-backed surface - survives.
     expect(getCompatibilityStatusText()).toBe("compatible");
+    expect(probes).toBeGreaterThan(1);
+    queryClient.clear();
+  });
+
+  // traycer#4747: a successful host.status answer surfaces its own busy /
+  // version payload on the compatible arm so report health can name a host
+  // that was up and serving turns.
+  it("carries hostStatus fields from a successful host.status answer", async () => {
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const busyStatus: HostStatusResponse = {
+      ...compatibleHostStatus,
+      busy: true,
+      busySessionCount: 2,
+      hostVersion: "9.9.9",
+    };
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => busyStatus,
+      getTaskContexts,
+      listHarnesses,
+      onMethod: () => undefined,
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("compatible");
+    });
+    expect(getCompatibilityDetailText()).toBe("live");
+    expect(getHostStatusSnapshotText()).toBe("busy=true;count=2;version=9.9.9");
+    queryClient.clear();
+  });
+
+  // Held-verdict-after-failed-refetch must keep the last successful hostStatus
+  // snapshot (data still present + isError) so a degraded connection still
+  // reports the host that answered, not a blank startup.
+  it("holds the last hostStatus when a later host.status refetch fails", async () => {
+    let probes = 0;
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const firstAnswer: HostStatusResponse = {
+      ...compatibleHostStatus,
+      busy: true,
+      busySessionCount: 4,
+      hostVersion: "held-version",
+    };
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => {
+        probes += 1;
+        if (probes === 1) return firstAnswer;
+        throw new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "host did not answer the dial",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      getTaskContexts,
+      listHarnesses,
+      onMethod: () => undefined,
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("compatible");
+    });
+    expect(getHostStatusSnapshotText()).toBe(
+      "busy=true;count=4;version=held-version",
+    );
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityDetailText()).toBe("degraded");
+    });
+    expect(getCompatibilityStatusText()).toBe("compatible");
+    // The held snapshot is the first successful answer, not a blank one.
+    expect(getHostStatusSnapshotText()).toBe(
+      "busy=true;count=4;version=held-version",
+    );
     expect(probes).toBeGreaterThan(1);
     queryClient.clear();
   });
