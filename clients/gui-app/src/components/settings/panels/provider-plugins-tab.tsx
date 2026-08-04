@@ -14,9 +14,11 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { useProvidersPluginIcon } from "@/hooks/providers/use-providers-plugin-icon-query";
 import { useProvidersPluginsList } from "@/hooks/providers/use-providers-plugins-list-query";
 import { useProvidersPluginsMutate } from "@/hooks/providers/use-providers-plugins-mutate-mutation";
 import { cn } from "@/lib/utils";
+import { ProviderEntryIcon } from "./provider-entry-icon";
 
 const CURSOR_SESSION_NOTICE =
   "Cursor marketplace plugins are not yet active in Traycer sessions. Listing is read-only until settingSources includes plugins.";
@@ -192,6 +194,7 @@ function ProviderPluginsTabBody({
       ) : null}
 
       <PluginsListBody
+        providerId={providerId}
         listLoading={listQuery.isLoading || listQuery.isPending}
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
@@ -299,6 +302,7 @@ function PluginAddFromSource({
 }
 
 function PluginsListBody({
+  providerId,
   listLoading,
   listError,
   errorMessage,
@@ -309,6 +313,7 @@ function PluginsListBody({
   runMutation,
   onRequestRemove,
 }: {
+  readonly providerId: ProviderId;
   readonly listLoading: boolean;
   readonly listError: boolean;
   readonly errorMessage: string | null;
@@ -353,15 +358,22 @@ function PluginsListBody({
       </div>
     );
   }
+  // A list-level decision, not a per-row one: the icon column is reserved for
+  // every row as soon as ANY row has artwork, so the names keep one left edge.
+  // For a provider that ships no plugin icons at all this is false everywhere
+  // and the column simply does not exist.
+  const reserveIconSpace = plugins.some((plugin) => plugin.hasIcon === true);
   return (
     <ul className="flex flex-col gap-2">
       {plugins.map((plugin) => (
         <PluginRow
           key={plugin.id}
+          providerId={providerId}
           plugin={plugin}
           caps={caps}
           isReadOnly={isReadOnly || plugin.readOnly}
           pending={pendingIds.has(plugin.id)}
+          reserveIconSpace={reserveIconSpace}
           onToggle={(enabled) =>
             runMutation(
               { action: "setEnabled", id: plugin.id, enabled },
@@ -378,23 +390,47 @@ function PluginsListBody({
 }
 
 function PluginRow({
+  providerId,
   plugin,
   caps,
   isReadOnly,
   pending,
+  reserveIconSpace,
   onToggle,
   onRemove,
 }: {
+  readonly providerId: ProviderId;
   readonly plugin: ProviderPlugin;
   readonly caps: ProviderPluginsCapabilities;
   readonly isReadOnly: boolean;
   readonly pending: boolean;
+  /** Some row in this list has artwork, so keep the text column aligned. */
+  readonly reserveIconSpace: boolean;
   readonly onToggle: (enabled: boolean) => void;
   readonly onRemove: () => void;
 }): ReactNode {
   const canRemove = caps.actionScopes.remove.length > 0;
   const canEnableDisable = caps.actionScopes.setEnabled.length > 0;
   const sourceBadge = plugin.source ?? null;
+  // Gated on the list's own `hasIcon`, so rows with no artwork never make the
+  // request. Per row rather than batched: each resolves independently and the
+  // list renders immediately without waiting on the slowest image.
+  const iconQuery = useProvidersPluginIcon({
+    providerId,
+    scope: "global",
+    workspaceRoot: null,
+    pluginId: plugin.id,
+    // Cache identity, not a request field: an upgrade installed outside the
+    // app arrives on this list, and without it here the icon query - which is
+    // `staleTime: Infinity`, `poll: false` - would serve the old version's
+    // artwork for the rest of the session.
+    version: plugin.version,
+    hasDarkIcon: plugin.hasDarkIcon === true,
+    enabled: plugin.hasIcon === true,
+  });
+  // `displayName` is the provider's own label ("PDF"); `name` is the install
+  // id ("pdf"). Older hosts send neither field, hence the fallback.
+  const title = plugin.displayName ?? plugin.name;
   return (
     <li
       className={cn(
@@ -402,10 +438,17 @@ function PluginRow({
         pending && "opacity-70",
       )}
     >
+      {/* Icon column first, name/description second, controls last - the
+          three-column rhythm of a plugin manager. Absent for providers that
+          ship no plugin artwork, which is most of them. */}
+      <ProviderEntryIcon
+        iconUrl={iconQuery.data?.icon.dataUri ?? null}
+        reserveSpace={reserveIconSpace}
+      />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="truncate text-ui-sm font-medium text-foreground">
-            {plugin.name}
+            {title}
           </span>
           {plugin.version !== null ? (
             <span className="text-ui-xs text-muted-foreground">
