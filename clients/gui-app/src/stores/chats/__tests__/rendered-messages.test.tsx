@@ -255,6 +255,21 @@ function assistantMessage(
   };
 }
 
+function plainTextBlock(
+  blockId: string,
+  timestamp: number,
+  text: string,
+): Extract<Message, { role: "assistant" }>["blocks"][number] {
+  return {
+    type: "text",
+    blockId,
+    status: "completed",
+    timestamp,
+    text,
+    providerNotice: null,
+  };
+}
+
 function checkpointManifest(
   checkpointId: string,
   filePath: string,
@@ -5800,5 +5815,43 @@ describe("useRenderedMessages turn.stopped", () => {
     );
     expect(untouchedAfter).toBe(untouchedBefore);
     expect(stoppedAfter?.stopped).not.toBeNull();
+  });
+  it("merges a multi-record turn without mutating the source record's blocks", () => {
+    // The accumulator now ALIASES the first record's block array and clones
+    // only on the first append. If that clone-on-write is ever lost, merging
+    // a sibling record would grow the persisted record's own array in place.
+    const first = {
+      ...assistantMessage("turn-merge", 2000),
+      messageId: "record-1",
+      blocks: [plainTextBlock("block-a", 2000, "first half")],
+    };
+    const second = {
+      ...assistantMessage("turn-merge", 2100),
+      messageId: "record-2",
+      blocks: [plainTextBlock("block-b", 2100, "second half")],
+    };
+    const firstBlocksRef = first.blocks;
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [first, second],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    // Source record untouched...
+    expect(first.blocks).toBe(firstBlocksRef);
+    expect(first.blocks).toHaveLength(1);
+    expect(second.blocks).toHaveLength(1);
+    // ...and the rendered turn still carries both records' content.
+    expect(result.current.length).toBeGreaterThan(0);
   });
 });
