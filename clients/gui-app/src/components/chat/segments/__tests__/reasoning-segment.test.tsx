@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReasoningSegment } from "@/components/chat/segments/reasoning-segment";
+import { LiveActivityPromoteContext } from "@/components/chat/segments/live-activity-promote-context";
+import { SegmentRow } from "@/components/chat/segments/segment-row";
 
 describe("<ReasoningSegment />", () => {
   afterEach(() => {
@@ -18,6 +20,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming
         durationMs={null}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -34,6 +38,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming
         durationMs={null}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -53,6 +59,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming={false}
         durationMs={12000}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -69,6 +77,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming={false}
         durationMs={null}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -83,6 +93,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming={false}
         durationMs={3000}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -99,6 +111,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming
         durationMs={null}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -118,6 +132,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming={false}
         durationMs={3000}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -137,6 +153,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming={false}
         durationMs={3000}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -167,6 +185,8 @@ describe("<ReasoningSegment />", () => {
           isStreaming={false}
           durationMs={3000}
           bodyBoundedByParent={false}
+          headerless={false}
+          initiallyExpanded={false}
         />
       </div>,
     );
@@ -195,6 +215,8 @@ describe("<ReasoningSegment />", () => {
         isStreaming={false}
         durationMs={3000}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
@@ -215,9 +237,384 @@ describe("<ReasoningSegment />", () => {
         isStreaming={false}
         durationMs={3_661_000}
         bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
       />,
     );
 
     expect(screen.getByText("Thought for 1h 1m 1s")).toBeTruthy();
+  });
+
+  it("renders no header of its own when headerless, and shows the trace anyway", () => {
+    render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming={false}
+        durationMs={3000}
+        bodyBoundedByParent={false}
+        headerless
+        // FALSE, and load-bearing. With `initiallyExpanded` the body shows
+        // through `expanded` alone and the `headerless` term of `bodyShown` is
+        // never exercised - the assertion below would pass with the coupling
+        // deleted. Completed, unbounded and unopened is the one combination
+        // where `headerless` is the only thing rendering anything at all.
+        initiallyExpanded={false}
+      />,
+    );
+
+    // The group header above already says "Thought for 3s"; repeating it here
+    // is the duplicate this mode exists to remove. No promote and no tail to
+    // reveal either, so there is no hidden control to keep.
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Thought for 3s")).toBeNull();
+    expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
+  });
+
+  it("does not draw a rail of its own - the container already owns one", () => {
+    const { container } = render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming
+        durationMs={null}
+        bodyBoundedByParent
+        headerless
+        initiallyExpanded
+      />,
+    );
+
+    // Two nested `border-l` rails put a second vertical line beside the
+    // window's own, down the whole trace.
+    expect(container.querySelectorAll("[class*='border-l']").length).toBe(0);
+  });
+
+  it("collapses an unopened headerless trace once it gains a header", () => {
+    // A headerless block shows its trace because there is nowhere else to put
+    // it, NOT because the reader asked. When a second reasoning block joins the
+    // run and this one gains a header, it must collapse like every other
+    // completed block - carrying the body across left the first thought of
+    // every run permanently expanded.
+    const { rerender } = render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming={false}
+        durationMs={3000}
+        bodyBoundedByParent={false}
+        headerless
+        initiallyExpanded={false}
+      />,
+    );
+    expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
+
+    rerender(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming={false}
+        durationMs={3000}
+        bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: "Thought for 3s" });
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Detailed chain of thought")).toBeNull();
+  });
+
+  it("keeps a trace the reader opened when the header appears", () => {
+    // `expanded` is the only signal that means intent, and it must survive the
+    // flip - otherwise a trace being read vanishes when a sibling arrives.
+    const { rerender } = render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming={false}
+        durationMs={3000}
+        bodyBoundedByParent={false}
+        headerless
+        initiallyExpanded={false}
+      />,
+    );
+
+    // The headerless body is still a click target, and a click here is the
+    // reader saying "keep this open".
+    fireEvent.click(screen.getByText("Detailed chain of thought"));
+
+    rerender(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming={false}
+        durationMs={3000}
+        bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: "Thought for 3s" });
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
+  });
+
+  // jsdom has no layout, so this is the structural half of the alignment: a
+  // thinking row and a tool row must agree on where the caret goes and on their
+  // horizontal padding, or their icons start in different columns and the group
+  // reads as two mis-indented lists. The rendered pixels are only checkable in
+  // a browser.
+  it("carries the caret trailing and hover-gated, exactly like a tool row", () => {
+    render(
+      <>
+        <ReasoningSegment
+          findUnitId={null}
+          markdown="Detailed chain of thought"
+          isStreaming={false}
+          durationMs={3000}
+          bodyBoundedByParent={false}
+          headerless={false}
+          initiallyExpanded={false}
+        />
+        <SegmentRow
+          open={false}
+          onOpenChange={() => undefined}
+          header={<span>Bash</span>}
+          body={null}
+          tone="default"
+          stickyHeader={false}
+          headerFindUnitId={null}
+          bodyFindUnitId={null}
+          expandable
+          className={undefined}
+          footer={null}
+        />
+      </>,
+    );
+
+    const rows = [
+      screen.getByRole("button", { name: "Thought for 3s" }),
+      screen.getByRole("button", { name: "Bash" }),
+    ];
+    for (const row of rows) {
+      expect(row.className).toContain("px-1");
+      // The caret TRAILS and is invisible until hover/focus/open...
+      const last = row.lastElementChild;
+      expect(last?.getAttribute("aria-hidden")).toBe("true");
+      expect(last?.getAttribute("class")).toContain("opacity-0");
+      // ...and nothing hidden leads the row, so both icons start at `px-1`.
+      expect(row.firstElementChild?.getAttribute("class")).not.toContain(
+        "opacity-0",
+      );
+    }
+  });
+
+  // A headerless streaming block inside an OPEN group has no promote, but it
+  // does have a bounded tail hiding the rest of the trace - so it keeps a
+  // hidden control. Expanding is what removes the tail, so gating the control
+  // on the tail alone made it destroy itself on activation: the button unmounted
+  // under the caret, focus fell to the body, the `aria-expanded="true"` it had
+  // just earned was never announced, and there was no way back to the preview.
+  it("keeps its hidden control alive through its own disclosure", () => {
+    render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming
+        durationMs={null}
+        bodyBoundedByParent={false}
+        headerless
+        initiallyExpanded={false}
+      />,
+    );
+
+    const control = screen.getByRole("button");
+    expect(control.className).toContain("sr-only");
+    expect(control.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("reasoning-tail")).toBeTruthy();
+
+    fireEvent.click(control);
+
+    // Same button, still there, now reporting the state it produced - and it
+    // toggles back.
+    const afterOpen = screen.getByRole("button");
+    expect(afterOpen).toBe(control);
+    expect(afterOpen.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.queryByTestId("reasoning-tail")).toBeNull();
+
+    fireEvent.click(afterOpen);
+    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    expect(screen.getByTestId("reasoning-tail")).toBeTruthy();
+  });
+
+  // Surviving its own disclosure is not the same as being worth pressing. Once
+  // the block completes there is no tail to collapse back to and a headerless
+  // body shows in full either way, so a retained control announced
+  // `aria-expanded="true"`, changed no pixels when pressed, and then deleted
+  // itself - dropping the caret to the top of the transcript on the way out.
+  it("drops its hidden control once completion makes it meaningless, handing focus to the trace", () => {
+    const props = {
+      findUnitId: null,
+      markdown: "Detailed chain of thought",
+      durationMs: null,
+      bodyBoundedByParent: false,
+      headerless: true,
+      initiallyExpanded: false,
+    } as const;
+    const { rerender } = render(<ReasoningSegment {...props} isStreaming />);
+
+    const control = screen.getByRole("button");
+    fireEvent.click(control);
+    control.focus();
+    expect(document.activeElement).toBe(control);
+
+    // The stream ends. Nothing about the trace changes - it was already showing
+    // in full - so the control has nothing left to do.
+    rerender(
+      <ReasoningSegment {...props} isStreaming={false} durationMs={3000} />,
+    );
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
+    // Focus went to the trace, not to the top of the transcript.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(
+      (document.activeElement as HTMLElement).contains(
+        screen.getByText("Detailed chain of thought"),
+      ),
+    ).toBe(true);
+  });
+
+  // The handoff must fire ONLY when the control actually goes away. A HEADED
+  // block keeps its button through the same completion transition, so moving
+  // focus out of it takes away the reader's Space/Enter route and relocates
+  // them for no visible reason - the button is still sitting right there.
+  //
+  // Two guards stop this and either one is sufficient: `headerless &&` on the
+  // effect, and the `activeElement === body` check inside it. So a mutation of
+  // just one SURVIVES this test - that is redundancy, not a gap. Removing both
+  // fails it. Do not read a surviving single-guard mutant as untested.
+  it("leaves focus alone when the header survives completion", () => {
+    const props = {
+      findUnitId: null,
+      markdown: "Detailed chain of thought",
+      durationMs: null,
+      bodyBoundedByParent: false,
+      headerless: false,
+      initiallyExpanded: true,
+    } as const;
+    const { rerender } = render(<ReasoningSegment {...props} isStreaming />);
+
+    const header = screen.getByRole("button");
+    header.focus();
+    expect(document.activeElement).toBe(header);
+
+    rerender(
+      <ReasoningSegment {...props} isStreaming={false} durationMs={3000} />,
+    );
+
+    // Same button, still mounted, still holding the caret.
+    expect(screen.getByRole("button")).toBe(header);
+    expect(document.activeElement).toBe(header);
+  });
+
+  // The reader moved the caret somewhere deliberately between the commit and
+  // the effect. An effect that fires regardless would yank them back.
+  //
+  // Same redundancy as above: the blur handler clearing the latch and the
+  // `activeElement === body` check each stop this alone, so only removing both
+  // fails this test.
+  it("does not reclaim focus the reader has moved elsewhere", () => {
+    const props = {
+      findUnitId: null,
+      markdown: "Detailed chain of thought",
+      durationMs: null,
+      bodyBoundedByParent: false,
+      headerless: true,
+      initiallyExpanded: false,
+    } as const;
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    try {
+      const { rerender } = render(<ReasoningSegment {...props} isStreaming />);
+
+      const control = screen.getByRole("button", { name: /Thinking/ });
+      fireEvent.click(control);
+      control.focus();
+      // Moving on before the stream ends must clear the latch.
+      fireEvent.blur(control);
+      elsewhere.focus();
+
+      rerender(
+        <ReasoningSegment {...props} isStreaming={false} durationMs={3000} />,
+      );
+
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
+  // It toggles, so its name has to say what pressing it does NOW. Reporting
+  // `aria-expanded="true"` under the label "show the full reasoning" described
+  // the opposite of the action.
+  it("names the hidden control for the action it will perform", () => {
+    render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Detailed chain of thought"
+        isStreaming
+        durationMs={null}
+        bodyBoundedByParent={false}
+        headerless
+        initiallyExpanded={false}
+      />,
+    );
+
+    const control = screen.getByRole("button");
+    expect(control.getAttribute("aria-label")).toBe(
+      "Thinking - show the full reasoning",
+    );
+
+    fireEvent.click(control);
+
+    expect(screen.getByRole("button").getAttribute("aria-label")).toBe(
+      "Thinking - collapse to the preview",
+    );
+  });
+
+  it("promotes instead of toggling when rendered inside the live window", () => {
+    const promote = vi.fn();
+    render(
+      <LiveActivityPromoteContext.Provider value={promote}>
+        <ReasoningSegment
+          findUnitId={null}
+          markdown="Detailed chain of thought"
+          isStreaming
+          durationMs={null}
+          bodyBoundedByParent
+          headerless={false}
+          initiallyExpanded={false}
+        />
+      </LiveActivityPromoteContext.Provider>,
+    );
+
+    const header = screen.getByRole("button", { name: "Thinking" });
+    // Nothing here discloses, so the button must not report a disclosure state
+    // at all - the same call `PromotingSegmentRow` makes with
+    // `rotateWhenOpen={false}`. Reporting `aria-expanded="false"` told a screen
+    // reader this control opens something in place, which it does not.
+    expect(header.getAttribute("aria-expanded")).toBeNull();
+
+    fireEvent.click(header);
+
+    // Expanding in place would open into a four-line box; the click leaves it.
+    expect(promote).toHaveBeenCalledTimes(1);
+    expect(header.getAttribute("aria-expanded")).toBeNull();
+    expect(screen.queryByTestId("reasoning-tail")).toBeNull();
   });
 });

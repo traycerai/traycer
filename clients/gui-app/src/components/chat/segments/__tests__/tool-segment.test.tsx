@@ -613,9 +613,55 @@ describe("<ToolSegment /> streaming heartbeat", () => {
       />,
     );
 
-    // Streaming row surfaces the progress line + a 0s elapsed tick beneath it.
-    expect(screen.getByText("Fetched 3/10 pages")).toBeTruthy();
-    expect(screen.getByText("0s")).toBeTruthy();
+    // The progress line keeps its own line under the row - it is a sentence
+    // that changes as the tool works, so it wants the width. The elapsed
+    // counter does NOT: it rides the header row, left of the status badge, the
+    // way the standalone card has always shown it. Both used to share that
+    // second line, which gave a progress-less tool (every command, most tools)
+    // a whole row holding nothing but a number.
+    const headerRow = screen.getByText("mcp__fetch").parentElement;
+    expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
+    expect(headerRow?.contains(screen.getByText("Fetched 3/10 pages"))).toBe(
+      false,
+    );
+    // Ephemeral chrome inside a find anchor: without the skip a query on the
+    // digits paints a highlight in a unit that counted no match.
+    expect(screen.getByText("0s").closest("[data-find-skip]")).not.toBeNull();
+    // A progress line DOES earn the second row.
+    expect(screen.getByTestId("segment-row-footer")).toBeTruthy();
+  });
+
+  it("renders no footer for a streaming tool that reports no progress", () => {
+    const startedAt = Date.now();
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="streaming-tool-quiet"
+        toolName="mcp__fetch"
+        {...inputProps("mcp__fetch", { url: "https://example.com" })}
+        error={null}
+        agentMessageSend={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={startedAt}
+        durationMs={null}
+        variant="row"
+      />,
+    );
+
+    // The counter is on the header row and there is nothing else to say, so the
+    // row is one line - not a line plus an empty strip carrying a lone number.
+    const headerRow = screen.getByText("mcp__fetch").parentElement;
+    expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
+    // And the footer element is ABSENT, not merely empty. Asserting only on the
+    // counter's position left a mutation that rendered the footer with an empty
+    // progress string undetected - an invisible second row that still costs the
+    // padding, which is the defect this whole change removes.
+    expect(screen.queryByTestId("segment-row-footer")).toBeNull();
   });
 
   it("omits the heartbeat once the call completes", () => {
