@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM,
+  CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  compactChatTurnMinimapPreview,
   CHAT_TURN_MINIMAP_EDGE_INSET_REM,
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
@@ -488,5 +490,52 @@ describe("resolveChatTurnMinimapRowViewportDistance", () => {
 
   it("returns null when row geometry is unavailable", () => {
     expect(resolveChatTurnMinimapRowViewportDistance({}, 0)).toBeNull();
+  });
+});
+
+describe("compactChatTurnMinimapPreview", () => {
+  it("normalizes whitespace and drops empty text", () => {
+    expect(compactChatTurnMinimapPreview("  hello\n\n  world  ")).toBe(
+      "hello world",
+    );
+    expect(compactChatTurnMinimapPreview("   \n\t ")).toBeNull();
+    expect(compactChatTurnMinimapPreview(null)).toBeNull();
+    expect(compactChatTurnMinimapPreview(undefined)).toBeNull();
+  });
+
+  it("retains only a bounded head of a very long turn", () => {
+    // The rail holds one of these per turn. Before this bound, a long
+    // transcript kept a second full-length copy of itself here.
+    const long = `Prompt ${"u".repeat(500_000)}`;
+    const preview = compactChatTurnMinimapPreview(long);
+
+    expect(preview).not.toBeNull();
+    expect((preview ?? "").length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
+    expect((preview ?? "").startsWith("Prompt uuu")).toBe(true);
+    // Elided rather than silently cut.
+    expect((preview ?? "").endsWith("…")).toBe(true);
+  });
+
+  it("still fills the budget when the head is mostly whitespace", () => {
+    // Collapsing runs of whitespace can shrink text far below the scan
+    // window, so the scan has to read past the budget to fill it.
+    const spaced = `${"a \n".repeat(100_000)}end`;
+    const preview = compactChatTurnMinimapPreview(spaced);
+
+    // Budget essentially filled (a trailing space may be trimmed before the
+    // ellipsis), rather than starved by the collapse.
+    expect((preview ?? "").length).toBeGreaterThan(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS - 5,
+    );
+    expect((preview ?? "").length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
+    expect((preview ?? "").startsWith("a a a")).toBe(true);
+  });
+
+  it("leaves a short turn untouched and unelided", () => {
+    expect(compactChatTurnMinimapPreview("short reply")).toBe("short reply");
   });
 });

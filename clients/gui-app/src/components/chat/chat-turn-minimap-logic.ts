@@ -203,3 +203,30 @@ export function resolveChatTurnMinimapRowViewportDistance(
   if (rowBottom <= scrollTop) return scrollTop - rowBottom;
   return Math.max(0, rowTop - scrollBottom);
 }
+
+/** Every preview is clamped to three lines on screen (and one is also reused
+ * as a jump target's accessible name), so nothing past this is perceivable. */
+export const CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS = 200;
+/** Whitespace collapsing can shrink text a lot - indented code, blank lines -
+ * so read a generous head to be sure the budget above can still be filled. */
+const PREVIEW_SCAN_CHARS = CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS * 4;
+
+/**
+ * Builds the rail's preview text for one message.
+ *
+ * The slice comes BEFORE the whitespace collapse on purpose. Normalizing
+ * first allocates a string as long as the whole turn, so the rail retained a
+ * second full-length copy of every user message and every final assistant
+ * message in the transcript - a heap snapshot of a long session found exactly
+ * that duplication. Reading a bounded head keeps the retained preview
+ * proportional to what can actually be shown.
+ */
+export function compactChatTurnMinimapPreview(
+  text: string | null | undefined,
+): string | null {
+  if (text === null || text === undefined) return null;
+  const compact = text.slice(0, PREVIEW_SCAN_CHARS).replace(/\s+/g, " ").trim();
+  if (compact.length === 0) return null;
+  if (compact.length <= CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS) return compact;
+  return `${compact.slice(0, CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS).trimEnd()}…`;
+}
