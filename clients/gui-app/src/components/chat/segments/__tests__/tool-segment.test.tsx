@@ -592,7 +592,11 @@ describe("<ToolSegment /> streaming heartbeat", () => {
   // The row variant is the path generic tools actually render on (they group
   // into the activity timeline); the footer renders beneath the row.
   it("shows the latest progress line and an elapsed counter while streaming", () => {
-    const startedAt = Date.now();
+    // Pinned: `LiveElapsed` reads the wall clock, so a render that crossed a
+    // second boundary turned the "0s" assertions below into "1s" at random.
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
     render(
       <ToolSegment
         headerFindUnitId={null}
@@ -619,7 +623,14 @@ describe("<ToolSegment /> streaming heartbeat", () => {
     // way the standalone card has always shown it. Both used to share that
     // second line, which gave a progress-less tool (every command, most tools)
     // a whole row holding nothing but a number.
-    const headerRow = screen.getByText("mcp__fetch").parentElement;
+    // Anchored to the row TRIGGER, not to `parentElement`: the contract is
+    // "the counter shares the header row", and one more wrapper around the tool
+    // name would silently retarget a parent-walk at that wrapper and fail here
+    // for a reason that has nothing to do with placement.
+    const headerRow = screen
+      .getByText("mcp__fetch")
+      .closest("[data-row-header]");
+    expect(headerRow).not.toBeNull();
     expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
     expect(headerRow?.contains(screen.getByText("Fetched 3/10 pages"))).toBe(
       false,
@@ -632,7 +643,9 @@ describe("<ToolSegment /> streaming heartbeat", () => {
   });
 
   it("renders no footer for a streaming tool that reports no progress", () => {
-    const startedAt = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
     render(
       <ToolSegment
         headerFindUnitId={null}
@@ -655,7 +668,10 @@ describe("<ToolSegment /> streaming heartbeat", () => {
 
     // The counter is on the header row and there is nothing else to say, so the
     // row is one line - not a line plus an empty strip carrying a lone number.
-    const headerRow = screen.getByText("mcp__fetch").parentElement;
+    const headerRow = screen
+      .getByText("mcp__fetch")
+      .closest("[data-row-header]");
+    expect(headerRow).not.toBeNull();
     expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
     // And the footer element is ABSENT, not merely empty. Asserting only on the
     // counter's position left a mutation that rendered the footer with an empty
@@ -665,7 +681,14 @@ describe("<ToolSegment /> streaming heartbeat", () => {
   });
 
   it("omits the heartbeat once the call completes", () => {
-    const startedAt = Date.now();
+    // Pinned for a second reason than the tests above: on a real clock this
+    // one passes VACUOUSLY. `queryByText("0s")` also returns null when a
+    // counter is rendered and the clock has ticked to "1s", so a regression
+    // that kept the heartbeat alive would go unseen. Pin the clock so "0s" is
+    // what a surviving counter would say, and match any counter besides.
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
     render(
       <ToolSegment
         headerFindUnitId={null}
@@ -689,6 +712,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
     // No footer once streaming ends - progress is a streaming-only affordance.
     expect(screen.queryByText("Fetched 10/10 pages")).toBeNull();
     expect(screen.queryByText("0s")).toBeNull();
+    expect(screen.queryByText(/^\d+s$/)).toBeNull();
   });
 
   it("shows a 'stopped' badge for an interrupted call and 'superseded' for a steered one", () => {

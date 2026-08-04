@@ -96,6 +96,19 @@ interface ActivitySummaryCounts {
   // alone cannot tell them apart, and the child's own formatter can - which is
   // how the group header and the block it stands in for came to disagree.
   thinkingDurationKnown: boolean;
+  // At least one FINISHED block contributed nothing to the sum, so
+  // `thinkingDurationMs` is a floor rather than a total. A block is finished
+  // with no duration when it was interrupted, superseded or errored (its
+  // timestamp is the turn-end, not the real finish) or when it predates
+  // `startedAt` - see `completedDurationMs`.
+  //
+  // The clause marks this with a trailing "+" instead of dropping the number.
+  // Dropping it is what a plain "all durations known" check would do, and that
+  // walks the label BACKWARDS - `thought for 5s` -> `thought` the moment an
+  // interrupted block joins a run that had already measured one. That reverse
+  // step is the exact defect `thinkingCompleted` exists to prevent, and it is
+  // reachable live, not just in history. A floor only ever grows.
+  thinkingDurationPartial: boolean;
   // At least one reasoning block has finished. Once that is true the clause
   // says "thought", never "thinking", however many new blocks start streaming -
   // the header describes the whole run, and a run that has already thought does
@@ -191,6 +204,7 @@ function createEmptyCounts(): ActivitySummaryCounts {
     thinkingDurationMs: 0,
     thinkingPresent: false,
     thinkingDurationKnown: false,
+    thinkingDurationPartial: false,
     thinkingCompleted: false,
     exploredFiles: 0,
     readFiles: 0,
@@ -808,10 +822,14 @@ function countReasoningSegment(
     return;
   }
   counts.thinkingCompleted = true;
-  if (segment.durationMs !== null) {
-    counts.thinkingDurationKnown = true;
-    counts.thinkingDurationMs += segment.durationMs;
+  if (segment.durationMs === null) {
+    // Finished, but unmeasurable - interrupted, superseded, errored, or older
+    // than `startedAt`. The sum it does not join stops being a total.
+    counts.thinkingDurationPartial = true;
+    return;
   }
+  counts.thinkingDurationKnown = true;
+  counts.thinkingDurationMs += segment.durationMs;
 }
 
 /**
@@ -827,8 +845,23 @@ function countReasoningSegment(
  */
 export function reasoningSummaryLabel(durationMs: number | null): string {
   if (durationMs === null) return "Thought";
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  return `Thought for ${formatClockDuration(seconds)}`;
+  return `Thought for ${thoughtClockDuration(durationMs)}`;
+}
+
+/**
+ * The ONE place a thinking duration becomes a string. `reasoningSummaryLabel`
+ * (the block's own header) and `thinkingPhrase` (the group clause standing in
+ * for it) both route through here, so the equality `hidesSoleReasoningHeader`
+ * bets on is structural rather than two copies of a rounding rule kept in step
+ * by hand.
+ *
+ * `Math.max(1, ...)` is why the rule needs a home: a block that started and
+ * finished inside the same millisecond has a real, measured duration of 0 and
+ * reads "1s", because "0s" describes nothing. A block with no measurement at
+ * all is `null` and never reaches here.
+ */
+function thoughtClockDuration(durationMs: number): string {
+  return formatClockDuration(Math.max(1, Math.round(durationMs / 1000)));
 }
 
 /**
@@ -851,12 +884,18 @@ export function reasoningSummaryLabel(durationMs: number | null): string {
  * reasoning block this string IS the whole label, and
  * `hidesSoleReasoningHeader` drops the block's own header on the strength of
  * the two being identical.
+ *
+ * The "+" suffix is the one thing here `reasoningSummaryLabel` has no analogue
+ * for, and it CANNOT break that equality: it needs one finished block with a
+ * duration and another without, which is two segments, and a group of two
+ * segments is never headerless.
  */
 function thinkingPhrase(counts: ActivitySummaryCounts): string | null {
   if (!counts.thinkingPresent) return null;
   if (counts.thinkingDurationKnown) {
-    const seconds = Math.max(1, Math.round(counts.thinkingDurationMs / 1000));
-    return `thought for ${formatClockDuration(seconds)}`;
+    const clause = `thought for ${thoughtClockDuration(counts.thinkingDurationMs)}`;
+    // A floor, not a total - some finished block could not be measured.
+    return counts.thinkingDurationPartial ? `${clause}+` : clause;
   }
   if (counts.thinkingCompleted) return "thought";
   return "thinking";

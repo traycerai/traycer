@@ -10,6 +10,7 @@ import {
   useId,
   useRef,
   useState,
+  type FocusEvent,
   type ReactNode,
 } from "react";
 
@@ -252,13 +253,25 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   // "body". The `activeElement` check below is the opposite guard: an effect
   // runs after commit, and if the reader moved focus somewhere deliberately in
   // between, that is theirs to keep.
+  //
+  // The blur only clears the latch when focus went somewhere REAL. Whether an
+  // engine dispatches `blur` for an element removed while focused is not
+  // settled - Chromium does, and jsdom does not - so clearing on every blur
+  // would let removal cancel the handoff it is supposed to trigger, silently,
+  // in the browser this actually ships in, with every test still green.
+  // `relatedTarget` is what separates the two: a reader who tabbed or clicked
+  // away hands focus to an element, removal hands it to nothing.
   const headerFocusedRef = useRef(false);
   const onHeaderFocus = useCallback((): void => {
     headerFocusedRef.current = true;
   }, []);
-  const onHeaderBlur = useCallback((): void => {
-    headerFocusedRef.current = false;
-  }, []);
+  const onHeaderBlur = useCallback(
+    (event: FocusEvent<HTMLButtonElement>): void => {
+      if (event.relatedTarget === null) return;
+      headerFocusedRef.current = false;
+    },
+    [],
+  );
   const controlRemoved = headerless && !headerActionable;
   useEffect(() => {
     if (!controlRemoved || !headerFocusedRef.current) return;
@@ -309,7 +322,7 @@ interface ReasoningHeaderProps {
   readonly visuallyHidden: boolean;
   readonly onToggle: () => void;
   readonly onFocus: () => void;
-  readonly onBlur: () => void;
+  readonly onBlur: (event: FocusEvent<HTMLButtonElement>) => void;
 }
 
 // State-AWARE, because this control toggles. Naming it "show the full
@@ -390,6 +403,9 @@ function ReasoningHeader(props: ReasoningHeaderProps) {
           leading always-on caret it replaces sat next to the Brain icon and
           read as two glyphs competing to be the row's marker. */}
       <ChevronRight
+        // Named so the alignment tests can find it without walking
+        // `lastElementChild`, which any new wrapper or sibling silently breaks.
+        data-row-caret=""
         className={cn(
           "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
           "group-hover/reasoning:translate-x-0 group-hover/reasoning:text-foreground group-hover/reasoning:opacity-100",

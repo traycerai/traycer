@@ -3,7 +3,7 @@ import {
   answeredQuestionsSummary,
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
-  reasoningSummaryLabel,
+  reasoningBlockLabel,
 } from "@/components/chat/chat-activity-groups";
 import {
   deriveA2AReceivedCollapsibleKey,
@@ -678,8 +678,7 @@ function subagentBodySearchText(
 function reasoningSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "reasoning" }>,
 ): ReadonlyArray<string> {
-  if (segment.isStreaming) return ["Thinking"];
-  return [reasoningSummaryLabel(segment.durationMs)];
+  return [reasoningBlockLabel(segment.isStreaming, segment.durationMs)];
 }
 
 // Index ONLY what the inline plan card renders: the headline, the status badge

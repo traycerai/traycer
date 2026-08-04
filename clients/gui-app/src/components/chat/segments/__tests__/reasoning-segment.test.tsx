@@ -400,10 +400,16 @@ describe("<ReasoningSegment />", () => {
     ];
     for (const row of rows) {
       expect(row.className).toContain("px-1");
-      // The caret TRAILS and is invisible until hover/focus/open...
-      const last = row.lastElementChild;
-      expect(last?.getAttribute("aria-hidden")).toBe("true");
-      expect(last?.getAttribute("class")).toContain("opacity-0");
+      // Queried by marker, not by `lastElementChild`: the contract under test
+      // is "the caret trails and is hover-gated", and walking the child list
+      // fails the moment either row grows a wrapper the caret still trails.
+      const caret = row.querySelector("[data-row-caret]");
+      expect(caret).not.toBeNull();
+      expect(caret?.getAttribute("aria-hidden")).toBe("true");
+      expect(caret?.getAttribute("class")).toContain("opacity-0");
+      // The caret is still LAST - asserted on the marker, so a new wrapper
+      // moves this assertion honestly instead of silently retargeting it.
+      expect(row.lastElementChild).toBe(caret);
       // ...and nothing hidden leads the row, so both icons start at `px-1`.
       expect(row.firstElementChild?.getAttribute("class")).not.toContain(
         "opacity-0",
@@ -525,9 +531,9 @@ describe("<ReasoningSegment />", () => {
   // The reader moved the caret somewhere deliberately between the commit and
   // the effect. An effect that fires regardless would yank them back.
   //
-  // Same redundancy as above: the blur handler clearing the latch and the
-  // `activeElement === body` check each stop this alone, so only removing both
-  // fails this test.
+  // Same redundancy as above: the blur handler clearing the latch (on a blur
+  // that names where focus went) and the `activeElement === body` check each
+  // stop this alone, so only removing both fails this test.
   it("does not reclaim focus the reader has moved elsewhere", () => {
     const props = {
       findUnitId: null,
@@ -545,8 +551,10 @@ describe("<ReasoningSegment />", () => {
       const control = screen.getByRole("button", { name: /Thinking/ });
       fireEvent.click(control);
       control.focus();
-      // Moving on before the stream ends must clear the latch.
-      fireEvent.blur(control);
+      // Moving on before the stream ends must clear the latch. `relatedTarget`
+      // is the element receiving focus - that is what makes this a reader who
+      // left, as opposed to a control that was taken away.
+      fireEvent.blur(control, { relatedTarget: elsewhere });
       elsewhere.focus();
 
       rerender(
@@ -557,6 +565,48 @@ describe("<ReasoningSegment />", () => {
     } finally {
       elsewhere.remove();
     }
+  });
+
+  // jsdom dispatches NO blur when a focused element is removed; Chromium - the
+  // engine this actually ships in - does. So a blur handler that cleared the
+  // latch unconditionally made the handoff a no-op in the real product while
+  // every test here stayed green. `relatedTarget` separates the two cases:
+  // removal hands focus to nothing.
+  //
+  // This test simulates the browser jsdom is not, so it fails only for the code
+  // under test and not for the environment.
+  it("still hands off when removal itself blurs the control", () => {
+    const props = {
+      findUnitId: null,
+      markdown: "Detailed chain of thought",
+      durationMs: null,
+      bodyBoundedByParent: false,
+      headerless: true,
+      initiallyExpanded: false,
+    } as const;
+    const { rerender } = render(<ReasoningSegment {...props} isStreaming />);
+
+    const control = screen.getByRole("button", { name: /Thinking/ });
+    control.focus();
+    expect(document.activeElement).toBe(control);
+
+    // What Chromium does on its way to removing a focused element: blur with no
+    // element to hand focus to, then focus falls to the body.
+    fireEvent.blur(control, { relatedTarget: null });
+
+    rerender(
+      <ReasoningSegment {...props} isStreaming={false} durationMs={3000} />,
+    );
+
+    // The control is gone, and focus is on the trace rather than stranded at
+    // the top of the transcript.
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(
+      (document.activeElement as HTMLElement).contains(
+        screen.getByText("Detailed chain of thought"),
+      ),
+    ).toBe(true);
   });
 
   // It toggles, so its name has to say what pressing it does NOW. Reporting

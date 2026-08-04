@@ -323,6 +323,74 @@ describe("chat activity grouping", () => {
     expect(soleGroupLabel(bothDone)).toBe("Thought");
   });
 
+  // A finished block with no duration is NOT only a history artifact: an
+  // interrupted, superseded or errored block is finished and unmeasurable too
+  // (`completedDurationMs` returns null because its timestamp is the turn-end),
+  // so a run can mix measured and unmeasurable blocks live. The sum is then a
+  // floor, and saying "Thought for 5s" claims a total nobody measured.
+  it("marks a duration that is only a floor when a finished block was unmeasurable", () => {
+    const timeline = buildActiveTimeline([
+      reasoningSegment("reasoning-1", false, 5_000),
+      reasoningSegment("reasoning-2", false, null),
+    ]);
+
+    expect(soleGroupLabel(timeline)).toBe("Thought for 5s+");
+  });
+
+  // The reason it is a "+" and not a fallback to the duration-less "Thought":
+  // that fallback walks the label BACKWARDS the moment an unmeasurable block
+  // joins a run that had already measured one - which is the exact shuttle
+  // `thinkingCompleted` was added to stop, one field over. A floor only grows.
+  it("never drops a measured duration when an unmeasurable block joins", () => {
+    const measured = reasoningSegment("reasoning-1", false, 5_000);
+    expect(soleGroupLabel(buildActiveTimeline([measured]))).toBe(
+      "Thought for 5s",
+    );
+
+    const joined = buildActiveTimeline([
+      measured,
+      reasoningSegment("reasoning-2", false, null),
+    ]);
+    expect(soleGroupLabel(joined)).toBe("Thought for 5s+");
+
+    const grown = buildActiveTimeline([
+      measured,
+      reasoningSegment("reasoning-2", false, null),
+      reasoningSegment("reasoning-3", false, 6_000),
+    ]);
+    expect(soleGroupLabel(grown)).toBe("Thought for 11s+");
+  });
+
+  // The "+" has no analogue in `reasoningSummaryLabel`, so it would break the
+  // equality `hidesSoleReasoningHeader` bets on if it could ever appear on a
+  // sole block. It cannot: it needs one measured block AND one unmeasurable
+  // one, and that is two segments. Asserted rather than argued.
+  it.each([null, 0, 5_000])(
+    "never marks a sole reasoning block as a floor (%s ms)",
+    (ms) => {
+      const timeline = buildCompleteTimeline([
+        reasoningSegment("reasoning-1", false, ms),
+      ]);
+      const group = soleGroup(timeline, 0);
+
+      expect(group.label).not.toContain("+");
+      expect(group.label).toBe(reasoningSummaryLabel(ms));
+      expect(hidesSoleReasoningHeader(group.segments)).toBe(true);
+    },
+  );
+
+  // A block still STREAMING is not a finished-but-unmeasurable one. It carries
+  // no duration either, but counting it as a floor marker would put a "+" on
+  // every run that is merely still thinking.
+  it("does not mark a floor for a block that is still streaming", () => {
+    const timeline = buildActiveTimeline([
+      reasoningSegment("reasoning-1", false, 5_000),
+      reasoningSegment("reasoning-2", true, null),
+    ]);
+
+    expect(soleGroupLabel(timeline)).toBe("Thought for 5s");
+  });
+
   // The header-suppression rule is keyed on the group's SHAPE, and the shape is
   // NOT append-only: a backgrounded command and a matched question tool both
   // leave the run they were in. The group id comes from the first segment, so
@@ -1138,9 +1206,26 @@ function soleGroup(
   timeline: ReadonlyArray<ChatActivityTimelineItem>,
   index: number,
 ): ActivityGroupModel {
+  // Range-checked BEFORE the read. An out-of-range index is the likeliest way
+  // a caller gets this wrong, and reading `.kind` off the undefined it returns
+  // throws a TypeError that names neither the index nor the helper.
+  //
+  // Checked on the length rather than on `item === undefined`, which is the
+  // obvious spelling: this repo does not set `noUncheckedIndexedAccess`, so the
+  // element type excludes undefined and `no-unnecessary-condition` rejects a
+  // comparison the type system believes can never be true. The runtime
+  // disagrees with the type here, and the length is the part of that both agree
+  // on.
+  if (index < 0 || index >= timeline.length) {
+    throw new Error(
+      `Expected an activity group at index ${index}, but the timeline holds ${timeline.length}`,
+    );
+  }
   const item = timeline[index];
   if (item.kind !== "activity_group") {
-    throw new Error(`Expected an activity group at index ${index}`);
+    throw new Error(
+      `Expected an activity group at index ${index}, got ${item.kind}`,
+    );
   }
   return item.group;
 }

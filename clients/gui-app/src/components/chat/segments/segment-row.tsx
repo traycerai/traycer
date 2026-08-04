@@ -45,6 +45,7 @@ export function SegmentRow(props: SegmentRowProps) {
     return (
       <div className={cn("group/work-row", className)}>
         <div
+          data-row-header=""
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(
             "flex w-full items-center gap-2 rounded-sm px-1 py-1 text-ui-sm",
@@ -70,6 +71,16 @@ export function SegmentRow(props: SegmentRowProps) {
 }
 
 /**
+ * `data-row-header` marks the header LINE on all three branches above - the
+ * plain div, the promoting button and the collapsible trigger. Placement tests
+ * ("the elapsed counter rides the header row, the progress line does not") need
+ * one anchor that means the same thing whichever branch rendered, and neither
+ * `parentElement` nor `closest("button")` is that: the first depends on wrapper
+ * depth inside each header, and the second silently returns null for the
+ * non-expandable row, which is the branch a streaming tool actually takes.
+ */
+
+/**
  * The disclosure caret every activity row shares: trailing, and invisible until
  * the row is hovered, focused or open.
  *
@@ -87,6 +98,9 @@ function RowTrailingCaret(props: { readonly rotateWhenOpen: boolean }) {
   return (
     <ChevronRight
       aria-hidden
+      // Named so the alignment tests can find it without walking
+      // `lastElementChild`, which any new wrapper or sibling silently breaks.
+      data-row-caret=""
       className={cn(
         "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
         "group-hover/row-trigger:translate-x-0 group-hover/row-trigger:text-foreground group-hover/row-trigger:opacity-100",
@@ -125,6 +139,7 @@ function PromotingSegmentRow(
       <button
         type="button"
         onClick={handleClick}
+        data-row-header=""
         data-activity-row-trigger=""
         data-find-include="true"
         data-chat-find-unit={headerFindUnitId ?? undefined}
@@ -169,6 +184,7 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
       className={cn("group/work-row", className)}
     >
       <CollapsibleTrigger
+        data-row-header=""
         data-activity-row-trigger=""
         data-find-include="true"
         data-chat-find-unit={headerFindUnitId ?? undefined}
