@@ -320,12 +320,23 @@ export function refreshGitSubscriptionWithFreshNonce(args: {
   const key = subscriptionKeyFor(client, subscriptionArgs);
   const shared = subscriptions.get(key);
   if (shared === undefined) return null;
-  // The entry is looked up BEFORE the version gate so the gate can read this
-  // stream's own stamp. Asking the client-wide value would let a sibling repo
-  // that negotiated 1.2 authorize a fresh-nonce replacement against a session
-  // that cannot correlate the nonce - and nothing would then settle the refresh
-  // except its 10s timeout.
-  const version = entrySchemaVersion(shared, client);
+  // The LIVE session only - not `entrySchemaVersion`. This gate is unlike the
+  // other two entry-scoped reads: they answer "who owns this slot", where
+  // holding the last known value through a blip beats thrashing ownership.
+  // This one authorizes an ACTION against whatever session exists right now,
+  // and a stamp is evidence about a handshake that has already ended.
+  //
+  // Both stale sources fail the same way. A sibling repo at 1.2 (the
+  // client-wide value) or this stream's own previous handshake (the stamp)
+  // would authorize a fresh-nonce replacement whose peer may be a restarted,
+  // rolled-back v1.1 host that cannot echo the nonce. The caller reads a
+  // non-null return as "the stream is handling it" and skips its unary
+  // fallback, so the refresh the user asked for never happens and they wait
+  // out the 10s timeout instead.
+  //
+  // `null` here (no handshake yet, or between connections) correctly declines
+  // and lets the caller do a plain unary refresh.
+  const version = shared.session?.getNegotiatedSchemaVersion() ?? null;
   if (version === null || version.major !== 1 || version.minor < 2) {
     return null;
   }
@@ -602,9 +613,15 @@ function sameSchemaVersion(
 }
 
 /**
- * The version to answer a question about THIS repo's stream with, in falling
- * order of authority: the live session, the last delivered stamp, the
- * client-wide value.
+ * The version to answer an OWNERSHIP question about THIS repo's stream with -
+ * "who writes this slot" - in falling order of authority: the live session, the
+ * last delivered stamp, the client-wide value.
+ *
+ * NOT for authorizing an action. `refreshGitSubscriptionWithFreshNonce` reads
+ * the live session directly and declines when it is `null`, because a stamp is
+ * evidence about a handshake that has already ended, and acting on it commits
+ * the caller to a stream that may no longer be able to honour it. Ownership can
+ * hold a last-known value through a blip; an action cannot.
  *
  * - The LIVE session is exact and needs no frame to become true, so a
  *   renegotiation is visible the moment it happens.

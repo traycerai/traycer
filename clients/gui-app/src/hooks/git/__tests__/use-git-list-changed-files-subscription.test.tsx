@@ -2163,5 +2163,41 @@ describe("useGitListChangedFilesSubscription", () => {
 
       await waitFor(() => expect(ownership.result.current).toBe(false));
     });
+
+    it("refuses a fresh-nonce refresh while the session is between connections", async () => {
+      // The nonce gate is an ACTION taken against whatever session exists now,
+      // so a stamp from a handshake that has already ended is not evidence for
+      // it. A host that restarts and rolls back to v1.1 cannot echo a
+      // `freshNonce`, and the caller treats a non-null return as "the stream is
+      // handling it" and skips its unary fallback - so guessing high here costs
+      // a real refresh and parks the user on the 10s timeout instead.
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
+      const repo = await renderRepo("/repo-a");
+      repo.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
+      repo.session.emitFrame(v12SnapshotFor("/repo-a", "parent-a"), null);
+      await waitFor(() =>
+        expect(repo.result.current.data?.fingerprint).toBe("parent-a"),
+      );
+
+      // Mid-reconnect: `resetForReconnect` clears the session's negotiated
+      // version, and reconciliation empties the client-wide one with it. Only
+      // the delivered stamp still says 1.2.
+      repo.session.negotiatedSchemaVersion = null;
+      mockWsStreamClient.methodSchemaVersion = null;
+      const before = mockWsStreamClient.subscribeCallCount;
+
+      expect(
+        refreshGitSubscriptionWithFreshNonce({
+          wsStreamClient: mockWsStreamClient,
+          queryClient,
+          hostId: "host1",
+          runningDir: "/repo-a",
+          ignoreWhitespace: false,
+        }),
+      ).toBeNull();
+      // No replacement was started, so nothing is left waiting on a nonce the
+      // next peer may not be able to echo.
+      expect(mockWsStreamClient.subscribeCallCount).toBe(before);
+    });
   });
 });
