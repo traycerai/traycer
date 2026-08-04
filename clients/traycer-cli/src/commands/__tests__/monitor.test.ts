@@ -499,6 +499,59 @@ describe("mixed-version inbox message frames", () => {
     void result;
   });
 
+  it("retries a failed inbox acknowledgement without dropping its event ID", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((..._args: unknown[]) => {
+        const cb = _args.find((arg) => typeof arg === "function") as
+          (() => void) | undefined;
+        cb?.();
+        return true;
+      });
+    callHostRpcMock
+      .mockRejectedValueOnce(new Error("temporary host outage"))
+      .mockResolvedValueOnce({});
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    sessions[0].serverFrame?.({
+      kind: "message",
+      hasBinaryPayload: false,
+      item: {
+        reply: { expectsReply: false },
+        fromAgentId: "peer-1",
+        senderTitle: null,
+        senderHarnessId: null,
+        epicId: "e1",
+        prompt: "retry me",
+        enqueuedAt: 123,
+        eventId: "evt-retry",
+      },
+    });
+    await flush(0);
+    await flush(0);
+
+    expect(callHostRpcMock).toHaveBeenCalledTimes(1);
+    expect(callHostRpcMock).toHaveBeenLastCalledWith("agent.inbox.ack", {
+      epicId: "e1",
+      agentId: "a1",
+      eventIds: ["evt-retry"],
+    });
+
+    await flush(1_000);
+    await flush(0);
+
+    expect(callHostRpcMock).toHaveBeenCalledTimes(2);
+    expect(callHostRpcMock).toHaveBeenLastCalledWith("agent.inbox.ack", {
+      epicId: "e1",
+      agentId: "a1",
+      eventIds: ["evt-retry"],
+    });
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
+
   it("does NOT ack a new-host (@1.2-negotiated) message frame when the stdout write errors", async () => {
     // The exact defect the amended go/no-go review found: an ack must never
     // fire for text that was never successfully written. Simulates a write

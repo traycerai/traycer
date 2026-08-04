@@ -337,6 +337,7 @@ function runInboxSubscription(
       );
       clearHealthTimer();
       clearRetryTimer();
+      acknowledgements.dispose();
       session?.close();
       reject(error);
     };
@@ -475,14 +476,17 @@ function runInboxSubscription(
  * Coalesces durable inbox acknowledgements into bounded unary RPCs. A replay
  * may deliver many frames concurrently; opening one authenticated RPC per
  * printed message otherwise creates a connection storm and turns a transient
- * hiccup into another replay. Failed batches intentionally stay unacked: the
- * inbox's at-least-once contract redelivers them after reconnect.
+ * hiccup into another replay. Failed batches remain pending and retry locally;
+ * the inbox's at-least-once contract also redelivers them after reconnect.
  */
 class InboxAcknowledgementQueue {
   private static readonly MAX_EVENT_IDS_PER_ACK = 500;
+  private static readonly RETRY_DELAY_MS = 1_000;
   private readonly pendingEventIds = new Set<string>();
   private flushing = false;
   private flushScheduled = false;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private disposed = false;
 
   constructor(
     private readonly target: InboxTarget,
@@ -490,8 +494,30 @@ class InboxAcknowledgementQueue {
   ) {}
 
   enqueue(eventId: string): void {
+    if (this.disposed) return;
     this.pendingEventIds.add(eventId);
-    if (this.flushScheduled || this.flushing) return;
+    this.scheduleFlush();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.pendingEventIds.clear();
+  }
+
+  private scheduleFlush(): void {
+    if (
+      this.flushScheduled ||
+      this.flushing ||
+      this.pendingEventIds.size === 0 ||
+      this.retryTimer !== null ||
+      this.disposed
+    ) {
+      return;
+    }
     this.flushScheduled = true;
     queueMicrotask(() => {
       this.flushScheduled = false;
@@ -500,21 +526,21 @@ class InboxAcknowledgementQueue {
   }
 
   private async flush(): Promise<void> {
-    if (this.flushing) return;
+    if (this.flushing || this.disposed) return;
     this.flushing = true;
     try {
-      while (this.pendingEventIds.size > 0) {
+      while (this.pendingEventIds.size > 0 && !this.disposed) {
         const eventIds = Array.from(this.pendingEventIds).slice(
           0,
           InboxAcknowledgementQueue.MAX_EVENT_IDS_PER_ACK,
         );
-        for (const eventId of eventIds) this.pendingEventIds.delete(eventId);
         try {
           await callHostRpc("agent.inbox.ack", {
             epicId: this.target.epicId,
             agentId: this.target.agentId,
             eventIds,
           });
+          for (const eventId of eventIds) this.pendingEventIds.delete(eventId);
         } catch (error) {
           this.logger.warn("Monitor failed to acknowledge inbox messages", {
             environment: config.environment,
@@ -523,18 +549,22 @@ class InboxAcknowledgementQueue {
             eventIds: eventIds.length,
             error: error instanceof Error ? error.message : String(error),
           });
+          this.scheduleRetry();
+          return;
         }
       }
     } finally {
       this.flushing = false;
-      if (this.pendingEventIds.size > 0 && !this.flushScheduled) {
-        this.flushScheduled = true;
-        queueMicrotask(() => {
-          this.flushScheduled = false;
-          void this.flush();
-        });
-      }
+      this.scheduleFlush();
     }
+  }
+
+  private scheduleRetry(): void {
+    if (this.retryTimer !== null || this.disposed) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.scheduleFlush();
+    }, InboxAcknowledgementQueue.RETRY_DELAY_MS);
   }
 }
 
