@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GitWatcherStatus } from "@traycer/protocol/host/git-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -53,6 +54,31 @@ describe("<GitWatcherStatusNotice />", () => {
     expect(screen.getByTestId(NOTICE).textContent).toContain(
       "Periodic refresh",
     );
+  });
+
+  it("keeps the tooltip body in one block so the diagnostic stacks under the explanation", async () => {
+    // `TooltipContent` is an `inline-flex` ROW. Two bare <p> siblings become
+    // side-by-side columns inside `max-w-xs`, so a host diagnostic - the line
+    // that carries the actual remedy - wraps into an unreadable ribbon.
+    const user = userEvent.setup();
+    renderNotice({
+      state: "degraded-capacity",
+      detail:
+        "raise fs.inotify.max_user_watches to restore watcher-driven git status",
+    });
+    await user.hover(screen.getByTestId(NOTICE));
+
+    const detail = await screen.findByText(/max_user_watches/u);
+    const explanation = screen.getByText(/Periodic refresh|watch limit/u, {
+      selector: "p",
+    });
+    // Same parent, and that parent is a single flex ITEM rather than the flex
+    // CONTAINER. Asserting only "same parent" would be vacuous - two bare
+    // siblings share the content element too - so pin that the shared parent
+    // is not the content element itself.
+    expect(detail.parentElement).toBe(explanation.parentElement);
+    expect(detail.parentElement?.getAttribute("data-slot")).toBeNull();
+    expect(detail.closest("[data-slot='tooltip-content']")).not.toBeNull();
   });
 
   it("exposes a keyboard-focusable trigger", () => {

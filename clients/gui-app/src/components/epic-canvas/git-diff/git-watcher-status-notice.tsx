@@ -86,12 +86,25 @@ export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
         {copy.label}
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        <p>{copy.explanation}</p>
-        {status.detail === null ? null : (
-          // Host diagnostics, rendered verbatim and never parsed: the wording
-          // is unstable by contract, which is exactly why it is not schema.
-          <p className="mt-1 text-muted-foreground/70">{status.detail}</p>
-        )}
+        {/* Block wrapper, not two bare siblings: `TooltipContent` is an
+            `inline-flex` ROW, so an explanation and a diagnostic placed
+            directly inside it become side-by-side columns and each wraps into
+            a narrow ribbon. One flex item that stacks internally is the fix
+            that doesn't reach into the shared primitive. */}
+        <div className="w-full">
+          <p>{copy.explanation}</p>
+          {status.detail === null ? null : (
+            // Host diagnostics, rendered verbatim and never parsed: the wording
+            // is unstable by contract, which is exactly why it is not schema.
+            //
+            // Toned against `background`, not `muted-foreground`: this surface
+            // is INVERSE (`bg-foreground`/`text-background`), so the muted
+            // token - designed to sit on `bg-background` - lands dark-on-dark
+            // in light themes and washes out in dark ones, obscuring the one
+            // line that carries the remedy.
+            <p className="mt-1 text-background/70">{status.detail}</p>
+          )}
+        </div>
       </TooltipContent>
     </Tooltip>
   );
