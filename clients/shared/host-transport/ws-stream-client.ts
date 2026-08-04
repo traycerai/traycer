@@ -896,9 +896,19 @@ class StreamSession<
    * signal their `reconnectAttempt` would be a lifetime drop counter, and a
    * handful of cumulative ordinary drops would pin every later reconnect at
    * the backoff cap. Cleared on every drop/teardown path via
-   * `resetForReconnect` / `teardownTimers`.
+   * `resetForReconnect` / `teardownTimers` - which SETTLES it on elapsed
+   * time rather than discarding it, see `subscribedAt`.
    */
   private healthyDwellTimer: TimerHandle | null = null;
+  /**
+   * Wall-clock stamp of the subscribe that armed `healthyDwellTimer`, or
+   * null when nothing is subscribed. The timer alone cannot decide the
+   * dwell: a backgrounded renderer throttles `setTimeout` (Chromium clamps
+   * hidden pages to >=1/min), so a socket can be genuinely subscribed for
+   * minutes with the callback still queued. Settling the dwell on elapsed
+   * time at the drop keeps the reset the stream has already earned.
+   */
+  private subscribedAt: number | null = null;
   private lastPongAt: number;
 
   constructor(options: StreamSessionOptions<Registry>) {
@@ -1733,18 +1743,53 @@ class StreamSession<
    */
   private armHealthyDwell(): void {
     this.clearHealthyDwell();
+    this.subscribedAt = Date.now();
     this.healthyDwellTimer = setTimeout(() => {
       this.healthyDwellTimer = null;
-      this.reconnectAttempt = 0;
-      this.noProgressUnauthorizedReconnects = 0;
+      this.resetLoopCounters();
     }, HEALTHY_SUBSCRIBED_DWELL_MS);
   }
 
+  /**
+   * Disarms the dwell and SETTLES it on elapsed time: if the socket really
+   * did stay subscribed past `HEALTHY_SUBSCRIBED_DWELL_MS`, the reset is
+   * applied here even though the timer never got to run.
+   *
+   * A timer is not a clock. `setTimeout` is throttled in a backgrounded
+   * renderer, so on a quiet event-only stream - the exact case the dwell
+   * exists to serve, since it has no application frames to reset on - a
+   * drop can be processed while the callback is still queued. Clearing it
+   * silently would discard a reset the stream had already earned and leave
+   * `reconnectAttempt` a lifetime drop counter, restoring the pinned-at-cap
+   * behavior this change removes. Elapsed time is the honest predicate.
+   *
+   * Ordering note: `onTransportDrop` calls `resetForReconnect()` (→ here)
+   * BEFORE `scheduleReconnect()`, so a settled dwell zeroes the counter and
+   * the redial is then attempt 1 - a healthy stream restarts its backoff
+   * from the floor rather than resuming a lifetime ladder.
+   */
   private clearHealthyDwell(): void {
     if (this.healthyDwellTimer !== null) {
       clearTimeout(this.healthyDwellTimer);
       this.healthyDwellTimer = null;
     }
+    const subscribedAt = this.subscribedAt;
+    this.subscribedAt = null;
+    if (
+      subscribedAt !== null &&
+      Date.now() - subscribedAt >= HEALTHY_SUBSCRIBED_DWELL_MS
+    ) {
+      this.resetLoopCounters();
+    }
+  }
+
+  /**
+   * The single reset applied by all three health signals - a delivered
+   * application frame, the dwell timer, and an elapsed-time dwell settle.
+   */
+  private resetLoopCounters(): void {
+    this.reconnectAttempt = 0;
+    this.noProgressUnauthorizedReconnects = 0;
   }
 
   /**
@@ -1893,8 +1938,7 @@ class StreamSession<
     // UNAUTHORIZED give-up bound reset; a host that acks the subscribe and
     // then fails initialization keeps escalating instead of looping at the
     // floor delay (int #4781).
-    this.reconnectAttempt = 0;
-    this.noProgressUnauthorizedReconnects = 0;
+    this.resetLoopCounters();
     const handler = this.serverFrameHandler;
     if (handler === null) {
       return;

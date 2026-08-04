@@ -1498,6 +1498,61 @@ describe("WsStreamClient", () => {
     vi.useRealTimers();
   });
 
+  // Codex review, PR #978 thread PRRT_kwDOL6Tbrc6WdfpB: "Reset dwell based on
+  // elapsed time, not only timer firing". A backgrounded renderer throttles
+  // `setTimeout` (Chromium clamps hidden pages to >=1/min), and a quiet
+  // event-only stream has no application frames to reset on - so the dwell
+  // callback is the ONLY reset signal it has, and discarding it on the drop
+  // leaves `reconnectAttempt` a lifetime drop counter again.
+  it("settles the dwell on ELAPSED time when a throttled timer never fired", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      hostCredentialMint: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 60_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 5_000,
+      maxBackoffMs: 20_000,
+    });
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
+    completeHandshake(sockets[0].socket);
+
+    // One ordinary drop, well inside the dwell, consumes attempt 0.
+    sockets[0].socket.fireClose(1006, "abnormal", false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sockets).toHaveLength(2);
+    completeHandshake(sockets[1].socket);
+
+    // The renderer is backgrounded: wall clock moves 30s - three times the
+    // dwell - while the throttled dwell timer has NOT run. `setSystemTime`
+    // shifts pending timers with it, so the callback is still queued exactly
+    // as it would be under throttling.
+    vi.setSystemTime(Date.now() + 30_000);
+
+    sockets[1].socket.fireClose(1006, "abnormal", false);
+
+    // The connection was genuinely subscribed past the dwell, so its reset is
+    // owed: the redial must come at the 5s floor. Without the elapsed-time
+    // settle the discarded timer leaves attempt 1 standing and this waits
+    // 10s - the lifetime-counter behavior the dwell exists to remove.
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(sockets).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sockets).toHaveLength(3);
+
+    session.close();
+    vi.useRealTimers();
+  });
+
   it("clears the healthy dwell timer when a quiet subscription drops", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 
