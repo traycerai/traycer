@@ -420,13 +420,20 @@ export class CommGraphCloudSubscriptionManager {
   }
 
   private scheduleReconnectingFailover(hostId: string): void {
+    const hasUntriedAlternative = this.relayHostIds.some(
+      (candidate) =>
+        candidate !== hostId && !this.rejectedRelayHostIds.has(candidate),
+    );
+    const hasRetryableRejectedAlternative = this.relayHostIds.some(
+      (candidate) =>
+        candidate !== hostId &&
+        this.rejectedRelayHostIds.has(candidate) &&
+        !this.unsupportedRelayHostIds.has(candidate),
+    );
     if (
       this.relayStatus !== "reconnecting" ||
       this.reconnectingFailoverTimer !== null ||
-      !this.relayHostIds.some(
-        (candidate) =>
-          candidate !== hostId && !this.rejectedRelayHostIds.has(candidate),
-      )
+      (!hasUntriedAlternative && !hasRetryableRejectedAlternative)
     ) {
       return;
     }
@@ -442,6 +449,19 @@ export class CommGraphCloudSubscriptionManager {
       }
       this.rejectedRelayHostIds.add(hostId);
       this.closeCurrent();
+      // Once every candidate in this dial cycle has timed out, begin another
+      // bounded cycle. Earlier reconnecting/unreachable relays may have
+      // recovered while the later candidates were being tried; retaining all
+      // rejection marks would otherwise leave the cloud-authoritative graph
+      // stale forever. An explicit `unsupported` verdict remains sticky for
+      // this attachment and is never retried by the timeout cycle.
+      if (
+        this.relayHostIds.every((candidate) =>
+          this.rejectedRelayHostIds.has(candidate),
+        )
+      ) {
+        this.rejectedRelayHostIds = new Set(this.unsupportedRelayHostIds);
+      }
       this.openNextRelay();
       this.publish();
     }, RECONNECTING_RELAY_FAILOVER_MS);

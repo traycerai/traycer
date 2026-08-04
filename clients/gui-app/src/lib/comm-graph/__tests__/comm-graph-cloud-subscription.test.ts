@@ -407,6 +407,34 @@ describe("CommGraphCloudSubscriptionManager", () => {
     }
   });
 
+  it("starts a new bounded relay cycle after every retryable candidate times out", () => {
+    vi.useFakeTimers();
+    const recorded = recordedOpener();
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      recorded.opener,
+      () => undefined,
+    );
+    try {
+      manager.setRelayHostIds(["relay-a", "relay-b"]);
+      manager.attach();
+      recorded.requests[0].handlers.onAvailability("available");
+      recorded.requests[0].handlers.onStatus("reconnecting");
+
+      vi.advanceTimersByTime(15_000);
+      expect(recorded.requests[1].hostId).toBe("relay-b");
+      recorded.requests[1].handlers.onStatus("reconnecting");
+
+      vi.advanceTimersByTime(15_000);
+      expect(recorded.requests).toHaveLength(3);
+      expect(recorded.requests[2].hostId).toBe("relay-a");
+      expect(manager.getAvailability()).toBe("available");
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("projects a cloud feed status to every origin host", () => {
     const recorded = recordedOpener();
     const manager = new CommGraphCloudSubscriptionManager(
