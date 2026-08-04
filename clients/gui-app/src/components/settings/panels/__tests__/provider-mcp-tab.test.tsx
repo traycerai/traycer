@@ -93,6 +93,18 @@ const folderActionMocks = vi.hoisted(() => ({
   isPreparing: false,
 }));
 
+// A rejected browse has no inline surface to land on - the popover is the only
+// thing on screen - so the failure is reported as a toast. Captured here
+// because the real helper reaches a sonner instance this suite does not mount.
+const toastMocks = vi.hoisted(() => ({ errors: [] as string[] }));
+
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: (message: string) => {
+    toastMocks.errors.push(message);
+    return 0;
+  },
+}));
+
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));
@@ -208,6 +220,7 @@ vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
 
 const BOTH_SCOPES = ["global", "project"] as const;
 const GLOBAL_ONLY = ["global"] as const;
+const PROJECT_ONLY = ["project"] as const;
 
 const FULL_CAPS: ProviderMcpCapabilities = {
   transports: ["stdio", "http"],
@@ -258,6 +271,26 @@ const KIMI_CAPS: ProviderMcpCapabilities = {
     toggleTool: [...GLOBAL_ONLY],
     discover: [...GLOBAL_ONLY],
     auth: [...GLOBAL_ONLY],
+  },
+};
+
+/**
+ * A provider that can ONLY list project-scoped configs - no Global to fall
+ * back to. Codex-like providers all advertise both, which is why this case
+ * went unnoticed: it is the one shape where the picker is the sole route to a
+ * usable state, so it is also the one where disabling the picker is fatal.
+ */
+const PROJECT_ONLY_CAPS: ProviderMcpCapabilities = {
+  ...FULL_CAPS,
+  actionScopes: {
+    list: [...PROJECT_ONLY],
+    add: [...PROJECT_ONLY],
+    update: [...PROJECT_ONLY],
+    remove: [...PROJECT_ONLY],
+    toggleServer: [...PROJECT_ONLY],
+    toggleTool: [...PROJECT_ONLY],
+    discover: [...PROJECT_ONLY],
+    auth: [...PROJECT_ONLY],
   },
 };
 
@@ -323,8 +356,14 @@ function renderTab(
  * not a chip pair beside a separate folder select - so a test drives it by
  * naming the destination it wants, exactly as a user does.
  */
+/**
+ * Matched by PREFIX, not exact string: the trigger's accessible name carries
+ * the current destination after the static label ("MCP config location:
+ * Global"), so a screen-reader user hears which config the control points at.
+ * An exact match would break every time the selection changes.
+ */
 function scopeTrigger(): HTMLElement {
-  return screen.getByRole("button", { name: "MCP config location" });
+  return screen.getByRole("button", { name: /^MCP config location/ });
 }
 
 function scopeTriggerText(): string {
@@ -355,6 +394,7 @@ describe("<ProviderMcpTab />", () => {
     mcpMocks.listCalls = [];
     worktreeMocks.workspaces = [];
     worktreeMocks.isPending = false;
+    toastMocks.errors = [];
     folderActionMocks.pickAndPrepareFolders.mockReset();
     folderActionMocks.pickAndPrepareFolders.mockResolvedValue(null);
     folderActionMocks.isPreparing = false;
@@ -460,6 +500,21 @@ describe("<ProviderMcpTab />", () => {
     renderTab(FULL_CAPS, "codex");
 
     openScopePicker();
+    // Emission ORDER is the grouping, and it is the reason the list ships with
+    // no group headers: a workspace is immediately followed by its own
+    // worktrees, which is the only thing saying which repo a worktree belongs
+    // to. Reordering the `targets` loop would otherwise pass every other
+    // assertion here while making two repos' worktrees indistinguishable.
+    const optionNames = screen
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    const appIndex = optionNames.findIndex((name) => name.includes("app"));
+    const featureIndex = optionNames.findIndex((name) =>
+      name.includes("app-feature"),
+    );
+    expect(appIndex).toBeGreaterThanOrEqual(0);
+    expect(featureIndex).toBe(appIndex + 1);
+
     // The branch is what distinguishes two near-identical basenames, so it has
     // to be on the row - not only in the path.
     const row = screen.getByRole("option", { name: /traycer\/feature/ });
@@ -574,6 +629,131 @@ describe("<ProviderMcpTab />", () => {
           c.workspaceRoot === "/Users/dev/picked",
       ),
     ).toBe(true);
+  });
+
+  it("keeps the picker reachable for a PROJECT-ONLY provider with no workspaces", () => {
+    // The dead end this guards: project-only provider, no folders opened on
+    // this host. There is no Global to fall back to, and the only way out -
+    // "Add a workspace folder…" - lives INSIDE the popover. Disabling the
+    // trigger in that state sealed the user in with no route to a usable
+    // config, which is the exact hole the add action was introduced to close.
+    useWorkspaceFoldersStore.setState({ folders: [], folderInfoByPath: {} });
+    resolvedWorkspaceMocks.folders = [];
+    renderTab(PROJECT_ONLY_CAPS, "codex");
+
+    const trigger = scopeTrigger();
+    expect(trigger instanceof HTMLButtonElement && trigger.disabled).toBe(
+      false,
+    );
+
+    openScopePicker();
+    expect(
+      screen.getByRole("option", { name: /Add a workspace folder/ }),
+    ).toBeDefined();
+  });
+
+  it("names the current destination in the trigger's accessible name", () => {
+    // `aria-label` REPLACES the visible text in the accessible name, so a bare
+    // static label would tell a screen-reader user what the control is for
+    // while withholding the only thing it displays - where the config goes.
+    renderTab(FULL_CAPS, "codex");
+
+    expect(scopeTrigger().getAttribute("aria-label")).toBe(
+      "MCP config location: Global",
+    );
+  });
+
+  it("does not fall back to the workspace root while a stored worktree is unresolved", () => {
+    // `targets` gains worktree paths only once the worktree query resolves, so
+    // a stored WORKTREE selection reads as invalid until then. Falling back to
+    // the single workspace in that window points the list - and any add or
+    // remove - at the PARENT repo's `.mcp.json`, which is a different file.
+    useWorkspaceFoldersStore.setState({
+      folders: ["/Users/dev/app"],
+      folderInfoByPath: {
+        "/Users/dev/app": {
+          path: "/Users/dev/app",
+          name: "app",
+          repoIdentifier: null,
+          hostId: "host-1",
+        },
+      },
+    });
+    resolvedWorkspaceMocks.folders = [
+      { kind: "local-only", path: "/Users/dev/app", name: "app" },
+    ];
+    useProvidersWorkspaceSelectionStore.setState({
+      selectedByHostId: { "host-1": "/Users/dev/worktrees/app-feature" },
+    });
+    // Still in flight, so the worktree has not entered `targets` yet.
+    worktreeMocks.workspaces = [];
+    worktreeMocks.isPending = true;
+    renderTab(FULL_CAPS, "codex");
+
+    expect(
+      mcpMocks.listCalls.some(
+        (c) => c.enabled && c.workspaceRoot === "/Users/dev/app",
+      ),
+    ).toBe(false);
+  });
+
+  it("reports a browse that REJECTS instead of failing silently", async () => {
+    // `pickAndPrepareFolders` guards only its prepare step; the pickers ahead
+    // of it are awaited bare, so a failure rejects out of `browseForWorkspace`.
+    // Unhandled, that is a silent no-op the user reads as a missed click.
+    folderActionMocks.pickAndPrepareFolders.mockRejectedValue(
+      new Error("picker exploded"),
+    );
+    renderTab(FULL_CAPS, "codex");
+
+    openScopePicker();
+    fireEvent.click(
+      screen.getByRole("option", { name: /Add a workspace folder/ }),
+    );
+
+    await vi.waitFor(() => {
+      expect(toastMocks.errors).toContain("Couldn't open the folder picker.");
+    });
+    // And the selection is untouched - a failed add is not a choice.
+    expect(scopeTriggerText()).toContain("Global");
+  });
+
+  it("files an added folder under the DISPATCH host, not the active one", async () => {
+    // The race this guards: `pickAndPrepareFolders` captures the host at
+    // dispatch and re-validates it across every await, and `browseForWorkspace`
+    // must stamp the folder with THAT id rather than re-reading the client
+    // after the picker returns. Discriminating only because the mocked result
+    // names a different host than the active one ("host-1" everywhere in this
+    // file) - with both the same, a re-read would produce an identical store
+    // and the assertion would hold for the wrong reason.
+    useWorkspaceFoldersStore.setState({ folders: [], folderInfoByPath: {} });
+    resolvedWorkspaceMocks.folders = [];
+    folderActionMocks.pickAndPrepareFolders.mockResolvedValue({
+      folders: [
+        { workspacePath: "/Users/dev/on-host-2", workspaceName: "on-host-2" },
+      ],
+      repoIdentifiers: [],
+      hostId: "host-2",
+    });
+    renderTab(FULL_CAPS, "codex");
+
+    openScopePicker();
+    fireEvent.click(
+      screen.getByRole("option", { name: /Add a workspace folder/ }),
+    );
+
+    await vi.waitFor(() => {
+      expect(
+        useWorkspaceFoldersStore.getState().folderInfoByPath[
+          "/Users/dev/on-host-2"
+        ],
+      ).toBeDefined();
+    });
+    expect(
+      useWorkspaceFoldersStore.getState().folderInfoByPath[
+        "/Users/dev/on-host-2"
+      ].hostId,
+    ).toBe("host-2");
   });
 
   it("leaves the selection alone when the folder pick is cancelled", async () => {
@@ -725,8 +905,11 @@ describe("<ProviderMcpTab />", () => {
     renderTab(KIMI_CAPS, "kimi");
     // A single-scope provider gets a statement, not a picker holding one dead
     // option - and the statement matches the Global row's own wording.
+    // The PREFIX regex matters on this negative assertion: the trigger's name
+    // now ends with the selected destination, so an exact-string query would
+    // match nothing whether or not the picker rendered.
     expect(
-      screen.queryByRole("button", { name: "MCP config location" }),
+      screen.queryByRole("button", { name: /^MCP config location/ }),
     ).toBeNull();
     expect(
       screen.getByText("Applies to every workspace on this host."),

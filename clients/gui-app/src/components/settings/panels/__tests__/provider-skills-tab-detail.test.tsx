@@ -17,6 +17,11 @@ const skillMocks = vi.hoisted(() => ({
   // `mutate.mock.calls`, which types as `any[]` and trips the repo's
   // no-unsafe-member-access rule the moment a test looks inside it.
   mutations: [] as ProvidersSkillsMutateAction[],
+  // The whole variables object, so the suite can assert the flags riding
+  // alongside the mutation - `suppressToast` in particular, which is what
+  // stops the hook's global toast from double-reporting the error this dialog
+  // already renders inline.
+  mutateVariables: [] as Array<{ readonly suppressToast: boolean }>,
   mutateIsPending: false,
   readFileCalls: [] as Array<{
     workspacePath: string | null;
@@ -49,13 +54,19 @@ vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   useProvidersSkillsMutate: () => ({
     mutate: (
-      variables: { mutation: ProvidersSkillsMutateAction },
+      variables: {
+        mutation: ProvidersSkillsMutateAction;
+        suppressToast: boolean;
+      },
       opts: {
         onSuccess: () => void;
         onError: (err: { message: string }) => void;
       },
     ) => {
       skillMocks.mutations.push(variables.mutation);
+      skillMocks.mutateVariables.push({
+        suppressToast: variables.suppressToast,
+      });
       skillMocks.mutate(variables, opts);
     },
     isPending: skillMocks.mutateIsPending,
@@ -136,6 +147,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     skillMocks.removeScopes = [];
     skillMocks.mutate.mockReset();
     skillMocks.mutations = [];
+    skillMocks.mutateVariables = [];
     skillMocks.mutateIsPending = false;
     skillMocks.readFileCalls = [];
     skillMocks.readFile = {
@@ -257,6 +269,41 @@ describe("<ProviderSkillsTab /> skill detail", () => {
         path: FIND_SKILLS.path,
       },
     ]);
+    // `suppressToast` rides with it because this dialog renders the failure
+    // inline (see the two error tests below). Without the flag the hook's
+    // `toastFromHostError` reports the same failure a second time, over a
+    // dialog that is already showing it.
+    expect(skillMocks.mutateVariables).toEqual([{ suppressToast: true }]);
+  });
+
+  it("disables Remove while THIS removal is in flight", () => {
+    // A destructive action's pending state is where a double-submit does
+    // damage, and nothing else in this suite exercises it.
+    //
+    // `isPending` alone is deliberately NOT enough: the gate is
+    // `isRemovePending(isMutating, pendingKey)`, so a create/import running
+    // concurrently must not grey out Remove. The confirmation therefore has to
+    // be driven for real - the mutate mock takes the call and settles nothing,
+    // which is exactly "in flight".
+    skillMocks.removeScopes = ["global"];
+    skillMocks.mutateIsPending = true;
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    const remove = screen.getByRole("button", { name: "Remove" });
+    // Not yet: pending is true, but no REMOVE is the pending one.
+    expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(false);
+
+    fireEvent.click(remove);
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // The native `disabled` property, not `toBeDisabled()`: jest-dom's
+    // matchers are not wired into this suite, so the matcher would be
+    // undefined rather than failing informatively.
+    const pendingRemove = screen.getByRole("button", { name: "Remove" });
+    expect(
+      pendingRemove instanceof HTMLButtonElement && pendingRemove.disabled,
+    ).toBe(true);
   });
 
   it("blocks removal of a built-in skill and says why, under the same provider", () => {

@@ -16,13 +16,16 @@ import { DEFAULT_THEME_PRESET } from "@/lib/theme-presets";
  */
 const queryMocks = vi.hoisted(() => ({
   params: [] as Array<{ native: { theme: string; pluginId: string } }>,
+  cacheKeys: [] as Array<ReadonlyArray<unknown>>,
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQueryWithResponseMap: (args: {
     params: { native: { theme: string; pluginId: string } };
+    cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
   }) => {
     queryMocks.params.push(args.params);
+    queryMocks.cacheKeys.push(args.cacheKeyIdentity ?? []);
     return { data: undefined, isPending: true, isError: false, error: null };
   },
 }));
@@ -45,11 +48,13 @@ function themed(theme: ResolvedTheme) {
   };
 }
 
-function run(args: {
+function render(args: {
   readonly hasDarkIcon: boolean;
+  readonly version: string | null;
   readonly wrapper: ((p: { children: ReactNode }) => ReactNode) | undefined;
-}): string {
+}): void {
   queryMocks.params = [];
+  queryMocks.cacheKeys = [];
   renderHook(
     () =>
       useProvidersPluginIcon({
@@ -57,17 +62,32 @@ function run(args: {
         scope: "global",
         workspaceRoot: null,
         pluginId: "github@m",
+        version: args.version,
         hasDarkIcon: args.hasDarkIcon,
         enabled: true,
       }),
     args.wrapper === undefined ? undefined : { wrapper: args.wrapper },
   );
+}
+
+function run(args: {
+  readonly hasDarkIcon: boolean;
+  readonly wrapper: ((p: { children: ReactNode }) => ReactNode) | undefined;
+}): string {
+  render({ ...args, version: "1.0.0" });
   // `.at(0)` rather than `[0]`: indexing types as non-optional here, so the
   // guard would read as dead code to the linter. The guard is what turns "the
   // hook issued no query at all" into a named failure instead of a TypeError.
   const first = queryMocks.params.at(0);
   if (first === undefined) throw new Error("hook issued no query");
   return first.native.theme;
+}
+
+function cacheKey(version: string | null): ReadonlyArray<unknown> {
+  render({ hasDarkIcon: false, version, wrapper: undefined });
+  const first = queryMocks.cacheKeys.at(0);
+  if (first === undefined) throw new Error("hook issued no query");
+  return first;
 }
 
 describe("useProvidersPluginIcon theme selection", () => {
@@ -100,5 +120,38 @@ describe("useProvidersPluginIcon theme selection", () => {
     // and must never be the reason a settings pane fails to render, so this
     // hook reads the context directly and falls back.
     expect(run({ hasDarkIcon: true, wrapper: undefined })).toBe("light");
+  });
+});
+
+describe("useProvidersPluginIcon cache identity", () => {
+  beforeEach(() => {
+    queryMocks.params = [];
+    queryMocks.cacheKeys = [];
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("varies the cache identity by installed version", () => {
+    // `staleTime: Infinity` + `poll: false` means this query is never refetched
+    // on its own, and the WIRE request carries no version (the host serves the
+    // newest install). So the version has to reach the cache key, or a plugin
+    // upgraded outside the app would keep serving the previous artwork for the
+    // rest of the session.
+    expect(cacheKey("1.0.0")).not.toEqual(cacheKey("2.0.0"));
+  });
+
+  it("keeps the identity stable for an unchanged version", () => {
+    // The other half of the rule: re-rendering the same installed version must
+    // not mint a new key, or every render would re-fetch the same bytes.
+    expect(cacheKey("1.0.0")).toEqual(cacheKey("1.0.0"));
+  });
+
+  it("carries a null version rather than dropping the slot", () => {
+    // An older host sends no version at all. The slot still has to be present
+    // and distinct from a real version, so the two never collide in the cache.
+    expect(cacheKey(null)).not.toEqual(cacheKey("1.0.0"));
+    expect(cacheKey(null)).toContain(null);
   });
 });

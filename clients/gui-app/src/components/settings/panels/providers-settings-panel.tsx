@@ -120,10 +120,14 @@ function initialActiveTab(
   const state =
     providers.find((p) => p.providerId === providerId) ?? providers[0];
   const tabs = resolveSupportedTabs(providerTabInputs(state));
-  // `focusTab` stays typed as the WIRE tab: a deep link is an inbound contract
-  // (route search / other surfaces), and `account` is client-only, so nothing
-  // outside this pane can name it. `ProviderSettingsTab ⊂ ProviderTabKey`, so
-  // the comparison below still narrows correctly.
+  // `focusTab` is a plain `string` in the store, so a deep link CAN name the
+  // client-only `account` tab even though it is absent from the wire enum -
+  // the match below is against the resolved tab list, not the schema. No
+  // caller sets it today; the "Add API key" CTA passes only `focusHarnessId`
+  // and therefore lands on `tabs[0]`, which is `general` for every provider
+  // that has one. That predates the Account/Usage split (the key field sat on
+  // `usage`, also not first) and is a CTA-side change, not one this pane can
+  // make on its own.
   const focusTab = useProvidersFocusStore.getState().focusTab;
   if (focusTab !== null) {
     const match = tabs.find((tab) => tab === focusTab);

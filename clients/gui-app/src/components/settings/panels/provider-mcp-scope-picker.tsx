@@ -24,6 +24,11 @@ import {
 } from "@/components/ui/popover";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+// The SAME basename rule `provider-mcp-tab.tsx` uses to build every
+// `McpScopeTarget.name` this picker renders. A second local implementation
+// would let the trigger's fallback title and the row title disagree about the
+// same path the moment either one is tweaked.
+import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { cn } from "@/lib/utils";
 
 /**
@@ -76,7 +81,6 @@ export function McpScopePicker(props: {
   readonly targets: readonly McpScopeTarget[];
   readonly workspaceRoot: string | null;
   readonly loading: boolean;
-  readonly disabled: boolean;
   /**
    * Opens the host's folder picker and adds the result to this host's
    * workspaces. Null when no host is bound to add folders to.
@@ -93,7 +97,6 @@ export function McpScopePicker(props: {
     targets,
     workspaceRoot,
     loading,
-    disabled,
     onBrowse,
     browsePending,
   } = props;
@@ -120,12 +123,16 @@ export function McpScopePicker(props: {
         align="start"
       >
         <PopoverTrigger
-          disabled={disabled}
-          aria-label="MCP config location"
+          // The DESTINATION is in the accessible name, not only the static
+          // role. `aria-label` replaces the visible text outright, so the bare
+          // "MCP config location" told a screen-reader user what the control
+          // is for while withholding the one thing it displays - which of
+          // Global or a specific project it currently points at. That is the
+          // whole content of the trigger for a sighted user.
+          aria-label={`MCP config location: ${triggerTitle}`}
           className={cn(
             "flex h-7 w-[min(100%,22rem)] min-w-0 items-center gap-2 rounded-sm border border-border bg-background px-2.5 text-left text-ui-sm transition-colors",
             "hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-            "disabled:pointer-events-none disabled:opacity-50",
             "dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
           )}
         >
@@ -288,7 +295,7 @@ function triggerContent(args: {
     // A stored selection that still validates but whose metadata has not
     // resolved yet: name the path's own basename rather than falling back to a
     // scope word the user never chose.
-    return { title: workspaceFallbackName(args.workspaceRoot), detail: "" };
+    return { title: workspaceFolderName(args.workspaceRoot), detail: "" };
   }
   return {
     title: "Choose a workspace",
@@ -306,9 +313,4 @@ function BranchTag(props: { readonly branch: string }): ReactNode {
       {props.branch}
     </span>
   );
-}
-
-function workspaceFallbackName(path: string): string {
-  const parts = path.split(/[\\/]/).filter((part) => part.length > 0);
-  return parts[parts.length - 1] ?? path;
 }

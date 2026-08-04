@@ -55,6 +55,7 @@ import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-w
 import { useHostBinding } from "@/lib/host";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { redactLogText } from "@/lib/logger";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { cn } from "@/lib/utils";
 import type { McpPendingAuthEntry } from "@/stores/settings/mcp-pending-auth-store";
@@ -75,6 +76,44 @@ function resolveLockedScope(
 ): ProviderNativeScope {
   if (supportsProject && !supportsGlobal) return "project";
   return "global";
+}
+
+/**
+ * Which project root this tab is pointed at: the stored selection when it
+ * still names something offered, else the single workspace of a one-workspace
+ * host, else nothing.
+ *
+ * Extracted rather than inlined in `useMcpScope` because the middle case has a
+ * timing condition that reads as noise beside the hook's other work — and it
+ * is the case that matters. `targetPaths` gains WORKTREE paths only once the
+ * worktree query resolves, so until then a stored worktree selection fails the
+ * membership test and looks indistinguishable from "nothing selected". Taking
+ * the single-workspace default in that window silently retargets the PARENT
+ * repo, and this value drives both the list and every add/remove — so an
+ * action landing there writes a different repo's `.mcp.json`.
+ *
+ * Gating on `worktreesPending` is safe only because it guards the branch that
+ * already requires exactly one workspace, which is precisely when that query is
+ * enabled. With zero workspaces it is disabled and stays pending forever, so a
+ * wider gate here would strand the empty-host states behind it.
+ */
+function resolveWorkspaceRoot(args: {
+  readonly selected: string | undefined;
+  readonly targetPaths: readonly string[];
+  readonly hostPaths: readonly string[];
+  readonly worktreesPending: boolean;
+}): string | null {
+  const { selected, targetPaths, hostPaths, worktreesPending } = args;
+  // Validated against every offered target, not just the open workspaces, so a
+  // stored worktree selection survives a reload.
+  if (selected !== undefined && targetPaths.includes(selected)) return selected;
+  if (selected !== undefined && worktreesPending) return null;
+  // Still defaults the single-workspace host to its one workspace - but the
+  // picker now RENDERS that as a selected control instead of a static line, so
+  // the default is visible as a choice that can be changed (including to one
+  // of that repo's worktrees).
+  if (hostPaths.length === 1) return hostPaths[0];
+  return null;
 }
 
 /**
@@ -332,21 +371,12 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
   );
 
   const selected = hostId === null ? undefined : selectedByHostId[hostId];
-  // Validated against every offered target, not just the open workspaces, so a
-  // stored worktree selection survives a reload.
-  const selectedValid =
-    selected !== undefined && targetPaths.includes(selected) ? selected : null;
-
-  let workspaceRoot: string | null = null;
-  if (selectedValid !== null) {
-    workspaceRoot = selectedValid;
-  } else if (hostPaths.length === 1) {
-    // Still defaults the single-workspace host to its one workspace - but the
-    // picker now RENDERS that as a selected control instead of a static line,
-    // so the default is visible as a choice that can be changed (including to
-    // one of that repo's worktrees).
-    workspaceRoot = hostPaths[0];
-  }
+  const workspaceRoot = resolveWorkspaceRoot({
+    selected,
+    targetPaths,
+    hostPaths,
+    worktreesPending: worktreeQuery.isPending,
+  });
 
   const setWorkspaceRoot = useCallback(
     (path: string) => {
@@ -393,10 +423,6 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
   const projectNeedsWorkspace =
     effectiveScope === "project" && workspaceRoot === null;
   const listWorkspaceRoot = effectiveScope === "global" ? null : workspaceRoot;
-  // Project is only fully disabled when this host has zero resolvable
-  // workspaces. Multi with no selection still enables Project so the picker
-  // can be shown for first-use.
-  const projectDisabled = hostPaths.length === 0 && !resolved.isLoading;
 
   return {
     hostId,
@@ -410,7 +436,6 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
     effectiveScope,
     setScope,
     projectNeedsWorkspace,
-    projectDisabled,
     listWorkspaceRoot,
     listEnabled: !projectNeedsWorkspace,
     // Only the workspace resolution gates the empty states. The worktree query
@@ -441,7 +466,6 @@ export function ProviderMcpTab(props: {
     effectiveScope,
     setScope,
     projectNeedsWorkspace,
-    projectDisabled,
     listWorkspaceRoot,
     listEnabled,
     workspacesLoading,
@@ -856,11 +880,26 @@ export function ProviderMcpTab(props: {
   // becomes the selection - otherwise the picker closes back onto Global and
   // the add reads as having done nothing.
   const handleBrowse = useCallback(() => {
-    void browseForWorkspace().then((path) => {
-      if (path === null) return;
-      setWorkspaceRoot(path);
-      setScope("project");
-    });
+    void browseForWorkspace()
+      .then((path) => {
+        if (path === null) return;
+        setWorkspaceRoot(path);
+        setScope("project");
+      })
+      // `pickAndPrepareFolders` guards only its `prepareFoldersAsync` call; the
+      // pickers upstream of it (`runnerHost.workspaceFolders.pickFolders()`,
+      // `openRemoteWorkspacePathPicker`) are awaited bare, so a failure there
+      // rejects out of `browseForWorkspace`. Without this the rejection is
+      // unhandled and the user is told nothing at all - the popover simply
+      // stays as it was, which reads as the click having missed.
+      .catch(() => {
+        reportableErrorToast("Couldn't open the folder picker.", undefined, {
+          title: "Could not add workspace folders",
+          message: "The folder picker failed to open.",
+          code: null,
+          source: "Workspace folders",
+        });
+      });
   }, [browseForWorkspace, setScope, setWorkspaceRoot]);
 
   const handleDialogOpenChange = useCallback((open: boolean) => {
@@ -892,7 +931,6 @@ export function ProviderMcpTab(props: {
         workspacesLoading={workspacesLoading}
         canAdd={canAdd}
         projectNeedsWorkspace={projectNeedsWorkspace}
-        projectDisabled={projectDisabled}
         browsePending={browsePending}
         onBrowse={handleBrowse}
         onScopeChange={setScope}
@@ -981,7 +1019,6 @@ function McpScopeHeader(props: {
   readonly workspacesLoading: boolean;
   readonly canAdd: boolean;
   readonly projectNeedsWorkspace: boolean;
-  readonly projectDisabled: boolean;
   readonly browsePending: boolean;
   readonly onBrowse: () => void;
   readonly onScopeChange: (scope: ProviderNativeScope) => void;
@@ -993,15 +1030,15 @@ function McpScopeHeader(props: {
   // wording is the same promise the Global row makes inside the picker, so the
   // two surfaces never describe the same scope differently.
   const globalOnly = !props.multiScope && props.effectiveScope === "global";
-  // Zero resolvable workspaces AND no Global to fall back to: there is nothing
-  // to pick. With Global available the picker stays live so Global is still
-  // reachable. Computed here rather than inline in the prop because
-  // `jsx-no-leaked-render`'s autofix rewrites an inline `a && b` into
-  // `a ? b : null`, which silently widens a boolean prop to `boolean | null`.
-  // NOTE: this no longer needs to cover "zero workspaces" on its own - the
-  // picker now carries the add-a-folder action, so an empty list is a state
-  // the user can act on rather than a dead control.
-  const pickerDisabled = props.projectDisabled && !props.multiScope;
+
+  // The picker is NEVER disabled, and that is load-bearing rather than an
+  // oversight. It used to go dead on "zero resolvable workspaces and no Global
+  // to fall back to" - which is precisely the project-only provider on a host
+  // this client has opened no folders on. The add-a-folder action lives INSIDE
+  // the popover, so disabling the trigger sealed off the only way out of that
+  // state: no workspaces, no way to add one, and Project is the only scope.
+  // An empty list is now something the user can act on, so the trigger stays
+  // live and the popover explains itself.
 
   // One toolbar row, two controls of the SAME height (`h-7` / `size="sm"`).
   // `items-center` rather than `items-start`: nothing here is taller than one
@@ -1019,7 +1056,6 @@ function McpScopeHeader(props: {
           targets={props.targets}
           workspaceRoot={props.workspaceRoot}
           loading={props.workspacesLoading}
-          disabled={pickerDisabled}
           browsePending={props.browsePending}
           onBrowse={props.onBrowse}
           onSelectGlobal={() => {

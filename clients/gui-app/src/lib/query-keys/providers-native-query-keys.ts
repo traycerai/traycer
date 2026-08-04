@@ -142,11 +142,18 @@ export const providersNativeQueryKeys = {
     "plugins",
   ],
 
+  // `version` rides the KEY but not `nativePluginIconParams` - it is cache
+  // identity, not a request field. The host always serves the newest installed
+  // version, so the request needs only the id; the version is what retires the
+  // previous version's entry, which `staleTime: Infinity` would otherwise
+  // strand. Must stay in step with `useProvidersPluginIcon`'s
+  // `cacheKeyIdentity`, or a key built here would address nothing.
   pluginIcon: (
     hostId: string | null,
     params: NativeListScopeParams & {
       readonly pluginId: string;
       readonly theme: ProviderPluginIconTheme;
+      readonly version: string | null;
     },
   ): QueryKey => [
     ...hostQueryKeys.method<HostRpcRegistry, "providers.list">(
@@ -157,6 +164,7 @@ export const providersNativeQueryKeys = {
     "providers",
     "native",
     "pluginIcon",
+    params.version,
   ],
 
   skillsList: (

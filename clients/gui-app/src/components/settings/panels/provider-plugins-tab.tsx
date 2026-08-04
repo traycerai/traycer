@@ -420,6 +420,11 @@ function PluginRow({
     scope: "global",
     workspaceRoot: null,
     pluginId: plugin.id,
+    // Cache identity, not a request field: an upgrade installed outside the
+    // app arrives on this list, and without it here the icon query - which is
+    // `staleTime: Infinity`, `poll: false` - would serve the old version's
+    // artwork for the rest of the session.
+    version: plugin.version,
     hasDarkIcon: plugin.hasDarkIcon === true,
     enabled: plugin.hasIcon === true,
   });

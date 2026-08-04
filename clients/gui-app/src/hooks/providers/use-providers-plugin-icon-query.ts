@@ -25,9 +25,14 @@ import { nativePluginIconParams } from "@/lib/query-keys/providers-native-query-
  * a set of images that essentially never change.
  *
  * Hence the inverse cache policy here: `staleTime: Infinity`. A plugin's icon
- * is immutable for a given installed version, and the version is part of what
- * the host resolves, so a genuine change arrives as a new list rather than as
- * a stale icon.
+ * is immutable for a given installed VERSION - which is why the version has to
+ * be part of the cache identity. The wire request addresses the plugin by id
+ * alone (the host always reads the newest installed version), so without this
+ * an upgrade performed outside the app would leave the old artwork cached for
+ * the rest of the session: `staleTime: Infinity` and `poll: false` mean this
+ * query is never refetched on its own, and the new version arrives only on the
+ * LIST. `cacheKeyIdentity` exists for exactly this shape - a stable resource id
+ * whose cached representation must vary by a content identity.
  *
  * Callers should pass `enabled: plugin.hasIcon` - the list already reports
  * whether artwork exists, so rows without it never make the round trip.
@@ -37,6 +42,12 @@ export function useProvidersPluginIcon(args: {
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
   readonly pluginId: string;
+  /**
+   * The installed version from the list row. Cache identity only - it is not
+   * sent, because the host resolves the newest version itself. A change here
+   * is what retires the previous version's artwork.
+   */
+  readonly version: string | null;
   /** From the list row - see `theme` below for why it gates the request. */
   readonly hasDarkIcon: boolean;
   readonly enabled: boolean;
@@ -59,7 +70,7 @@ export function useProvidersPluginIcon(args: {
     "providers.list",
     PluginIconData
   >({
-    cacheKeyIdentity: ["providers", "native", "pluginIcon"],
+    cacheKeyIdentity: ["providers", "native", "pluginIcon", args.version],
     client,
     method: "providers.list",
     params: nativePluginIconParams({
@@ -78,8 +89,9 @@ export function useProvidersPluginIcon(args: {
       // this would put every icon on a refetch timer - and `refetchInterval`
       // fires regardless of `staleTime`, so the Infinity above would not save
       // it. That is precisely the megabytes-on-a-timer this hook exists to
-      // avoid. An installed plugin's artwork is immutable anyway; a new
-      // version arrives as a new list, not as a stale icon.
+      // avoid. An installed plugin's artwork is immutable for its version, and
+      // `cacheKeyIdentity` above carries that version, so an upgrade retires
+      // the old entry rather than needing a refetch of the unchanged one.
       poll: false,
       // No `retry` here: `providers.list` is a condition-polled method, so the
       // shared poll table already pins `retry: false` and the option is typed

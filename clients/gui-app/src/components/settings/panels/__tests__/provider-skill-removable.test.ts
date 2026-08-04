@@ -35,6 +35,17 @@ describe("skillRemovability", () => {
     });
   });
 
+  it("hides removal when only `project` is advertised", () => {
+    // The tab is global-scoped end to end: it lists with `scope: "global"` and
+    // `onRemove` sends the same. A provider advertising only `project`
+    // satisfies "some remove scope exists" while the request the button
+    // actually issues is one the host must refuse - which is the always-fails
+    // button this module exists to prevent.
+    expect(
+      skillRemovability({ removeScopes: ["project"], source: "shared" }),
+    ).toEqual({ kind: "hidden" });
+  });
+
   it("prefers `hidden` over `blocked` when neither condition holds", () => {
     // A built-in skill under a provider that cannot remove anything: there is
     // nothing actionable to explain, so say nothing.
