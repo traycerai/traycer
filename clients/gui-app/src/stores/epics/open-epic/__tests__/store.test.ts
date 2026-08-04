@@ -2881,6 +2881,48 @@ describe("createOpenEpicStore", () => {
       }
     });
 
+    it("replays presence that arrived while a room was cold", async () => {
+      // A room the local user has never opened has no `Awareness` instance, so
+      // inbound presence frames have nowhere to land. Dropping them left a
+      // collaborator already sitting in the body invisible until their next
+      // renewal (y-protocols refreshes local state every outdatedTimeout/2).
+      const { Awareness: PeerAwareness, encodeAwarenessUpdate } =
+        await import("y-protocols/awareness");
+      const { opened, handle } = openWithReadyRoom(
+        "epic-cold-presence",
+        "shared body",
+      );
+      // Cold: snapshotted, never leased.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const peerDoc = new Y.Doc();
+      const peer = new PeerAwareness(peerDoc);
+      peer.setLocalState({ userName: "Peer" });
+      handle().callbacks.onArtifactRoomAwareness(
+        "artifact-room-0",
+        encodeAwarenessUpdate(peer, [peer.clientID]),
+      );
+      // Still cold - presence must not be what materializes a room.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const release = opened.store.getState().acquireArtifactBodyLease("art-1");
+      const awareness = opened.store
+        .getState()
+        .getArtifactBodyAwareness("art-1");
+      if (awareness === null) throw new Error("missing awareness");
+
+      const seen = Array.from(awareness.getStates().entries()).filter(
+        ([clientId]) => clientId !== awareness.clientID,
+      );
+      expect(seen).toHaveLength(1);
+      expect(seen[0][1]).toMatchObject({ userName: "Peer" });
+
+      release();
+      peer.destroy();
+      peerDoc.destroy();
+      opened.dispose();
+    });
+
     it("keeps a room hot while a remote collaborator is present in it", async () => {
       const { Awareness: PeerAwareness, encodeAwarenessUpdate } =
         await import("y-protocols/awareness");

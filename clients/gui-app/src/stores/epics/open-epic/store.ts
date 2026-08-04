@@ -855,6 +855,18 @@ export function createOpenEpicStore(
      * See `pushColdArtifactRoomUpdate` for why the total must not be used. */
     bytesSinceCollapse: number;
     latestHostStateVectorBase64: string | null;
+    /**
+     * Recent remote awareness frames, replayed when the room materializes.
+     *
+     * A cold room has no `Awareness` instance, so inbound presence frames
+     * would otherwise be dropped and a collaborator already sitting in the
+     * body would be invisible when the local user finally opens it. Bounded
+     * because these arrive continuously: y-protocols renews each client's
+     * state every `outdatedTimeout / 2` (15s), so the newest few frames
+     * always cover every currently-present peer, and anything staler than
+     * `outdatedTimeout` is culled by Awareness itself after replay.
+     */
+    awarenessFrames: Uint8Array[];
   };
   const coldArtifactRooms = new Map<string, ColdArtifactRoomEntry>();
   /** Outstanding materialization leases per room id. A room with a live lease
@@ -869,6 +881,9 @@ export function createOpenEpicStore(
   const BIN_AWARENESS_REMOTE_ORIGIN = "artifact-room-stream-remote";
   const ROOM_PENDING_COLLAPSE_BYTES = 2 * 1024 * 1024;
   const ROOM_PENDING_COLLAPSE_ENTRIES = 32;
+  /** Frames retained per cold room; see `ColdArtifactRoomEntry.awarenessFrames`.
+   * One renewal cycle across a realistic number of collaborators. */
+  const COLD_ROOM_AWARENESS_FRAMES = 32;
   const COLD_ROOM_COLLAPSE_BYTES = 1024 * 1024;
   const COLD_ROOM_COLLAPSE_ENTRIES = 32;
   /**
@@ -1112,6 +1127,37 @@ export function createOpenEpicStore(
     );
   }
 
+  /**
+   * Encode the room's currently-known REMOTE peers as a single awareness
+   * update, for replay after a demote. The local client is excluded: the
+   * editor sets its own state when it rebinds, and replaying a stale copy of
+   * it would fight that.
+   */
+  function encodeArtifactRoomPeerAwareness(
+    entry: ArtifactRoomReplicaEntry,
+  ): Uint8Array[] {
+    const remote = Array.from(entry.awareness.getStates().keys()).filter(
+      (clientId) => clientId !== entry.awareness.clientID,
+    );
+    if (remote.length === 0) return [];
+    return [encodeAwarenessUpdate(entry.awareness, remote)];
+  }
+
+  function recordColdArtifactRoomAwareness(
+    artifactRoomId: string,
+    awarenessBytes: Uint8Array,
+  ): void {
+    const cold = coldArtifactRooms.get(artifactRoomId);
+    // Only rooms the host has actually snapshotted are worth holding presence
+    // for - an unseeded room cannot be materialized, so there is nothing to
+    // replay into.
+    if (cold === undefined) return;
+    cold.awarenessFrames.push(awarenessBytes);
+    while (cold.awarenessFrames.length > COLD_ROOM_AWARENESS_FRAMES) {
+      cold.awarenessFrames.shift();
+    }
+  }
+
   /** Any awareness client other than our own local one. */
   function hasRemoteArtifactRoomPeers(
     entry: ArtifactRoomReplicaEntry,
@@ -1190,6 +1236,7 @@ export function createOpenEpicStore(
         bytes: update.byteLength,
         bytesSinceCollapse: 0,
         latestHostStateVectorBase64: hostStateVectorBase64,
+        awarenessFrames: [],
       });
       return;
     }
@@ -1251,6 +1298,9 @@ export function createOpenEpicStore(
       bytes: encoded.byteLength,
       bytesSinceCollapse: 0,
       latestHostStateVectorBase64,
+      // Carry the peers this replica currently knows about across the demote,
+      // so cooling a room does not blank presence when it comes back.
+      awarenessFrames: encodeArtifactRoomPeerAwareness(entry),
     });
     return true;
   }
@@ -1324,6 +1374,12 @@ export function createOpenEpicStore(
     // get echoed back to the host as an outbound update.
     Y.applyUpdate(entry.doc, Y.mergeUpdates(cold.updates), BIN_STREAM_ORIGIN);
     entry.latestHostStateVectorBase64 = cold.latestHostStateVectorBase64;
+    // Replay presence that arrived while the room was cold, so a peer already
+    // in the body is visible immediately rather than after their next renewal.
+    // `BIN_AWARENESS_REMOTE_ORIGIN` keeps these from echoing back to the host.
+    for (const frame of cold.awarenessFrames) {
+      applyAwarenessUpdate(entry.awareness, frame, BIN_AWARENESS_REMOTE_ORIGIN);
+    }
     enforceHotArtifactRoomCap();
     armCooldownForUnleasedMaterialization(artifactRoomId);
     return entry;
@@ -1892,7 +1948,13 @@ export function createOpenEpicStore(
               // routing them through the root awareness would mis-attribute
               // cursors and lose the per-artifact-room presence channel.
               const entry = artifactRoomReplicas.get(artifactRoomId);
-              if (entry === undefined) return;
+              if (entry === undefined) {
+                // Cold room: retain the frame rather than dropping it. Without
+                // this a collaborator already present in a room this client
+                // has never opened stays invisible until their next renewal.
+                recordColdArtifactRoomAwareness(artifactRoomId, awarenessBytes);
+                return;
+              }
               applyAwarenessUpdate(
                 entry.awareness,
                 awarenessBytes,
