@@ -8,7 +8,6 @@ import {
   useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent,
@@ -85,6 +84,77 @@ const MUTED_PROSE = cn(
   "[--tw-prose-invert-bold:var(--color-muted-foreground)]",
 );
 
+/**
+ * Whether a click landing anywhere in the trace body was aimed at the
+ * disclosure, rather than at something inside it.
+ *
+ * Two things it is not. Reasoning markdown renders real controls - a code
+ * block's copy button, links, reference chips - and the listener spans the whole
+ * body, so without the first check the control's own click ALSO toggles: the
+ * copy runs and then the group promotes, opening, scrolling and taking focus for
+ * a gesture that asked for none of that. And a click ending a drag-selection
+ * *inside this block* is the reader copying text, not collapsing it; a stray
+ * selection elsewhere on the page must not swallow the click, which is why this
+ * is scoped to `node`.
+ */
+function bodyClickIsDisclosure(
+  event: MouseEvent,
+  node: HTMLDivElement,
+): boolean {
+  const target = event.target;
+  if (
+    target instanceof Element &&
+    target.closest("a, button, [role='button'], input, select, textarea")
+  ) {
+    return false;
+  }
+  const selection = window.getSelection();
+  return !(
+    selection !== null &&
+    !selection.isCollapsed &&
+    selection.anchorNode !== null &&
+    node.contains(selection.anchorNode)
+  );
+}
+
+/**
+ * Whether a click on the trace body can only PIN it open, never fold it.
+ *
+ * True for a finished headerless block outside the live window: its body shows
+ * because `headerless` shows it, there is no tail left to collapse to, and the
+ * click therefore changes no pixels. The write to `expanded` still matters
+ * later - it decides whether the trace survives a sibling arriving and giving
+ * this block a header - so the gesture is kept, but only in the direction the
+ * reader can be assumed to want. Toggling an invisible gesture means two
+ * identical clicks give opposite results with no feedback either way.
+ */
+function bodyClickOnlyPins(
+  headerless: boolean,
+  isStreaming: boolean,
+  promotes: boolean,
+): boolean {
+  return headerless && !isStreaming && !promotes;
+}
+
+/**
+ * Settles a blur that named no new focus owner, once the DOM has stopped
+ * moving. A control still in the document was LEFT BEHIND by the reader; a
+ * detached one was TAKEN AWAY by completion, and the focus handoff still needs
+ * to know it had the caret.
+ *
+ * A microtask rather than a re-render: resampling in a layout effect only works
+ * if some other commit happens to land between the click and the removal.
+ */
+function settleAmbiguousBlur(
+  control: HTMLElement,
+  onLeftBehind: () => void,
+): void {
+  queueMicrotask(() => {
+    if (!control.isConnected) return;
+    onLeftBehind();
+  });
+}
+
 function ReasoningContent(props: ReasoningContentProps) {
   const { className, markdown, isStreaming } = props;
   return (
@@ -131,22 +201,35 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   // selectable element: the header button is the keyboard/assistive-tech
   // control, and a click that ends a text selection (click-drag) must not
   // collapse the trace, so reasoning stays copyable.
+  // On a FINISHED headerless block the click changes no pixels: the body is
+  // shown because `headerless` shows it, not because `expanded` is set, and
+  // there is no tail to collapse back to. It still WRITES `expanded`, and that
+  // write is read later - when a sibling segment arrives and gives this block a
+  // header, `expanded` decides whether the trace the reader is looking at stays
+  // put or folds away under them.
+  //
+  // Keeping that pin is deliberate (see the `headerless` prop docs: `expanded`
+  // is the only signal that means intent). TOGGLING it is not: a second click,
+  // equally invisible, silently un-pins, so a reader clicking around in the
+  // trace gets opposite outcomes from identical gestures with no feedback
+  // either way. Where the gesture cannot be seen it only ever pins.
+  //
+  // `promote !== null` is excluded because inside the live window the click
+  // leaves the window, which is very much visible.
+  const bodyPinsOnly = bodyClickOnlyPins(
+    headerless,
+    isStreaming,
+    promote !== null,
+  );
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const bindBodyToggle = useCallback(
     (node: HTMLDivElement | null) => {
       bodyRef.current = node;
       if (node === null) return;
-      const onClick = () => {
-        const selection = window.getSelection();
-        // Suppress the toggle only when the click ends a text selection *within
-        // this block* (drag-to-copy); a stray selection elsewhere on the page
-        // must not swallow the click.
-        if (
-          selection !== null &&
-          !selection.isCollapsed &&
-          selection.anchorNode !== null &&
-          node.contains(selection.anchorNode)
-        ) {
+      const onClick = (event: MouseEvent) => {
+        if (!bodyClickIsDisclosure(event, node)) return;
+        if (bodyPinsOnly) {
+          setExpanded(true);
           return;
         }
         toggle();
@@ -160,7 +243,7 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
         if (bodyRef.current === node) bodyRef.current = null;
       };
     },
-    [toggle],
+    [bodyPinsOnly, toggle],
   );
 
   // The tail preview is this block's OWN bounded scroller. Inside a container
@@ -282,20 +365,28 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   }, []);
   const onHeaderBlur = useCallback(
     (event: FocusEvent<HTMLButtonElement>): void => {
-      if (event.relatedTarget === null) return;
-      headerFocusedRef.current = false;
+      if (event.relatedTarget !== null) {
+        headerFocusedRef.current = false;
+        return;
+      }
+      // A blur naming no new focus owner is TWO different events: the reader
+      // clicking a non-focusable transcript surface, and Chromium removing the
+      // focused control (jsdom dispatches nothing at all there). They are
+      // identical at dispatch time, so decide once the DOM has settled - a
+      // control still in the document was left behind, a detached one was taken
+      // away.
+      //
+      // A microtask, not a re-render. The previous version resampled focus in a
+      // layout effect, which is correct only if some OTHER commit lands between
+      // the click and the completion that removes the control; with no commit in
+      // between the stale reading survived and completion stole focus back. This
+      // runs off the event itself, so it does not depend on a render arriving.
+      settleAmbiguousBlur(event.target, () => {
+        headerFocusedRef.current = false;
+      });
     },
     [],
   );
-  useLayoutEffect(() => {
-    const trigger =
-      rootRef.current?.querySelector("[data-activity-row-trigger]") ?? null;
-    // No trigger means this commit is the one that removed it, so the reading
-    // below is left untouched - it is focus ownership as of the last commit
-    // that still had a control, which is what the handoff needs.
-    if (trigger === null) return;
-    headerFocusedRef.current = trigger === document.activeElement;
-  });
   const controlRemoved = headerless && !headerActionable;
   useEffect(() => {
     if (!controlRemoved || !headerFocusedRef.current) return;
