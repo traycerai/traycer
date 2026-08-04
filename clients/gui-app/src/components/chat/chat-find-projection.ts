@@ -2,6 +2,8 @@ import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
 import {
   answeredQuestionsSummary,
   buildChatActivityTimeline,
+  hidesSoleReasoningHeader,
+  reasoningBlockLabel,
 } from "@/components/chat/chat-activity-groups";
 import {
   deriveA2AReceivedCollapsibleKey,
@@ -27,7 +29,6 @@ import {
   planHeadline,
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
-import { formatClockDuration } from "@/lib/format-duration";
 import { formatSingleLine } from "@/lib/utils";
 import type {
   ActivityGroupModel,
@@ -234,32 +235,47 @@ function activityGroupSearchUnits(
   tileInstanceId: string,
 ): ReadonlyArray<ChatFindUnit> {
   const groupKey = deriveActivityGroupCollapsibleKey(tileInstanceId, group.id);
+  // Hoisted: a group property, not a per-child one, and computing it inside the
+  // flatMap would walk the segment list once per segment.
+  const headerlessReasoning = hidesSoleReasoningHeader(group.segments);
   return compactUnits([
     chatFindUnit({
       unitId: chatFindActivityGroupSummaryUnitId(group.id),
       text: group.label,
       owningChain: [],
     }),
-    // Unconditional. A reveal force-opens the group, and every child renders
-    // headed - with its own anchor - in both the live window and the expanded
-    // body, so each of these units has somewhere to paint.
+    // A reveal force-opens the group, and every child that renders a header
+    // renders it in both the live window and the expanded body, so each of
+    // these units has somewhere to paint. The ONE child that renders no header
+    // is a group's sole reasoning block, and it is skipped below - its label is
+    // already the group summary's own leading clause, so nothing leaves the
+    // index with it.
     ...group.segments.flatMap((segment) =>
-      activityGroupChildSearchUnits(
+      activityGroupChildSearchUnits({
         segment,
-        group.id,
-        [groupKey],
+        groupId: group.id,
+        groupChain: [groupKey],
         tileInstanceId,
-      ),
+        headerlessReasoning,
+      }),
     ),
   ]);
 }
 
+interface ActivityGroupChildSearchUnitsArgs {
+  readonly segment: ActivityGroupModel["segments"][number];
+  readonly groupId: string;
+  readonly groupChain: ReadonlyArray<ChatCollapsibleKey>;
+  readonly tileInstanceId: string;
+  /** The group's sole reasoning block renders unheaded, so it has no anchor. */
+  readonly headerlessReasoning: boolean;
+}
+
 function activityGroupChildSearchUnits(
-  segment: ActivityGroupModel["segments"][number],
-  groupId: string,
-  groupChain: ReadonlyArray<ChatCollapsibleKey>,
-  tileInstanceId: string,
+  args: ActivityGroupChildSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
+  const { segment, groupId, groupChain, tileInstanceId } = args;
+  if (segment.kind === "reasoning" && args.headerlessReasoning) return [];
   if (segment.kind === "subagent") {
     const renderId = segment.id;
     return subagentSegmentSearchUnits({
@@ -662,8 +678,7 @@ function subagentBodySearchText(
 function reasoningSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "reasoning" }>,
 ): ReadonlyArray<string> {
-  if (segment.isStreaming) return ["Thinking"];
-  return [reasoningSummaryLabel(segment.durationMs)];
+  return [reasoningBlockLabel(segment.isStreaming, segment.durationMs)];
 }
 
 // Index ONLY what the inline plan card renders: the headline, the status badge
@@ -804,10 +819,4 @@ function changeCountLabel(fileCount: number, artifactCount: number): string {
     parts.push(`${artifactCount} artifact${artifactCount > 1 ? "s" : ""}`);
   }
   return parts.join(" ");
-}
-
-function reasoningSummaryLabel(durationMs: number | null): string {
-  if (durationMs === null) return "Thought";
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  return `Thought for ${formatClockDuration(seconds)}`;
 }

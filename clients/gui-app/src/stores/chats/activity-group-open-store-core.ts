@@ -27,6 +27,30 @@ export function createActivityGroupOpenStore(
         }
         return { openIds: next };
       }),
+    // Deliberately NOT seeded from the durable mirror, and entries are never
+    // deleted or evicted once added.
+    // It is a one-way record for as long as the tab lives: nothing that happens
+    // to a group can un-show a header it already showed. Reopening a closed chat
+    // is a fresh read, so starting empty there is right - the trace has not
+    // vanished from under anyone.
+    headedIds: new Set<string>(),
+    markHeaded: (segmentIds) =>
+      set((state) => {
+        if (segmentIds.every((id) => state.headedIds.has(id))) return state;
+        // UNCAPPED, unlike `openIds`, and the asymmetry is the point. A FIFO cap
+        // here is not a cap, it is amnesia: evicting the oldest entry erases the
+        // fact that a header was once on screen, so the next remount of that
+        // group drops the header and unfolds a completed trace - the exact
+        // discontinuity this set exists to prevent, just delayed until the 257th
+        // group. A bound that can forget cannot back a latch.
+        //
+        // The growth is bounded by "reasoning blocks in this tab that have shown
+        // a header", which is proportional to the transcript the tab is already
+        // holding in memory, and each entry is one short id.
+        const next = new Set(state.headedIds);
+        for (const id of segmentIds) next.add(id);
+        return { headedIds: next };
+      }),
   }));
 }
 
