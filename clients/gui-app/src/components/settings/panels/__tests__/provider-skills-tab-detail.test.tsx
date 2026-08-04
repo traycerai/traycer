@@ -5,7 +5,13 @@ import type {
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 
@@ -134,6 +140,24 @@ function renderTab(): void {
   render(<ProviderSkillsTab state={skillsState()} />);
 }
 
+/**
+ * The confirmation's destructive button, by role.
+ *
+ * Scoped through the dialog rather than queried globally even though a bare
+ * `getByRole("button", { name: "Remove" })` happens to work: the skill dialog
+ * behind it has its own "Remove", and the only reason that one is not also a
+ * match is that Radix `aria-hidden`s the background while a modal is open. So
+ * the global query returns the CONFIRM button here and the SKILL dialog's
+ * button two lines later, which reads as a bug even when it isn't. Scoping
+ * says which one is meant.
+ */
+function confirmAction(): HTMLElement {
+  return within(screen.getByTestId("confirm-destructive-dialog")).getByRole(
+    "button",
+    { name: "Remove" },
+  );
+}
+
 const FIND_SKILLS: ProviderSkill = {
   name: "find-skills",
   description: "Helps users discover and install agent skills.",
@@ -258,7 +282,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     const confirm = screen.getByTestId("confirm-destructive-dialog");
     expect(confirm.textContent).toContain(FIND_SKILLS.name);
 
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(confirmAction());
 
     // The host re-lists and matches on BOTH before deleting anything, so a
     // request carrying only one of them could not be refused when stale.
@@ -295,7 +319,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(false);
 
     fireEvent.click(remove);
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(confirmAction());
 
     // The native `disabled` property, not `toBeDisabled()`: jest-dom's
     // matchers are not wired into this suite, so the matcher would be
@@ -328,7 +352,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     renderTab();
     fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(confirmAction());
 
     // The open skill no longer exists on disk; leaving its dialog up would
     // leave a readFile pointed at a deleted path.
@@ -352,7 +376,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     renderTab();
     fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(confirmAction());
 
     // The confirmation closes (re-confirming what just failed is not the next
     // step) but the skill dialog stays - the tab's own error banner would be
