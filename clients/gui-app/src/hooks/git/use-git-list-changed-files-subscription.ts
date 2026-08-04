@@ -513,6 +513,14 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     sessionClosed = true;
     session.close();
     shared.lastEvent = event;
+    // Terminal teardown DROPS watcher health, unlike a non-fatal error frame
+    // which preserves it. The distinction is whether anything is still
+    // arriving: a failing git compute keeps polling, so "refreshing on a
+    // timer" stays true, but a fatal frame or a closed transport means no
+    // frame will ever arrive again. Keeping the notice there would promise
+    // periodic refreshes that have permanently stopped - most misleading in
+    // the panel, where cached data keeps the view looking alive.
+    shared.lastWatcherStatus = null;
     settleSharedRefresh(shared, subscriptionKeyFor(wsStreamClient, args));
     notifyConsumers(shared);
   };

@@ -54,4 +54,15 @@ describe("<GitWatcherStatusNotice />", () => {
       "Periodic refresh",
     );
   });
+
+  it("exposes a keyboard-focusable trigger", () => {
+    // The tooltip carries the entire explanation AND the remedy, so the
+    // trigger has to be reachable without a pointer. An `asChild` <span>
+    // renders identically and silently fails this.
+    renderNotice({ state: "degraded-capacity", detail: "over budget" });
+    const trigger = screen.getByTestId(NOTICE);
+    expect(trigger.tagName).toBe("BUTTON");
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+  });
 });

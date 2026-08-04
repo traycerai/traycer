@@ -1709,6 +1709,42 @@ describe("useGitListChangedFilesSubscription", () => {
       });
     });
 
+    it("drops watcher health when the stream terminates for good", async () => {
+      // The mirror of the test above, and the distinction is whether anything
+      // is still arriving. A non-fatal git error keeps polling, so "refreshing
+      // on a timer" stays true; a fatal frame means no frame will ever arrive
+      // again, and continuing to promise periodic refreshes is a lie the
+      // panel is especially good at hiding behind cached data.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      session.emitFrame(
+        { type: "error", message: "fatal git error", isFatal: true },
+        null,
+      );
+      await waitFor(() => expect(result.current.error).not.toBeNull());
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("drops watcher health when the transport closes", async () => {
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      // A closed transport produces no domain error frame at all, so this
+      // path has to clear the value on its own.
+      session.emitStatus("closed", { kind: "caller" });
+      await waitFor(() => expect(result.current.error).not.toBeNull());
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
     it("clears watcher health when the connection renegotiates below 1.3", async () => {
       // Cold-review finding: writing `lastWatcherStatus` only when the field
       // is PRESENT makes it a latch. The same client instance can reconnect to

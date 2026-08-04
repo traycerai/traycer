@@ -66,20 +66,24 @@ export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5",
-            "text-ui-xs text-muted-foreground/70",
-            "cursor-default select-none",
-            props.className,
-          )}
-          data-testid="git-watcher-status-notice"
-          data-watcher-state={status.state}
-        >
-          <Icon className="size-3.5 text-muted-foreground/60" />
-          {copy.label}
-        </span>
+      {/* A real focusable trigger, NOT an `asChild` span. The tooltip carries
+          the entire explanation and the remedy, so a non-focusable trigger
+          would leave keyboard-only users with the two-word label and no way to
+          reach the reason for it. Radix's default trigger is a button, which
+          also gives the label to assistive tech. */}
+      <TooltipTrigger
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5",
+          "text-ui-xs text-muted-foreground/70",
+          "cursor-default select-none",
+          "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
+          props.className,
+        )}
+        data-testid="git-watcher-status-notice"
+        data-watcher-state={status.state}
+      >
+        <Icon className="size-3.5 text-muted-foreground/60" />
+        {copy.label}
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
         <p>{copy.explanation}</p>
