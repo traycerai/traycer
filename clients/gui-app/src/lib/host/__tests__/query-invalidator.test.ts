@@ -60,7 +60,7 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     }
   });
 
-  it("with refetchActive: true, refetches non-catalog host queries but only marks catalog methods stale", async () => {
+  it("with refetchActive: true, refetches non-catalog host queries and leaves catalog methods entirely untouched", async () => {
     const queryClient = createAppQueryClient();
     const invalidator = createHostQueryInvalidator(queryClient);
 
@@ -96,12 +96,65 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     expect(models.fetches.count).toBe(1);
     expect(commands.fetches.count).toBe(1);
 
-    expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(true);
+    // NOT invalidated - see the next test for why the flag itself matters.
+    expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(listCommandsKey)?.isInvalidated).toBe(
-      true,
+      false,
     );
     // Control refetched successfully, so the invalidation flag clears.
     expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
+  });
+
+  // Codex review, PR #977 thread PRRT_kwDOL6Tbrc6WdeIO: "Do not invalidate
+  // cache-only catalog queries during recovery". Marking them stale without
+  // a refetch is not enough - TanStack treats an invalidated query as stale
+  // regardless of `staleTime`, so the storm is deferred to the next mount,
+  // not prevented. The picker creates one enabled `listModels` observer per
+  // harness on open, so that mount is where all ~14 probes would land.
+  // This is the load-bearing half of the argument, pinned in-suite because it
+  // is the non-obvious part: `staleTime: Infinity` does NOT protect a query
+  // that carries `isInvalidated`. `Query.isStaleByTime` returns true on the
+  // invalidated flag BEFORE it ever consults the time budget
+  // (query-core 5.101.4, `query.js:134`), and `shouldFetchOnMount` routes
+  // through exactly that. So "mark stale without refetching" only moves the
+  // fan-out to the next mount. The test above asserts the sweep leaves the
+  // flag off; this one shows what that flag would have cost.
+  it("an invalidated cache-only entry DOES refetch on the next mount (the cost the carve-out avoids)", async () => {
+    const queryClient = createAppQueryClient();
+
+    const models = mountCountedQuery(queryClient, listModelsKey, {
+      staleTime: Infinity,
+      impl: () => Promise.resolve({ models: ["a"] }),
+    });
+    stops.push(models.stop);
+    await waitUntil(() => models.fetches.count === 1);
+
+    // Control mount with the entry still clean: cache-only means no fetch.
+    models.stop();
+    const clean = mountCountedQuery(queryClient, listModelsKey, {
+      staleTime: Infinity,
+      impl: () => Promise.resolve({ models: ["a"] }),
+    });
+    stops.push(clean.stop);
+    await settle(30);
+    expect(clean.fetches.count).toBe(0);
+
+    // Now flag it exactly as a `refetchType: "none"` sweep would have, and
+    // remount: the picker re-probes despite staleTime: Infinity.
+    clean.stop();
+    await queryClient.invalidateQueries({
+      queryKey: listModelsKey,
+      refetchType: "none",
+    });
+    expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(true);
+
+    const afterInvalidation = mountCountedQuery(queryClient, listModelsKey, {
+      staleTime: Infinity,
+      impl: () => Promise.resolve({ models: ["a"] }),
+    });
+    stops.push(afterInvalidation.stop);
+    await waitUntil(() => afterInvalidation.fetches.count === 1);
+    expect(afterInvalidation.fetches.count).toBe(1);
   });
 
   it("with refetchActive: false, marks every host-scoped query stale without refetching", async () => {
@@ -174,7 +227,14 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
 
     await settle(20);
     // Carve-out holds even when the catalog entry is already in error: no
-    // automatic recovery fetch on the active host-scope sweep.
+    // automatic recovery fetch on the active host-scope sweep. The unchanged
+    // fetch count is the whole probe here - note that `isInvalidated` below
+    // is NOT evidence of anything the invalidator did: a query comes out of a
+    // REJECTED fetch already flagged invalidated by TanStack itself, before
+    // any `invalidateQueries` call (verified directly). It is asserted only
+    // to pin that pre-existing shape, and it is exactly why the successful
+    // catalogs in the tests above - where the flag does mean something - are
+    // the ones that discriminate the carve-out.
     expect(models.fetches.count).toBe(1);
     expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(listModelsKey)?.status).toBe("error");
