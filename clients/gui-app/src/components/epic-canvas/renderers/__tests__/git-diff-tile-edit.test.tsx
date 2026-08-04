@@ -40,6 +40,7 @@ interface EditTestState {
   worktreeContent: string;
   nextDraftContent: string;
   nextDraftCaret: number;
+  sizeBytes: number;
 }
 
 const state = vi.hoisted((): EditTestState => ({
@@ -52,18 +53,21 @@ const state = vi.hoisted((): EditTestState => ({
   worktreeContent: "const value = 1;\n",
   nextDraftContent: "const value = 2;\n",
   nextDraftCaret: 16,
+  sizeBytes: 17,
 }));
 
 interface DiffSurfaceTestState {
   mountCount: number;
   unmountCount: number;
   readonly editableNewFiles: FileContents[];
+  lastIsEmptyFile: boolean | null;
 }
 
 const diffSurfaceState = vi.hoisted((): DiffSurfaceTestState => ({
   mountCount: 0,
   unmountCount: 0,
   editableNewFiles: [],
+  lastIsEmptyFile: null,
 }));
 
 const preloadState = vi.hoisted(() => ({
@@ -166,6 +170,7 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
   FileDiffContent: function FileDiffContentMock(props: {
     readonly editStatus?: ReactNode;
     readonly editAdapter?: DiffClickToEditAdapter;
+    readonly isEmptyFile?: boolean;
     readonly editSession?: {
       readonly editorOptions: EditorOptions<undefined>;
       readonly oldFile: FileContents | null;
@@ -177,6 +182,7 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
     );
     const [editorCaret, setEditorCaret] = useState(0);
     const newFile = props.editSession?.newFile;
+    const isEmptyFile = props.isEmptyFile ?? null;
 
     useEffect(() => {
       diffSurfaceState.mountCount += 1;
@@ -193,6 +199,10 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
         diffSurfaceState.editableNewFiles.push(newFile);
       }
     }, [newFile]);
+
+    useEffect(() => {
+      diffSurfaceState.lastIsEmptyFile = isEmptyFile;
+    }, [isEmptyFile]);
 
     const changeEditorDocument = (
       content: string,
@@ -233,12 +243,24 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
         >
           Click code
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            props.editAdapter?.activateEmptyOrigin();
+          }}
+        >
+          Click empty origin
+        </button>
         {props.editSession === undefined ? null : (
           <>
             <button
               type="button"
               onClick={() => {
-                changeEditorDocument("const value = 2;\n", 16, true);
+                changeEditorDocument(
+                  state.nextDraftContent,
+                  state.nextDraftCaret,
+                  true,
+                );
               }}
             >
               Change draft
@@ -289,9 +311,11 @@ describe("<GitDiffTile /> editing", () => {
     state.worktreeContent = "const value = 1;\n";
     state.nextDraftContent = "const value = 2;\n";
     state.nextDraftCaret = 16;
+    state.sizeBytes = 17;
     diffSurfaceState.mountCount = 0;
     diffSurfaceState.unmountCount = 0;
     diffSurfaceState.editableNewFiles.length = 0;
+    diffSurfaceState.lastIsEmptyFile = null;
     state.refetchContents.mockImplementation(() =>
       Promise.resolve({
         error: null,
@@ -770,6 +794,88 @@ describe("<GitDiffTile /> editing", () => {
     ).toBe(true);
     expect(state.refetchContents).toHaveBeenCalledTimes(2);
   });
+
+  it("treats a zero-byte untracked file as empty-editable, activates through the empty-origin path (no clickable line), and autosaves the first typed character to the correct file", async () => {
+    state.stage = "untracked";
+    state.sizeBytes = 0;
+    state.worktreeContent = "";
+    state.nextDraftContent = "X";
+    state.nextDraftCaret = 1;
+    state.refetchContents.mockImplementation(() =>
+      Promise.resolve({
+        error: null,
+        data: {
+          runningDir: "/work/repo",
+          filePath: "src/app.ts",
+          oldFile: null,
+          newFile: { name: "src/app.ts", contents: "" },
+          worktreeFile: { name: "src/app.ts", contents: "" },
+          error: null,
+        },
+      }),
+    );
+    const untrackedNode = makeGitFileDiffTile({
+      hostId: "host-A",
+      runningDir: "/work/repo",
+      filePath: "src/app.ts",
+      stage: "untracked",
+      repositoryContext: null,
+    });
+    renderTile(untrackedNode, true);
+
+    // `isEmptyFile` reaches FileDiffContent before any click - it must be
+    // known while still read-only, to decide whether to show the
+    // empty-origin affordance at all.
+    await waitFor(() => {
+      expect(diffSurfaceState.lastIsEmptyFile).toBe(true);
+    });
+    expect(screen.queryByRole("button", { name: "Change draft" })).toBeNull();
+
+    // No line/token exists to click for an empty file - activation goes
+    // through `activateEmptyOrigin` instead of a diff line/token click, but
+    // must land on the exact same real hydration -> ownership -> editSession
+    // pipeline (`begin` in `git-diff-editing.tsx`) as a normal code click.
+    fireEvent.click(screen.getByRole("button", { name: "Click empty origin" }));
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+
+    const changeDraft = await screen.findByRole("button", {
+      name: "Change draft",
+    });
+    fireEvent.click(changeDraft);
+
+    await waitFor(() => {
+      expect(state.writeFile).toHaveBeenCalledWith({
+        workspacePath: "/work/repo",
+        filePath: "src/app.ts",
+        // SHA-256 of the empty-string baseline (`fileContentRevision("")`),
+        // not a guessed placeholder.
+        expectedRevision:
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        content: "X",
+      });
+    });
+  });
+
+  it("keeps a zero-byte staged file read-only - size alone must not bypass the staged edit gate", async () => {
+    state.stage = "staged";
+    state.sizeBytes = 0;
+    const stagedNode = makeGitFileDiffTile({
+      hostId: "host-A",
+      runningDir: "/work/repo",
+      filePath: "src/app.ts",
+      stage: "staged",
+      repositoryContext: null,
+    });
+    renderTile(stagedNode, true);
+
+    await waitFor(() => {
+      expect(diffSurfaceState.lastIsEmptyFile).toBe(false);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Click empty origin" }));
+    expect(state.refetchContents).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Change draft" })).toBeNull();
+  });
 });
 
 let activeQueryClient: QueryClient | null = null;
@@ -812,7 +918,7 @@ function changedFile(stage: GitStage): GitChangedFile {
     insertions: 1,
     deletions: 1,
     isBinary: false,
-    sizeBytes: 17,
+    sizeBytes: state.sizeBytes,
     stagedOid: "index-1",
     worktreeOid: state.worktreeOid,
   };

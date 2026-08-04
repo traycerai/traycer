@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { File } from "@pierre/diffs";
 import { Editor } from "@pierre/diffs/edit";
 
@@ -23,6 +23,20 @@ import { Editor } from "@pierre/diffs/edit";
 // single-argument `window.postMessage` call that jsdom's stricter (2-arg)
 // implementation rejects. Real browsers always have both - these shims only
 // close jsdom-specific gaps so the real attach/edit code path can run.
+//
+// Both patches are restored in `afterAll`: an unrestored `window.postMessage`
+// override leaks into every other test file Vitest schedules onto the same
+// worker for the rest of the run (React's scheduler falls back to
+// `postMessage` for task scheduling in jsdom, so a forced-origin wrapper left
+// in place silently corrupted an unrelated notifications hook test's retry
+// timing until this was traced down).
+// Captured as a descriptor (not a direct `.getContext` value reference) so
+// restoring it later never reads as an unbound method extraction.
+const originalGetContextDescriptor = Object.getOwnPropertyDescriptor(
+  HTMLCanvasElement.prototype,
+  "getContext",
+);
+let originalPostMessage: typeof window.postMessage;
 beforeAll(() => {
   Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
     configurable: true,
@@ -31,9 +45,21 @@ beforeAll(() => {
       measureText: (text: string) => ({ width: text.length * 8 }),
     }),
   });
-  const realPostMessage = window.postMessage.bind(window);
+  originalPostMessage = window.postMessage.bind(window);
+  const realPostMessage = originalPostMessage;
   window.postMessage = ((message: unknown) =>
     realPostMessage(message, "*")) as typeof window.postMessage;
+});
+
+afterAll(() => {
+  if (originalGetContextDescriptor !== undefined) {
+    Object.defineProperty(
+      HTMLCanvasElement.prototype,
+      "getContext",
+      originalGetContextDescriptor,
+    );
+  }
+  window.postMessage = originalPostMessage;
 });
 
 function makeContainer(): HTMLDivElement {

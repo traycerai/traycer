@@ -192,6 +192,7 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
         lineNumbers={false}
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );

@@ -438,6 +438,7 @@ function PrReviewThreadHunk(props: {
           lineNumbers={hunk.lineNumbers}
           indicatorStyle="bars"
           fileHeaders={false}
+          isEmptyFile={false}
         />
       </DiffContentFrame>
     </div>

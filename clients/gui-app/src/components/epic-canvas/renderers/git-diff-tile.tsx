@@ -571,6 +571,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
         findFilePath: props.file.path,
         bundleFindFileId: gitBundleDiffFindFileId(props.file),
       }}
+      isEmptyFile={editing.canOfferEdit ? props.file.sizeBytes === 0 : false}
       editStatus={
         <DiffTabHeaderPortal>
           <GitDiffEditStatusContent editing={editing} appearance="pill" />

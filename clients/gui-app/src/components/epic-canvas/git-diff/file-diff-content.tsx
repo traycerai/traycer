@@ -11,6 +11,8 @@ import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to
 interface FileDiffContentProps {
   readonly diff: GitGetFileDiffResponse;
   readonly fileIdentity: DiffContentFrameFileIdentity | null;
+  /** Zero-byte file - see `DiffContentPrimitiveProps.isEmptyFile`. */
+  readonly isEmptyFile: boolean;
   readonly mode: "split" | "unified";
   readonly wordWrap: boolean;
   readonly backgrounds: boolean;
@@ -70,6 +72,7 @@ export function FileDiffContent(props: FileDiffContentProps) {
           fileHeaders={false}
           editAdapter={props.editAdapter}
           editSession={props.editSession}
+          isEmptyFile={props.isEmptyFile}
         />
       </DiffContentFrame>
     </>

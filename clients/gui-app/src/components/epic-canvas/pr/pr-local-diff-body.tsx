@@ -267,6 +267,7 @@ function PrLocalDiffFileBody(props: {
       lineNumbers={preferences.lineNumbers}
       indicatorStyle={preferences.indicatorStyle}
       fileHeaders={false}
+      isEmptyFile={false}
     />
   );
 }

@@ -5,7 +5,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from "react";
-import { FileDiff } from "@pierre/diffs/react";
+import { File, FileDiff } from "@pierre/diffs/react";
 import {
   hydratePartialDiff,
   parseDiffFromFile,
@@ -14,7 +14,10 @@ import {
   type FileDiffMetadata,
 } from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
-import { useResolvedTheme } from "@/providers/use-resolved-theme";
+import {
+  useResolvedTheme,
+  type ResolvedTheme,
+} from "@/providers/use-resolved-theme";
 import {
   buildPatchCacheKey,
   resolveDiffThemeName,
@@ -25,6 +28,7 @@ import { DiffEditProvider } from "@/components/diff/diff-edit-provider";
 import { DiffHighlightLoading } from "@/components/diff/diff-highlight-loading";
 import { useDiffsDiffHighlightReady } from "@/components/diff/use-diff-highlight-ready";
 import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
+import { EmptyOriginEditAffordance } from "@/components/diff/empty-origin-edit-affordance";
 
 const DIFF_FIND_UNSAFE_CSS = `
   [data-traycer-diff-find-match] {
@@ -64,6 +68,15 @@ export interface DiffContentPrimitiveProps {
     readonly oldFile: FileContents | null;
     readonly newFile: FileContents;
   };
+  /**
+   * True when the target file has zero bytes on disk (an empty
+   * new/untracked file, or an already-empty tracked file) - independent of
+   * `editSession`, since it must be known before editing has even started
+   * to decide whether to show the empty-origin activation affordance (see
+   * `EmptyOriginEditAffordance`). An empty file's `FileDiffMetadata` carries
+   * zero hunks, so it never renders a clickable line/token.
+   */
+  readonly isEmptyFile: boolean;
 }
 
 export interface DiffContentFrameFileIdentity {
@@ -170,51 +183,128 @@ export function DiffContentPrimitive(
   });
 
   const pierreOverflow = resolvePierreOverflow(props.wordWrap);
+  // An empty file's `FileDiffMetadata` carries zero hunks, so it never
+  // renders a clickable line/token - `emptyOriginAdapter` is the adapter to
+  // activate through when that's true, or `null` when the affordance
+  // shouldn't show (not empty, no adapter, or a real editor already
+  // attached). Narrowing this way (rather than a separate boolean) lets
+  // TypeScript track that the adapter is defined everywhere it's used below.
+  const emptyOriginAdapter =
+    props.isEmptyFile &&
+    props.editAdapter !== undefined &&
+    !props.editAdapter.attached
+      ? props.editAdapter
+      : null;
+  // A diff with zero hunks (an empty new/untracked file) never renders a
+  // content element at all in `<FileDiff>` - the library's own edit-attach
+  // completion logic needs to find one in the DOM and gives up silently
+  // when it can't, permanently stranding the editor without ever attaching
+  // (proven against the real, unmocked library in
+  // `git-diff-empty-file-edit.test.ts`; `<File>` has no such gap, since it
+  // falls back to a single empty row instead of rendering nothing). There is
+  // genuinely nothing to diff for a brand-new empty file anyway, so once
+  // editing starts for one, render the plain single-file editor instead of
+  // the diff pipeline - same editor session, same activation adapter, same
+  // autosave path, just a different `@pierre/diffs` component underneath.
+  const emptyFileEditSession =
+    props.isEmptyFile && props.editSession !== undefined
+      ? props.editSession
+      : null;
 
   return (
     <DiffEditProvider>
-      {highlightReady ? (
-        fileDiffs.map((fileDiff) => (
-          <FileDiff
-            key={fileDiff.name}
-            fileDiff={fileDiff}
-            // `hydrateFileDiffForEdit` can leave a file still partial (a
-            // legitimately missing required side for change/rename-changed).
-            // `@pierre/diffs` never re-attempts hydration for a partial diff
-            // once `edit` flips true, so claiming a working editor here would
-            // silently strand it the same way an unhydrated diff always did -
-            // render read-only instead and let the caller's own validation
-            // (see `validateGitEditContents`) surface the unavailable state.
-            edit={props.editSession !== undefined && !fileDiff.isPartial}
-            editorOptions={
-              fileDiff.isPartial ? undefined : props.editSession?.editorOptions
-            }
-            options={{
-              disableFileHeader: !props.fileHeaders,
-              collapsed: false,
-              diffStyle: props.mode === "split" ? "split" : "unified",
-              diffIndicators: props.indicatorStyle,
-              disableBackground: !props.backgrounds,
-              disableLineNumbers: !props.lineNumbers,
-              lineDiffType: "none",
-              useTokenTransformer: true,
-              overflow: pierreOverflow,
-              theme: themeName,
-              themeType: resolvedTheme,
-              unsafeCSS: DIFF_PANEL_WITH_FIND_UNSAFE_CSS,
-              ...props.editAdapter?.diffOptions,
-            }}
+      <div className="grid">
+        <div className="col-start-1 row-start-1">
+          {renderDiffContentBody({
+            emptyFileEditSession,
+            fileDiffs,
+            highlightReady,
+            props,
+            pierreOverflow,
+            themeName,
+            resolvedTheme,
+          })}
+        </div>
+        {emptyOriginAdapter !== null ? (
+          <EmptyOriginEditAffordance
+            onActivate={emptyOriginAdapter.activateEmptyOrigin}
           />
-        ))
-      ) : (
-        <DiffHighlightLoading testId="diff-highlighting" />
-      )}
+        ) : null}
+      </div>
     </DiffEditProvider>
   );
 }
 
 function resolvePierreOverflow(wordWrap: boolean): "wrap" | "scroll" {
   return wordWrap ? "wrap" : "scroll";
+}
+
+/** Extracted to avoid a nested ternary across the empty-file/diff/loading three-way branch. */
+function renderDiffContentBody(args: {
+  readonly emptyFileEditSession: NonNullable<
+    DiffContentPrimitiveProps["editSession"]
+  > | null;
+  readonly fileDiffs: ReadonlyArray<FileDiffMetadata>;
+  readonly highlightReady: boolean;
+  readonly props: DiffContentPrimitiveProps;
+  readonly pierreOverflow: "wrap" | "scroll";
+  readonly themeName: "pierre-light" | "pierre-dark";
+  readonly resolvedTheme: ResolvedTheme;
+}): ReactNode {
+  const { emptyFileEditSession, props } = args;
+  if (emptyFileEditSession !== null) {
+    return (
+      <File
+        file={emptyFileEditSession.newFile}
+        edit
+        editorOptions={emptyFileEditSession.editorOptions}
+        options={{
+          disableFileHeader: !props.fileHeaders,
+          overflow: args.pierreOverflow,
+          useTokenTransformer: true,
+          theme: args.themeName,
+          themeType: args.resolvedTheme,
+          unsafeCSS: DIFF_PANEL_WITH_FIND_UNSAFE_CSS,
+          ...props.editAdapter?.fileOptions,
+        }}
+      />
+    );
+  }
+  if (!args.highlightReady) {
+    return <DiffHighlightLoading testId="diff-highlighting" />;
+  }
+  return args.fileDiffs.map((fileDiff) => (
+    <FileDiff
+      key={fileDiff.name}
+      fileDiff={fileDiff}
+      // `hydrateFileDiffForEdit` can leave a file still partial (a
+      // legitimately missing required side for change/rename-changed).
+      // `@pierre/diffs` never re-attempts hydration for a partial diff once
+      // `edit` flips true, so claiming a working editor here would silently
+      // strand it the same way an unhydrated diff always did - render
+      // read-only instead and let the caller's own validation (see
+      // `validateGitEditContents`) surface the unavailable state.
+      edit={props.editSession !== undefined && !fileDiff.isPartial}
+      editorOptions={
+        fileDiff.isPartial ? undefined : props.editSession?.editorOptions
+      }
+      options={{
+        disableFileHeader: !props.fileHeaders,
+        collapsed: false,
+        diffStyle: props.mode === "split" ? "split" : "unified",
+        diffIndicators: props.indicatorStyle,
+        disableBackground: !props.backgrounds,
+        disableLineNumbers: !props.lineNumbers,
+        lineDiffType: "none",
+        useTokenTransformer: true,
+        overflow: args.pierreOverflow,
+        theme: args.themeName,
+        themeType: args.resolvedTheme,
+        unsafeCSS: DIFF_PANEL_WITH_FIND_UNSAFE_CSS,
+        ...props.editAdapter?.diffOptions,
+      }}
+    />
+  ));
 }
 
 /**

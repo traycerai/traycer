@@ -237,6 +237,7 @@ function renderPrimitive(args: {
       lineNumbers
       indicatorStyle="bars"
       fileHeaders={false}
+      isEmptyFile={false}
       editSession={
         args.editSession === undefined
           ? undefined
@@ -290,6 +291,7 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
         editSession={{
           editorOptions: EMPTY_EDITOR_OPTIONS,
           oldFile: CHANGE_OLD,
@@ -318,6 +320,7 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
         editSession={{
           editorOptions: EMPTY_EDITOR_OPTIONS,
           oldFile: stableOld,
@@ -354,6 +357,7 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
         editSession={{
           editorOptions: { ...EMPTY_EDITOR_OPTIONS },
           oldFile,
@@ -519,6 +523,7 @@ index 1111111..2222222 100644
           lineNumbers
           indicatorStyle="bars"
           fileHeaders={false}
+          isEmptyFile={false}
           editSession={{
             editorOptions: EMPTY_EDITOR_OPTIONS,
             oldFile: fileAOld,
@@ -534,6 +539,7 @@ index 1111111..2222222 100644
           lineNumbers
           indicatorStyle="bars"
           fileHeaders={false}
+          isEmptyFile={false}
           editSession={{
             editorOptions: EMPTY_EDITOR_OPTIONS,
             oldFile: fileBOld,

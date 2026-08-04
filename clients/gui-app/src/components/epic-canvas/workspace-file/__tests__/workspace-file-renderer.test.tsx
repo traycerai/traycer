@@ -251,9 +251,7 @@ describe("<WorkspaceFileRenderer />", () => {
         />,
       );
 
-      expect(
-        screen.queryByTestId("workspace-file-empty-affordance"),
-      ).toBeNull();
+      expect(screen.queryByTestId("empty-origin-edit-affordance")).toBeNull();
     });
 
     it("does not render the affordance once the adapter reports attached, even for empty content", () => {
@@ -276,9 +274,7 @@ describe("<WorkspaceFileRenderer />", () => {
         />,
       );
 
-      expect(
-        screen.queryByTestId("workspace-file-empty-affordance"),
-      ).toBeNull();
+      expect(screen.queryByTestId("empty-origin-edit-affordance")).toBeNull();
     });
 
     it("activates on click", () => {
@@ -302,7 +298,7 @@ describe("<WorkspaceFileRenderer />", () => {
         />,
       );
 
-      fireEvent.click(screen.getByTestId("workspace-file-empty-affordance"));
+      fireEvent.click(screen.getByTestId("empty-origin-edit-affordance"));
       expect(activateEmptyOrigin).toHaveBeenCalledTimes(1);
     });
 
@@ -327,7 +323,7 @@ describe("<WorkspaceFileRenderer />", () => {
         />,
       );
 
-      const affordance = screen.getByTestId("workspace-file-empty-affordance");
+      const affordance = screen.getByTestId("empty-origin-edit-affordance");
       fireEvent.keyDown(affordance, { key: "Tab" });
       expect(activateEmptyOrigin).not.toHaveBeenCalled();
       fireEvent.keyDown(affordance, { key: "Enter" });
@@ -359,9 +355,7 @@ describe("<WorkspaceFileRenderer />", () => {
       const host = document.querySelector("[data-diffs-host]");
       const grid = host?.querySelector(".grid");
       expect(grid).toBeTruthy();
-      expect(
-        screen.getByTestId("workspace-file-empty-affordance"),
-      ).toBeTruthy();
+      expect(screen.getByTestId("empty-origin-edit-affordance")).toBeTruthy();
 
       // Once attached, the affordance is gone but the same grid wrapper (not
       // a replaced/reflowed container) still holds the real editor - proven
@@ -386,9 +380,7 @@ describe("<WorkspaceFileRenderer />", () => {
       );
 
       expect(document.querySelector("[data-diffs-host] .grid")).toBe(grid);
-      expect(
-        screen.queryByTestId("workspace-file-empty-affordance"),
-      ).toBeNull();
+      expect(screen.queryByTestId("empty-origin-edit-affordance")).toBeNull();
     });
   });
 

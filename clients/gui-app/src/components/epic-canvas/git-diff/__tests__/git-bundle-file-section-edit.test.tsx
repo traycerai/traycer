@@ -20,7 +20,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { FileContents } from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
-import type { GitChangedFile } from "@traycer/protocol/host";
+import type { GitChangedFile, GitStage } from "@traycer/protocol/host";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
@@ -44,6 +44,8 @@ interface BundleEditTestState {
   worktreeContent: string;
   nextDraftContent: string;
   nextDraftCaret: number;
+  stage: GitStage;
+  sizeBytes: number;
 }
 
 const state = vi.hoisted((): BundleEditTestState => ({
@@ -54,18 +56,22 @@ const state = vi.hoisted((): BundleEditTestState => ({
   worktreeContent: "const value = 1;\n",
   nextDraftContent: "const value = 2;\n",
   nextDraftCaret: 16,
+  stage: "unstaged",
+  sizeBytes: 17,
 }));
 
 interface BundleDiffSurfaceTestState {
   mountCount: number;
   unmountCount: number;
   readonly editableNewFiles: FileContents[];
+  lastIsEmptyFile: boolean | null;
 }
 
 const diffSurfaceState = vi.hoisted((): BundleDiffSurfaceTestState => ({
   mountCount: 0,
   unmountCount: 0,
   editableNewFiles: [],
+  lastIsEmptyFile: null,
 }));
 
 const preloadState = vi.hoisted(() => ({
@@ -121,6 +127,7 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
   FileDiffContent: function FileDiffContentMock(props: {
     readonly editStatus?: ReactNode;
     readonly editAdapter?: DiffClickToEditAdapter;
+    readonly isEmptyFile?: boolean;
     readonly editSession?: {
       readonly editorOptions: EditorOptions<undefined>;
       readonly oldFile: FileContents | null;
@@ -132,6 +139,7 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
     );
     const [editorCaret, setEditorCaret] = useState(0);
     const newFile = props.editSession?.newFile;
+    const isEmptyFile = props.isEmptyFile ?? null;
 
     useEffect(() => {
       diffSurfaceState.mountCount += 1;
@@ -147,6 +155,25 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
       }
       setEditorDocument(newFile.contents);
     }, [newFile]);
+
+    useEffect(() => {
+      diffSurfaceState.lastIsEmptyFile = isEmptyFile;
+    }, [isEmptyFile]);
+
+    const changeEditorDocument = (
+      content: string,
+      caret: number,
+      blur: boolean,
+    ): void => {
+      setEditorDocument(content);
+      setEditorCaret(caret);
+      const changedFile = { name: "src/app.ts", contents: content };
+      props.editSession?.editorOptions.onChange?.(changedFile, undefined, {
+        changes: [],
+        file: changedFile,
+      });
+      if (blur) props.editSession?.editorOptions.onBlur?.();
+    };
 
     return (
       <div
@@ -172,25 +199,41 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
         >
           Click bundle code
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            props.editAdapter?.activateEmptyOrigin();
+          }}
+        >
+          Click bundle empty origin
+        </button>
         {props.editSession === undefined ? null : (
-          <button
-            type="button"
-            onClick={() => {
-              setEditorDocument(state.nextDraftContent);
-              setEditorCaret(state.nextDraftCaret);
-              const changedFile = {
-                name: "src/app.ts",
-                contents: state.nextDraftContent,
-              };
-              props.editSession?.editorOptions.onChange?.(
-                changedFile,
-                undefined,
-                { changes: [], file: changedFile },
-              );
-            }}
-          >
-            Type bundle draft
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                changeEditorDocument(
+                  state.nextDraftContent,
+                  state.nextDraftCaret,
+                  false,
+                );
+              }}
+            >
+              Type bundle draft
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                changeEditorDocument(
+                  state.nextDraftContent,
+                  state.nextDraftCaret,
+                  true,
+                );
+              }}
+            >
+              Type and blur bundle draft
+            </button>
+          </>
         )}
       </div>
     );
@@ -243,6 +286,8 @@ describe("<BundleFileSection /> editing", () => {
     state.worktreeContent = "const value = 1;\n";
     state.nextDraftContent = "const value = 2;\n";
     state.nextDraftCaret = 16;
+    state.stage = "unstaged";
+    state.sizeBytes = 17;
     state.refetchContents.mockReset();
     state.refetchContents.mockImplementation(() =>
       Promise.resolve({
@@ -273,6 +318,7 @@ describe("<BundleFileSection /> editing", () => {
     diffSurfaceState.mountCount = 0;
     diffSurfaceState.unmountCount = 0;
     diffSurfaceState.editableNewFiles.length = 0;
+    diffSurfaceState.lastIsEmptyFile = null;
   });
 
   afterEach(() => {
@@ -391,6 +437,78 @@ describe("<BundleFileSection /> editing", () => {
     expect(diffSurfaceState.editableNewFiles).toHaveLength(1);
     expect(diffSurfaceState.editableNewFiles[0]).toBe(editableNewFile);
   });
+
+  it("treats a zero-byte untracked aggregate file as empty-editable, activates through the empty-origin path, and autosaves the first typed character to the correct file", async () => {
+    state.stage = "untracked";
+    state.sizeBytes = 0;
+    state.worktreeContent = "";
+    state.nextDraftContent = "X";
+    state.nextDraftCaret = 1;
+    state.refetchContents.mockImplementation(() =>
+      Promise.resolve({
+        error: null,
+        data: {
+          runningDir: "/work/repo",
+          filePath: "src/app.ts",
+          oldFile: null,
+          newFile: { name: "src/app.ts", contents: "" },
+          worktreeFile: { name: "src/app.ts", contents: "" },
+          error: null,
+        },
+      }),
+    );
+    renderBundleFile(true);
+
+    // `isEmptyFile` reaches FileDiffContent before any click - same
+    // computation (`editing.canOfferEdit ? sizeBytes === 0 : false`) as the
+    // single-file tile, threaded through the aggregate section instead.
+    await waitFor(() => {
+      expect(diffSurfaceState.lastIsEmptyFile).toBe(true);
+    });
+    expect(
+      screen.queryByRole("button", { name: "Type bundle draft" }),
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Click bundle empty origin" }),
+    );
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+
+    const typeAndBlur = await screen.findByRole("button", {
+      name: "Type and blur bundle draft",
+    });
+    fireEvent.click(typeAndBlur);
+
+    await waitFor(() => {
+      expect(state.writeFile).toHaveBeenCalledWith({
+        workspacePath: "/work/repo",
+        filePath: "src/app.ts",
+        // SHA-256 of the empty-string baseline (`fileContentRevision("")`),
+        // not a guessed placeholder.
+        expectedRevision:
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        content: "X",
+      });
+    });
+  });
+
+  it("keeps a zero-byte staged aggregate file read-only - size alone must not bypass the staged edit gate", async () => {
+    state.stage = "staged";
+    state.sizeBytes = 0;
+    renderBundleFile(true);
+
+    await waitFor(() => {
+      expect(diffSurfaceState.lastIsEmptyFile).toBe(false);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Click bundle empty origin" }),
+    );
+    expect(state.refetchContents).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Type bundle draft" }),
+    ).toBeNull();
+  });
 });
 
 function renderBundleFile(show: boolean): RenderResult {
@@ -423,11 +541,11 @@ function changedFile(): GitChangedFile {
     path: "src/app.ts",
     previousPath: null,
     status: "modified",
-    stage: "unstaged",
+    stage: state.stage,
     insertions: 1,
     deletions: 1,
     isBinary: false,
-    sizeBytes: 17,
+    sizeBytes: state.sizeBytes,
     stagedOid: "index-1",
     worktreeOid: state.worktreeOid,
   };

@@ -7,13 +7,21 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
 import {
   DiffContentFrame,
   DiffContentPrimitive,
 } from "@/components/diff/diff-content-primitive";
 import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
+import { EMPTY_ORIGIN_AFFORDANCE_TEST_ID } from "@/components/diff/empty-origin-edit-affordance";
 
 const captured = vi.hoisted(() => ({
   overflows: [] as Array<"wrap" | "scroll">,
@@ -26,6 +34,10 @@ const captured = vi.hoisted(() => ({
     setRenderOptions: Mock;
     primeDiffHighlightCache: Mock;
     primeFileHighlightCache: Mock;
+  },
+  lastFileProps: null as null | {
+    readonly file: { readonly name: string; readonly contents: string };
+    readonly edit?: boolean;
   },
 }));
 
@@ -50,6 +62,15 @@ vi.mock("@pierre/diffs/react", () => ({
       readonly unsafeCSS: string;
     };
   }) => <MockFileDiff {...props} />,
+  File: (props: {
+    readonly file: { readonly name: string; readonly contents: string };
+    readonly edit?: boolean;
+  }) => {
+    captured.lastFileProps = props;
+    return (
+      <div data-testid="mock-file" data-edit={String(props.edit === true)} />
+    );
+  },
 }));
 
 function MockFileDiff(props: {
@@ -98,6 +119,7 @@ describe("<DiffContentPrimitive />", () => {
     captured.lastEdit = null;
     captured.lastUnsafeCSS = null;
     captured.pool = null;
+    captured.lastFileProps = null;
   });
 
   afterEach(() => {
@@ -122,6 +144,7 @@ describe("<DiffContentPrimitive />", () => {
           lineNumbers
           indicatorStyle="bars"
           fileHeaders={false}
+          isEmptyFile={false}
         />
       </DiffContentFrame>,
     );
@@ -144,6 +167,7 @@ describe("<DiffContentPrimitive />", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
         editAdapter={editAdapter}
       />,
     );
@@ -166,6 +190,7 @@ describe("<DiffContentPrimitive />", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
         editAdapter={editAdapter}
         editSession={{
           editorOptions: editAdapter.editorOptions,
@@ -207,6 +232,7 @@ describe("<DiffContentPrimitive />", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />,
     );
 
@@ -254,6 +280,7 @@ describe("<DiffContentPrimitive />", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />,
     );
     const firstHost = await screen.findByTestId("file-diff");
@@ -270,6 +297,7 @@ describe("<DiffContentPrimitive />", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />,
     );
 
@@ -279,6 +307,120 @@ describe("<DiffContentPrimitive />", () => {
     expect(captured.unmountCount).toBe(unmountsBefore);
     await waitFor(() => {
       expect(primeDiffHighlightCache).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+describe("<DiffContentPrimitive /> empty-origin behavior", () => {
+  beforeEach(() => {
+    captured.overflows = [];
+    captured.mountCount = 0;
+    captured.unmountCount = 0;
+    captured.lastEdit = null;
+    captured.lastUnsafeCSS = null;
+    captured.pool = null;
+    captured.lastFileProps = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the empty-origin affordance for an empty file with an unattached adapter, and activates on click", () => {
+    const editAdapter = createEditAdapter();
+    render(
+      <DiffContentPrimitive
+        patch=""
+        cacheScope="empty"
+        mode="unified"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile
+        editAdapter={editAdapter}
+      />,
+    );
+
+    const affordance = screen.getByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID);
+    fireEvent.click(affordance);
+    expect(editAdapter.activateEmptyOrigin).toHaveBeenCalledTimes(1);
+    // No editSession yet: still the read-only diff pipeline, not <File>.
+    expect(screen.queryByTestId("mock-file")).toBeNull();
+  });
+
+  it("does not render the affordance once the adapter reports a real editor attached", () => {
+    const editAdapter = { ...createEditAdapter(), attached: true };
+    render(
+      <DiffContentPrimitive
+        patch=""
+        cacheScope="empty-attached"
+        mode="unified"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile
+        editAdapter={editAdapter}
+      />,
+    );
+
+    expect(screen.queryByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID)).toBeNull();
+  });
+
+  it("does not render the affordance when the file is not empty", () => {
+    const editAdapter = createEditAdapter();
+    render(
+      <DiffContentPrimitive
+        patch="@@ -1 +1 @@\n-old\n+new\n"
+        cacheScope="non-empty"
+        mode="unified"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile={false}
+        editAdapter={editAdapter}
+      />,
+    );
+
+    expect(screen.queryByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID)).toBeNull();
+  });
+
+  it("renders <File> (not <FileDiff>) once an editSession is set for an empty file, with the caret-1:0 editorOptions and new-file identity", () => {
+    // A real editor has already attached (editSession only exists once
+    // activation completed) - the affordance must stay hidden here too.
+    const editAdapter = { ...createEditAdapter(), attached: true };
+    render(
+      <DiffContentPrimitive
+        patch=""
+        cacheScope="empty-editing"
+        mode="unified"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile
+        editAdapter={editAdapter}
+        editSession={{
+          editorOptions: editAdapter.editorOptions,
+          oldFile: null,
+          newFile: { name: "untracked.txt", contents: "" },
+        }}
+      />,
+    );
+
+    expect(screen.queryByTestId("file-diff")).toBeNull();
+    expect(screen.queryByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID)).toBeNull();
+    const fileNode = screen.getByTestId("mock-file");
+    expect(fileNode.getAttribute("data-edit")).toBe("true");
+    expect(captured.lastFileProps?.file).toEqual({
+      name: "untracked.txt",
+      contents: "",
     });
   });
 });

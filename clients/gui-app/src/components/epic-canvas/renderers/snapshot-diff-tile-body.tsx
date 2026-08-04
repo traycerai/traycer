@@ -388,6 +388,7 @@ function SnapshotFileDiffContent(props: {
         lineNumbers={props.diffViewerPreferences.lineNumbers}
         indicatorStyle={props.diffViewerPreferences.indicatorStyle}
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );

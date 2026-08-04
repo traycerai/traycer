@@ -84,6 +84,7 @@ export function SnapshotHashInlineDiff(props: {
           lineNumbers={false}
           indicatorStyle="bars"
           fileHeaders={false}
+          isEmptyFile={false}
         />
       </DiffContentFrame>
     </div>

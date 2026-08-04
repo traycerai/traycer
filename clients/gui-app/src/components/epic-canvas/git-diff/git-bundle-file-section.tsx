@@ -289,6 +289,7 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
         findFilePath: props.file.path,
         bundleFindFileId: props.bundleFindFileId,
       }}
+      isEmptyFile={editing.canOfferEdit ? props.file.sizeBytes === 0 : false}
       editStatus={
         <DiffBundleFileHeaderPortal>
           <GitDiffEditStatusContent editing={editing} appearance="quiet" />
