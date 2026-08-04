@@ -1779,5 +1779,68 @@ describe("useGitListChangedFilesSubscription", () => {
       );
       expect(result.current.watcherStatus).toBeNull();
     });
+
+    it("still accepts a v1.2 frame while the client-wide version reads 1.3", async () => {
+      // `getMethodSchemaVersion` is client-wide PER METHOD, rebuilt from the
+      // first still-live session — so two repo streams on one client can sit at
+      // different minors while a host restart renegotiates one and not the
+      // other. `watcher` is required at v1.3, so a strict v1.3-only parse would
+      // reject every frame from the v1.2 session and the dispatcher's `return`
+      // would drop it: that repo's changes freeze until it reconnects.
+      const { result, session } = await renderAtMinor(3);
+      const v12Frame: GitSubscribeStatusEventV12 = {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "head",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-v12",
+        nestedFingerprint: "nested-v12",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_000,
+        freshNonce: null,
+      };
+      session.emitFrame(v12Frame, null);
+
+      // Delivered, not dropped...
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-v12"),
+      );
+      // ...and the missing field reads as UNKNOWN rather than healthy.
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("drops watcher health when the session is REPLACED, not only when it terminates", async () => {
+      // Replacement retires the generation and makes the old session's
+      // callbacks inert, so nothing downstream can clear the value on its
+      // behalf — and the replacement may reach a different host incarnation.
+      // `markTerminal` covers the terminal path only.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      const before = mockWsStreamClient.subscribeCallCount;
+      // Not awaited on purpose: the clear happens at REPLACEMENT time, and the
+      // returned promise settles only when the new session delivers its
+      // targeted snapshot - which is after the window under test.
+      void refreshGitSubscriptionWithFreshNonce({
+        wsStreamClient: mockWsStreamClient,
+        queryClient,
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+      await waitFor(() =>
+        expect(mockWsStreamClient.subscribeCallCount).toBeGreaterThan(before),
+      );
+      // Cleared at replacement time - BEFORE the new session's first frame,
+      // which is the whole window this covers.
+      await waitFor(() => expect(result.current.watcherStatus).toBeNull());
+    });
   });
 });

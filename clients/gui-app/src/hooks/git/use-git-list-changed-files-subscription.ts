@@ -465,6 +465,32 @@ function recordDeliveredFrame(
 }
 
 /**
+ * v1.3 parse that DEGRADES to v1.2 instead of dropping the frame.
+ *
+ * The tier is chosen from a client-wide, per-method schema version, but the
+ * frame arrives on one specific session - and those can disagree while a host
+ * restart renegotiates one repo's stream and not another's. A strict v1.3 parse
+ * of a genuine v1.2 frame fails on the required `watcher`, and the caller's
+ * `return` would then freeze that repo's changes until it reconnects.
+ *
+ * Degrading is safe in the direction that matters: the v1.2 schema is
+ * non-strict, so any v1.3 field present is stripped rather than trusted, and
+ * the absent `watcher` is recorded as UNKNOWN - never as healthy.
+ */
+function tolerantV13Parse(value: unknown):
+  | {
+      success: true;
+      data: GitSubscribeStatusEventV12 | GitSubscribeStatusEventV13;
+    }
+  | { success: false } {
+  const strict = gitSubscribeStatusEventSchemaV13.safeParse(value);
+  if (strict.success) return { success: true, data: strict.data };
+  const relaxed = gitSubscribeStatusEventSchemaV12.safeParse(value);
+  if (relaxed.success) return { success: true, data: relaxed.data };
+  return { success: false };
+}
+
+/**
  * Which frame shape this connection negotiated, as one value instead of a
  * ladder of independent booleans.
  *
@@ -490,6 +516,17 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   // then ignored and cannot publish a terminal error over the preserved cache.
   shared.sessionGeneration += 1;
   const generation = shared.sessionGeneration;
+  // Watcher health belongs to the session that reported it. Retiring the
+  // generation is exactly what makes the old session's callbacks inert, so
+  // nothing downstream can ever clear this value on its behalf - and the
+  // replacement may negotiate a different minor, or reach a different host
+  // incarnation, before its first frame lands. `markTerminal` covers the
+  // terminal path; this covers replacement, which bypasses it.
+  shared.lastWatcherStatus = null;
+  // Clearing the field is not enough on its own - the render-time value is read
+  // through the store snapshot, so without a notify the notice stays on screen
+  // until some later frame happens to publish.
+  notifyConsumers(shared);
   shared.closeCurrentSession();
   const session = wsStreamClient.subscribe("git.subscribeStatus", {
     hostId: args.hostId,
@@ -544,11 +581,22 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     // the negotiated minor is what keeps a v1.3-only field off a connection
     // that negotiated 1.2, independently of the host projecting correctly.
     if (v12Frames) {
-      const parsed = (
-        v13Frames
-          ? gitSubscribeStatusEventSchemaV13
-          : gitSubscribeStatusEventSchemaV12
-      ).safeParse(envelope.value);
+      // `getMethodSchemaVersion` is CLIENT-WIDE per method, not per session:
+      // `reconcileMethodSchemaVersion` rebuilds it from the first still-live
+      // session for that method. Two repo streams on one client can therefore
+      // sit at different minors - a host restart mid-session renegotiates one
+      // and not the other - and this frame's session may be the v1.2 one while
+      // the client-wide value reads v1.3.
+      //
+      // `watcher` is REQUIRED at v1.3, so a strict v1.3-only parse would reject
+      // every frame from that session and `return` would drop it silently:
+      // the repo's changes freeze until it reconnects. Falling back to the v1.2
+      // schema costs nothing and cannot leak - a non-strict zod parse strips
+      // unknown keys, and a frame with no `watcher` is recorded as UNKNOWN
+      // rather than as healthy.
+      const parsed = v13Frames
+        ? tolerantV13Parse(envelope.value)
+        : gitSubscribeStatusEventSchemaV12.safeParse(envelope.value);
       if (!parsed.success) return;
       handleNonceCorrelatedFrame({
         event: parsed.data,

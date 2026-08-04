@@ -85,7 +85,11 @@ export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
         <Icon className="size-3.5 text-muted-foreground/60" />
         {copy.label}
       </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
+      {/* No width cap here: `TooltipContent` already applies `w-fit max-w-xs`,
+          so this was a redundant restatement of the primitive's own value.
+          Whether that cap should be viewport-bounded is a question about the
+          shared primitive and every tooltip in the app, not about this one. */}
+      <TooltipContent className={undefined}>
         {/* Block wrapper, not two bare siblings: `TooltipContent` is an
             `inline-flex` ROW, so an explanation and a diagnostic placed
             directly inside it become side-by-side columns and each wraps into
