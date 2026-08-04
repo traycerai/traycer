@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdtemp,
   readdir,
   rm,
@@ -6,20 +7,58 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 // Redirect host.log for StderrLogTee so tests never write under ~/.traycer.
 const teeMocks = vi.hoisted(() => ({
   logPath: "",
 }));
 
+// Controllable stall for appendFile so flush(timeout) can be proven to race
+// the queue rather than only exercising the already-drained path.
+const appendFileGate = vi.hoisted(() => {
+  let stall = false;
+  let waiters: Array<() => void> = [];
+  return {
+    setStall(value: boolean): void {
+      stall = value;
+    },
+    async maybeStall(): Promise<void> {
+      if (!stall) return;
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    },
+    releaseAll(): void {
+      const pending = waiters;
+      waiters = [];
+      for (const resolve of pending) resolve();
+    },
+  };
+});
+
 vi.mock("../../store/paths", () => ({
   bootstrapLogPath: () => teeMocks.logPath,
 }));
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    appendFile: async (
+      ...args: Parameters<typeof actual.appendFile>
+    ): Promise<void> => {
+      await appendFileGate.maybeStall();
+      await actual.appendFile(...args);
+    },
+  };
+});
+
 const {
   CRASH_REPORT_SPAWN_SLACK_MS,
+  REPORT_SUMMARY_MAX_CHARS,
   STDERR_FATAL_WINDOW_MAX_BYTES,
   STDERR_MARKER_MAX_CHARS,
   STDERR_TEE_MAX_PENDING_BYTES,
@@ -90,6 +129,30 @@ describe("StderrCaptureBuffer", () => {
     expect(escaped.length).toBe(STDERR_MARKER_MAX_CHARS);
     expect(escaped.endsWith("…")).toBe(true);
     expect(escaped.slice(0, -1)).toBe("A".repeat(STDERR_MARKER_MAX_CHARS - 1));
+  });
+
+  describe("toSingleLine (shared escaper)", () => {
+    it("escapes LF and U+2028/U+2029, strips C0 controls, keeps tab", () => {
+      const out = StderrCaptureBuffer.toSingleLine(
+        "a\nb\u2028c\u2029d\x00\x01\te",
+        1_000,
+      );
+      expect(out).toBe("a\\nb\\nc\\nd\te");
+    });
+
+    it("clamps after escaping with an ellipsis", () => {
+      const out = StderrCaptureBuffer.toSingleLine("A".repeat(100), 10);
+      expect(out.length).toBe(10);
+      expect(out.endsWith("…")).toBe(true);
+      expect(out.slice(0, -1)).toBe("A".repeat(9));
+    });
+
+    it("counts escaped newlines toward the clamp", () => {
+      // Two newlines become four chars (`\\n` × 2); clamp must apply after.
+      const out = StderrCaptureBuffer.toSingleLine("a\nb\nc", 5);
+      expect(out.length).toBe(5);
+      expect(out.endsWith("…")).toBe(true);
+    });
   });
 
   describe("FATAL-anchored window", () => {
@@ -185,6 +248,8 @@ describe("StderrLogTee", () => {
   });
 
   afterEach(async () => {
+    appendFileGate.setStall(false);
+    appendFileGate.releaseAll();
     await rm(root, { recursive: true, force: true });
   });
 
@@ -215,14 +280,21 @@ describe("StderrLogTee", () => {
     expect(written).toBe("hello stderr\n");
   });
 
-  it("flush resolves after timeout even if the queue is stalled", async () => {
-    // Stall the queue by pointing at a non-writable path via a hanging
-    // append is hard; instead verify timeoutMs bounds the wait when the
-    // queue already resolved (and that a short timeout still returns).
+  it("flush(timeout) resolves without the stalled appendFile settling, then release leaves no unhandled rejection", async () => {
+    // Prove the timeout arm of Promise.race, not the already-drained path.
+    appendFileGate.setStall(true);
     const tee = new StderrLogTee("production");
+    tee.append(Buffer.from("stalled write\n"));
     const started = Date.now();
     await tee.flush(50);
-    expect(Date.now() - started).toBeLessThan(500);
+    expect(Date.now() - started).toBeLessThan(400);
+    // Release the stalled write so the microtask settles cleanly.
+    appendFileGate.setStall(false);
+    appendFileGate.releaseAll();
+    // Give the deferred append a turn to finish without throwing unhandled.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   });
 });
 
@@ -328,6 +400,32 @@ describe("prepareCrashReportsDir", () => {
     const info = await stat(dir);
     expect(info.isDirectory()).toBe(true);
     expect(survivors).toEqual([]);
+  });
+
+  it("creates a new directory with mode 0o700 (POSIX)", async () => {
+    if (platform() === "win32") return;
+    const dir = join(root, "mode-crash-reports");
+    await prepareCrashReportsDir(dir, 5);
+    const info = await stat(dir);
+    expect(info.mode & 0o777).toBe(0o700);
+  });
+
+  it("leaves an existing directory's mode untouched", async () => {
+    if (platform() === "win32") return;
+    const dir = join(root, "existing-mode");
+    await import("node:fs/promises").then((fs) =>
+      fs.mkdir(dir, { recursive: true, mode: 0o755 }),
+    );
+    // Ensure the mode is what we set (mkdir mode can be umask-masked on some
+    // platforms; chmod pins it so the "untouched" assertion is meaningful).
+    await chmod(dir, 0o755);
+    const before = (await stat(dir)).mode & 0o777;
+    expect(before).toBe(0o755);
+
+    await prepareCrashReportsDir(dir, 5);
+
+    const after = (await stat(dir)).mode & 0o777;
+    expect(after).toBe(0o755);
   });
 
   it("never throws when the parent is unwritable / mkdir fails", async () => {
@@ -445,6 +543,33 @@ describe("findCrashReportSince", () => {
 
     const match = await findCrashReportSince(dir, sinceMs, EMPTY_EXCLUDE);
     expect(match).toEqual({ filename: "broken.json", summary: null });
+  });
+
+  it("normalizes report summary to a single line (newlines + U+2028) and clamps length", async () => {
+    // summarizeReport is private; exercise it through findCrashReportSince.
+    const sinceMs = Date.now() - 1_000;
+    const path = join(dir, "multiline.json");
+    const longMsg =
+      "line1\nline2\u2028line3 " + "Z".repeat(REPORT_SUMMARY_MAX_CHARS + 100);
+    await writeFile(
+      path,
+      JSON.stringify({
+        header: { event: "Allocation failed", trigger: "FatalError" },
+        javascriptStack: { message: longMsg },
+      }),
+      "utf8",
+    );
+    await utimes(path, new Date(sinceMs + 100), new Date(sinceMs + 100));
+
+    const match = await findCrashReportSince(dir, sinceMs, EMPTY_EXCLUDE);
+    expect(match).not.toBeNull();
+    const summary = match?.summary;
+    expect(summary).not.toBeNull();
+    // One logical line: no raw LF / U+2028 / U+2029 remain.
+    expect(summary).not.toMatch(/[\n\u2028\u2029]/);
+    expect(summary).toContain("\\n");
+    expect(summary!.length).toBeLessThanOrEqual(REPORT_SUMMARY_MAX_CHARS);
+    expect(summary!.endsWith("…")).toBe(true);
   });
 
   it("returns null for a missing directory", async () => {

@@ -30,8 +30,10 @@ import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   CRASH_REPORT_SPAWN_SLACK_MS,
   MAX_KEPT_CRASH_REPORTS,
+  STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_FLUSH_TIMEOUT_MS,
   StderrLogTee,
+  type StderrTee,
   type CrashReportMatch,
   crashReportsDirFor,
   describeExitCode,
@@ -268,7 +270,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     sinceMs: number,
     excludeNames: ReadonlySet<string>,
   ) => Promise<CrashReportMatch | null>;
-  readonly createStderrTee: (environment: Environment) => StderrLogTee;
+  readonly createStderrTee: (environment: Environment) => StderrTee;
 }
 
 const defaultRunDeps: RunHostStartDeps = {
@@ -665,9 +667,39 @@ export async function runHostStart(
   // into host.log plus the head+tail capture for the crash marker. Failures
   // are swallowed - a diagnostics write must never take the supervisor down.
   const stderrTee = deps.createStderrTee(opts.environment);
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderrTee.append(chunk);
+  // Resolves when the stderr stream ends (or errors). `exit` fires when the
+  // process dies, NOT when its pipes have drained, so the finalize path waits
+  // on THIS (bounded) before writing the marker - otherwise the fatal text can
+  // still be unread in the pipe and the capture comes out empty in exactly the
+  // abnormal-death case this feature exists for.
+  let resolveStderrEnded: () => void = () => undefined;
+  const stderrEnded = new Promise<void>((resolve) => {
+    resolveStderrEnded = resolve;
   });
+  if (child.stderr === null || child.stderr === undefined) {
+    resolveStderrEnded();
+  } else {
+    const stderr = child.stderr;
+    stderr.on("data", (chunk: Buffer) => {
+      stderrTee.append(chunk);
+    });
+    // MANDATORY, not defensive: the stream is a live `Readable` this process
+    // owns, and Node rethrows an unhandled stream `error` as an uncaught
+    // exception. A read error on this pipe (EIO, or EPIPE after an abnormal
+    // child death - i.e. precisely the crash case) would kill the supervisor
+    // BEFORE it writes the terminal marker Desktop reads. Swallow it and
+    // settle the wait: whatever bytes arrived are still worth recording, and
+    // `error` may arrive instead of `end`.
+    stderr.on("error", () => {
+      resolveStderrEnded();
+    });
+    stderr.on("end", () => {
+      resolveStderrEnded();
+    });
+    stderr.on("close", () => {
+      resolveStderrEnded();
+    });
+  }
 
   const probeObservation =
     probeContext === null
@@ -718,6 +750,7 @@ export async function runHostStart(
       probeObservation,
       childSpawnedAtMs,
       stderrTee,
+      stderrEnded,
       crashReportsDirPath,
       preexistingReportNames,
     });
@@ -823,7 +856,8 @@ async function persistChildExit(input: {
   readonly bundle: string;
   readonly probeObservation: Promise<ProbeObservation> | null;
   readonly childSpawnedAtMs: number;
-  readonly stderrTee: StderrLogTee;
+  readonly stderrTee: StderrTee;
+  readonly stderrEnded: Promise<void>;
   readonly crashReportsDirPath: string;
   readonly preexistingReportNames: ReadonlySet<string>;
 }): Promise<void> {
@@ -864,9 +898,14 @@ async function persistChildExit(input: {
     bundle,
     deps,
   } = input;
-  // Drain queued stderr tee writes (bounded) before any terminal marker:
-  // `process.exit()` below abandons pending appends, and the fatal text they
-  // carry is the evidence this whole path exists to keep.
+  // TWO waits, and they are not interchangeable. First: let the stderr pipe
+  // reach `end` - `exit` does not imply drained pipes, so without this the
+  // capture can be empty precisely when the child died hard. Second: drain
+  // the tee's queued `appendFile` writes, which `process.exit()` below would
+  // otherwise abandon. Both are bounded, because a grandchild holding the
+  // inherited stderr fd can keep the stream open indefinitely and a
+  // diagnostics path must never hang the supervisor's exit.
+  await withDeadline(input.stderrEnded, STDERR_END_WAIT_TIMEOUT_MS);
   await input.stderrTee.flush(STDERR_FLUSH_TIMEOUT_MS);
   // `process.exit()` is synchronous. Terminal markers are therefore written
   // synchronously before exit rather than scheduling an append that the
@@ -1028,16 +1067,45 @@ function boundedCrashReportScan(input: {
   readonly preexistingReportNames: ReadonlySet<string>;
 }): Promise<CrashReportMatch | null> {
   return Promise.race([
-    input.deps.findCrashReport(
-      input.crashReportsDirPath,
-      input.childSpawnedAtMs - CRASH_REPORT_SPAWN_SLACK_MS,
-      input.preexistingReportNames,
-    ),
+    // `.catch` is load-bearing, not decoration. `persistChildExit` is invoked
+    // as `void persistChildExit(...)`, so a rejection here would skip the
+    // terminal marker AND `deps.exit` - leaving the supervisor alive with no
+    // evidence written, which is strictly worse than having no `report=`
+    // field. The default implementation swallows its own I/O errors, but the
+    // INJECTED dependency contract makes no such promise.
+    input.deps
+      .findCrashReport(
+        input.crashReportsDirPath,
+        input.childSpawnedAtMs - CRASH_REPORT_SPAWN_SLACK_MS,
+        input.preexistingReportNames,
+      )
+      .catch(() => null),
     new Promise<null>((resolve) => {
       const timer = setTimeout(
         () => resolve(null),
         CRASH_REPORT_SCAN_TIMEOUT_MS,
       );
+      timer.unref?.();
+    }),
+  ]);
+}
+
+/**
+ * Resolves when `promise` settles or `timeoutMs` elapses, whichever is first.
+ * Never rejects: every caller here is on the exit path, where the only
+ * acceptable outcome is "continue and write the marker".
+ */
+function withDeadline(
+  promise: Promise<void>,
+  timeoutMs: number,
+): Promise<void> {
+  return Promise.race([
+    promise.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
       timer.unref?.();
     }),
   ]);

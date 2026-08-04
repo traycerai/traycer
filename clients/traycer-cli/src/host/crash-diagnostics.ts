@@ -103,6 +103,21 @@ export const CRASH_REPORT_SCAN_TIMEOUT_MS = 2_000;
 export const STDERR_FLUSH_TIMEOUT_MS = 1_000;
 
 /**
+ * Budget for waiting on the child's stderr stream to END before the terminal
+ * marker is written. `exit` fires when the process dies, NOT when its pipes
+ * have drained, so finalizing on `exit` can write the marker while the fatal
+ * text is still unread in the pipe - the capture is then empty in exactly the
+ * abnormal-death case it exists for. Bounded because a grandchild holding the
+ * inherited stderr fd can delay `close` indefinitely, and a diagnostics path
+ * must never be able to hang the supervisor's exit: wait, then write whatever
+ * has arrived.
+ */
+export const STDERR_END_WAIT_TIMEOUT_MS = 2_000;
+
+/** Clamp for the one-line report digest embedded in logs/markers. */
+export const REPORT_SUMMARY_MAX_CHARS = 512;
+
+/**
  * Windows exit statuses worth naming. Keyed by the unsigned NTSTATUS value
  * (Node reports them as positive decimals, e.g. 3221226505). Codes below
  * 0x40000000 are ordinary exit codes and are not decoded.
@@ -255,6 +270,21 @@ export class StderrCaptureBuffer {
   }
 
   /**
+   * Normalizes arbitrary text to the single-line marker grammar: escapes
+   * every JS line terminator, strips remaining control characters, clamps.
+   * Exposed as a static because report summaries need the identical
+   * treatment - a `javascriptStack.message` carrying a newline would
+   * otherwise break the same single-line contract this class exists to
+   * protect for stderr.
+   */
+  static toSingleLine(text: string, maxChars: number): string {
+    const escaped = escapeToSingleLine(text);
+    return escaped.length <= maxChars
+      ? escaped
+      : `${escaped.slice(0, maxChars - 1)}…`;
+  }
+
+  /**
    * Single-line, marker-grammar-safe rendering: head, an elision mark when
    * middle bytes were dropped, then the tail. EVERY JS line terminator is
    * escaped (the marker parser scans one line, and U+2028/U+2029 are line
@@ -281,24 +311,45 @@ export class StderrCaptureBuffer {
           ? `${headText}\n[... ${this.elidedBytes} bytes elided ...]\n${tailText}`
           : `${headText}${tailText}`;
     }
-    const newlinesEscaped = joined
-      .replace(/\r/g, "")
-      .replace(/[\n\u2028\u2029]/g, "\\n");
-    // Strip remaining control characters by code point (a regex range
-    // over them would trip no-control-regex; a filter states the same
-    // thing plainly). Tab survives - whitespace the marker quoting
-    // handles.
-    let escaped = "";
-    for (const ch of newlinesEscaped) {
-      const code = ch.codePointAt(0) ?? 0;
-      if (code >= 0x20 || code === 0x09) {
-        escaped += ch;
-      }
-    }
-    return escaped.length <= STDERR_MARKER_MAX_CHARS
-      ? escaped
-      : `${escaped.slice(0, STDERR_MARKER_MAX_CHARS - 1)}…`;
+    return StderrCaptureBuffer.toSingleLine(joined, STDERR_MARKER_MAX_CHARS);
   }
+}
+
+/**
+ * Escapes every JS line terminator and strips remaining control characters.
+ * Shared by the stderr capture and the report summary: both end up on a
+ * single `key=value` marker line, and the parser's `.`-based line regex will
+ * not cross U+2028/U+2029 - an unescaped one silently discards the WHOLE
+ * marker. Tab survives; the marker quoting handles ordinary whitespace.
+ */
+function escapeToSingleLine(text: string): string {
+  const newlinesEscaped = text
+    .replace(/\r/g, "")
+    .replace(/[\n\u2028\u2029]/g, "\\n");
+  // By code point rather than a regex range: a control-character range would
+  // trip no-control-regex, and this states the same rule plainly.
+  let escaped = "";
+  for (const ch of newlinesEscaped) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code >= 0x20 || code === 0x09) {
+      escaped += ch;
+    }
+  }
+  return escaped;
+}
+
+/**
+ * Structural surface of the stderr tee that `runHostStart` consumes.
+ * `RunHostStartDeps` is typed with THIS, not the concrete class: naming the
+ * class drags its private fields into the dependency type, which forced test
+ * doubles through an `as unknown` chain the repo's type rules ban. A method
+ * added here later breaks a stub at compile time instead of at runtime.
+ */
+export interface StderrTee {
+  readonly capture: StderrCaptureBuffer;
+  append(chunk: Buffer): void;
+  teeDroppedBytes(): number;
+  flush(timeoutMs: number): Promise<void>;
 }
 
 /**
@@ -311,7 +362,7 @@ export class StderrCaptureBuffer {
  * terminal marker - `process.exit` would otherwise abandon them. Failures
  * are swallowed: a diagnostics write must never take the supervisor down.
  */
-export class StderrLogTee {
+export class StderrLogTee implements StderrTee {
   readonly capture = new StderrCaptureBuffer(
     STDERR_HEAD_MAX_BYTES,
     STDERR_TAIL_MAX_BYTES,
@@ -375,7 +426,14 @@ export async function prepareCrashReportsDir(
   keep: number,
 ): Promise<readonly string[]> {
   try {
-    await mkdir(dir, { recursive: true });
+    // 0700: a Node diagnostic report embeds `environmentVariables`, and the
+    // host child inherits `process.env` plus the Traycer env overrides - so a
+    // fatal crash writes the operator's secrets to disk. Under a default
+    // umask the directory would be world-readable and every local user on the
+    // machine could read them. Mode is applied to the leaf only; an existing
+    // directory keeps its mode (chmod-ing a path the operator may have
+    // deliberately relaxed is not this function's call).
+    await mkdir(dir, { recursive: true, mode: 0o700 });
   } catch {
     // Unwritable data dir: the spawn will surface real failures; a missing
     // report destination must not block the host from starting.
@@ -498,7 +556,18 @@ async function summarizeReport(path: string): Promise<string | null> {
     if (event !== null) parts.push(`event=${event}`);
     if (trigger !== null) parts.push(`trigger=${trigger}`);
     if (message !== null) parts.push(`js=${message}`);
-    return parts.length > 0 ? parts.join(" ") : null;
+    if (parts.length === 0) {
+      return null;
+    }
+    // ENFORCED, not just documented: these values come verbatim out of the
+    // report JSON, and a `javascriptStack.message` carrying a line
+    // terminator would break the one-line contract this digest promises -
+    // the same hazard `escapedForMarker` exists to prevent for stderr, and
+    // `persistChildExit` already passes this straight into a log line.
+    return StderrCaptureBuffer.toSingleLine(
+      parts.join(" "),
+      REPORT_SUMMARY_MAX_CHARS,
+    );
   } catch {
     return null;
   }

@@ -17,11 +17,12 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
 import {
   CRASH_REPORT_SPAWN_SLACK_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_HEAD_MAX_BYTES,
   STDERR_TAIL_MAX_BYTES,
   StderrCaptureBuffer,
   type CrashReportMatch,
-  type StderrLogTee,
+  type StderrTee,
 } from "../../host/crash-diagnostics";
 import type { Environment } from "../../runner/environment";
 import { hostHomeDir } from "../../store/paths";
@@ -198,6 +199,8 @@ interface Recorded {
   findCrashReportResult: CrashReportMatch | null;
   /** When set, findCrashReport never resolves (scan-timeout path). */
   findCrashReportHangs: boolean;
+  /** When set, findCrashReport rejects (must not skip marker/exit). */
+  findCrashReportRejects: boolean;
   lastStderrTee: MemoryStderrTee | null;
   readonly loggerErrors: Array<{
     message: string;
@@ -206,10 +209,10 @@ interface Recorded {
 }
 
 /**
- * Capture-only stderr tee: never opens host.log. Satisfies StderrLogTee's
- * structural surface used by persistChildExit.
+ * Capture-only stderr tee: never opens host.log. Typed as StderrTee so no
+ * cast is required (concrete StderrLogTee private fields stay out of deps).
  */
-class MemoryStderrTee {
+class MemoryStderrTee implements StderrTee {
   readonly capture = new StderrCaptureBuffer(
     STDERR_HEAD_MAX_BYTES,
     STDERR_TAIL_MAX_BYTES,
@@ -226,11 +229,6 @@ class MemoryStderrTee {
   flush(_timeoutMs: number): Promise<void> {
     return Promise.resolve();
   }
-}
-
-function asStderrLogTee(tee: MemoryStderrTee): StderrLogTee {
-  const asUnknown: unknown = tee;
-  return asUnknown as StderrLogTee;
 }
 
 interface RunStubs {
@@ -265,6 +263,7 @@ function makeRunStubs(
     findCrashReportCalls: [],
     findCrashReportResult: null,
     findCrashReportHangs: false,
+    findCrashReportRejects: false,
     lastStderrTee: null,
     loggerErrors: [],
   };
@@ -377,6 +376,9 @@ function makeRunStubs(
         sinceMs,
         excludeNames: new Set(excludeNames),
       });
+      if (recorded.findCrashReportRejects) {
+        throw new Error("injected findCrashReport failure");
+      }
       if (recorded.findCrashReportHangs) {
         return new Promise<CrashReportMatch | null>(() => {
           // Never resolves — exercises the scan timeout race.
@@ -384,10 +386,10 @@ function makeRunStubs(
       }
       return recorded.findCrashReportResult;
     },
-    createStderrTee: (_environment: Environment) => {
+    createStderrTee: (_environment: Environment): StderrTee => {
       const tee = new MemoryStderrTee();
       recorded.lastStderrTee = tee;
-      return asStderrLogTee(tee);
+      return tee;
     },
   };
   return { child, recorded, deps };
@@ -1216,6 +1218,160 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(crashed).toBeDefined();
     expect(crashed?.fields.exitCode).toBe(7);
     expect(crashed?.fields.report).toBeUndefined();
+  }, 10_000);
+
+  it("writes the terminal marker and exits when findCrashReport rejects", async () => {
+    // Injected findCrashReport must not skip marker + deps.exit (the race
+    // has a .catch; without it a rejection leaves the supervisor alive).
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    recorded.findCrashReportRejects = true;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(deps, child, 7, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(7);
+    expect(crashed?.fields.report).toBeUndefined();
+  });
+
+  it("survives an error on the stderr stream and still writes the terminal marker", async () => {
+    // Major: an unhandled Readable error on child.stderr used to kill the
+    // supervisor before persistChildExit wrote the marker Desktop reads.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              setImmediate(() => {
+                stderr.write(Buffer.from("partial fatal text\n"));
+                // Stream error instead of a clean end — must be swallowed.
+                stderr.emit("error", new Error("EIO on host stderr"));
+                child.emit("exit", 7, null);
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(7);
+    // Bytes that arrived before the error are still worth recording.
+    expect(String(crashed?.fields.stderrTail)).toContain("partial fatal text");
+  });
+
+  it("includes stderr bytes that arrive after exit but before stream end", async () => {
+    // Major: `exit` ≠ drained pipe. Without awaiting stderrEnded before the
+    // marker, the fatal text still in the pipe is lost. This test FAILS if
+    // that await is removed.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              setImmediate(() => {
+                // Process dies first; fatal text is still in flight.
+                child.emit("exit", 7, null);
+                setImmediate(() => {
+                  stderr.write(
+                    Buffer.from(
+                      "FATAL ERROR: late-arriving OOM block after exit\n",
+                    ),
+                  );
+                  stderr.end();
+                });
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(String(crashed?.fields.stderrTail)).toContain(
+      "FATAL ERROR: late-arriving OOM block after exit",
+    );
+  });
+
+  it("writes the marker within the stderr-end deadline when the stream never ends", async () => {
+    // A grandchild holding the inherited stderr fd can delay close forever;
+    // the wait is bounded so the supervisor cannot hang on exit.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+
+    const started = Date.now();
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              setImmediate(() => {
+                stderr.write(Buffer.from("partial\n"));
+                // Never end/close — only exit.
+                child.emit("exit", 7, null);
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+    const elapsed = Date.now() - started;
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    // Bound: wait is STDERR_END_WAIT_TIMEOUT_MS, not forever.
+    expect(elapsed).toBeLessThan(STDERR_END_WAIT_TIMEOUT_MS + 1_500);
+    expect(elapsed).toBeGreaterThanOrEqual(STDERR_END_WAIT_TIMEOUT_MS - 200);
   }, 10_000);
 
   it("omits crash-diagnostic fields on clean exit", async () => {

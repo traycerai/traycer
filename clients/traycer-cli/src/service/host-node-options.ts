@@ -37,33 +37,64 @@ export const HOST_DIAGNOSTIC_REPORT_FLAGS =
 
 const HOST_APPENDED_FLAGS = `${HOST_V8_FLAGS} ${HOST_DIAGNOSTIC_REPORT_FLAGS}`;
 
+// Value-taking flags this helper canonically owns. Each is stripped from the
+// inherited value before the canonical set is appended.
+//
+// The strip MUST be quote-aware and MUST cover the space-separated form:
+// NODE_OPTIONS accepts `--flag value` as well as `--flag=value`, and values
+// may be double-quoted (`--report-directory="/path with spaces"`). Removing
+// only the flag leaves the VALUE behind as a bare token, and Node rejects the
+// whole of NODE_OPTIONS on an unrecognized token - so the host never starts
+// at all. That is the worst failure a diagnostics change can ship, which is
+// why every arm goes through one shared pattern instead of hand-rolled
+// variants that drift (the `--max-semi-space-size` arm had exactly that gap).
+const VALUE_FLAGS_OWNED = [
+  "--max-semi-space-size",
+  "--report-directory",
+  // Not appended by us, but stripped: an inherited constant report filename
+  // makes every crash overwrite one file, which defeats the supervisor's
+  // "report newer than this child, and not one that pre-existed it" scan
+  // (and a non-`.json` name makes the scan ignore reports entirely).
+  "--report-filename",
+] as const;
+
+/** Boolean flags this helper appends; stripped so they cannot duplicate. */
+const BOOLEAN_FLAGS_OWNED = [
+  "--report-on-fatalerror",
+  "--report-compact",
+] as const;
+
+// `--flag`, optionally followed by `=value` or ` value`, where value may be
+// quoted. The space-separated arm refuses to swallow a following `--flag`, so
+// a malformed value-less token cannot eat its neighbor.
+function valueFlagPattern(flag: string): RegExp {
+  return new RegExp(
+    `(^|\\s)${flag}(?:=(?:"[^"]*"|\\S+)|\\s+(?:"[^"]*"|(?!--)\\S+))?(?=\\s|$)`,
+    "g",
+  );
+}
+
 // Appends the host's required creation-time flags to an inherited
-// NODE_OPTIONS value. Any pre-existing token this helper canonically appends
-// (`--max-semi-space-size`, the report flags, `--report-directory`) is
-// stripped first so the host always lands on the canonical set - whether the
-// inherited value is the macOS plist's identical copy (a true no-op) or some
-// other value an operator set in their shell, which would otherwise silently
-// defeat or duplicate it. Unrelated operator tokens are preserved.
+// NODE_OPTIONS value, after stripping every token this helper owns - so the
+// host always lands on the canonical set whether the inherited value is the
+// macOS plist's identical copy (a true no-op) or something an operator set in
+// their shell that would silently defeat or duplicate it. Unrelated operator
+// tokens are preserved.
 export function withHostNodeOptions(existing: string | undefined): string {
   if (existing === undefined || existing.length === 0) {
     return HOST_APPENDED_FLAGS;
   }
-  const stripped = existing
-    .replace(/(^|\s)--max-semi-space-size(?:=\S+)?(?=\s|$)/g, " ")
-    .replace(/(^|\s)--report-on-fatalerror(?=\s|$)/g, " ")
-    .replace(/(^|\s)--report-compact(?=\s|$)/g, " ")
-    // Quote-aware, and covers both `=value` and space-separated forms:
-    // NODE_OPTIONS values may be double-quoted (`--report-directory="/path
-    // with spaces"`), and a naive \S+ strip would leave `with spaces"`
-    // behind - an unterminated NODE_OPTIONS that kills Node before any user
-    // code runs. The space-separated arm refuses to swallow a following
-    // `--flag` so a malformed value-less token cannot eat its neighbor.
-    .replace(
-      /(^|\s)--report-directory(?:=(?:"[^"]*"|\S+)|\s+(?:"[^"]*"|(?!--)\S+))?(?=\s|$)/g,
+  let stripped = existing;
+  for (const flag of VALUE_FLAGS_OWNED) {
+    stripped = stripped.replace(valueFlagPattern(flag), " ");
+  }
+  for (const flag of BOOLEAN_FLAGS_OWNED) {
+    stripped = stripped.replace(
+      new RegExp(`(^|\\s)${flag}(?=\\s|$)`, "g"),
       " ",
-    )
-    .trim()
-    .replace(/\s+/g, " ");
+    );
+  }
+  stripped = stripped.trim().replace(/\s+/g, " ");
   return stripped.length > 0
     ? `${stripped} ${HOST_APPENDED_FLAGS}`
     : HOST_APPENDED_FLAGS;
