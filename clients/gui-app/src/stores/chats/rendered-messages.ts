@@ -58,7 +58,6 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
-import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -1985,10 +1984,8 @@ function withTurnCompletion(
           turnHadOutput: rows.some(
             (row) => row.role === "assistant" && row.segments.length > 0,
           ),
-          turnReplyText: collectAssistantReplyText(
-            rows.flatMap((row) =>
-              row.role === "assistant" ? row.segments : [],
-            ),
+          turnReplySegments: rows.flatMap((row) =>
+            row.role === "assistant" ? row.segments : [],
           ),
         };
   return rows.map((row, index) =>
@@ -2491,7 +2488,7 @@ function renderStoppedTurnsWithoutAssistantRecords(
         stoppedAt: stopped.stoppedAt,
         reason: stopped.reason,
         turnHadOutput: false,
-        turnReplyText: "",
+        turnReplySegments: [],
       },
       pausedDurationMs: 0,
       pausedSinceMs: null,

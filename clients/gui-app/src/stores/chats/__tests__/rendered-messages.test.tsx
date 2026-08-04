@@ -16,6 +16,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -5087,12 +5088,14 @@ describe("useRenderedMessages turn.stopped", () => {
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("leaves the stopped marker null for a turn that completed naturally", () => {
@@ -5254,12 +5257,14 @@ describe("useRenderedMessages turn.stopped", () => {
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.segments.at(-1)?.kind).toBe("error");
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Working on it",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("Working on it");
   });
 
   it("renders an empty completed turn with the stopped marker (stopped before responding)", () => {
@@ -5296,12 +5301,14 @@ describe("useRenderedMessages turn.stopped", () => {
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.segments ?? []).toHaveLength(0);
     expect(row?.completedAt).toBe(11_000);
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 11_000,
       reason: "Stop requested by owner.",
       turnHadOutput: false,
-      turnReplyText: "",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("");
   });
 
   it("synthesizes a stopped boundary when no assistant record ever materialized", () => {
@@ -5341,7 +5348,7 @@ describe("useRenderedMessages turn.stopped", () => {
         stoppedAt: 11_000,
         reason: "Stop requested by owner.",
         turnHadOutput: false,
-        turnReplyText: "",
+        turnReplySegments: [],
       },
     });
   });
@@ -5543,7 +5550,7 @@ describe("useRenderedMessages turn.stopped", () => {
     // createdAt anchors to the turn's true startedAt (not an ordering-only
     // bumped timestamp), so completedAt - createdAt measures the whole turn.
     expect(trailingRow?.createdAt).toBe(10_000);
-    expect(trailingRow?.stopped).toEqual({
+    expect(trailingRow?.stopped).toMatchObject({
       stoppedAt: 13_000,
       reason: "Stop requested by owner.",
       // The turn DID produce output (the text chunk above the steer) even
@@ -5552,8 +5559,10 @@ describe("useRenderedMessages turn.stopped", () => {
       // The turn's copyable reply text, aggregated from the text chunk
       // above the steer even though this boundary row's own segments are
       // empty - the copy control needs somewhere to source it from.
-      turnReplyText: "Working on it",
     });
+    expect(
+      collectAssistantReplyText(trailingRow?.stopped?.turnReplySegments ?? []),
+    ).toBe("Working on it");
     // The trailing row sorts after the nested steer bubble, not before it.
     const steerIndex = rows.findIndex(
       (row) => row.id === "steer:queue:block-2",
@@ -5606,12 +5615,14 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(trailingRow.completedAt).toBe(10_500);
     // createdAt anchors to startedAt here too - there's no earlier chunk.
     expect(trailingRow.createdAt).toBe(10_000);
-    expect(trailingRow.stopped).toEqual({
+    expect(trailingRow.stopped).toMatchObject({
       stoppedAt: 10_500,
       reason: "Stop requested by owner.",
       turnHadOutput: false,
-      turnReplyText: "",
     });
+    expect(
+      collectAssistantReplyText(trailingRow.stopped?.turnReplySegments ?? []),
+    ).toBe("");
   });
 
   it("shows the stopped marker only once the turn.stopped event actually lands, across a rerender", () => {
@@ -5657,12 +5668,14 @@ describe("useRenderedMessages turn.stopped", () => {
     });
 
     const after = result.current.find((row) => row.role === "assistant");
-    expect(after?.stopped).toEqual({
+    expect(after?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(after?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("suppresses the stopped marker while the turn is still active, even once its event has landed, then shows it once the snapshot catches up", () => {
@@ -5747,12 +5760,14 @@ describe("useRenderedMessages turn.stopped", () => {
     });
     const settled = result.current.find((row) => row.role === "assistant");
     expect(settled?.completedAt).toBe(15_000);
-    expect(settled?.stopped).toEqual({
+    expect(settled?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(settled?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("keeps an unrelated turn's row reference stable when a sibling turn's turn.stopped event is appended", () => {
