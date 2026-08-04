@@ -365,8 +365,14 @@ function ReasoningHeader(props: ReasoningHeaderProps) {
           ? hiddenHeaderActionLabel(label, promotes, expanded)
           : undefined
       }
+      // Both dropped together in promotion mode, for one reason: this click
+      // leaves the live window rather than disclosing anything here. Keeping
+      // `aria-controls` while dropping `aria-expanded` was half a claim - it
+      // named an element as this button's disclosure target and then declined
+      // to report its state, so assistive tech was pointed at a body whose
+      // visibility the button does not own.
       aria-expanded={promotes ? undefined : expanded}
-      aria-controls={controlsId ?? undefined}
+      aria-controls={promotes ? undefined : (controlsId ?? undefined)}
       className={cn(
         "group/reasoning flex max-w-full items-center gap-2 overflow-hidden rounded-md px-1 py-1 text-left text-ui-sm text-muted-foreground transition-colors",
         "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",

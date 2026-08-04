@@ -659,12 +659,20 @@ describe("<ReasoningSegment />", () => {
     // `rotateWhenOpen={false}`. Reporting `aria-expanded="false"` told a screen
     // reader this control opens something in place, which it does not.
     expect(header.getAttribute("aria-expanded")).toBeNull();
+    // And `aria-controls` goes with it. Naming a body as this button's
+    // disclosure target while declining to report that body's state is half a
+    // claim: it points assistive tech at an element whose visibility the button
+    // does not own. The streaming body IS rendered here, so `controlsId` is
+    // non-null and this asserts the promotion branch, not an empty one.
+    expect(header.getAttribute("aria-controls")).toBeNull();
+    expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
 
     fireEvent.click(header);
 
     // Expanding in place would open into a four-line box; the click leaves it.
     expect(promote).toHaveBeenCalledTimes(1);
     expect(header.getAttribute("aria-expanded")).toBeNull();
+    expect(header.getAttribute("aria-controls")).toBeNull();
     expect(screen.queryByTestId("reasoning-tail")).toBeNull();
   });
 });
