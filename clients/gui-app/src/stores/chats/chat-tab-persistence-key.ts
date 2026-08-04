@@ -16,6 +16,8 @@ export interface ChatTabPersistenceIdentity {
   readonly tileInstanceId: string;
   readonly epicId: string;
   readonly chatId: string;
+  /** Bound host when known; legacy/test callers may omit it. */
+  readonly hostId?: string | null;
 }
 
 export function chatTabPersistenceTabKey(

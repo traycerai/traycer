@@ -5,6 +5,7 @@ import type {
   TileScrollAnchor,
 } from "@/hooks/scroll/scroll-restoration-adapter";
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
+import { readingPositionIdentityForTileInstance } from "@/lib/reading-position";
 
 interface NativeScrollMetrics {
   readonly scrollTop: number;
@@ -34,6 +35,10 @@ export function useNativeDivScrollRestoration(
   contentReady: boolean,
 ): NativeDivScrollRestoration {
   const visible = useTileBodyVisible();
+  const identity = useMemo(
+    () => readingPositionIdentityForTileInstance(instanceId),
+    [instanceId],
+  );
 
   const elementRef = useRef<HTMLDivElement | null>(null);
   const liveMetricsRef = useRef<NativeScrollMetrics | null>(null);
@@ -45,21 +50,9 @@ export function useNativeDivScrollRestoration(
     [],
   );
 
-  const onScroll = useCallback((event: UIEvent<HTMLDivElement>): void => {
-    const el = event.currentTarget;
-    // A concealed container reports a zero-height box; ignore so a hidden-state
-    // read never clobbers the saved position.
-    if (el.clientHeight === 0) return;
-    liveMetricsRef.current = {
-      scrollTop: el.scrollTop,
-      scrollLeft: el.scrollLeft,
-      scrollHeight: el.scrollHeight,
-      scrollWidth: el.scrollWidth,
-    };
-  }, []);
-
   const adapter = useMemo<ScrollRestorationAdapter>(
     () => ({
+      surfaceKind: "native",
       captureAnchor: () => {
         const metrics = liveMetricsRef.current;
         if (metrics === null) return null;
@@ -90,7 +83,29 @@ export function useNativeDivScrollRestoration(
     [],
   );
 
-  useScrollRestoration(instanceId, adapter, visible, contentReady);
+  const { commit } = useScrollRestoration(
+    identity,
+    adapter,
+    visible,
+    contentReady,
+  );
+
+  const onScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>): void => {
+      const el = event.currentTarget;
+      // A concealed container reports a zero-height box; ignore so a
+      // hidden-state read never clobbers the saved position.
+      if (el.clientHeight === 0) return;
+      liveMetricsRef.current = {
+        scrollTop: el.scrollTop,
+        scrollLeft: el.scrollLeft,
+        scrollHeight: el.scrollHeight,
+        scrollWidth: el.scrollWidth,
+      };
+      commit();
+    },
+    [commit],
+  );
 
   return { scrollContainerRef, onScroll };
 }

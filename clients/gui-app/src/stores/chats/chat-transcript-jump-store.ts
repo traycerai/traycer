@@ -9,7 +9,7 @@
  * one after `openTileInEpic` mounts it.
  *
  * Session-only and deliberately not persisted: a jump is a navigation intent,
- * not reading position (that is `tile-scroll-anchor-store`). Requests are
+ * not reading position (that belongs to the global reading-position service). Requests are
  * CONSUMED - the tile clears the entry once it has acted - so a remount does
  * not replay an old jump, and a repeat jump to the same anchor still fires
  * because `requestId` advances.
