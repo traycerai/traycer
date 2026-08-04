@@ -650,6 +650,79 @@ describe("<ReasoningSegment />", () => {
     expect(promote).toHaveBeenCalledTimes(1);
   });
 
+  // `<summary>` is the interactive element that looks least like one: no ARIA
+  // role, not focusable by default, styled as prose. But `<details>` is
+  // supported end to end - `MERGEABLE_HTML_CONTAINERS` exists precisely to keep
+  // a blank-line-split disclosure in a single block - so a trace can ship one,
+  // and its summary is a real control the reader clicks to open the nested
+  // section, not to fold the reasoning around it.
+  const DETAILS_TRACE = [
+    "Before the disclosure.",
+    "",
+    "<details>",
+    "<summary>Show the sub-trace</summary>",
+    "",
+    "Nested detail.",
+    "",
+    "</details>",
+  ].join("\n");
+
+  it("does not collapse the trace when a nested <summary> is clicked", () => {
+    render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown={DETAILS_TRACE}
+        isStreaming={false}
+        durationMs={3000}
+        bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: "Thought for 3s" });
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // The disclosure really rendered - otherwise this test proves nothing about
+    // a control it never showed.
+    const summary = screen.getByText("Show the sub-trace");
+    expect(summary.tagName).toBe("SUMMARY");
+
+    fireEvent.click(summary);
+
+    // Opening the nested section left the reasoning block the reader is reading
+    // exactly where it was.
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // ...and the guard suppressed the control's click, not the whole listener.
+    fireEvent.click(screen.getByText("Before the disclosure."));
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("does not promote when a nested <summary> is clicked in the live window", () => {
+    const promote = vi.fn();
+    render(
+      <LiveActivityPromoteContext.Provider value={promote}>
+        <ReasoningSegment
+          findUnitId={null}
+          markdown={DETAILS_TRACE}
+          isStreaming
+          durationMs={null}
+          bodyBoundedByParent
+          headerless
+          initiallyExpanded={false}
+        />
+      </LiveActivityPromoteContext.Provider>,
+    );
+
+    fireEvent.click(screen.getByText("Show the sub-trace"));
+    expect(promote).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Before the disclosure."));
+    expect(promote).toHaveBeenCalledTimes(1);
+  });
+
   // The companion to "keeps a trace the reader opened when the header appears".
   // That pin is deliberate, but on a COMPLETED headerless block the gesture is
   // invisible - the body is already fully shown - so a second click un-pinning

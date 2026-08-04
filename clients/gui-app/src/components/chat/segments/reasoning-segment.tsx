@@ -89,13 +89,23 @@ const MUTED_PROSE = cn(
  * disclosure, rather than at something inside it.
  *
  * Two things it is not. Reasoning markdown renders real controls - a code
- * block's copy button, links, reference chips - and the listener spans the whole
- * body, so without the first check the control's own click ALSO toggles: the
- * copy runs and then the group promotes, opening, scrolling and taking focus for
- * a gesture that asked for none of that. And a click ending a drag-selection
- * *inside this block* is the reader copying text, not collapsing it; a stray
- * selection elsewhere on the page must not swallow the click, which is why this
- * is scoped to `node`.
+ * block's copy button, links, reference chips, and a `<summary>` the author
+ * wrote by hand - and the listener spans the whole body, so without the first
+ * check the control's own click ALSO toggles: the copy runs and then the group
+ * promotes, opening, scrolling and taking focus for a gesture that asked for
+ * none of that. And a click ending a drag-selection *inside this block* is the
+ * reader copying text, not collapsing it; a stray selection elsewhere on the
+ * page must not swallow the click, which is why this is scoped to `node`.
+ *
+ * The list is bounded, not open-ended, and the bound is `TRAYCER_SANITIZE_SCHEMA`
+ * - nothing else can reach this DOM. Of the tags it admits only `a`, `input` and
+ * `summary` self-activate on click (it allows no `role`, so `[role='button']`
+ * and `button` cover only what our own React components render). `summary` is
+ * the one that is easy to miss: it is not focusable-by-default, carries no ARIA
+ * role and looks like prose, yet `<details>` is deliberately supported end to
+ * end (`MERGEABLE_HTML_CONTAINERS` exists to keep a blank-line-split disclosure
+ * in one block), so a trace CAN ship one. Widening the schema means revisiting
+ * this selector.
  */
 function bodyClickIsDisclosure(
   event: MouseEvent,
@@ -104,7 +114,9 @@ function bodyClickIsDisclosure(
   const target = event.target;
   if (
     target instanceof Element &&
-    target.closest("a, button, [role='button'], input, select, textarea")
+    target.closest(
+      "a, button, [role='button'], input, select, textarea, summary",
+    )
   ) {
     return false;
   }
