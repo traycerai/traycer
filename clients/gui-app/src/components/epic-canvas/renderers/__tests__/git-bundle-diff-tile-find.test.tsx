@@ -117,6 +117,7 @@ vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
     repoState: null,
     repoMode: "normal",
     pollStartedAtMs: 1,
+    watcherStatus: null,
   }),
 }));
 

@@ -22,6 +22,11 @@ import {
   flushDesktopTabsPersistence,
   hasPendingDesktopTabsWrite,
 } from "@/stores/tabs/desktop-tabs-persistence";
+import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
+import {
+  flushLiveReadingPositions,
+  preserveReadingPositionViewsForMove,
+} from "@/lib/reading-position";
 import { findStripItemForRef } from "@/stores/tabs/layout";
 import { readTabStripLayout } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -102,6 +107,9 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
         const tab = stateBeforeMove.tabsById[tabId];
         return tab === undefined ? [] : [tab];
       });
+      const movingViewKeys = Object.keys(
+        stateBeforeMove.canvasByTabId[request.tabId]?.tilesByInstanceId ?? {},
+      );
       // Grouped-move adapter (renderer-only; the move IPC itself, step 5
       // below, is unchanged): a tab paired into a split cannot be handed to
       // another window still grouped, so this separates it first and makes
@@ -110,6 +118,11 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
       // racing the move could restore the pre-separation pairing.
       void (async () => {
         const ref: TabRef = { kind: "epic", id: request.tabId };
+        // Publish the source renderer's last coherent reading snapshots before
+        // any structural mutation can conceal or unmount their DOM. The flush
+        // drains the service's debounced localStorage writes synchronously;
+        // the destination still tolerates cross-process storage-event delay.
+        flushLiveReadingPositions(request.epicId);
         // Step 2: synchronous separate. `separateBeforeMove` refuses
         // identically (`{separated: false, splitId: null}`) whether the ref
         // was never grouped or is grouped but has a locked partner, so its
@@ -133,6 +146,16 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
           );
           if (!flushed) return;
         }
+        // Canvas projection is a separate 100ms-debounced channel from the
+        // tab strip. Flush it independently so a just-mutated layout and its
+        // stable tile instance ids arrive before the move IPC hydrates the
+        // destination renderer.
+        const canvasFlushed =
+          await flushActiveDesktopPerWindowProjection().then(
+            () => true,
+            () => false,
+          );
+        if (!canvasFlushed) return;
         // Step 4: revalidate - abort if anything changed the ref's status
         // while the flush was in flight (closed, re-locked, re-paired), or
         // if step 2's separation was refused outright (e.g. a locked split
@@ -145,6 +168,7 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
           request.tabId,
         );
         if (result.result !== "moved") return;
+        preserveReadingPositionViewsForMove(movingViewKeys);
         // Step 6: post-move removal routed through the coordinator (which
         // applies its own echo suppression around the same underlying
         // `discardTabState` source mutation) instead of calling the source

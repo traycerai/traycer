@@ -10,6 +10,7 @@ import {
 } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
+  CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
   isChatTimelineAtStrictBottom,
   isChatTimelineGeometryMeasurable,
   useChatTimelineFollowLatch,
@@ -181,6 +182,13 @@ function notImplemented(): never {
   throw new Error("not implemented in this test double");
 }
 
+const DEFAULT_FOLLOW_LATCH_OPTIONS = {
+  onFollowIntentChange: undefined,
+  onReaderGesture: undefined,
+  isCorrectionSuppressed: undefined,
+  resolveSuppressedEndLanding: undefined,
+};
+
 interface FakeListRef {
   readonly current: LegendListRef;
   readonly scrollToEnd: Mock<() => Promise<void>>;
@@ -211,10 +219,26 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
 
 describe("useChatTimelineFollowLatch", () => {
   let shim: ScrollableNodeShim;
+  let animationFrameCallbacks: Map<number, FrameRequestCallback>;
+  let nextAnimationFrameId: number;
 
   beforeEach(() => {
     capturedResizeCallbacks = [];
     vi.stubGlobal("ResizeObserver", ControllableResizeObserver);
+    animationFrameCallbacks = new Map();
+    nextAnimationFrameId = 1;
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      (callback: FrameRequestCallback): number => {
+        const id = nextAnimationFrameId;
+        nextAnimationFrameId += 1;
+        animationFrameCallbacks.set(id, callback);
+        return id;
+      },
+    );
+    vi.stubGlobal("cancelAnimationFrame", (id: number): void => {
+      animationFrameCallbacks.delete(id);
+    });
     shim = installScrollableNodeShim();
   });
 
@@ -224,7 +248,13 @@ describe("useChatTimelineFollowLatch", () => {
     document.body.innerHTML = "";
   });
 
-  it("synchronizes permission when the parent follow mode changes", () => {
+  function flushAnimationFrame(): void {
+    const callbacks = [...animationFrameCallbacks.values()];
+    animationFrameCallbacks.clear();
+    for (const callback of callbacks) callback(performance.now());
+  }
+
+  it("treats initialScrollAtEnd as a mount seed, not a live reset", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,
@@ -233,7 +263,12 @@ describe("useChatTimelineFollowLatch", () => {
     const listRef = makeFakeListRef(node);
     const { result, rerender } = renderHook(
       ({ initialScrollAtEnd }) =>
-        useChatTimelineFollowLatch(listRef, initialScrollAtEnd, true),
+        useChatTimelineFollowLatch(
+          listRef,
+          initialScrollAtEnd,
+          true,
+          DEFAULT_FOLLOW_LATCH_OPTIONS,
+        ),
       { initialProps: { initialScrollAtEnd: true } },
     );
 
@@ -241,7 +276,259 @@ describe("useChatTimelineFollowLatch", () => {
     shim.setGeometry(node, { scrollHeight: 1700 });
     result.current.followEndIfPermitted();
 
-    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("owns an under-landing until bounded correction reaches the true end", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    listRef.scrollToEnd.mockImplementation((): Promise<void> => {
+      if (listRef.scrollToEnd.mock.calls.length === 1) {
+        shim.setGeometry(node, { scrollTop: 1120, scrollHeight: 1700 });
+      } else {
+        shim.setGeometry(node, { scrollTop: 1200, scrollHeight: 1700 });
+      }
+      fireNativeScroll(node);
+      return Promise.resolve();
+    });
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+    flushAnimationFrame();
+    flushAnimationFrame();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
+    expect(node.scrollTop).toBe(1200);
+
+    result.current.noteReaderGesture({
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    shim.setGeometry(node, { scrollTop: 800 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    shim.setGeometry(node, { scrollTop: 1200 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+    shim.setGeometry(node, { scrollHeight: 1800 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(3);
+  });
+
+  it("bounds a correction that never reaches measurable strict end", () => {
+    const node = shim.makeNode({
+      scrollTop: 1200,
+      scrollHeight: 1700,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollHeight: 1800 });
+    result.current.followEndIfPermitted();
+    for (let frame = 0; frame < 12; frame += 1) flushAnimationFrame();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(
+      CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
+    );
+    expect(animationFrameCallbacks.size).toBe(0);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("treats opposed motion during an active correction as a reader departure without a gesture token", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    listRef.scrollToEnd.mockImplementation((): Promise<void> => {
+      shim.setGeometry(node, { scrollTop: 1120 });
+      fireNativeScroll(node);
+      return Promise.resolve();
+    });
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+
+    shim.setGeometry(node, { scrollTop: 900 });
+    fireNativeScroll(node);
+    flushAnimationFrame();
+    flushAnimationFrame();
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires wheel intent before native scroll so growth cannot swallow a departure", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const onReaderGesture = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+
+    expect(onReaderGesture).toHaveBeenCalledWith({
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("converges a toward-end reader landing when content grows before scroll delivery", () => {
+    const node = shim.makeNode({
+      scrollTop: 700,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
+    // The reader physically reaches the end that existed at gesture time.
+    // A streaming commit then grows the document before scroll delivery.
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1700 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("owns an animated go-live operation until its fresh-DOM landing resolves", () => {
+    const node = shim.makeNode({
+      scrollTop: 200,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    result.current.beginOwnedEndNavigation();
+    shim.setGeometry(node, { scrollTop: 650 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).not.toHaveBeenLastCalledWith(false);
+
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+    result.current.completeOwnedEndNavigation(result.current.isAtStrictEnd());
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it("yields an owned go-live operation to an opposed scrollbar move", () => {
+    const node = shim.makeNode({
+      scrollTop: 500,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    result.current.beginOwnedEndNavigation();
+    shim.setGeometry(node, { scrollTop: 800 });
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollTop: 700 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("keeps a suppressed hydration edge visibly detached", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: () => true,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
   });
 
   it("review regression: downward scroll that remains non-bottom cannot reacquire", () => {
@@ -252,7 +539,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node); // confirm at edge
 
@@ -278,7 +570,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node);
 
@@ -310,7 +607,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, false, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        false,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node);
 
@@ -328,7 +630,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node);
 
@@ -350,7 +657,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, false, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        false,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
 
     // A resize/scroll event can still fire while hidden (0x0) - must be
@@ -383,7 +695,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node);
 
@@ -415,7 +732,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node);
 
@@ -444,7 +766,14 @@ describe("useChatTimelineFollowLatch", () => {
       clientHeight: 500,
     });
     const listRef = makeFakeListRef(node);
-    renderHook(() => useChatTimelineFollowLatch(listRef, true, true));
+    renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
     fireNativeScroll(node); // confirm following
 
     // Shrink the viewport - distance is now > epsilon with NO scrollTop
@@ -473,7 +802,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node);
 
@@ -489,7 +823,12 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const { result } = renderHook(() =>
-      useChatTimelineFollowLatch(listRef, true, true),
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
     );
     fireNativeScroll(node);
 
