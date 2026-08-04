@@ -64,6 +64,11 @@ export const runnerMutationKeys = {
   supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
+  // On-demand V8 heap snapshot of this renderer (Diagnostics → Memory).
+  // Keyed so the capture dedups - it freezes the renderer while the heap is
+  // walked, so a double-click must not queue a second walk.
+  captureHeapSnapshot: () =>
+    ["runner.diagnostics.captureHeapSnapshot"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
   // on-disk cache). Used by the Settings → Host Updates row's
   // "Check now" / "Retry" buttons so stale cached failures don't survive
