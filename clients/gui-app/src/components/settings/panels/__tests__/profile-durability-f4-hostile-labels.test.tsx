@@ -259,8 +259,8 @@ function renderProvidersSettingsPanel() {
       </TooltipProvider>
     </QueryClientProvider>,
   );
-  // Profiles render on the "Profiles & Limits" tab, not General. Radix Tabs
-  // activate on mouseDown, not click.
+  // Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
+  // tab. Radix Tabs activate on mouseDown, not click.
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Profiles & Limits" }));
   return view;
 }
