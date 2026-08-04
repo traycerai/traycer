@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -21,15 +21,24 @@ export function ErrorSegment({
   message,
   recoverable,
 }: ErrorSegmentProps) {
-  // Rebuilt when the row's fields change: the runtime accumulator replaces a
-  // same-blockId error in place (message/code/recoverable), and the blockId is
-  // this row's React key, so a MOUNTED row can update - a frozen draft would
-  // report the old cause. Re-minting the correlation id/timestamp on rebuild
-  // is fine (the capture has no external effect). The real message/code reach
-  // ONLY the private diagnostics branch - the public prefill stays null-bodied
-  // because both fields are host/harness-supplied free text and the public
-  // context does no redaction (see the hostile transcript-code test).
-  const reportContext = useMemo(
+  // Built at CLICK time, never at render. This row is durable transcript: it
+  // mounts whenever the chat is opened, which is one or more commits BEFORE
+  // `SupportContextRegistryBridge`'s effects publish that chat's own
+  // id/harness/model (chat state arrives through a store subscription, so it
+  // trails a route change by two commits). Both `buildReportIssueDraftContext`
+  // and `capturePersistedAgentError` snapshot that registry, and the harness
+  // id doubles as the fingerprint's `causalProvider` - so building at render
+  // would file the report under the PREVIOUSLY open chat and cluster it under
+  // the wrong provider. Report time is the only moment the registry is known
+  // to describe this row's chat. Deferring also keeps the draft honest when
+  // the runtime accumulator replaces a same-blockId error under a MOUNTED row
+  // (blockId is this row's React key) - the click reads today's props.
+  //
+  // The real message/code reach ONLY the private diagnostics branch - the
+  // public prefill stays null-bodied because both fields are host/harness-
+  // supplied free text and the public context does no redaction (see the
+  // hostile transcript-code test).
+  const buildReportContext = useCallback(
     () =>
       buildReportIssueDraftContext(
         createReportIssueContext({
@@ -68,7 +77,7 @@ export function ErrorSegment({
           </span>
         </div>
         <ReportIssueAction
-          context={reportContext}
+          context={buildReportContext}
           presentation="icon"
           className="-mt-1 -mr-1 shrink-0"
         />

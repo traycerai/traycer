@@ -27,9 +27,17 @@ export interface DefaultHostReadinessPresentation {
   /**
    * Last boot-progress event of the current provisioning attempt, non-null
    * only once that attempt has FAILED (when `progress` above has already
-   * nulled out). Report surfaces read it so a settled install failure can
-   * still say where it died; live surfaces keep reading `progress`, and a
-   * successful attempt leaves nothing behind for later unrelated reports.
+   * nulled out). The PROVISIONING-ERROR report reads it so a settled install
+   * failure can still say where it died; live surfaces keep reading
+   * `progress`.
+   *
+   * It is cleared only by a new attempt or a successful settle, so it can
+   * outlive the surface that owned it - a host that failed to install and
+   * then came up by some other route leaves it set. Consumers must therefore
+   * scope it to the failure it explains rather than treating it as ambient
+   * host state (see `includeRetainedProgress` in the readiness controller);
+   * the provisioning-error card is safe because it renders only while that
+   * attempt's error is still live.
    */
   readonly lastProgress: MutationProgress | null;
   readonly provisioningError: Error | null;

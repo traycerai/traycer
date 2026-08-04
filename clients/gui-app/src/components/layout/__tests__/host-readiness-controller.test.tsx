@@ -815,6 +815,86 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
       source: "Host startup",
     });
   });
+
+  // The retained stage outlives the attempt that produced it (cleared only by
+  // a new attempt or a successful settle), so a host that failed to install,
+  // came up by some other route, and later stopped answering the probe would
+  // otherwise append a dead install stage to a #860-shaped report - pointing
+  // triage at provisioning, the exact wrong place. Only the provisioning-error
+  // card, which renders only while its own converge error is live, may use it.
+  it.each([
+    {
+      name: "unreachable-host",
+      readiness: { kind: "compatibility-error" } as const,
+      compatibility: {
+        status: "failed" as const,
+        errorMessage: "fetch failed",
+        unreachable: true,
+      },
+      expected: {
+        title: "Traycer Host is not responding",
+        message:
+          "The app could not reach Traycer Host. Host health: host ready, compat unreachable.",
+        code: "HOST_UNREACHABLE",
+        source: "Host connection",
+      },
+    },
+    {
+      name: "incompatible-host",
+      readiness: { kind: "incompatible-host" } as const,
+      compatibility: {
+        status: "incompatible" as const,
+        errorMessage: null,
+        unreachable: false,
+      },
+      expected: {
+        title: "Host update required",
+        message:
+          "Traycer Host requires an update. Host health: host ready, compat incompatible.",
+        code: "HOST_INCOMPATIBLE",
+        source: "Host compatibility",
+      },
+    },
+  ])(
+    "keeps a settled install stage out of the $name report",
+    ({ readiness, compatibility, expected }) => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+      const presentation: DefaultHostReadinessPresentation = {
+        ...DEFAULT_HOST_PRESENTATION,
+        localHostState: "ready",
+        progress: null,
+        // Left over from an install that died long before this failure.
+        lastProgress: {
+          stage: "extract",
+          percent: 80,
+          bytes: null,
+          totalBytes: null,
+          message: null,
+        },
+        compatibility: {
+          ...DEFAULT_HOST_PRESENTATION.compatibility,
+          ...compatibility,
+        },
+      };
+      const controller: HostReadinessController = {
+        readinessFor: () => readiness,
+        defaultHostPresentation: presentation,
+      };
+
+      renderWithProviders(
+        controller,
+        <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+          <Member id="epic" />
+        </SurfaceReadinessBoundary>,
+        buildRunnerHost(),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+      const context = useDesktopDialogStore.getState().reportIssueContext;
+      expect(context).toEqual(expected);
+      expect(context?.message).not.toContain("last progress");
+    },
+  );
 });
 
 describe("<SurfaceReadinessBoundary /> single respawn owner (MED6)", () => {
