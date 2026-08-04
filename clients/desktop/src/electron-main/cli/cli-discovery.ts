@@ -482,6 +482,53 @@ export async function probeCliVersion(
   });
 }
 
+// Probe results for PATH candidates, cached for the process lifetime and
+// keyed by binary path. Discovery runs on every CLI invocation (status
+// polls included), and an unresponsive candidate costs the full 2s probe
+// timeout each time - the cache bounds that to one probe per binary per
+// desktop session. The promise (not the settled value) is cached so
+// concurrent discoveries share one exec. Accepted staleness: a PATH binary
+// replaced mid-session keeps its verdict until relaunch; the next launch's
+// reconcile re-probes and re-governs staging anyway.
+const pathProbeCache = new Map<string, Promise<string | null>>();
+
+function cachedProbeCliVersion(binaryPath: string): Promise<string | null> {
+  const cached = pathProbeCache.get(binaryPath);
+  if (cached !== undefined) return cached;
+  const probe = probeCliVersion(binaryPath);
+  pathProbeCache.set(binaryPath, probe);
+  return probe;
+}
+
+export function resetCliProbeCacheForTests(): void {
+  pathProbeCache.clear();
+}
+
+/**
+ * Vet a `traycer` found on PATH before discovery may return it: it must
+ * answer `--version` (cached probe). Merely *existing* under the right name
+ * is not enough - the name can be squatted by something that is not our
+ * CLI at all (oss #872: an AppImage-manager launcher for the desktop app
+ * itself), and adopting such a binary both suppresses bundled-CLI staging
+ * and breaks every subsequent invocation. Returns the probed version (plus
+ * the inferred npm source, when the path resolves into the npm package)
+ * or `null` when the candidate must be ignored.
+ */
+export async function vetPathCliCandidate(
+  binaryPath: string,
+): Promise<{ readonly version: string; readonly source?: "npm" } | null> {
+  const version = await cachedProbeCliVersion(binaryPath);
+  if (version === null) {
+    log.warn(
+      "[cli] `traycer` on PATH failed the version probe - ignoring it for discovery",
+      { binaryPath },
+    );
+    return null;
+  }
+  const source = await inferNpmPathSource(binaryPath);
+  return source !== undefined ? { version, source } : { version };
+}
+
 /**
  * Absolute path to the CLI binary bundled inside the desktop app's
  * `extraResources/cli/`. NP-7 publishes per-platform/arch binaries; the
@@ -542,9 +589,11 @@ function devCliWrapperPath(): string {
  * multi-run dev shell reads its own `~/.traycer/cli/dev-runs/<slot>/...`
  * manifest while keeping shared dev credentials/config outside the run slot.
  *
- * "PATH CLI newer than bundled, trust it" is handled by the caller
- * after a version probe (packaged-build flow); this discovery layer simply
- * returns the most-authoritative source it can find.
+ * A PATH candidate is only returned after it passes the `--version` vet
+ * (`vetPathCliCandidate`, cached per process) - a name-squatting binary
+ * that cannot answer falls through to the bundled CLI instead of being
+ * adopted (oss #872). Version-trust policy beyond that ("PATH CLI newer
+ * than bundled, trust it") stays with the caller (cli-reconcile).
  */
 export async function discoverCli(): Promise<CliDiscoveryResult> {
   const manifest = await readCliManifest();
@@ -572,14 +621,10 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
   if (config.environment === "production") {
     const pathCli = await findCliOnPath();
     if (pathCli !== null) {
-      const source = await inferNpmPathSource(pathCli);
-      const version = source === "npm" ? await probeCliVersion(pathCli) : null;
-      return {
-        kind: "path",
-        binaryPath: pathCli,
-        version,
-        ...(source !== undefined ? { source } : {}),
-      };
+      const vetted = await vetPathCliCandidate(pathCli);
+      if (vetted !== null) {
+        return { kind: "path", binaryPath: pathCli, ...vetted };
+      }
     }
   }
   const bundled = await resolveBundledCliPath();
@@ -717,41 +762,6 @@ export async function sweepAsideCliBinaries(stablePath: string): Promise<void> {
         rm(join(dir, name), { force: true }).catch(() => undefined),
       ),
   );
-}
-
-/**
- * Self-heal pass: if the manifest points at a missing/non-executable
- * binary AND the bundled CLI is present and runnable, silently reinstall
- * the bundled CLI to the stable per-user path. Returns the path that is
- * known-good after the pass.
- *
- * If the bundled CLI is absent there's nothing to repair from - caller
- * routes to the first-launch UX which downloads/installs CLI via NP-7
- * (out of scope here; for v1 NP-5 we only handle the bundled-CLI case).
- */
-export async function selfHealCliFromBundled(opts: {
-  readonly bundledCliPath: string | null;
-  readonly bundledVersion: string;
-}): Promise<string | null> {
-  const manifest = await readCliManifest();
-  const stablePath = stableCliBinaryPath();
-  const installedOk =
-    manifest !== null && (await isExecutable(manifest.binaryPath));
-  if (installedOk) {
-    return manifest.binaryPath;
-  }
-  if (opts.bundledCliPath === null) {
-    return null;
-  }
-  log.info("[cli] installed CLI missing/corrupt - reinstalling bundled CLI", {
-    manifestBinary: manifest?.binaryPath ?? null,
-    stablePath,
-  });
-  return installBundledCli({
-    bundledCliPath: opts.bundledCliPath,
-    version: opts.bundledVersion,
-    source: "desktop",
-  });
 }
 
 // POSIX: X_OK access check is atomic - file exists and the user can
