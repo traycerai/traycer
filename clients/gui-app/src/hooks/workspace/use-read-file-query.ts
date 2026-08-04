@@ -31,6 +31,11 @@ export function useWorkspaceReadFile(
         workspacePath.length > 0 &&
         filePath.length > 0,
       staleTime: 5_000,
+      // A fresh mount (closing and reopening a tab) must never surface a
+      // stale cached read - the file may have changed externally while the
+      // tab was closed. Scoped here, not globally: other host queries still
+      // want cache-first mounts.
+      refetchOnMount: "always",
     },
   });
 }

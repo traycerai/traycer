@@ -302,6 +302,18 @@ function WorkspaceFileTileLive(props: {
     });
   }, [editSession.state?.lastSavedAt, queryClient, tabHostId]);
 
+  // This tile is kept alive (not remounted) across an inactive/active toggle,
+  // so `refetchOnMount` never re-fires when the user switches back to it -
+  // only the false→true edge should force one fresh read past `staleTime`.
+  const wasActiveRef = useRef(props.isActive);
+  useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = props.isActive;
+    if (props.isActive && !wasActive) {
+      void query.refetch();
+    }
+  }, [props.isActive, query]);
+
   const readLatestDiskContent = useCallback(async (): Promise<string> => {
     const conflictDiskContent = editSession.state?.conflict?.diskContent;
     if (conflictDiskContent !== null && conflictDiskContent !== undefined) {
