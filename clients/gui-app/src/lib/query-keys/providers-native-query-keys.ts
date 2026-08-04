@@ -167,6 +167,29 @@ export const providersNativeQueryKeys = {
     params.version,
   ],
 
+  /**
+   * Matches EVERY cached icon on one host, whatever plugin, theme or version.
+   *
+   * A predicate rather than a prefix because the discriminating segments sit on
+   * both sides of the request params: `pluginId` and `theme` ride inside them,
+   * and `version` trails after. No prefix covers the family, and a per-plugin
+   * one would still miss the case this exists for.
+   *
+   * Needed because `version` is NULLABLE. For a versioned plugin a reinstall
+   * changes the key and retires the old entry by itself; for one that reports
+   * no version the key is identical across reinstalls, and with
+   * `staleTime: Infinity` and no polling that entry would serve the previous
+   * install's artwork for the rest of the session.
+   */
+  isPluginIconKey: (hostId: string | null, key: QueryKey): boolean => {
+    const scope = hostQueryKeys.scope(hostId);
+    if (key.length < scope.length) return false;
+    for (let i = 0; i < scope.length; i += 1) {
+      if (key[i] !== scope[i]) return false;
+    }
+    return key.includes("pluginIcon");
+  },
+
   skillsList: (
     hostId: string | null,
     params: NativeListScopeParams,

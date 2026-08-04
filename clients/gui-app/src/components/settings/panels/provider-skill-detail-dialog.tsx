@@ -56,6 +56,18 @@ export function ProviderSkillDetailDialog(props: {
   readonly removal: SkillRemovability;
   readonly removePending: boolean;
   /**
+   * True while ANY skill mutation is in flight, not just this removal.
+   *
+   * Separate from `removePending` on purpose: every skill mutation shares one
+   * `useMutation` observer, and a second `mutate()` on it replaces the first
+   * call's `onSuccess`/`onError`, so starting a removal on top of a pending
+   * create or import can swallow that operation's failure entirely. Removal is
+   * therefore disabled by any of them - but the SPINNER stays on
+   * `removePending`, or an unrelated create would make this button claim to be
+   * doing the removing.
+   */
+  readonly removeDisabled: boolean;
+  /**
    * A failed removal. Surfaced HERE rather than only on the tab behind this
    * dialog, which the user cannot see while it is open.
    */
@@ -131,7 +143,7 @@ export function ProviderSkillDetailDialog(props: {
               size="sm"
               variant="destructive"
               className="shrink-0"
-              disabled={props.removePending}
+              disabled={props.removeDisabled}
               onClick={props.onRequestRemove}
             >
               {props.removePending ? (

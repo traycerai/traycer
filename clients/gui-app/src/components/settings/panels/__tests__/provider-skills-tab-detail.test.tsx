@@ -326,34 +326,60 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     expect(skillMocks.mutateVariables).toEqual([{ suppressToast: true }]);
   });
 
-  it("disables Remove while THIS removal is in flight", () => {
+  it("disables Remove for ANY pending skill mutation, but only spins for its own", () => {
     // A destructive action's pending state is where a double-submit does
     // damage, and nothing else in this suite exercises it.
     //
-    // `isPending` alone is deliberately NOT enough: the gate is
-    // `isRemovePending(isMutating, pendingKey)`, so a create/import running
-    // concurrently must not grey out Remove. The confirmation therefore has to
-    // be driven for real - the mutate mock takes the call and settles nothing,
-    // which is exactly "in flight".
+    // Removal is disabled by any in-flight skill mutation, not only by another
+    // removal: every one of them goes through a SINGLE `useMutation` observer,
+    // and a second `mutate()` on it replaces the first call's
+    // `onSuccess`/`onError`. Starting a removal on top of a pending create can
+    // therefore swallow that create's failure with no inline error and no
+    // toast - and both share the one `pendingKey`, so whichever settles first
+    // clears it while the other is still running.
+    //
+    // The SPINNER stays specific, which is why these are two props and not
+    // one: an unrelated create must not make this button claim to be doing the
+    // removing.
     skillMocks.removeScopes = ["global"];
     skillMocks.mutateIsPending = true;
     renderTab();
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
-    const remove = screen.getByRole("button", { name: "Remove" });
-    // Not yet: pending is true, but no REMOVE is the pending one.
-    expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(false);
-
-    fireEvent.click(remove);
-    fireEvent.click(confirmAction());
-
     // The native `disabled` property, not `toBeDisabled()`: jest-dom's
     // matchers are not wired into this suite, so the matcher would be
     // undefined rather than failing informatively.
+    const remove = screen.getByRole("button", { name: "Remove" });
+    expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(true);
+    // Still the trash ICON, not the spinner: the pending operation is somebody
+    // else's. The spinner renders a `<span>` of braille frames, so the lucide
+    // `<svg>` surviving here is what says the button is not claiming the work.
+    expect(remove.querySelector("svg")).not.toBeNull();
+  });
+
+  it("disables Remove and spins it once THIS removal is in flight", () => {
+    // The confirmation is driven for real - the mutate mock takes the call and
+    // settles nothing, which is exactly "in flight" - because `pendingKey` is
+    // internal state that only the real path sets.
+    skillMocks.removeScopes = ["global"];
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
+
+    const remove = screen.getByRole("button", { name: "Remove" });
+    // Nothing pending yet, so it is live - otherwise the assertions below
+    // would pass on a button that was disabled the whole time.
+    expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(false);
+
+    fireEvent.click(remove);
+    skillMocks.mutateIsPending = true;
+    fireEvent.click(confirmAction());
+
     const pendingRemove = screen.getByRole("button", { name: "Remove" });
     expect(
       pendingRemove instanceof HTMLButtonElement && pendingRemove.disabled,
     ).toBe(true);
+    // Now it IS the pending operation, so the icon gives way to the spinner.
+    expect(pendingRemove.querySelector("svg")).toBeNull();
   });
 
   it("blocks removal of a built-in skill and says why, under the same provider", () => {

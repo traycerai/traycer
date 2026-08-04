@@ -331,6 +331,7 @@ function ProviderSkillsTabBody({
             source: openSkill.source,
           })}
           removePending={removePending}
+          removeDisabled={isMutating}
           removeError={removeError}
           onRequestRemove={() => {
             setRemoveTarget(openSkill);
