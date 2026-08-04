@@ -44,6 +44,7 @@ describe("epic left panel registry", () => {
     expect(LEFT_PANEL_DEFINITIONS.map((entry) => entry.id)).toEqual([
       "chats",
       "terminals",
+      "managed-commands",
       "artifacts",
       "git-diff",
       "pull-requests",
@@ -62,6 +63,7 @@ describe("epic left panel registry", () => {
     const alwaysVisiblePanelIds: ReadonlyArray<LeftPanelId> = [
       "chats",
       "terminals",
+      "managed-commands",
       "artifacts",
       "sharing",
     ];

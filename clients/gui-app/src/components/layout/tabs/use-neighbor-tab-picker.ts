@@ -2,7 +2,9 @@ import { useCallback, useMemo } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { LANDING_ROUTE } from "@/lib/routes";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { tabActivationHistory, tabRefKey } from "@/stores/tabs/layout";
 import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
+import { readTabStripLayout } from "@/stores/tabs/store";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -71,14 +73,29 @@ export function useNeighborTabPicker(): NeighborTabPicker {
  * disappears. Reads `getHeaderTabs()` BEFORE any store mutation -
  * callers must invoke this *prior* to the kind-specific close action.
  *
- * Browser-style: focus the previous-ordered tab; if the closing tab
- * was first, focus the new first.
+ * Prefer the most recently activated surviving tab. Legacy layouts and
+ * malformed history fall back to browser-style strip adjacency.
  */
 export function pickNeighborForClose(closingTab: HeaderTab): HeaderTab | null {
   const tabs = getHeaderTabs();
   const closingIdx = tabs.findIndex(
     (t) => t.kind === closingTab.kind && t.id === closingTab.id,
   );
+  const history = tabActivationHistory(readTabStripLayout());
+  const closingKey = `${closingTab.kind}:${closingTab.id}`;
+  const activeHistoryRef = history.at(0);
+  if (
+    activeHistoryRef !== undefined &&
+    tabRefKey(activeHistoryRef) === closingKey
+  ) {
+    const tabsByKey = new Map<string, HeaderTab>(
+      tabs.map((tab) => [`${tab.kind}:${tab.id}`, tab] as const),
+    );
+    for (const ref of history.slice(1)) {
+      const recent = tabsByKey.get(tabRefKey(ref));
+      if (recent !== undefined) return recent;
+    }
+  }
   return pickNeighborAfterRemovingTabs(
     tabs,
     closingIdx,

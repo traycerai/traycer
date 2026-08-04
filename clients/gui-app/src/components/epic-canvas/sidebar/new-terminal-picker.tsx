@@ -7,10 +7,10 @@
  * opens a raw terminal tab bound to that row's host, with the row's
  * `runningDir` persisted as the PTY working directory.
  *
- * Host+folder selection itself lives in `NewTerminalPickerBody`, shared with
- * the Cmd+K palette's "Create new terminal" dialog. `PopoverContent` only
- * mounts this body while `isOpen`, so its state (explicit row, launch latch)
- * starts fresh every open without an imperative reset.
+ * Host+folder selection itself lives in `NewTerminalPickerBody`.
+ * `PopoverContent` only mounts this body while `isOpen`, so its state
+ * (explicit row, launch latch) starts fresh every open without an imperative
+ * reset. CMD-T uses the inline opener's own fuzzy workspace sub-page.
  */
 import { useCallback, useState } from "react";
 import { Plus } from "lucide-react";

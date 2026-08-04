@@ -1492,6 +1492,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: frame.messageId,
             message: {
@@ -1644,6 +1645,7 @@ describe("createChatSessionStore", () => {
     expect(state.queue.items).toHaveLength(1);
     const item = state.queue.items[0];
     expect(isOptimisticQueuedItem(item)).toBe(true);
+    if (item.kind !== "prompt") throw new Error("expected prompt item");
     expect(item.messageId).toBe(frame.messageId);
     expect(item.message.content).toEqual(IMAGE_CONTENT);
     expect(item.sender).toEqual({ type: "user", userId: OWNER_ID });
@@ -1744,6 +1746,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "reminted-message",
             message: {
@@ -1827,6 +1830,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: frame.messageId,
             message: {
@@ -1912,6 +1916,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "reminted-message",
             message: {
@@ -2343,6 +2348,7 @@ describe("createChatSessionStore", () => {
       settings: ChatRunSettings,
       status: "pending" | "steering",
     ) => ({
+      kind: "prompt" as const,
       queueItemId,
       messageId: `m-${queueItemId}`,
       message: {
@@ -3139,6 +3145,7 @@ describe("createChatSessionStore", () => {
         status: "paused",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "message-queue-1",
             message: {

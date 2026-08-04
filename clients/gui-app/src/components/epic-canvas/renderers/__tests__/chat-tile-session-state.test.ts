@@ -276,6 +276,7 @@ function runnableQueue(itemCount: number): ChatQueueState {
   return {
     status: "running",
     items: Array.from({ length: itemCount }, (_, index) => ({
+      kind: "prompt" as const,
       queueItemId: `item-${index}`,
       messageId: `message-${index}`,
       message: { kind: "user" as const, content: CONTENT },

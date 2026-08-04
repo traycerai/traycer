@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatQueuedManagedCommandItem,
+  ChatQueuedPromptItem,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   pruneAcceptedActions,
   reconcileQueueChange,
@@ -94,8 +97,9 @@ function createPendingUserMessage(
 function createQueueItem(
   messageId: string,
   content: JsonContent,
-): ChatQueueState["items"][number] {
+): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId: `queue-${messageId}`,
     messageId,
     message: {
@@ -110,6 +114,21 @@ function createQueueItem(
     targetTurnId: null,
     steerRequest: null,
     fallbackReason: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+}
+
+function createManagedCommandQueueItem(
+  queueItemId: string,
+): ChatQueuedManagedCommandItem {
+  return {
+    kind: "managed-command",
+    queueItemId,
+    commandId: `${queueItemId}-command`,
+    description: "bun test --watch",
+    commandKind: "monitor",
+    status: "pending",
     createdAt: 1000,
     updatedAt: 1000,
   };
@@ -513,6 +532,69 @@ describe("chat-queue-reconciler", () => {
 
       // Snapshot reconciliation returns new accepted actions from the patch
       expect(result.acceptedActions).toHaveProperty("action-1");
+    });
+  });
+
+  describe("managed-command queue items", () => {
+    it("never settles a pending send against a managed-command item", () => {
+      const managedItem = createManagedCommandQueueItem("queue-managed");
+      const input: ReconcileQueueInput = {
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        queue: { status: "running", items: [managedItem] },
+        nowMs: 5000,
+      };
+
+      const result = reconcileQueueChange(input);
+
+      // The host has not echoed the send back yet, so the action stays pending
+      // even though a chip is sitting in the queue.
+      expect(result.pendingActions).toEqual(input.pendingActions);
+      expect(result.acceptedActions).toEqual({});
+      expect(result.pendingUserMessages).toEqual(input.pendingUserMessages);
+      // The reconciler only reads the queue - the chip is untouched.
+      expect(input.queue.items).toEqual([managedItem]);
+    });
+
+    it("settles a pending send from its prompt echo while a managed-command sibling survives", () => {
+      const managedItem = createManagedCommandQueueItem("queue-managed");
+      const promptEcho = createQueueItem("msg-1", CONTENT);
+      const input: ReconcileQueueInput = {
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        queue: { status: "running", items: [managedItem, promptEcho] },
+        nowMs: 5000,
+      };
+
+      const result = reconcileQueueChange(input);
+
+      expect(result.pendingActions).toEqual({});
+      expect(result.acceptedActions).toHaveProperty("action-1");
+      expect(input.queue.items).toEqual([managedItem, promptEcho]);
+    });
+
+    it("restores an unconfirmed send rather than accepting a managed-command item as its echo", () => {
+      const managedItem = createManagedCommandQueueItem("queue-managed");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "running", items: [managedItem] },
+        failedSendRestoration: null,
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.acceptedActions).toEqual({});
+      expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
+      expect(input.queue.items).toEqual([managedItem]);
     });
   });
 

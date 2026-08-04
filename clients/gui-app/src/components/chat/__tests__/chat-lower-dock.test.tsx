@@ -7,6 +7,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BackgroundItem,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
@@ -209,6 +210,7 @@ function renderDock(input: DockInput) {
       <ChatLowerDock
         snapshotLoaded
         epicId="epic-1"
+        chatId="chat-1"
         viewTabId="tab-1"
         selfAgent={input.selfAgent}
         activeAgents={input.activeAgents}
@@ -216,6 +218,7 @@ function renderDock(input: DockInput) {
         restore={baseRestore(input.changes)}
         queue={input.queue}
         backgroundItems={input.backgroundItems}
+        runningManagedCommandCount={0}
         backgroundStopPendingTaskIds={new Set()}
         backgroundStopAllPending={false}
         activeTurnStatus="running"
@@ -272,8 +275,9 @@ function queueState(
   return { status: "idle", items: [...items] };
 }
 
-function queuedItem(queueItemId: string, text: string): ChatQueuedItem {
+function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId: `${queueItemId}-message`,
     message: {

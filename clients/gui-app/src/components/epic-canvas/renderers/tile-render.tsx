@@ -23,6 +23,7 @@ import { TicketTile } from "./ticket-tile";
 import { WorkspaceFileTile } from "./workspace-file-tile";
 import { GitDiffTile } from "./git-diff-tile";
 import { SnapshotDiffTile } from "./snapshot-diff-tile";
+import { ManagedCommandOutputTile } from "./managed-command-output-tile";
 import { CommGraphTile } from "./comm-graph-tile";
 import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
@@ -110,6 +111,14 @@ const TILE_RENDERERS: TileRendererRegistry = {
   ),
   "snapshot-diff": ({ node, viewTabId }) => (
     <SnapshotDiffTile node={node} viewTabId={viewTabId} />
+  ),
+  "managed-command-output": ({ node, viewTabId, tileId, epicId }) => (
+    <ManagedCommandOutputTile
+      node={node}
+      viewTabId={viewTabId}
+      tileId={tileId}
+      epicId={epicId}
+    />
   ),
   // Epic-scoped, not host-scoped: the tile fans a subscription out per host.
   // The surrounding `TabHostProvider` carries the ref's inert placeholder host

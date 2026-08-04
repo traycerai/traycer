@@ -14,9 +14,10 @@ import type {
   EpicResourceSnapshotWire,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWireV13,
+  ManagedCommandOwnerWire,
+  OwnerResourceSnapshotWireV14,
   ResourceProcessSnapshotWire,
-  ResourceOwnerKindWire,
+  ResourceOwnerKindWireV14,
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
@@ -38,7 +39,7 @@ export type ResourcesStreamClientFactory = (
   callbacks: ResourcesStreamCallbacks,
 ) => ResourcesStreamClientHandle;
 
-export type OwnerResourceUsage = OwnerResourceSnapshotWireV13;
+export type OwnerResourceUsage = OwnerResourceSnapshotWireV14;
 export type EpicResourceUsage = EpicResourceSnapshotWire;
 export type AppResourceUsage = AppResourceSnapshotWire;
 export type HostTreeResourceUsage = HostTreeResourceSnapshotWire;
@@ -52,7 +53,7 @@ export interface TaskResourceSummary {
 
 /** Stable map key for one owner within an epic's projection. */
 export function resourceOwnerKey(
-  kind: ResourceOwnerKindWire,
+  kind: ResourceOwnerKindWireV14,
   ownerId: string,
 ): string {
   return `${kind}\x1f${ownerId}`;
@@ -60,7 +61,7 @@ export function resourceOwnerKey(
 
 export function globalResourceOwnerKey(
   epicId: string,
-  kind: ResourceOwnerKindWire,
+  kind: ResourceOwnerKindWireV14,
   ownerId: string,
 ): string {
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
@@ -76,7 +77,7 @@ export interface ResourcesState {
    * map is "not currently tracked" - callers must treat that as unknown, never
    * as zero use.
    */
-  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV13>;
+  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV14>;
   /** Host-app usage sampled alongside the owner projection. */
   readonly app: AppResourceSnapshotWire | null;
   /** Whole host-process-tree aggregate, available from resources.subscribe@1.2. */
@@ -101,7 +102,7 @@ export interface ResourcesStoreHandle {
   readonly dispose: () => void;
 }
 
-const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWireV13> =
+const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWireV14> =
   new Map();
 const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 
@@ -111,15 +112,30 @@ const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 // projection is resent each update, but only owners whose metrics actually moved
 // get a new reference (and re-render their chip).
 function ownerUsageEqual(
-  a: OwnerResourceSnapshotWireV13,
-  b: OwnerResourceSnapshotWireV13,
+  a: OwnerResourceSnapshotWireV14,
+  b: OwnerResourceSnapshotWireV14,
 ): boolean {
   return (
     a.cpuPercent === b.cpuPercent &&
     a.rssBytes === b.rssBytes &&
     a.processCount === b.processCount &&
     a.activeProcessName === b.activeProcessName &&
+    managedCommandEqual(a.managedCommand, b.managedCommand) &&
     processesEqual(a.processes, b.processes)
+  );
+}
+
+// Renaming a Monitor changes what its row reads without moving a number, so
+// the naming has to take part in the identity check that gates re-renders.
+function managedCommandEqual(
+  a: ManagedCommandOwnerWire | null,
+  b: ManagedCommandOwnerWire | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.commandId === b.commandId &&
+    a.kind === b.kind &&
+    a.description === b.description
   );
 }
 
@@ -198,12 +214,12 @@ function otherUsageEqual(
 }
 
 function mergeOwners(
-  previous: ReadonlyMap<string, OwnerResourceSnapshotWireV13>,
+  previous: ReadonlyMap<string, OwnerResourceSnapshotWireV14>,
   payload: ResourcesProjectionPayload,
   scope: ResourcesStreamScope,
-): ReadonlyMap<string, OwnerResourceSnapshotWireV13> {
+): ReadonlyMap<string, OwnerResourceSnapshotWireV14> {
   if (payload.owners.length === 0) return EMPTY_OWNERS;
-  const next = new Map<string, OwnerResourceSnapshotWireV13>();
+  const next = new Map<string, OwnerResourceSnapshotWireV14>();
   for (const owner of payload.owners) {
     const key =
       scope.kind === "global"

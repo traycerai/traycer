@@ -76,6 +76,19 @@ const INNER_SUBPAGE: CommandSubpage = {
       hostBadge: "Remote Box",
     },
     {
+      id: "open:cat:status",
+      label: "Unavailable Leaf",
+      description: null,
+      keywords: ["unavailable"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      run: () => undefined,
+      statusBadge: "Unavailable: Remote Box",
+    },
+    {
       id: "open:cat:nested",
       label: "Nested",
       description: null,
@@ -262,6 +275,25 @@ describe("PaneOpener", () => {
       tabId: "tab-deep",
       groupId: "group-deep",
     });
+  });
+
+  it("includes a deep row's status badge in its accessible name", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-status"
+        groupId="group-status"
+        active={false}
+      />,
+    );
+
+    fireEvent.change(searchInput(), { target: { value: "unavailable" } });
+
+    expect(
+      screen.getByRole("option", {
+        name: "Category → Unavailable Leaf → Unavailable: Remote Box",
+      }),
+    ).not.toBeNull();
   });
 
   it("selecting a deep row that bears a sub-page drills into it", () => {
