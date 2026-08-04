@@ -332,6 +332,38 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
     await assertLibraryAcceptsHydratedDiff(hydrated, rehydrated);
   });
 
+  it("keeps a real non-empty change diff in FileDiff when host metadata incorrectly says zero bytes", () => {
+    render(
+      <DiffContentPrimitive
+        patch={CHANGE_PATCH}
+        cacheScope="host-zero-size-regression"
+        mode="split"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        // This is the exact production boundary regression: the host used to
+        // publish zero for every changed file. The parsed/hydrated diff is the
+        // final authority and must keep this non-empty file in-place.
+        isEmptyFile
+        editSession={{
+          editorOptions: EMPTY_EDITOR_OPTIONS,
+          oldFile: CHANGE_OLD,
+          newFile: CHANGE_NEW,
+        }}
+      />,
+    );
+
+    expect(capturedFileDiffs).toHaveLength(1);
+    const fileDiffNode = document.querySelector(
+      '[data-testid="instrumented-file-diff"]',
+    );
+    expect(fileDiffNode).toBeInstanceOf(HTMLElement);
+    expect(fileDiffNode?.getAttribute("data-edit")).toBe("true");
+    expect(requireCapturedFileDiff().type).toBe("change");
+  });
+
   it("keeps the hydrated FileDiffMetadata identity stable when only editorOptions churn", () => {
     const oldFile = CHANGE_OLD;
     const newFile = CHANGE_NEW;

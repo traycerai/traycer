@@ -42,9 +42,25 @@ const captured = vi.hoisted(() => ({
 }));
 
 vi.mock("@pierre/diffs", () => ({
-  parsePatchFiles: () => [
+  parsePatchFiles: (patch: string) => [
     {
-      files: [{ name: "src/app.ts" }],
+      files: [
+        patch.length === 0
+          ? {
+              name: "src/app.ts",
+              type: "new",
+              hunks: [],
+              additionLines: [],
+              deletionLines: [],
+            }
+          : {
+              name: "src/app.ts",
+              type: "change",
+              hunks: [{}],
+              additionLines: ["new"],
+              deletionLines: ["old"],
+            },
+      ],
     },
   ],
 }));
@@ -388,6 +404,51 @@ describe("<DiffContentPrimitive /> empty-origin behavior", () => {
     );
 
     expect(screen.queryByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID)).toBeNull();
+  });
+
+  it("keeps a non-empty diff mounted in place when host size metadata incorrectly says zero", () => {
+    const editAdapter = createEditAdapter();
+    const rendered = render(
+      <DiffContentPrimitive
+        patch="@@ -1 +1 @@\n-old\n+new\n"
+        cacheScope="bad-zero-size-hint"
+        mode="split"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile
+        editAdapter={editAdapter}
+      />,
+    );
+
+    const readContainer = screen.getByTestId("file-diff");
+    expect(screen.queryByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID)).toBeNull();
+
+    rendered.rerender(
+      <DiffContentPrimitive
+        patch="@@ -1 +1 @@\n-old\n+new\n"
+        cacheScope="bad-zero-size-hint"
+        mode="split"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile
+        editAdapter={editAdapter}
+        editSession={{
+          editorOptions: editAdapter.editorOptions,
+          oldFile: { name: "src/app.ts", contents: "old\n" },
+          newFile: { name: "src/app.ts", contents: "new\n" },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("file-diff")).toBe(readContainer);
+    expect(readContainer.getAttribute("data-edit")).toBe("true");
+    expect(screen.queryByTestId("mock-file")).toBeNull();
   });
 
   it("renders <File> (not <FileDiff>) once an editSession is set for an empty file, with the caret-1:0 editorOptions and new-file identity", () => {

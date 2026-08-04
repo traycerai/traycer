@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { File, FileDiff, parseDiffFromFile } from "@pierre/diffs";
+import {
+  File,
+  FileDiff,
+  parseDiffFromFile,
+  parsePatchFiles,
+} from "@pierre/diffs";
 import { Editor } from "@pierre/diffs/edit";
 
 /**
@@ -68,6 +73,22 @@ function makeContainer(): HTMLDivElement {
 }
 
 describe("empty untracked Git-diff editor attach (real @pierre/diffs library)", () => {
+  it("parses the host's empty-untracked patch as the confirmed zero-hunk new-file shape", () => {
+    const parsed = parsePatchFiles(
+      `diff --git a/empty.txt b/empty.txt
+new file mode 100644
+index 000000000..e69de29bb
+`,
+      "empty-untracked-host-patch",
+    );
+    const fileDiff = parsed[0]?.files[0];
+
+    expect(fileDiff.type).toBe("new");
+    expect(fileDiff.hunks).toHaveLength(0);
+    expect(fileDiff.additionLines).toHaveLength(0);
+    expect(fileDiff.deletionLines).toHaveLength(0);
+  });
+
   it("parseDiffFromFile(null, empty newFile) produces a full, non-partial diff", () => {
     const fileDiff = parseDiffFromFile(null, {
       name: "empty.txt",

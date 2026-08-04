@@ -69,12 +69,10 @@ export interface DiffContentPrimitiveProps {
     readonly newFile: FileContents;
   };
   /**
-   * True when the target file has zero bytes on disk (an empty
-   * new/untracked file, or an already-empty tracked file) - independent of
-   * `editSession`, since it must be known before editing has even started
-   * to decide whether to show the empty-origin activation affordance (see
-   * `EmptyOriginEditAffordance`). An empty file's `FileDiffMetadata` carries
-   * zero hunks, so it never renders a clickable line/token.
+   * Host metadata hint that the target file has zero bytes on disk. The
+   * renderer always verifies this against the parsed diff before exposing
+   * the empty-origin path: a stale or placeholder size must never replace a
+   * real `<FileDiff>` with the whole-file `<File>` editor.
    */
   readonly isEmptyFile: boolean;
 }
@@ -183,6 +181,8 @@ export function DiffContentPrimitive(
   });
 
   const pierreOverflow = resolvePierreOverflow(props.wordWrap);
+  const confirmedEmptyNewFile =
+    props.isEmptyFile && isConfirmedEmptyNewFileDiff(fileDiffs);
   // An empty file's `FileDiffMetadata` carries zero hunks, so it never
   // renders a clickable line/token - `emptyOriginAdapter` is the adapter to
   // activate through when that's true, or `null` when the affordance
@@ -190,7 +190,7 @@ export function DiffContentPrimitive(
   // attached). Narrowing this way (rather than a separate boolean) lets
   // TypeScript track that the adapter is defined everywhere it's used below.
   const emptyOriginAdapter =
-    props.isEmptyFile &&
+    confirmedEmptyNewFile &&
     props.editAdapter !== undefined &&
     !props.editAdapter.attached
       ? props.editAdapter
@@ -207,7 +207,7 @@ export function DiffContentPrimitive(
   // the diff pipeline - same editor session, same activation adapter, same
   // autosave path, just a different `@pierre/diffs` component underneath.
   const emptyFileEditSession =
-    props.isEmptyFile && props.editSession !== undefined
+    confirmedEmptyNewFile && props.editSession !== undefined
       ? props.editSession
       : null;
 
@@ -237,6 +237,25 @@ export function DiffContentPrimitive(
 
 function resolvePierreOverflow(wordWrap: boolean): "wrap" | "scroll" {
   return wordWrap ? "wrap" : "scroll";
+}
+
+/**
+ * The plain `<File>` fallback exists only for a genuinely empty, newly-added
+ * file: `@pierre/diffs` renders that zero-hunk model with no attachable line.
+ * Treat the host's byte-size field as a hint and require the parsed/hydrated
+ * model to agree, preserving in-place `<FileDiff edit>` for every real diff.
+ */
+function isConfirmedEmptyNewFileDiff(
+  fileDiffs: ReadonlyArray<FileDiffMetadata>,
+): boolean {
+  if (fileDiffs.length !== 1) return false;
+  const fileDiff = fileDiffs[0];
+  return (
+    fileDiff.type === "new" &&
+    fileDiff.hunks.length === 0 &&
+    fileDiff.additionLines.length === 0 &&
+    fileDiff.deletionLines.length === 0
+  );
 }
 
 /** Extracted to avoid a nested ternary across the empty-file/diff/loading three-way branch. */
