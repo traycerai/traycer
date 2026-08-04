@@ -303,5 +303,7 @@ function createEditAdapter(): DiffClickToEditAdapter {
     onKeyDownCapture: vi.fn(),
     onPointerDownCapture: vi.fn(),
     cancelPendingActivation: vi.fn(),
+    activateEmptyOrigin: vi.fn(),
+    attached: false,
   };
 }

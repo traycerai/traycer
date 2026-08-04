@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  type RenderResult,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -104,6 +105,14 @@ vi.mock(
           >
             Click source
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              props.editAdapter.activateEmptyOrigin();
+            }}
+          >
+            Activate empty
+          </button>
           {props.editing ? (
             <button
               type="button"
@@ -120,6 +129,20 @@ vi.mock(
               }}
             >
               Change source
+            </button>
+          ) : null}
+          {props.editing ? (
+            <button
+              type="button"
+              onClick={() => {
+                const file = { name: "src/index.ts", contents: "X" };
+                props.editAdapter.editorOptions.onChange?.(file, undefined, {
+                  changes: [],
+                  file,
+                });
+              }}
+            >
+              Type without blur
             </button>
           ) : null}
         </div>
@@ -382,6 +405,76 @@ describe("<WorkspaceFileTile /> editing", () => {
       expect(state.rendererContent).toHaveBeenCalledWith(state.readContent);
     });
   });
+
+  describe("activating from an empty file", () => {
+    beforeEach(() => {
+      state.readContent = "";
+    });
+
+    it("activates via activateEmptyOrigin, types the first character, and autosaves it - same session/write path as a line-click activation", async () => {
+      renderTile();
+
+      expect(
+        screen.queryByRole("button", { name: "Change source" }),
+      ).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Activate empty" }));
+
+      expect(state.writeFile).not.toHaveBeenCalled();
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Change source" }),
+      );
+
+      await waitFor(() => {
+        expect(state.writeFile).toHaveBeenCalledWith({
+          workspacePath: "/work/repo",
+          filePath: "src/index.ts",
+          expectedRevision:
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          content: "const value = 2;\n",
+        });
+      });
+    });
+
+    it("retains an unsaved draft typed from empty across an unmount/remount of the tile", async () => {
+      // The runtime's autosave debounce (FILE_EDIT_AUTOSAVE_DELAY_MS, real
+      // timers - this file doesn't fake them) would otherwise race this
+      // test's own real-clock `waitFor`/unmount/remount sequence: a write
+      // that completes mid-test would clear `isDirty` out from under the
+      // very assertions proving the draft survives untouched.
+      state.writeFile.mockReturnValue(new Promise(() => undefined));
+      const { unmount } = renderTile();
+      fireEvent.click(screen.getByRole("button", { name: "Activate empty" }));
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Type without blur" }),
+      );
+
+      await waitFor(() => {
+        expect(currentRuntimeState()).toMatchObject({
+          draftContent: "X",
+          isDirty: true,
+        });
+      });
+      expect(state.writeFile).not.toHaveBeenCalled();
+
+      unmount();
+      // The runtime is keyed by file identity, not by tile lifetime - a
+      // dirty draft is never disposed just because its surface unmounted
+      // (`FileEditRuntime.canDispose` refuses while `isDirty`).
+      expect(currentRuntimeState()).toMatchObject({
+        draftContent: "X",
+        isDirty: true,
+      });
+
+      renderTile();
+      await waitFor(() => {
+        expect(state.rendererContent).toHaveBeenCalledWith("");
+      });
+      expect(currentRuntimeState()).toMatchObject({
+        draftContent: "X",
+        isDirty: true,
+      });
+    });
+  });
 });
 
 function currentRuntimeState() {
@@ -395,11 +488,11 @@ function currentRuntimeState() {
     ?.store.getState();
 }
 
-function renderTile(): void {
+function renderTile(): RenderResult {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  render(
+  return render(
     <QueryClientProvider client={queryClient}>
       <TabHostProvider hostId="host-A">
         <WorkspaceFileTile node={NODE} viewTabId="view-1" isActive />

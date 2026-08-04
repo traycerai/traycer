@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -43,6 +44,9 @@ export type DiffEditActivationResult =
   | { readonly kind: "focus-owner"; readonly ownerSurfaceId: string }
   | { readonly kind: "rejected" };
 
+/** Caret an empty-origin activation (no clickable line exists) starts at. */
+const EMPTY_ORIGIN_CARET: DiffEditCaret = { lineNumber: 1, character: 0 };
+
 export interface DiffClickToEditAdapter {
   readonly fileOptions: Pick<
     FileOptions<undefined>,
@@ -66,6 +70,10 @@ export interface DiffClickToEditAdapter {
     event: ReactPointerEvent<HTMLElement>,
   ) => void;
   readonly cancelPendingActivation: () => void;
+  /** Activates at `{lineNumber: 1, character: 0}` with no click-target required - a surface (e.g. an empty file) with no rendered line/token to click routes through this instead. */
+  readonly activateEmptyOrigin: () => void;
+  /** True once `editorOptions.onAttach` has actually fired for the live session - distinct from `active`, which flips as soon as ownership is claimed, before the real editable surface exists. */
+  readonly attached: boolean;
 }
 
 export function useDiffClickToEdit(props: {
@@ -95,6 +103,19 @@ export function useDiffClickToEdit(props: {
   }
   const unregisterEditorRef = useRef<(() => void) | null>(null);
   const attachedEditorRef = useRef<Editor<undefined> | null>(null);
+  const [attached, setAttached] = useState(false);
+  // Render-phase reset (React's documented "storing information from
+  // previous renders" pattern - not an effect body, avoiding the
+  // `react-hooks/set-state-in-effect` cascading-render concern, and not a
+  // ref, since a ref's `.current` can't be read during render either): the
+  // moment `active` goes false, `attached` must reflect it immediately,
+  // since a fresh activation cycle can start again before any effect would
+  // otherwise run.
+  const [wasActive, setWasActive] = useState(props.active);
+  if (wasActive !== props.active) {
+    setWasActive(props.active);
+    if (!props.active && attached) setAttached(false);
+  }
 
   const cancelPendingActivation = useCallback((): void => {
     generationRef.current += 1;
@@ -104,31 +125,50 @@ export function useDiffClickToEdit(props: {
     if (propsRef.current.enabled) preloadDiffEditProviderSilently();
   }, []);
 
+  // Shared activation core: every activation path (a real line/token click,
+  // and `activateEmptyOrigin` for a file with no clickable lines at all)
+  // funnels through here, so there is exactly one place that starts an edit
+  // session - no separate save/session state for the empty-file case.
+  const activateWithCaret = useCallback((caret: DiffEditCaret): void => {
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    pendingCaretRef.current = { generation, caret };
+    const request: DiffEditActivationRequest = {
+      caret,
+      isCurrent: () => generationRef.current === generation,
+      editorReady: preloadDiffEditProvider(),
+    };
+    void propsRef.current
+      .onActivate(request)
+      .then((result) => {
+        if (!request.isCurrent() || result.kind !== "focus-owner") return;
+        focusRegisteredDiffEditor(result.ownerSurfaceId, caret);
+      })
+      .catch((error: unknown) => {
+        if (request.isCurrent()) propsRef.current.onActivationError(error);
+      });
+  }, []);
+
   const activate = useCallback(
     (event: MouseEvent | PointerEvent, caret: DiffEditCaret): void => {
       if (!propsRef.current.enabled || !isDiffEditActivationGesture(event)) {
         return;
       }
-      const generation = generationRef.current + 1;
-      generationRef.current = generation;
-      pendingCaretRef.current = { generation, caret };
-      const request: DiffEditActivationRequest = {
-        caret,
-        isCurrent: () => generationRef.current === generation,
-        editorReady: preloadDiffEditProvider(),
-      };
-      void propsRef.current
-        .onActivate(request)
-        .then((result) => {
-          if (!request.isCurrent() || result.kind !== "focus-owner") return;
-          focusRegisteredDiffEditor(result.ownerSurfaceId, caret);
-        })
-        .catch((error: unknown) => {
-          if (request.isCurrent()) propsRef.current.onActivationError(error);
-        });
+      activateWithCaret(caret);
     },
-    [],
+    [activateWithCaret],
   );
+
+  // Entry point for a surface with no clickable line/token at all (an empty
+  // file renders zero lines - see `splitFileContents` - so `onLineClick`/
+  // `onTokenClick` can never fire). Any caller-side gesture filtering
+  // (button/modifier checks for a pointer event, key checks for a keyboard
+  // event) happens in the caller, since there both mouse and keyboard
+  // gestures may reach this same one entry point.
+  const activateEmptyOrigin = useCallback((): void => {
+    if (!propsRef.current.enabled) return;
+    activateWithCaret(EMPTY_ORIGIN_CARET);
+  }, [activateWithCaret]);
 
   const fileOptions = useMemo<DiffClickToEditAdapter["fileOptions"]>(() => {
     if (!props.enabled) return {};
@@ -218,6 +258,7 @@ export function useDiffClickToEdit(props: {
           props.surfaceId,
           editor,
         );
+        setAttached(true);
         queueMicrotask(() => {
           if (attachedEditorRef.current !== editor) return;
           const pending = pendingCaretRef.current;
@@ -300,5 +341,7 @@ export function useDiffClickToEdit(props: {
     onKeyDownCapture,
     onPointerDownCapture,
     cancelPendingActivation,
+    activateEmptyOrigin,
+    attached,
   };
 }

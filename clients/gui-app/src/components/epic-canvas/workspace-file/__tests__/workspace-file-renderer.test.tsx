@@ -1,5 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   afterEach,
   beforeEach,
@@ -110,7 +117,7 @@ afterEach(() => {
 describe("<WorkspaceFileRenderer />", () => {
   it("keeps the same diffs-container DOM node across read → edit", async () => {
     const onChange = vi.fn();
-    const editAdapter = createEditAdapter(onChange);
+    const editAdapter = createEditAdapter(onChange, undefined);
     const rendered = render(
       <WorkspaceFileRenderer
         content={"const value = 1;\n"}
@@ -175,7 +182,7 @@ describe("<WorkspaceFileRenderer />", () => {
   });
 
   it("stamps the host's stable file identity for cross-surface find/navigation", () => {
-    const editAdapter = createEditAdapter(vi.fn());
+    const editAdapter = createEditAdapter(vi.fn(), undefined);
     const { container } = render(
       <WorkspaceFileRenderer
         content={"const value = 1;\n"}
@@ -201,6 +208,190 @@ describe("<WorkspaceFileRenderer />", () => {
     );
   });
 
+  describe("empty-file activation affordance", () => {
+    it("renders an accessible, cursor-text affordance for empty content when not yet attached", () => {
+      render(
+        <WorkspaceFileRenderer
+          content=""
+          fileName="empty.txt"
+          language="plaintext"
+          editing={false}
+          cacheKey="workspace-file:empty.txt"
+          editAdapter={createEditAdapter(vi.fn(), undefined)}
+          revealLine={null}
+          revealNonce={null}
+          findTarget={null}
+          onRevealConsumed={vi.fn()}
+          fileIdentity={null}
+        />,
+      );
+
+      const affordance = screen.getByRole("button", {
+        name: "Empty file — click or press Enter to edit",
+      });
+      expect(affordance).toBeTruthy();
+      expect(affordance.tabIndex).toBe(0);
+      expect(affordance.className).toContain("cursor-text");
+    });
+
+    it("does not render the affordance for non-empty content", () => {
+      render(
+        <WorkspaceFileRenderer
+          content={"const value = 1;\n"}
+          fileName="source.ts"
+          language="typescript"
+          editing={false}
+          cacheKey="workspace-file:source.ts"
+          editAdapter={createEditAdapter(vi.fn(), undefined)}
+          revealLine={null}
+          revealNonce={null}
+          findTarget={null}
+          onRevealConsumed={vi.fn()}
+          fileIdentity={null}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("workspace-file-empty-affordance"),
+      ).toBeNull();
+    });
+
+    it("does not render the affordance once the adapter reports attached, even for empty content", () => {
+      render(
+        <WorkspaceFileRenderer
+          content=""
+          fileName="empty.txt"
+          language="plaintext"
+          editing
+          cacheKey="workspace-file:empty.txt"
+          editAdapter={createEditAdapter(vi.fn(), {
+            activateEmptyOrigin: vi.fn(),
+            attached: true,
+          })}
+          revealLine={null}
+          revealNonce={null}
+          findTarget={null}
+          onRevealConsumed={vi.fn()}
+          fileIdentity={null}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("workspace-file-empty-affordance"),
+      ).toBeNull();
+    });
+
+    it("activates on click", () => {
+      const activateEmptyOrigin = vi.fn();
+      render(
+        <WorkspaceFileRenderer
+          content=""
+          fileName="empty.txt"
+          language="plaintext"
+          editing={false}
+          cacheKey="workspace-file:empty.txt"
+          editAdapter={createEditAdapter(vi.fn(), {
+            activateEmptyOrigin,
+            attached: false,
+          })}
+          revealLine={null}
+          revealNonce={null}
+          findTarget={null}
+          onRevealConsumed={vi.fn()}
+          fileIdentity={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("workspace-file-empty-affordance"));
+      expect(activateEmptyOrigin).toHaveBeenCalledTimes(1);
+    });
+
+    it("activates on Enter and on Space, and ignores every other key", () => {
+      const activateEmptyOrigin = vi.fn();
+      render(
+        <WorkspaceFileRenderer
+          content=""
+          fileName="empty.txt"
+          language="plaintext"
+          editing={false}
+          cacheKey="workspace-file:empty.txt"
+          editAdapter={createEditAdapter(vi.fn(), {
+            activateEmptyOrigin,
+            attached: false,
+          })}
+          revealLine={null}
+          revealNonce={null}
+          findTarget={null}
+          onRevealConsumed={vi.fn()}
+          fileIdentity={null}
+        />,
+      );
+
+      const affordance = screen.getByTestId("workspace-file-empty-affordance");
+      fireEvent.keyDown(affordance, { key: "Tab" });
+      expect(activateEmptyOrigin).not.toHaveBeenCalled();
+      fireEvent.keyDown(affordance, { key: "Enter" });
+      expect(activateEmptyOrigin).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(affordance, { key: " " });
+      expect(activateEmptyOrigin).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the same grid cell footprint across the affordance-to-editor swap (no row-height change)", () => {
+      const rendered = render(
+        <WorkspaceFileRenderer
+          content=""
+          fileName="empty.txt"
+          language="plaintext"
+          editing={false}
+          cacheKey="workspace-file:empty.txt"
+          editAdapter={createEditAdapter(vi.fn(), {
+            activateEmptyOrigin: vi.fn(),
+            attached: false,
+          })}
+          revealLine={null}
+          revealNonce={null}
+          findTarget={null}
+          onRevealConsumed={vi.fn()}
+          fileIdentity={null}
+        />,
+      );
+
+      const host = document.querySelector("[data-diffs-host]");
+      const grid = host?.querySelector(".grid");
+      expect(grid).toBeTruthy();
+      expect(
+        screen.getByTestId("workspace-file-empty-affordance"),
+      ).toBeTruthy();
+
+      // Once attached, the affordance is gone but the same grid wrapper (not
+      // a replaced/reflowed container) still holds the real editor - proven
+      // by DOM node identity, not a pixel measurement jsdom can't provide.
+      rendered.rerender(
+        <WorkspaceFileRenderer
+          content=""
+          fileName="empty.txt"
+          language="plaintext"
+          editing
+          cacheKey="workspace-file:empty.txt"
+          editAdapter={createEditAdapter(vi.fn(), {
+            activateEmptyOrigin: vi.fn(),
+            attached: true,
+          })}
+          revealLine={null}
+          revealNonce={null}
+          findTarget={null}
+          onRevealConsumed={vi.fn()}
+          fileIdentity={null}
+        />,
+      );
+
+      expect(document.querySelector("[data-diffs-host] .grid")).toBe(grid);
+      expect(
+        screen.queryByTestId("workspace-file-empty-affordance"),
+      ).toBeNull();
+    });
+  });
+
   it("does not mount the Diffs file surface until primeFileHighlightCache resolves", async () => {
     let resolvePrime: (() => void) | null = null;
     const primePromise = new Promise<void>((resolve) => {
@@ -221,7 +412,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         cacheKey="workspace-file:source.ts"
-        editAdapter={createEditAdapter(vi.fn())}
+        editAdapter={createEditAdapter(vi.fn(), undefined)}
         revealLine={null}
         revealNonce={null}
         findTarget={null}
@@ -267,7 +458,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         cacheKey="workspace-file:source.ts"
-        editAdapter={createEditAdapter(vi.fn())}
+        editAdapter={createEditAdapter(vi.fn(), undefined)}
         revealLine={2}
         revealNonce={1}
         findTarget={null}
@@ -312,7 +503,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         cacheKey="workspace-file:source.ts"
-        editAdapter={createEditAdapter(vi.fn())}
+        editAdapter={createEditAdapter(vi.fn(), undefined)}
         revealLine={2}
         revealNonce={1}
         findTarget={null}
@@ -351,7 +542,7 @@ describe("<WorkspaceFileRenderer />", () => {
       language: "typescript",
       editing: false,
       cacheKey: "workspace-file:source.ts",
-      editAdapter: createEditAdapter(vi.fn()),
+      editAdapter: createEditAdapter(vi.fn(), undefined),
       revealLine: null,
       revealNonce: null,
       findTarget: null,
@@ -384,6 +575,12 @@ describe("<WorkspaceFileRenderer />", () => {
 
 function createEditAdapter(
   onChange: (content: string) => void,
+  overrides:
+    | {
+        readonly activateEmptyOrigin: () => void;
+        readonly attached: boolean;
+      }
+    | undefined,
 ): DiffClickToEditAdapter {
   return {
     fileOptions: {
@@ -408,6 +605,8 @@ function createEditAdapter(
     onKeyDownCapture: vi.fn(),
     onPointerDownCapture: vi.fn(),
     cancelPendingActivation: vi.fn(),
+    activateEmptyOrigin: overrides?.activateEmptyOrigin ?? vi.fn(),
+    attached: overrides?.attached ?? false,
   };
 }
 

@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@pierre/diffs/edit";
+import { File } from "@pierre/diffs";
 import {
   isDiffEditActivationGesture,
   registerDiffEditor,
@@ -430,6 +431,79 @@ describe("click-to-edit adapter", () => {
     // real handler anyway so this deliberately-rejected fixture promise
     // never reaches it.
     return rejection.catch(() => undefined);
+  });
+
+  it("activateEmptyOrigin routes through the same onActivate as a line click, at the origin caret", () => {
+    const activate = vi.fn<Activate>(() =>
+      Promise.resolve({ kind: "activated" }),
+    );
+    const { result } = renderAdapter(activate, vi.fn());
+
+    act(() => {
+      result.current.activateEmptyOrigin();
+    });
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(activate.mock.calls[0]?.[0].caret).toEqual({
+      lineNumber: 1,
+      character: 0,
+    });
+  });
+
+  it("activateEmptyOrigin does nothing while the adapter is disabled", () => {
+    const activate = vi.fn<Activate>(() =>
+      Promise.resolve({ kind: "activated" }),
+    );
+    const { result } = renderHook(() =>
+      useDiffClickToEdit({
+        surfaceId: "surface-disabled",
+        enabled: false,
+        active: false,
+        onActivate: activate,
+        onActivationError: vi.fn(),
+        onChange: vi.fn(),
+        onBlur: vi.fn(),
+        onSaveShortcut: vi.fn(),
+      }),
+    );
+
+    act(() => {
+      result.current.activateEmptyOrigin();
+    });
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("reports attached only once editorOptions.onAttach fires, and resets it the moment active goes false", () => {
+    const { result, rerender } = renderHook(
+      (active: boolean) =>
+        useDiffClickToEdit({
+          surfaceId: "surface-attach",
+          enabled: true,
+          active,
+          onActivate: () => Promise.resolve({ kind: "activated" }),
+          onActivationError: vi.fn(),
+          onChange: vi.fn(),
+          onBlur: vi.fn(),
+          onSaveShortcut: vi.fn(),
+        }),
+      { initialProps: true },
+    );
+
+    expect(result.current.attached).toBe(false);
+
+    const editor = new Editor<undefined>({});
+    const fileInstance = new File({}, undefined, true);
+    act(() => {
+      result.current.editorOptions.onAttach?.(editor, fileInstance);
+    });
+    expect(result.current.attached).toBe(true);
+
+    // Deactivating (e.g. another surface claims ownership) must clear
+    // `attached` immediately - a fresh activation cycle can start again
+    // before any real editor has attached for it.
+    rerender(false);
+    expect(result.current.attached).toBe(false);
   });
 });
 

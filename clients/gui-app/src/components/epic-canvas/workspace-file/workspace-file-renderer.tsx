@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -48,6 +49,47 @@ interface WorkspaceFileSourceFindTargetWithNonce extends WorkspaceFileSourceFind
 // the comparable "wait for a virtualized DOM node after a jump" concern in
 // `use-chat-find-controller.ts` (`FIND_REVEAL_ANCHOR_RETRY_LIMIT`).
 const WORKSPACE_FILE_REVEAL_RETRY_LIMIT = 3;
+
+const EMPTY_FILE_AFFORDANCE_LABEL = "Empty file — click or press Enter to edit";
+
+/**
+ * `splitFileContents` (the library's own line-splitting helper) returns zero
+ * lines for an empty string, so `<File>` paints nothing clickable - the
+ * entire click-to-edit path is gated on the library's own line/token click
+ * callbacks, which never fire without a rendered line. This affordance is
+ * the one alternate entry point for that case: a single-row, keyboard- and
+ * pointer-accessible control that activates through the *same* shared
+ * `activateEmptyOrigin` adapter method a real line click would use - no
+ * separate save/session path. It shares a CSS Grid cell with `<File>`/the
+ * loading placeholder so removing it never reflows the row it sits in: the
+ * grid cell's own height, not this control's, drives the box, and it simply
+ * stops being painted once `editAdapter.attached` confirms a real editor is
+ * there to take over - never before, so activation cannot produce a blank
+ * gap.
+ */
+function EmptyFileEditAffordance(props: {
+  readonly onActivate: () => void;
+}): ReactNode {
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>): void => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      props.onActivate();
+    },
+    [props],
+  );
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={EMPTY_FILE_AFFORDANCE_LABEL}
+      data-testid="workspace-file-empty-affordance"
+      className="col-start-1 row-start-1 flex h-6 cursor-text items-center px-2 text-ui-xs text-muted-foreground"
+      onClick={props.onActivate}
+      onKeyDown={handleKeyDown}
+    />
+  );
+}
 
 /**
  * The shared Diffs-backed source surface for both reading and editing a
@@ -192,6 +234,12 @@ export function WorkspaceFileRenderer(props: {
     };
   }, [container, content, findTarget]);
 
+  // Zero-line content has no clickable line/token, in read mode or while an
+  // activation is still attaching - keep the affordance up until
+  // `editAdapter.attached` confirms the real editor took over, not merely
+  // until `editing` flips (which happens before the editor exists).
+  const showEmptyOriginAffordance = content === "" && !editAdapter.attached;
+
   return (
     <div
       className="min-h-full min-w-full bg-canvas"
@@ -203,16 +251,27 @@ export function WorkspaceFileRenderer(props: {
       onPointerDownCapture={editAdapter.onPointerDownCapture}
     >
       <DiffEditProvider>
-        {highlightReady ? (
-          <File
-            file={file}
-            edit={editing}
-            editorOptions={editAdapter.editorOptions}
-            options={options}
-          />
-        ) : (
-          <DiffHighlightLoading testId="workspace-file-highlighting" />
-        )}
+        <div className="grid">
+          {highlightReady ? (
+            <div className="col-start-1 row-start-1">
+              <File
+                file={file}
+                edit={editing}
+                editorOptions={editAdapter.editorOptions}
+                options={options}
+              />
+            </div>
+          ) : (
+            <div className="col-start-1 row-start-1">
+              <DiffHighlightLoading testId="workspace-file-highlighting" />
+            </div>
+          )}
+          {showEmptyOriginAffordance ? (
+            <EmptyFileEditAffordance
+              onActivate={editAdapter.activateEmptyOrigin}
+            />
+          ) : null}
+        </div>
       </DiffEditProvider>
     </div>
   );
