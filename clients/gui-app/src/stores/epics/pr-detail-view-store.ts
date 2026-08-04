@@ -8,8 +8,8 @@
  * the tab you were reading rather than resetting to Overview. Coordinate keying
  * also means there is nothing to evict when a tile is removed.
  *
- * Not persisted, matching `tile-scroll-anchor-store`: a fresh app load starts
- * every PR on Overview. Wrap with `persist` if that ever needs to survive a
+ * Not persisted: a fresh app load starts every PR on Overview. Wrap with
+ * `persist` if that ever needs to survive a
  * reload - the shape is already serialisable.
  */
 import { create } from "zustand";

@@ -8,6 +8,8 @@ import type {
   GitSubscribeStatusEvent,
   GitSubscribeStatusEventV11,
   GitSubscribeStatusEventV12,
+  GitSubscribeStatusEventV13,
+  GitWatcherStatus,
 } from "@traycer/protocol/host/git-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
@@ -1569,5 +1571,348 @@ describe("useGitListChangedFilesSubscription", () => {
     } finally {
       randomUuid.mockRestore();
     }
+  });
+
+  describe("watcher health (v1.3)", () => {
+    function v13Snapshot(
+      watcher: GitWatcherStatus,
+    ): GitSubscribeStatusEventV13 {
+      return {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "head",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-1",
+        nestedFingerprint: "nested-1",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_000,
+        freshNonce: null,
+        watcher,
+      };
+    }
+
+    async function renderAtMinor(minor: number) {
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor };
+      const rendered = renderHook(
+        () =>
+          useGitListChangedFilesSubscription({
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() =>
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1),
+      );
+      const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+        ...(minor >= 2 ? { freshNonce: null } : {}),
+      });
+      if (session === undefined) throw new Error("Expected session");
+      return { result: rendered.result, session };
+    }
+
+    it("surfaces watcher health from a v1.3 frame", async () => {
+      const { result, session } = await renderAtMinor(3);
+      expect(result.current.watcherStatus).toBeNull();
+
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() =>
+        expect(result.current.watcherStatus).toEqual({
+          state: "degraded-capacity",
+          detail: "over budget",
+        }),
+      );
+      // The frame still populates the cache exactly as a v1.2 frame would -
+      // watcher health rides ALONGSIDE the changeset, it does not replace it.
+      expect(result.current.data?.fingerprint).toBe("parent-1");
+
+      session.emitFrame(v13Snapshot({ state: "watching", detail: null }), null);
+      await waitFor(() =>
+        expect(result.current.watcherStatus).toEqual({
+          state: "watching",
+          detail: null,
+        }),
+      );
+    });
+
+    it("reports UNKNOWN, not healthy, against a host negotiated below 1.3", async () => {
+      // The distinction matters: a released host emits no watcher field at
+      // all, and rendering that as "watching" would assert live updates this
+      // client has no evidence for.
+      const { result, session } = await renderAtMinor(2);
+      const v12: GitSubscribeStatusEventV12 = {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "head",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-1",
+        nestedFingerprint: "nested-1",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_000,
+        freshNonce: null,
+      };
+      session.emitFrame(v12, null);
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-1"),
+      );
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("ignores a watcher field arriving on a connection negotiated at 1.2", async () => {
+      // Defence in depth against a host that projects incorrectly: the v1.2
+      // schema parse strips the field, so it can never reach the UI.
+      const { result, session } = await renderAtMinor(2);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-1"),
+      );
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("holds watcher health across a git error frame", async () => {
+      // Error frames carry no watcher field, and a git-compute failure says
+      // nothing about the watcher. Dropping the value here would hide the
+      // notice for the whole error backoff - precisely when the panel is
+      // showing stale data and the staleness needs explaining.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      session.emitFrame(
+        { type: "error", message: "transient", isFatal: false },
+        null,
+      );
+      await waitFor(() => expect(result.current.error).not.toBeNull());
+      expect(result.current.watcherStatus).toEqual({
+        state: "degraded-error",
+        detail: "boom",
+      });
+    });
+
+    it("drops watcher health when the stream terminates for good", async () => {
+      // The mirror of the test above, and the distinction is whether anything
+      // is still arriving. A non-fatal git error keeps polling, so "refreshing
+      // on a timer" stays true; a fatal frame means no frame will ever arrive
+      // again, and continuing to promise periodic refreshes is a lie the
+      // panel is especially good at hiding behind cached data.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      session.emitFrame(
+        { type: "error", message: "fatal git error", isFatal: true },
+        null,
+      );
+      await waitFor(() => expect(result.current.error).not.toBeNull());
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("drops watcher health when the transport closes", async () => {
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      // A closed transport produces no domain error frame at all, so this
+      // path has to clear the value on its own.
+      session.emitStatus("closed", { kind: "caller" });
+      await waitFor(() => expect(result.current.error).not.toBeNull());
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("clears watcher health when the connection renegotiates below 1.3", async () => {
+      // Cold-review finding: writing `lastWatcherStatus` only when the field
+      // is PRESENT makes it a latch. The same client instance can reconnect to
+      // a restarted or rolled-back host and negotiate down, and then no frame
+      // is able to clear a notice describing a host generation that is gone.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
+      const downgraded: GitSubscribeStatusEventV12 = {
+        type: "updated",
+        runningDir: "/repo",
+        headSha: "head-2",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-2",
+        nestedFingerprint: "nested-2",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        changedPaths: [],
+        submodules: [],
+        pollStartedAtMs: 2_000,
+        freshNonce: null,
+      };
+      session.emitFrame(downgraded, null);
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-2"),
+      );
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("still accepts a v1.2 frame while the client-wide version reads 1.3", async () => {
+      // `getMethodSchemaVersion` is client-wide PER METHOD, rebuilt from the
+      // first still-live session — so two repo streams on one client can sit at
+      // different minors while a host restart renegotiates one and not the
+      // other. `watcher` is required at v1.3, so a strict v1.3-only parse would
+      // reject every frame from the v1.2 session and the dispatcher's `return`
+      // would drop it: that repo's changes freeze until it reconnects.
+      const { result, session } = await renderAtMinor(3);
+      const v12Frame: GitSubscribeStatusEventV12 = {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "head",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-v12",
+        nestedFingerprint: "nested-v12",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_000,
+        freshNonce: null,
+      };
+      session.emitFrame(v12Frame, null);
+
+      // Delivered, not dropped...
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-v12"),
+      );
+      // ...and the missing field reads as UNKNOWN rather than healthy.
+      expect(result.current.watcherStatus).toBeNull();
+    });
+
+    it("DROPS a malformed watcher rather than downgrading it into a v1.2 parse", async () => {
+      // The skew fallback must not become a bypass for the wire contract. A
+      // frame that CARRIES a watcher and still fails v1.3 is malformed - an
+      // unknown `state`, say - and the non-strict v1.2 schema would happily
+      // "rescue" it by stripping the offending field, recording the watcher as
+      // UNKNOWN and accepting a payload the contract exists to reject. Only a
+      // frame with no `watcher` key at all is version skew.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
+        null,
+      );
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-1"),
+      );
+
+      const malformed = {
+        ...v13Snapshot({ state: "degraded-capacity", detail: null }),
+        fingerprint: "parent-malformed",
+        watcher: { state: "not-a-real-state", detail: null },
+      };
+      session.emitFrame(malformed, null);
+
+      // ORDERING, not a sleep: `emitFrame` runs the handler synchronously, so
+      // once a LATER well-formed frame is visible the malformed one has
+      // provably already been processed. A fixed delay would add dead time to
+      // every run and stay timing-dependent under load.
+      // Narrowed before the spread: `v13Snapshot` is typed as the whole union,
+      // and spreading it unnarrowed leaves `type` as a union, so TS cannot pick
+      // the member the extra `fingerprint` belongs to.
+      const base = v13Snapshot({
+        state: "degraded-capacity",
+        detail: "over budget",
+      });
+      if (base.type !== "snapshot") throw new Error("expected a snapshot");
+      const after: GitSubscribeStatusEventV13 = {
+        ...base,
+        fingerprint: "parent-after",
+      };
+      session.emitFrame(after, null);
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-after"),
+      );
+
+      // The malformed frame's payload never landed, and the watcher it carried
+      // never displaced the known-good value.
+      expect(result.current.data?.fingerprint).not.toBe("parent-malformed");
+      expect(result.current.watcherStatus).toEqual({
+        state: "degraded-capacity",
+        detail: "over budget",
+      });
+    });
+
+    it("clears watcher health while the socket is RECONNECTING, not only on close", async () => {
+      // A recoverable drop parks the logical session at "reconnecting", never
+      // "closed", so `markTerminal` is not on that path. Without an explicit
+      // clear the notice survives the whole backoff - stating "Periodic
+      // refresh" as fact while no frame can arrive to contradict it.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      session.emitStatus("reconnecting", null);
+      await waitFor(() => expect(result.current.watcherStatus).toBeNull());
+      // Not terminal: the stream is still expected to recover, so this must
+      // not masquerade as a fatal error.
+      expect(result.current.error).toBeNull();
+    });
+
+    it("drops watcher health when the session is REPLACED, not only when it terminates", async () => {
+      // Replacement retires the generation and makes the old session's
+      // callbacks inert, so nothing downstream can clear the value on its
+      // behalf — and the replacement may reach a different host incarnation.
+      // `markTerminal` covers the terminal path only.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      const before = mockWsStreamClient.subscribeCallCount;
+      // Not awaited on purpose: the clear happens at REPLACEMENT time, and the
+      // returned promise settles only when the new session delivers its
+      // targeted snapshot - which is after the window under test.
+      void refreshGitSubscriptionWithFreshNonce({
+        wsStreamClient: mockWsStreamClient,
+        queryClient,
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+      await waitFor(() =>
+        expect(mockWsStreamClient.subscribeCallCount).toBeGreaterThan(before),
+      );
+      // Cleared at replacement time - BEFORE the new session's first frame,
+      // which is the whole window this covers.
+      await waitFor(() => expect(result.current.watcherStatus).toBeNull());
+    });
   });
 });

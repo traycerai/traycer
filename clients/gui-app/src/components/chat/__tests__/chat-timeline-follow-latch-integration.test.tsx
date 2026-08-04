@@ -23,6 +23,7 @@ import { createRef, type ReactNode, type RefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
+import type { ChatTimelineFollowLatch } from "@/components/chat/chat-timeline-follow-latch";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -212,6 +213,9 @@ interface RenderTimelineOptions {
         readonly footerSize: number;
       }) => void)
     | undefined;
+  readonly onFollowIntentChange: ((isFollowing: boolean) => void) | undefined;
+  readonly followLatchRef:
+    RefObject<ChatTimelineFollowLatch | null> | undefined;
 }
 
 interface RerenderTimelineOptions {
@@ -258,6 +262,8 @@ function renderTimeline(
         contentInsetEndAdjustment={contentInsetEndAdjustment}
         onItemSizeChanged={options.onItemSizeChanged}
         onListMetricsChange={options.onListMetricsChange}
+        onFollowIntentChange={options.onFollowIntentChange}
+        followLatchRef={options.followLatchRef}
       />
     </div>
   );
@@ -341,7 +347,156 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 1. Core no-rerender proof (review's central finding)
+  // 1. Production-order owned correction and reader reattachment
+  // -----------------------------------------------------------------------
+
+  it("converges through a no-settle user/assistant/reasoning/text/tool/inset burst, then honors reader detach and strict-end reacquisition", async () => {
+    const rowCount = 36;
+    const composerInset = 160;
+    const baseMessages = makeMessages(rowCount);
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(rowCount) + composerInset,
+    );
+    const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+    const onFollowIntentChange = vi.fn();
+    const { listRef, rerenderMessages } = renderTimeline({
+      messages: baseMessages,
+      contentInsetEndAdjustment: composerInset,
+      followLatchRef,
+      onFollowIntentChange,
+    });
+    await settleLegendList();
+
+    const node = requireScrollNode(listRef);
+    parkAtStrictBottom(node);
+    const list = listRef.current;
+    if (!list) throw new Error("LegendList ref not mounted");
+    const ownedUnderLanding = vi
+      .spyOn(list, "scrollToEnd")
+      .mockImplementation((): Promise<void> => {
+        node.scrollTop = Math.max(0, maxScrollTop(node) - 72);
+        fireNativeScroll(node);
+        return Promise.resolve();
+      });
+
+    const userAppend = [
+      ...baseMessages,
+      {
+        ...makeMessage(rowCount, "user"),
+        id: "burst-user",
+        content: "send with composer chrome present",
+      },
+    ];
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(userAppend.length) + composerInset,
+    );
+    rerenderMessages(userAppend, undefined);
+
+    const assistantBase = {
+      ...makeMessage(rowCount + 1, "assistant"),
+      id: "burst-assistant",
+    };
+    const assistantAppend = [...userAppend, assistantBase];
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(assistantAppend.length) + composerInset + 40,
+    );
+    rerenderMessages(assistantAppend, undefined);
+
+    const withReasoning = [
+      ...userAppend,
+      {
+        ...assistantBase,
+        content: "Thinking through the request",
+      },
+    ];
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withReasoning.length) + composerInset + 180,
+    );
+    rerenderMessages(withReasoning, undefined);
+    act(() => {
+      list.setItemSize("burst-assistant", {
+        height: 270,
+        width: VIEWPORT_WIDTH_PX,
+      });
+    });
+
+    const withText = withReasoning.map((message) =>
+      message.id === "burst-assistant"
+        ? {
+            ...message,
+            content: `${message.content}\nStreaming answer text`,
+          }
+        : message,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withText.length) + composerInset + 300,
+    );
+    rerenderMessages(withText, undefined);
+
+    const withToolStatus = withText.map((message) =>
+      message.id === "burst-assistant"
+        ? {
+            ...message,
+            content: `${message.content}\nTool output`,
+            statusLabel: "Running tool",
+          }
+        : message,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withToolStatus.length) + composerInset + 440,
+    );
+    rerenderMessages(withToolStatus, {
+      contentInsetEndAdjustment: composerInset + 120,
+      initialScrollAtEnd: undefined,
+    });
+
+    expect(ownedUnderLanding).toHaveBeenCalled();
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    ownedUnderLanding.mockRestore();
+    const correctionLanding = vi
+      .spyOn(list, "scrollToEnd")
+      .mockImplementation((): Promise<void> => {
+        node.scrollTop = maxScrollTop(node);
+        fireNativeScroll(node);
+        return Promise.resolve();
+      });
+    act(() => {
+      followLatchRef.current?.followEndIfPermitted();
+    });
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    act(() => {
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      node.scrollTop = Math.max(0, maxScrollTop(node) - 240);
+      fireNativeScroll(node);
+    });
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    act(() => {
+      node.scrollTop = maxScrollTop(node);
+      fireNativeScroll(node);
+    });
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withToolStatus.length) + composerInset + 560,
+    );
+    rerenderMessages(
+      withToolStatus.map((message) =>
+        message.id === "burst-assistant"
+          ? { ...message, statusLabel: "Tool completed" }
+          : message,
+      ),
+      undefined,
+    );
+    await settleLegendList();
+    expectAtTrueEnd(node);
+    correctionLanding.mockRestore();
+  });
+
+  // -----------------------------------------------------------------------
+  // 2. Core no-rerender proof (review's central finding)
   // -----------------------------------------------------------------------
 
   describe("silent detach then layout callbacks with no ChatTimeline rerender", () => {

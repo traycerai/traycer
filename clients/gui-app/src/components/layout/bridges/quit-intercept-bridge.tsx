@@ -16,6 +16,7 @@ import {
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger } from "@/lib/logger";
+import { flushLiveReadingPositions } from "@/lib/reading-position";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
@@ -138,6 +139,7 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     if (onGet === undefined || respond === undefined) return;
     const subscription = onGet((request) => {
       cancelAmbientPushRef.current();
+      flushLiveReadingPositions(null);
       const snapshot = registry.getUnsyncedEdits();
       const reply = (): Promise<void> =>
         respond({ requestId: request.requestId, snapshot });

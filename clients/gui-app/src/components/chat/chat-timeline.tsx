@@ -18,7 +18,6 @@ import {
 } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import { resolveChatTimelineIsAtEnd } from "@/components/chat/chat-scroll-restoration";
 import { chatTimelineGetItemType } from "@/components/chat/chat-messages-scroll-helpers";
 import { registerPanelResizeParticipant } from "@/lib/layout/panel-resizing-class";
 import {
@@ -30,7 +29,11 @@ import {
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
   type StableChatTimelineRowsState,
 } from "./chat-stable-rows";
-import { useChatTimelineFollowLatch } from "./chat-timeline-follow-latch";
+import {
+  useChatTimelineFollowLatch,
+  type ChatTimelineFollowLatch,
+  type ChatTimelineReaderGestureIntent,
+} from "./chat-timeline-follow-latch";
 
 /**
  * Ticket 24 (painted-chat lifecycle audit, finding 5): a row-local
@@ -189,7 +192,14 @@ export interface ChatTimelineProps {
   readonly initialScrollIndex?: ChatTimelineInitialScrollAnchor | null;
   /** Composer + queued-surface overlay height, reserved as bottom content inset. */
   readonly contentInsetEndAdjustment?: number;
-  readonly onIsAtEndChange?: (isAtEnd: boolean) => void;
+  readonly onFollowIntentChange?: (isFollowing: boolean) => void;
+  readonly onReaderGesture?: (intent: ChatTimelineReaderGestureIntent) => void;
+  /** Controller bridge for explicit reader/navigation ownership changes. */
+  readonly followLatchRef?: RefObject<ChatTimelineFollowLatch | null>;
+  /** Explicit bootstrap/restoration ownership gate for automatic correction. */
+  readonly isFollowCorrectionSuppressed?: () => boolean;
+  /** Releases that gate only for a controller-validated reader end landing. */
+  readonly resolveSuppressedEndLanding?: () => boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /** Notifies presentational consumers after LegendList remeasures any row. */
@@ -228,7 +238,11 @@ export const ChatTimeline = memo(function ChatTimeline({
   initialScrollAtEnd = true,
   initialScrollIndex = null,
   contentInsetEndAdjustment = 0,
-  onIsAtEndChange,
+  onFollowIntentChange,
+  onReaderGesture,
+  followLatchRef,
+  isFollowCorrectionSuppressed,
+  resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
   onItemSizeChanged,
   onListMetricsChange,
@@ -243,7 +257,21 @@ export const ChatTimeline = memo(function ChatTimeline({
     listRef,
     initialScrollAtEnd,
     rows.length > 0,
+    {
+      onFollowIntentChange,
+      onReaderGesture,
+      isCorrectionSuppressed: isFollowCorrectionSuppressed,
+      resolveSuppressedEndLanding,
+    },
   );
+
+  useLayoutEffect(() => {
+    if (!followLatchRef) return;
+    followLatchRef.current = followLatch;
+    return () => {
+      followLatchRef.current = null;
+    };
+  }, [followLatch, followLatchRef]);
 
   const navigationHighlightStore = useNavigationHighlightStore(
     navigationHighlightedMessageId,
@@ -276,13 +304,9 @@ export const ChatTimeline = memo(function ChatTimeline({
   );
 
   const handleScroll = useCallback(() => {
-    const state = listRef.current?.getState();
-    const isAtEnd = resolveChatTimelineIsAtEnd(state);
-    if (isAtEnd !== undefined) {
-      onIsAtEndChange?.(isAtEnd);
-    }
+    followLatch.observeLiveGeometry();
     onScroll?.();
-  }, [listRef, onIsAtEndChange, onScroll]);
+  }, [followLatch, onScroll]);
 
   // Fixup (callback-synchronous-follow): item-layout and footer/header-
   // layout are two of the real LegendList maintain triggers that never
@@ -352,8 +376,8 @@ export const ChatTimeline = memo(function ChatTimeline({
         estimatedItemSize={90}
         // Keep LegendList's proximity threshold explicit for onEndReached and
         // presentation consumers. Follow ownership deliberately reads only
-        // strict `isAtEnd` via resolveChatTimelineIsAtEnd; this 10% band can
-        // never re-attach a detached reader.
+        // fresh DOM geometry inside the latch; this 10% band can never
+        // re-attach a detached reader.
         onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
         initialScrollAtEnd={initialScrollAtEnd}
         initialScrollIndex={initialScrollIndex ?? undefined}
