@@ -16,6 +16,11 @@ import {
   dropCommGraphRowOpenKeys,
   useCommGraphRowOpenStore,
 } from "@/stores/epics/comm-graph-row-open-store";
+import {
+  readCommGraphTimelineEpicState,
+  reconcilePrunedCommGraphTimelineRows,
+  useCommGraphTimelineStore,
+} from "@/stores/epics/comm-graph-timeline-store";
 
 function cloudEvent(
   overrides: Partial<HostCommunicationGraphCloudFeedEvent>,
@@ -429,13 +434,17 @@ describe("CommGraphCloudSubscriptionManager", () => {
     ).toEqual([events[0]]);
   });
 
-  it("applies an advancing frontier without reconnecting, moving, or stalling the cursor", () => {
+  it("applies an advancing frontier without reconnecting and returns a pruned playback cursor to live", () => {
     useCommGraphRowOpenStore.setState({ openRowKeysByEpicId: {} });
+    useCommGraphTimelineStore.setState({ stateByEpicId: {} });
     const recorded = recordedOpener();
     const manager = new CommGraphCloudSubscriptionManager(
       "epic-1",
       recorded.opener,
-      (rowKeys) => dropCommGraphRowOpenKeys("epic-1", rowKeys),
+      (rowKeys) => {
+        dropCommGraphRowOpenKeys("epic-1", rowKeys);
+        reconcilePrunedCommGraphTimelineRows("epic-1", rowKeys);
+      },
     );
     manager.setRelayHostIds(["relay-b"]);
     manager.attach();
@@ -452,6 +461,15 @@ describe("CommGraphCloudSubscriptionManager", () => {
     );
     useCommGraphRowOpenStore.getState().setRowOpen("epic-1", "below", true);
     useCommGraphRowOpenStore.getState().setRowOpen("epic-1", "at", true);
+    const below = manager
+      .getSnapshot()
+      .events.find((event) => event.eventId === "below");
+    expect(below).toBeDefined();
+    if (below === undefined) return;
+    useCommGraphTimelineStore
+      .getState()
+      .setCursor("epic-1", commGraphCursorForEvent(below));
+    useCommGraphTimelineStore.getState().setPlaying("epic-1", true);
     handlers.onEvent(
       cloudEvent({ eventId: "live-8", ingestVersion: 8, capturedAt: 8_000 }),
     );
@@ -470,6 +488,11 @@ describe("CommGraphCloudSubscriptionManager", () => {
       useCommGraphRowOpenStore.getState().openRowKeysByEpicId["epic-1"];
     expect(openRows?.has("below")).toBe(false);
     expect(openRows?.has("at")).toBe(true);
+    expect(readCommGraphTimelineEpicState("epic-1")).toEqual({
+      cursor: null,
+      playing: false,
+      speed: 1,
+    });
 
     handlers.onEvent(
       cloudEvent({ eventId: "live-9", ingestVersion: 9, capturedAt: 9_000 }),

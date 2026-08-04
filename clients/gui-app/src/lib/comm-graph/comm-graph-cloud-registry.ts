@@ -3,6 +3,7 @@ import {
   type CommGraphCloudSubscriptionOpener,
 } from "@/lib/comm-graph/comm-graph-cloud-subscription";
 import { dropCommGraphRowOpenKeys } from "@/stores/epics/comm-graph-row-open-store";
+import { reconcilePrunedCommGraphTimelineRows } from "@/stores/epics/comm-graph-timeline-store";
 
 const DETACHED_CLOUD_MANAGER_LIMIT = 3;
 export type CommGraphCloudSubscriptionClaim = object;
@@ -51,7 +52,10 @@ export function getCommGraphCloudSubscriptionManager(
         }
         return opener(request);
       },
-      (rowKeys) => dropCommGraphRowOpenKeys(epicId, rowKeys),
+      (rowKeys) => {
+        dropCommGraphRowOpenKeys(epicId, rowKeys);
+        reconcilePrunedCommGraphTimelineRows(epicId, rowKeys);
+      },
     ),
     openersByClaim: new Map(),
     claimByRelayHostId: new Map(),

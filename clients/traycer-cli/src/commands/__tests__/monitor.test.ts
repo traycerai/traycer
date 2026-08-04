@@ -634,12 +634,12 @@ describe("mixed-version inbox message frames", () => {
   });
 
   it("acks when a stdout write confirms successfully after the bounded timeout", async () => {
-    let writeCallback: ((error?: Error) => void) | null = null;
+    let writeCallback: ((error: Error | undefined) => void) | null = null;
     const stdoutSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation((...args: unknown[]) => {
         writeCallback = args.find((arg) => typeof arg === "function") as
-          | ((error?: Error) => void)
+          | ((error: Error | undefined) => void)
           | null;
         return true;
       });
@@ -663,7 +663,7 @@ describe("mixed-version inbox message frames", () => {
     await flush(10_000);
     expect(callHostRpcMock).not.toHaveBeenCalled();
 
-    writeCallback?.();
+    writeCallback?.(undefined);
     await flush(0);
     await flush(0);
 

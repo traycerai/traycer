@@ -125,3 +125,19 @@ export function readCommGraphTimelineEpicState(
 ): CommGraphTimelineEpicState {
   return readEpicState(useCommGraphTimelineStore.getState(), epicId);
 }
+
+/** Returns a pruned playback cursor to live and stops its stale play intent. */
+export function reconcilePrunedCommGraphTimelineRows(
+  epicId: string,
+  rowKeys: ReadonlySet<string>,
+): void {
+  if (rowKeys.size === 0) return;
+  const store = useCommGraphTimelineStore.getState();
+  const current = readCommGraphTimelineEpicState(epicId);
+  if (current.cursor === null) return;
+  const cursorRowKey =
+    current.cursor.eventId ?? `${current.cursor.hostId}:${current.cursor.id}`;
+  if (!rowKeys.has(cursorRowKey)) return;
+  store.setPlaying(epicId, false);
+  store.setCursor(epicId, null);
+}
