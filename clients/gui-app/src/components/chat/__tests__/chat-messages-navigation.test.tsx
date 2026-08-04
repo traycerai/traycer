@@ -15,7 +15,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { type ReactElement, useCallback } from "react";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type StoreApi } from "zustand/vanilla";
 import { CHAT_ANCHOR_SETTLE_FALLBACK_MS } from "@/components/chat/chat-messages";
 import {
@@ -33,6 +33,8 @@ import { type ActivityGroupOpenState } from "@/stores/chats/activity-group-open-
 import { type ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessageAt } from "./chat-message-fixtures";
 import {
+  advanceLegendListFrames,
+  advanceLegendListTime,
   setLegendListSyntheticScrollEventsEnabled,
   settleLegendList,
 } from "./legend-list-test-environment";
@@ -704,14 +706,10 @@ describe("ChatMessages scroll policy", () => {
       await selectLastChatTurnMinimapItem();
 
       // Real gap so op1's and op2's independent 750ms fallbacks land at
-      // clearly distinguishable real-time moments - needed only so this
+      // clearly distinguishable browser-time moments - needed only so this
       // test can isolate "op1's stale callback fires" from "op2 also
       // genuinely settles", not required by the mechanism itself.
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 250);
-        });
-      });
+      await advanceLegendListTime(250);
 
       // OP2: pill click (scrollToEnd, animated) - setTimelineMode
       // ("following-end") both changes the mode AND clears
@@ -731,11 +729,7 @@ describe("ChatMessages scroll policy", () => {
       // "op2 also happens to have genuinely settled on its own", so the
       // assertion below can only pass because mode is still "following-end"
       // independent of either settle callback having run.
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 650);
-        });
-      });
+      await advanceLegendListTime(650);
 
       const scrollNode = getScrollNode();
       // A bare pointerdown now must STILL freeze op2's still-in-flight
@@ -823,16 +817,8 @@ describe("ChatMessages scroll policy", () => {
       );
       rerenderMessages(afterOverflow);
       await settleLegendList();
-      await act(async () => {
-        for (let frame = 0; frame < 6; frame += 1) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 300);
-        });
-      });
+      await advanceLegendListFrames(6);
+      await advanceLegendListTime(300);
 
       await waitFor(
         () => {
@@ -1059,11 +1045,7 @@ describe("ChatMessages scroll policy", () => {
         await fireScrollTopAndFlush(top);
         if (!isJumpPillVisible()) break;
       }
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 40);
-        });
-      });
+      await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS + 40);
 
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       await waitFor(
@@ -1175,11 +1157,7 @@ describe("ChatMessages scroll policy", () => {
       // Library-owned (see above) - a bare write would cancel before the
       // strict-epsilon branch is even reached.
       await fireLibraryOwnedScrollTo(Math.max(0, end - 200));
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 50);
-        });
-      });
+      await advanceLegendListTime(50);
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
 
       // True live edge: strict epsilon satisfied → following-end.
@@ -1331,11 +1309,7 @@ describe("ChatMessages scroll policy", () => {
             blockId: "",
           },
         });
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 50);
-          });
-        });
+        await advanceLegendListTime(50);
 
         await waitForNavigationSettle();
         await waitForNavigationSettle();
@@ -1451,11 +1425,7 @@ describe("ChatMessages scroll policy", () => {
         expect(getScrollNode().dataset.scrollMode).toBe("following-end");
 
         // initial settle + 3 re-issue settles = 4 * fallback.
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, (CHAT_ANCHOR_SETTLE_FALLBACK_MS + 100) * 5);
-          });
-        });
+        await advanceLegendListTime((CHAT_ANCHOR_SETTLE_FALLBACK_MS + 100) * 5);
 
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
         expect(isJumpPillVisible()).toBe(true);
@@ -1480,20 +1450,12 @@ describe("ChatMessages scroll policy", () => {
       try {
         const minimapButton = screen.getByTestId("chat-turn-minimap-hit-strip");
         fireEvent.keyDown(minimapButton, { key: "Home" });
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        });
+        await advanceLegendListFrames(1);
         fireEvent.keyDown(minimapButton, { key: "Enter" });
 
         // Mid-settle: a real wheel gesture must abort the re-issue chain
         // (generation bump + suppression clear). Park at a known offset.
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 120);
-          });
-        });
+        await advanceLegendListTime(120);
         undershoot.setEnabled(false);
         act(() => {
           fireEvent.wheel(scrollNode, { deltaY: -80 });
@@ -1505,11 +1467,7 @@ describe("ChatMessages scroll policy", () => {
 
         // Wait well past any remaining settle/re-issue windows. A buggy
         // non-aborted re-issue would snap scroll away from the user's park.
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, (CHAT_ANCHOR_SETTLE_FALLBACK_MS + 100) * 4);
-          });
-        });
+        await advanceLegendListTime((CHAT_ANCHOR_SETTLE_FALLBACK_MS + 100) * 4);
 
         expect(getScrollNode().scrollTop).toBe(parked);
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -1534,33 +1492,33 @@ describe("ChatMessages scroll policy", () => {
         scrollNode,
         "removeEventListener",
       );
-      onTestFinished(() => {
+      try {
+        rerenderWith({
+          scrollRequest: {
+            requestId: 10_002,
+            messageId: targetId,
+            blockId: "",
+          },
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        const clearCountBeforeUnmount = clearTimeoutSpy.mock.calls.length;
+
+        unmount();
+
+        expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(
+          clearCountBeforeUnmount,
+        );
+        expect(removeEventListenerSpy).toHaveBeenCalledWith(
+          "scrollend",
+          expect.any(Function),
+        );
+      } finally {
         removeEventListenerSpy.mockRestore();
         clearTimeoutSpy.mockRestore();
-      });
-
-      rerenderWith({
-        scrollRequest: {
-          requestId: 10_002,
-          messageId: targetId,
-          blockId: "",
-        },
-      });
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      const clearCountBeforeUnmount = clearTimeoutSpy.mock.calls.length;
-
-      unmount();
-
-      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(
-        clearCountBeforeUnmount,
-      );
-      expect(removeEventListenerSpy).toHaveBeenCalledWith(
-        "scrollend",
-        expect.any(Function),
-      );
+      }
     });
 
     it("getItemType splits human-sent user rows from A2A agent-sent rows", () => {

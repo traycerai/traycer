@@ -37,6 +37,8 @@ import { type ActivityGroupOpenState } from "@/stores/chats/activity-group-open-
 import { type ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessageAt } from "./chat-message-fixtures";
 import {
+  advanceLegendListFrames,
+  advanceLegendListTime,
   setLegendListScrollContainerScrollHeightOverride,
   setLegendListSyntheticScrollEventsEnabled,
   settleLegendList,
@@ -248,11 +250,7 @@ describe("ChatMessages scroll policy", () => {
       const afterStream = appendStreamingAssistantChunks(afterSend, 3, 999_000);
       rerenderMessages(afterStream);
       await settleLegendList();
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        });
-      });
+      await advanceLegendListTime(100);
 
       expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
@@ -356,16 +354,8 @@ describe("ChatMessages scroll policy", () => {
       rerenderMessages(afterOverflow);
       await settleLegendList();
       // Two-rAF reveal pass + state commit for overflowsUsableViewport.
-      await act(async () => {
-        for (let frame = 0; frame < 6; frame += 1) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 300);
-        });
-      });
+      await advanceLegendListFrames(6);
+      await advanceLegendListTime(300);
 
       await waitFor(
         () => {
@@ -391,11 +381,7 @@ describe("ChatMessages scroll policy", () => {
       ];
       rerenderMessages(afterComplete);
       await settleLegendList();
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 200);
-        });
-      });
+      await advanceLegendListTime(200);
 
       // Decision #10: stay anchored - no flip to following-end (that would be
       // the auto-reveal regression). Compare two real scrollTops, never a
@@ -464,16 +450,8 @@ describe("ChatMessages scroll policy", () => {
       );
       rerenderMessages(afterOverflow);
       await settleLegendList();
-      await act(async () => {
-        for (let frame = 0; frame < 6; frame += 1) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 300);
-        });
-      });
+      await advanceLegendListFrames(6);
+      await advanceLegendListTime(300);
       const trailing1 = afterOverflow[afterOverflow.length - 1];
       const afterTurn1Complete: ReadonlyArray<ChatMessageModel> = [
         ...afterOverflow.slice(0, -1),
@@ -534,16 +512,8 @@ describe("ChatMessages scroll policy", () => {
       }
       rerenderMessages(turn2Overflow);
       await settleLegendList();
-      await act(async () => {
-        for (let frame = 0; frame < 6; frame += 1) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 300);
-        });
-      });
+      await advanceLegendListFrames(6);
+      await advanceLegendListTime(300);
       const trailing2 = turn2Overflow[turn2Overflow.length - 1];
       const afterTurn2Complete: ReadonlyArray<ChatMessageModel> = [
         ...turn2Overflow.slice(0, -1),
@@ -830,11 +800,7 @@ describe("ChatMessages scroll policy", () => {
         );
         rerenderMessages(completed);
         await waitForRevealPassTick();
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 200);
-          });
-        });
+        await advanceLegendListTime(200);
 
         expect(getScrollNode().scrollTop).toBe(scrollAtFirstOverflow);
         expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
@@ -905,11 +871,7 @@ describe("ChatMessages scroll policy", () => {
       );
       rerenderMessages(afterFlush);
       await settleLegendList();
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        });
-      });
+      await advanceLegendListTime(100);
 
       // Classifier returned none: park + free-scrolling mode both hold.
       expect(getScrollNode().scrollTop).toBe(parkedScrollTop);
@@ -1161,11 +1123,7 @@ describe("ChatMessages scroll policy", () => {
         ];
         rerenderMessages(afterForeign);
         await settleLegendList();
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 100);
-          });
-        });
+        await advanceLegendListTime(100);
 
         expect(getScrollNode().scrollTop).toBe(parkedScrollTop);
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -1260,11 +1218,7 @@ describe("ChatMessages scroll policy", () => {
       const stepMs = 100;
       for (let waited = 0; waited < budgetMs; waited += stepMs) {
         if (reachedTerminalState()) return;
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, stepMs);
-          });
-        });
+        await advanceLegendListTime(stepMs);
       }
     }
 
@@ -1304,13 +1258,7 @@ describe("ChatMessages scroll policy", () => {
     }
 
     async function flushAnchorPositionFrames(): Promise<void> {
-      await act(async () => {
-        for (let frame = 0; frame < 10; frame += 1) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        }
-      });
+      await advanceLegendListFrames(10);
     }
 
     it("(pin A) send recovers via validated reissue to the exact fade-safe anchor offset after short landings", async () => {
@@ -1538,11 +1486,7 @@ describe("ChatMessages scroll policy", () => {
 
         // Let the first issue land short, then simulate an OS-scrollbar drag
         // upward (no generation-bumping gesture).
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 120);
-          });
-        });
+        await advanceLegendListTime(120);
         undershoot.setEnabled(false);
         const departed = Math.max(0, getScrollNode().scrollTop - 500);
         act(() => {
@@ -1737,9 +1681,9 @@ describe("ChatMessages scroll policy", () => {
         // Every attempt's promise hangs -> every attempt times out ->
         // validate is unconditionally false regardless of the (actually
         // correct) DOM position -> retries exhaust -> fail-safe, never a
-        // phantom settle at the transiently-correct position. Real watchdog
-        // windows must elapse here (~4 x 2600ms) - the poll exits at the
-        // fail-safe flip instead of padding a fifth window on top.
+        // phantom settle at the transiently-correct position. Full watchdog
+        // windows advance here (~4 x 2600ms of browser time) - the poll exits
+        // at the fail-safe flip instead of padding a fifth window on top.
         await waitForMultiRetryAnchorSettle(
           () => getScrollNode().dataset.scrollMode === "free-scrolling",
         );
@@ -2091,11 +2035,7 @@ describe("ChatMessages scroll policy", () => {
       });
       expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
 
-      await act(async () => {
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => resolve()),
-        );
-      });
+      await advanceLegendListFrames(1);
 
       fireEvent.wheel(scrollNode, { deltaY: 40 });
       expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
@@ -2460,6 +2400,11 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
       expect(rafSpy.mock.calls.length).toBeGreaterThan(1);
 
+      // This suite owns requestAnimationFrame through the shared browser
+      // clock. Leaving the observation spy installed makes the next test's
+      // fresh fake clock wrap a stale clock function and strands its frame
+      // queue, so restore the scheduling boundary before teardown.
+      rafSpy.mockRestore();
       unmount();
     });
 
@@ -2629,13 +2574,11 @@ describe("ChatMessages scroll policy", () => {
 
       // First scroll-only report: reaching the true end reconciles mode to
       // `following-end` (ticket 11 fix #1) without touching the anchor refs.
-      await act(async () => {
+      act(() => {
         scrollNode.scrollTop = trueEnd;
         fireEvent.scroll(scrollNode);
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
       });
+      await advanceLegendListFrames(1);
       expect(scrollNode.dataset.scrollMode).toBe("following-end");
 
       // Second scroll-only report: a real decrease (an OS-scrollbar drag
@@ -2648,13 +2591,11 @@ describe("ChatMessages scroll policy", () => {
       // state short-circuits the scroll coalescer - so the already-armed
       // second rAF from the schedule above elapses after this transition
       // has already landed, not before it).
-      await act(async () => {
+      act(() => {
         scrollNode.scrollTop = trueEnd - 900;
         fireEvent.scroll(scrollNode);
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
       });
+      await advanceLegendListFrames(1);
       expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
 
       await waitForRevealPassTick();

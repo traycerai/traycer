@@ -34,7 +34,9 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
 import {
+  installLegendListTestClock,
   installLegendListViewportMetrics,
+  restoreLegendListTestClock,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
@@ -444,6 +446,7 @@ function resetSurfaceHostModules(): void {
 
 beforeEach(() => {
   installLegendListViewportMetrics();
+  installLegendListTestClock();
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
@@ -475,6 +478,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  restoreLegendListTestClock();
   chatHarness.teardown();
   epicHarness.teardown();
   __getOpenEpicRegistryForTests().disposeAll();
