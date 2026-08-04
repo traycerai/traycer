@@ -2122,5 +2122,46 @@ describe("useGitListChangedFilesSubscription", () => {
       // The whole point: B answers for itself, and answers differently.
       expect(ownership.result.current.b).toBe(false);
     });
+
+    it("hands the rich slot back when the stream terminates", async () => {
+      // A terminated stream will never write the slot again, so the unary
+      // query has to take it back. The client-wide value used to do this by
+      // itself: closing a session removes it from `ownedSessions` and
+      // reconciles the method's version away, leaving no owner. Reading the
+      // entry's own session instead loses that for free - `StreamSession.close`
+      // does NOT clear its negotiated version (only `resetForReconnect` does),
+      // so a closed session keeps answering with the minor it last negotiated
+      // and the slot stays disabled with nothing left to fill it.
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
+      const repo = await renderRepo("/repo-a");
+      repo.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+
+      const ownership = renderHook(
+        () =>
+          useGitSubscriptionOwnsRichSlot({
+            wsStreamClient: mockWsStreamClient,
+            hostId: "host1",
+            runningDir: "/repo-a",
+            ignoreWhitespace: false,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() => expect(ownership.result.current).toBe(true));
+
+      // Fatal domain frame -> `markTerminal`. Reconciliation drops the
+      // client-wide value the same way it always did; the entry must not go on
+      // answering from the session it just closed.
+      // Reconciliation drops the client-wide value as the session leaves
+      // `ownedSessions`, which happens DURING the close - so it is already gone
+      // by the time anything re-reads. Setting it afterwards would leave the
+      // store holding a snapshot taken while it was still 1.1.
+      mockWsStreamClient.methodSchemaVersion = null;
+      repo.session.emitFrame(
+        { type: "error", message: "fatal git error", isFatal: true },
+        null,
+      );
+
+      await waitFor(() => expect(ownership.result.current).toBe(false));
+    });
   });
 });

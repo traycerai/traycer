@@ -685,7 +685,20 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     // periodic refreshes that have permanently stopped - most misleading in
     // the panel, where cached data keeps the view looking alive.
     shared.lastWatcherStatus = null;
+    // Same cliff for the negotiated version, and it needs BOTH halves dropped.
+    // A closed `StreamSession` keeps reporting the minor it last negotiated -
+    // only `resetForReconnect` clears that, not `close()` - and the stamp is
+    // just as stale. Left in place, this entry would go on claiming the stream
+    // owns the rich slot while no stream remains to write it, so the unary
+    // query stays disabled and the panel has no writer at all.
+    //
+    // Falling back to the client-wide value here is exactly right: closing the
+    // session removes it from `ownedSessions` and reconciles the method's
+    // version away, which is how this case used to resolve itself.
+    shared.session = null;
+    shared.negotiatedVersion = null;
     settleSharedRefresh(shared, subscriptionKeyFor(wsStreamClient, args));
+    notifyEntryChanged(subscriptionKeyFor(wsStreamClient, args));
     notifyConsumers(shared);
   };
 
