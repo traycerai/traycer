@@ -1122,7 +1122,7 @@ describe("<ChatTile />", () => {
     expect(frame.fromMessageId).toBe("message-1");
   });
 
-  it("sends edit-user-message from the inline editor with current composer settings", async () => {
+  it("resubmits an unchanged inline message with current composer settings", async () => {
     useComposerRunSettingsStore.setState({
       globalLastRunSettings: QUEUED_SETTINGS,
     });
@@ -1149,8 +1149,12 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
-    pasteInlineEditText(" updated");
-    fireEvent.click(getButtonByAriaLabel("Send edit"));
+    const sendEditButton = getButtonByAriaLabel("Send edit");
+    if (!(sendEditButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send edit button");
+    }
+    expect(sendEditButton.disabled).toBe(false);
+    fireEvent.click(sendEditButton);
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
