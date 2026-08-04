@@ -678,13 +678,6 @@ export function createOpenEpicStore(
   type ArtifactRoomReplicaEntry = {
     doc: Y.Doc;
     awareness: Awareness;
-    /**
-     * Mirror of the host-side artifact-room doc, advanced from every applied
-     * `artifactRoomSnapshot`/`artifactRoomUpdate`. Used to compare against the artifactRoom's local
-     * dirty watermark so we can clear the dirty flag once the host's
-     * view covers the local edits - analogous to root `hostCoverageDoc`.
-     */
-    hostCoverageDoc: Y.Doc;
     docUpdateHandler: (update: Uint8Array, origin: unknown) => void;
     awarenessUpdateHandler: (
       changes: { added: number[]; updated: number[]; removed: number[] },
@@ -780,7 +773,6 @@ export function createOpenEpicStore(
     if (existing !== undefined) return existing;
     const replicaDoc = new Y.Doc();
     const replicaAwareness = new Awareness(replicaDoc);
-    const replicaHostCoverageDoc = new Y.Doc();
     const docUpdateHandler = (update: Uint8Array, origin: unknown): void => {
       // Host-originated applies must not be echoed; locally-originated
       // edits become outbound `artifactRoomApplyUpdate` frames.
@@ -841,7 +833,6 @@ export function createOpenEpicStore(
     const entry: ArtifactRoomReplicaEntry = {
       doc: replicaDoc,
       awareness: replicaAwareness,
-      hostCoverageDoc: replicaHostCoverageDoc,
       docUpdateHandler,
       awarenessUpdateHandler,
       pendingUpdates: [],
@@ -860,7 +851,6 @@ export function createOpenEpicStore(
     entry.awareness.off("update", entry.awarenessUpdateHandler);
     entry.awareness.destroy();
     entry.doc.destroy();
-    entry.hostCoverageDoc.destroy();
     artifactRoomReplicas.delete(artifactRoomId);
   }
 
@@ -1256,12 +1246,6 @@ export function createOpenEpicStore(
               const hadPrior = artifactRoomReplicas.has(artifactRoomId);
               const entry = getOrCreateArtifactRoomReplica(artifactRoomId);
               Y.applyUpdate(entry.doc, snapshotBytes, BIN_STREAM_ORIGIN);
-              // Reset the host coverage replica with the new snapshot
-              // so subsequent coverage checks reflect the host's view.
-              entry.hostCoverageDoc.destroy();
-              const freshCoverage = new Y.Doc();
-              Y.applyUpdate(freshCoverage, snapshotBytes);
-              entry.hostCoverageDoc = freshCoverage;
               entry.latestHostStateVectorBase64 =
                 hostArtifactRoomStateVectorBase64;
               // If the local replica is ahead of the host's snapshot,
@@ -1342,7 +1326,6 @@ export function createOpenEpicStore(
               const entry = artifactRoomReplicas.get(artifactRoomId);
               if (entry === undefined) return;
               Y.applyUpdate(entry.doc, updateBytes, BIN_STREAM_ORIGIN);
-              Y.applyUpdate(entry.hostCoverageDoc, updateBytes);
               entry.latestHostStateVectorBase64 =
                 hostArtifactRoomStateVectorBase64;
               if (
