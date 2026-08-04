@@ -221,12 +221,32 @@ const PREVIEW_SCAN_CHARS = CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS * 4;
  * that duplication. Reading a bounded head keeps the retained preview
  * proportional to what can actually be shown.
  */
+/**
+ * `String.prototype.slice` cuts on UTF-16 code units, so a cut landing
+ * between the halves of a surrogate pair leaves a lone surrogate that
+ * renders as a replacement glyph. This preview doubles as the jump
+ * target's accessible name, so a screen reader would announce the
+ * malformed character too - drop a trailing high surrogate instead.
+ */
+function sliceWholeCodePoints(text: string, maxUnits: number): string {
+  if (text.length <= maxUnits) return text;
+  const cut = text.slice(0, maxUnits);
+  const last = cut.charCodeAt(cut.length - 1);
+  const endsOnLeadingSurrogate = last >= 0xd800 && last <= 0xdbff;
+  return endsOnLeadingSurrogate ? cut.slice(0, -1) : cut;
+}
+
 export function compactChatTurnMinimapPreview(
   text: string | null | undefined,
 ): string | null {
   if (text === null || text === undefined) return null;
-  const compact = text.slice(0, PREVIEW_SCAN_CHARS).replace(/\s+/g, " ").trim();
+  const compact = sliceWholeCodePoints(text, PREVIEW_SCAN_CHARS)
+    .replace(/\s+/g, " ")
+    .trim();
   if (compact.length === 0) return null;
   if (compact.length <= CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS) return compact;
-  return `${compact.slice(0, CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS).trimEnd()}…`;
+  return `${sliceWholeCodePoints(
+    compact,
+    CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  ).trimEnd()}…`;
 }

@@ -25,10 +25,6 @@ import {
   type AnalyticsResourcePressureTier,
   type AnalyticsSessionAgeBucket,
 } from "@/lib/analytics";
-import {
-  desktopAppResourceUsageFromMetrics,
-  getDesktopDiagnosticsBridge,
-} from "@/lib/resources/desktop-app-resource-usage";
 
 const BYTES_PER_MB = 1024 * 1024;
 const MS_PER_HOUR = 3_600_000;
@@ -44,18 +40,28 @@ const MIN_SLOPE_SAMPLES = 3;
 const PRESSURE_REPEAT_THROTTLE_MS = MS_PER_HOUR;
 
 /**
- * Tiers are on the JS heap, not the working set: the renderer's old-space
- * ceiling is 4 GB, so `critical` still leaves room to report before an
- * allocation failure takes the window down with the event unsent.
+ * Tiers are on the JS heap, not the working set, and are expressed as a
+ * FRACTION of the measured ceiling rather than as absolute megabytes.
+ *
+ * The absolute values these replace (3072/2304/1536) were derived from the
+ * desktop's 4 GB old-space limit, but Chromium sizes `jsHeapSizeLimit` from
+ * device memory, so a low-memory client can OOM around 2 GB - below two of the
+ * three thresholds. The tiers meant to fire before an allocation failure were
+ * exactly the ones that could never fire, for exactly the population most
+ * likely to hit one. The fractions reproduce the old thresholds at a 4 GB
+ * limit and keep their meaning everywhere else.
  */
 const PRESSURE_TIERS: ReadonlyArray<{
   readonly tier: AnalyticsResourcePressureTier;
-  readonly jsHeapMb: number;
+  readonly limitFraction: number;
 }> = [
-  { tier: "critical", jsHeapMb: 3072 },
-  { tier: "high", jsHeapMb: 2304 },
-  { tier: "elevated", jsHeapMb: 1536 },
+  { tier: "critical", limitFraction: 0.75 },
+  { tier: "high", limitFraction: 0.5625 },
+  { tier: "elevated", limitFraction: 0.375 },
 ];
+/** Fallback ceiling when the runtime does not expose one, so the tiers keep
+ * the behaviour they had when they were absolute. */
+const ASSUMED_JS_HEAP_LIMIT_MB = 4096;
 
 const TIER_RANK: Readonly<Record<AnalyticsResourcePressureTier, number>> = {
   elevated: 1,
@@ -97,7 +103,6 @@ export interface ResourceTelemetryDeps {
   readonly now: () => number;
   readonly startedAtMs: number;
   readonly readJsHeap: () => JsHeapReading | null;
-  readonly readRendererUsage: () => Promise<RendererUsageReading | null>;
   readonly collectContext: () => ResourceTelemetryContext;
   readonly emit: ResourceTelemetryEmitter;
 }
@@ -105,7 +110,7 @@ export interface ResourceTelemetryDeps {
 export interface ResourceTelemetrySampler {
   /** Take and emit exactly one sample. Exposed for tests and for the pressure
    * path; production drives it from `start`. */
-  readonly sampleOnce: () => Promise<void>;
+  readonly sampleOnce: () => void;
   readonly start: () => () => void;
 }
 
@@ -145,8 +150,15 @@ export function heapSlopeMbPerHour(
 
 export function pressureTierFor(
   jsHeapMb: number,
+  jsHeapLimitMb: number | null,
 ): AnalyticsResourcePressureTier | null {
-  const match = PRESSURE_TIERS.find((entry) => jsHeapMb >= entry.jsHeapMb);
+  const limit =
+    jsHeapLimitMb === null || jsHeapLimitMb <= 0
+      ? ASSUMED_JS_HEAP_LIMIT_MB
+      : jsHeapLimitMb;
+  const match = PRESSURE_TIERS.find(
+    (entry) => jsHeapMb >= limit * entry.limitFraction,
+  );
   return match === undefined ? null : match.tier;
 }
 
@@ -177,21 +189,19 @@ export function readJsHeap(): JsHeapReading | null {
   };
 }
 
-export async function readRendererUsage(): Promise<RendererUsageReading | null> {
-  const bridge = getDesktopDiagnosticsBridge();
-  if (bridge === null) return null;
-  try {
-    const snapshot = await bridge.getMetrics();
-    const usage = desktopAppResourceUsageFromMetrics(snapshot, Date.now());
-    return {
-      workingSetMb: roundToTenth(usage.renderer.rssBytes / BYTES_PER_MB),
-      cpuPercent: roundToTenth(usage.renderer.cpuPercent),
-    };
-  } catch {
-    // Diagnostics are never allowed to surface a failure into the app.
-    return null;
-  }
-}
+/*
+ * Process CPU and working set are deliberately NOT sampled here.
+ *
+ * The only renderer-side source is `app.getAppMetrics()`, whose
+ * `percentCPUUsage` is a delta against the last call and is accumulated per
+ * pid in the main process - one shared bookmark for every caller. Sampling it
+ * would corrupt the Resource Monitor's live reading (its next 1 Hz tick would
+ * measure a sub-second window) and would itself report an interval defined by
+ * whichever other poller ran last, not the 15 minutes this sampler implies.
+ * A number that cannot be compared across samples or aggregated across users
+ * is worse than no number, and the JS heap is the signal this event exists
+ * for. Restoring CPU here needs a sampler-owned delta source, not this one.
+ */
 
 export function createResourceTelemetrySampler(
   deps: ResourceTelemetryDeps,
@@ -200,7 +210,14 @@ export function createResourceTelemetrySampler(
   let lastPressureAtMs: number | null = null;
   let lastPressureTier: AnalyticsResourcePressureTier | null = null;
 
-  const sampleOnce = async (): Promise<void> => {
+  // Dropping the process-metrics read left this path fully synchronous, so
+  // there is no longer an await window a teardown could slip through. The
+  // `stopped` latch stays as the explicit guarantee: a sample must never emit
+  // for a renderer that is being torn down, whatever the path grows back into.
+  let stopped = false;
+
+  const sampleOnce = (): void => {
+    if (stopped) return;
     const heap = deps.readJsHeap();
     // No heap reading means no primary signal; process metrics alone would not
     // be interpretable, so skip the sample entirely.
@@ -209,20 +226,17 @@ export function createResourceTelemetrySampler(
     heapHistory.push({ atMs: at, jsHeapMb: heap.usedMb });
     if (heapHistory.length > SLOPE_WINDOW_SAMPLES) heapHistory.shift();
 
-    const usage = await deps.readRendererUsage();
     const context = deps.collectContext();
     const measurement = {
       js_heap_mb: heap.usedMb,
       js_heap_limit_mb: heap.limitMb,
       heap_slope_mb_per_h: heapSlopeMbPerHour(heapHistory),
-      renderer_working_set_mb: usage === null ? null : usage.workingSetMb,
-      renderer_cpu_percent: usage === null ? null : usage.cpuPercent,
       session_age_bucket: sessionAgeBucket(at - deps.startedAtMs),
       open_tabs: context.openTabs,
     };
     deps.emit.sample(measurement);
 
-    const tier = pressureTierFor(heap.usedMb);
+    const tier = pressureTierFor(heap.usedMb, heap.limitMb);
     if (tier === null) {
       // Dropping out of every band re-arms the escalation path, so a later
       // climb reports immediately instead of waiting out the throttle.
@@ -242,13 +256,15 @@ export function createResourceTelemetrySampler(
   };
 
   const start = (): (() => void) => {
+    stopped = false;
     const firstTimer = window.setTimeout(() => {
-      void sampleOnce();
+      sampleOnce();
     }, RESOURCE_FIRST_SAMPLE_DELAY_MS);
     const repeatTimer = window.setInterval(() => {
-      void sampleOnce();
+      sampleOnce();
     }, RESOURCE_SAMPLE_INTERVAL_MS);
     return () => {
+      stopped = true;
       window.clearTimeout(firstTimer);
       window.clearInterval(repeatTimer);
     };
@@ -265,12 +281,18 @@ export function startResourceTelemetry(
   collectContext: () => ResourceTelemetryContext,
 ): () => void {
   const analytics = Analytics.getInstance();
-  const startedAtMs = Date.now();
+  // `performance.now()` rather than `Date.now()`: both the session-age bucket
+  // and the least-squares heap slope are differences between stamps, and the
+  // wall clock can step backwards (NTP correction, manual change, resume from
+  // sleep). A backward step makes a day-old session report `under_1h` - the
+  // one axis the event exists to correlate heap against - and makes the slope
+  // regression's x-axis non-monotonic, which can flip its sign and report a
+  // leaking session as releasing memory.
+  const startedAtMs = performance.now();
   const sampler = createResourceTelemetrySampler({
-    now: () => Date.now(),
+    now: () => performance.now(),
     startedAtMs,
     readJsHeap,
-    readRendererUsage,
     collectContext,
     emit: {
       sample: (properties) => {

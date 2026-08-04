@@ -501,6 +501,7 @@ function createDirtyEpicHandle(
     dispose: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => !store.getState().isDirty,
+    hotArtifactRoomIdsForTests: () => [],
   };
 }
 

@@ -42,7 +42,13 @@ import { contentFingerprint } from "@/lib/text-hash";
 export const ESTIMATED_BYTES_PER_HTML_CHAR = 10;
 
 /** ~6.4M characters of highlighted HTML at the factor above. */
-export const HIGHLIGHT_CACHE_BYTE_BUDGET = 64 * 1024 * 1024;
+// Sized so the byte budget does not quietly shrink the cache's working set:
+// the previous character-count bound admitted ~20M highlighted-HTML chars,
+// which at the estimate below is ~200 MB. Dropping straight to 64 MB cut
+// capacity ~3x and would have traded a measured memory win for unmeasured
+// re-highlight CPU on scrollback. 128 MB keeps most of the old working set
+// while still bounding what the cache can retain.
+export const HIGHLIGHT_CACHE_BYTE_BUDGET = 128 * 1024 * 1024;
 
 export function estimatedHighlightBytes(htmlChars: number): number {
   return htmlChars * ESTIMATED_BYTES_PER_HTML_CHAR;

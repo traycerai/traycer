@@ -5,21 +5,20 @@ import {
   pressureTierFor,
   sessionAgeBucket,
   type JsHeapReading,
-  type RendererUsageReading,
   type ResourceTelemetryEmitter,
 } from "@/lib/resources/resource-telemetry";
 
 const HOUR_MS = 3_600_000;
 
 interface Harness {
-  readonly sampleOnce: () => Promise<void>;
+  readonly sampleOnce: () => void;
   readonly sampleEvents: Array<Record<string, unknown>>;
   readonly pressureEvents: Array<Record<string, unknown>>;
   readonly setHeap: (reading: JsHeapReading | null) => void;
   readonly setNow: (value: number) => void;
 }
 
-function createHarness(usage: RendererUsageReading | null): Harness {
+function createHarness(): Harness {
   const sampleEvents: Array<Record<string, unknown>> = [];
   const pressureEvents: Array<Record<string, unknown>> = [];
   let heap: JsHeapReading | null = { usedMb: 100, limitMb: 4096 };
@@ -38,7 +37,6 @@ function createHarness(usage: RendererUsageReading | null): Harness {
     now: () => now,
     startedAtMs: 0,
     readJsHeap: () => heap,
-    readRendererUsage: () => Promise.resolve(usage),
     collectContext: () => ({ openTabs: 3 }),
     emit,
   });
@@ -110,26 +108,38 @@ describe("heapSlopeMbPerHour", () => {
 });
 
 describe("pressureTierFor", () => {
-  it("maps heap size to the highest crossed tier", () => {
-    expect(pressureTierFor(1024)).toBeNull();
-    expect(pressureTierFor(1536)).toBe("elevated");
-    expect(pressureTierFor(2304)).toBe("high");
-    expect(pressureTierFor(3072)).toBe("critical");
-    expect(pressureTierFor(3900)).toBe("critical");
+  it("maps heap size to the highest crossed tier at the desktop ceiling", () => {
+    expect(pressureTierFor(1024, 4096)).toBeNull();
+    expect(pressureTierFor(1536, 4096)).toBe("elevated");
+    expect(pressureTierFor(2304, 4096)).toBe("high");
+    expect(pressureTierFor(3072, 4096)).toBe("critical");
+    expect(pressureTierFor(3900, 4096)).toBe("critical");
+  });
+
+  it("scales the tiers to a smaller heap ceiling", () => {
+    // On a 2 GB ceiling the old absolute thresholds put `high` and `critical`
+    // ABOVE the limit, so the tiers meant to fire before an allocation failure
+    // could never fire at all.
+    expect(pressureTierFor(768, 2048)).toBe("elevated");
+    expect(pressureTierFor(1152, 2048)).toBe("high");
+    expect(pressureTierFor(1536, 2048)).toBe("critical");
+  });
+
+  it("falls back to the desktop ceiling when the runtime reports no limit", () => {
+    expect(pressureTierFor(1536, null)).toBe("elevated");
+    expect(pressureTierFor(1024, null)).toBeNull();
   });
 });
 
 describe("createResourceTelemetrySampler", () => {
-  it("emits one sample carrying heap, process, and workload context", async () => {
-    const harness = createHarness({ workingSetMb: 512.4, cpuPercent: 12.5 });
-    await harness.sampleOnce();
+  it("emits one sample carrying heap and workload context", () => {
+    const harness = createHarness();
+    harness.sampleOnce();
 
     expect(harness.sampleEvents).toHaveLength(1);
     expect(harness.sampleEvents[0]).toMatchObject({
       js_heap_mb: 100,
       js_heap_limit_mb: 4096,
-      renderer_working_set_mb: 512.4,
-      renderer_cpu_percent: 12.5,
       session_age_bucket: "under_1h",
       open_tabs: 3,
       heap_slope_mb_per_h: null,
@@ -137,45 +147,47 @@ describe("createResourceTelemetrySampler", () => {
     expect(harness.pressureEvents).toHaveLength(0);
   });
 
-  it("reports null process metrics when no desktop bridge is present", async () => {
-    const harness = createHarness(null);
-    await harness.sampleOnce();
+  it("carries no process-metric fields", () => {
+    // Process CPU/working set are sourced from a main-process accumulator that
+    // is shared with the Resource Monitor pollers, so reading it here both
+    // corrupts their numbers and yields an interval this sampler did not
+    // define. The event deliberately ships neither field.
+    const harness = createHarness();
+    harness.sampleOnce();
 
-    expect(harness.sampleEvents[0]).toMatchObject({
-      renderer_working_set_mb: null,
-      renderer_cpu_percent: null,
-      js_heap_mb: 100,
-    });
+    const sample = harness.sampleEvents[0];
+    expect(sample).not.toHaveProperty("renderer_working_set_mb");
+    expect(sample).not.toHaveProperty("renderer_cpu_percent");
   });
 
-  it("stays silent when the heap cannot be read at all", async () => {
-    const harness = createHarness(null);
+  it("stays silent when the heap cannot be read at all", () => {
+    const harness = createHarness();
     harness.setHeap(null);
-    await harness.sampleOnce();
+    harness.sampleOnce();
 
     expect(harness.sampleEvents).toHaveLength(0);
     expect(harness.pressureEvents).toHaveLength(0);
   });
 
-  it("fills in a slope once the rolling window has enough samples", async () => {
-    const harness = createHarness(null);
+  it("fills in a slope once the rolling window has enough samples", () => {
+    const harness = createHarness();
     harness.setHeap({ usedMb: 100, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     harness.setNow(HOUR_MS);
     harness.setHeap({ usedMb: 200, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     harness.setNow(2 * HOUR_MS);
     harness.setHeap({ usedMb: 300, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
 
     expect(harness.sampleEvents[0].heap_slope_mb_per_h).toBeNull();
     expect(harness.sampleEvents[2].heap_slope_mb_per_h).toBe(100);
   });
 
-  it("throttles a sustained tier but reports an escalation immediately", async () => {
-    const harness = createHarness(null);
+  it("throttles a sustained tier but reports an escalation immediately", () => {
+    const harness = createHarness();
     harness.setHeap({ usedMb: 1600, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     expect(harness.pressureEvents).toHaveLength(1);
     expect(harness.pressureEvents[0]).toMatchObject({
       pressure_tier: "elevated",
@@ -183,45 +195,45 @@ describe("createResourceTelemetrySampler", () => {
 
     // Same tier, minutes later: throttled.
     harness.setNow(15 * 60_000);
-    await harness.sampleOnce();
+    harness.sampleOnce();
     expect(harness.pressureEvents).toHaveLength(1);
 
     // Escalation bypasses the throttle.
     harness.setNow(30 * 60_000);
     harness.setHeap({ usedMb: 3100, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     expect(harness.pressureEvents).toHaveLength(2);
     expect(harness.pressureEvents[1]).toMatchObject({
       pressure_tier: "critical",
     });
   });
 
-  it("re-reports after the throttle window elapses", async () => {
-    const harness = createHarness(null);
+  it("re-reports after the throttle window elapses", () => {
+    const harness = createHarness();
     harness.setHeap({ usedMb: 1600, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     harness.setNow(HOUR_MS);
-    await harness.sampleOnce();
+    harness.sampleOnce();
 
     expect(harness.pressureEvents).toHaveLength(2);
   });
 
-  it("re-arms escalation after the heap falls out of every tier", async () => {
-    const harness = createHarness(null);
+  it("re-arms escalation after the heap falls out of every tier", () => {
+    const harness = createHarness();
     harness.setHeap({ usedMb: 3100, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     expect(harness.pressureEvents).toHaveLength(1);
 
     // Back under every threshold - no pressure event, and the tier memory resets.
     harness.setNow(60_000);
     harness.setHeap({ usedMb: 200, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     expect(harness.pressureEvents).toHaveLength(1);
 
     // Climbing again reports immediately despite being inside the throttle window.
     harness.setNow(120_000);
     harness.setHeap({ usedMb: 3100, limitMb: 4096 });
-    await harness.sampleOnce();
+    harness.sampleOnce();
     expect(harness.pressureEvents).toHaveLength(2);
   });
 
@@ -236,7 +248,6 @@ describe("createResourceTelemetrySampler", () => {
         now: () => 0,
         startedAtMs: 0,
         readJsHeap,
-        readRendererUsage: () => Promise.resolve(null),
         collectContext: () => ({ openTabs: 0 }),
         emit: { sample: () => {}, pressure: () => {} },
       });

@@ -390,8 +390,6 @@ type ResourceMeasurementProperties = {
   readonly js_heap_mb: number;
   readonly js_heap_limit_mb: number | null;
   readonly heap_slope_mb_per_h: number | null;
-  readonly renderer_working_set_mb: number | null;
-  readonly renderer_cpu_percent: number | null;
   readonly session_age_bucket: AnalyticsSessionAgeBucket;
   readonly open_tabs: number;
 };
@@ -1337,8 +1335,6 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
       "js_heap_mb",
       "js_heap_limit_mb",
       "heap_slope_mb_per_h",
-      "renderer_working_set_mb",
-      "renderer_cpu_percent",
       "session_age_bucket",
       "open_tabs",
     ],
@@ -1350,8 +1346,6 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
       "js_heap_mb",
       "js_heap_limit_mb",
       "heap_slope_mb_per_h",
-      "renderer_working_set_mb",
-      "renderer_cpu_percent",
       "session_age_bucket",
       "open_tabs",
     ],
@@ -1653,8 +1647,6 @@ const MEASURE_PROPERTY_KEYS = new Set<string>([
   "heap_slope_mb_per_h",
   "js_heap_limit_mb",
   "js_heap_mb",
-  "renderer_cpu_percent",
-  "renderer_working_set_mb",
 ]);
 
 function analyticsPropertyHasValidator(

@@ -539,3 +539,31 @@ describe("compactChatTurnMinimapPreview", () => {
     expect(compactChatTurnMinimapPreview("short reply")).toBe("short reply");
   });
 });
+
+describe("compactChatTurnMinimapPreview surrogate safety", () => {
+  it("never truncates in the middle of an astral character", () => {
+    // The 200th UTF-16 unit lands inside the emoji, so a code-unit slice would
+    // emit a lone high surrogate - rendered as a replacement glyph, and read
+    // aloud by a screen reader since this text is also the jump target's
+    // accessible name.
+    const text = `${"a".repeat(199)}\u{1F600}${"b".repeat(300)}`;
+    const preview = compactChatTurnMinimapPreview(text);
+    if (preview === null) throw new Error("expected a preview");
+
+    expect(preview).toBe(preview.replace(/\uFFFD/g, ""));
+    for (let index = 0; index < preview.length; index += 1) {
+      const code = preview.charCodeAt(index);
+      const isLead = code >= 0xd800 && code <= 0xdbff;
+      if (!isLead) continue;
+      const next = preview.charCodeAt(index + 1);
+      expect(Number.isNaN(next) ? -1 : next).toBeGreaterThanOrEqual(0xdc00);
+    }
+    // The pair is dropped whole rather than split.
+    expect(preview.endsWith("\u2026")).toBe(true);
+  });
+
+  it("keeps an astral character that fits entirely inside the budget", () => {
+    const preview = compactChatTurnMinimapPreview("hi \u{1F600} there");
+    expect(preview).toBe("hi \u{1F600} there");
+  });
+});

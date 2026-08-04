@@ -201,12 +201,20 @@ function LogDetailGroup(): ReactNode {
  * The resulting path is shown for copying rather than revealed in the file
  * manager: no reveal capability is exposed for arbitrary paths.
  */
+/** Serialization scope for the heap capture - see the `scope` note below. */
+const HEAP_SNAPSHOT_MUTATION_SCOPE = "runner-heap-snapshot";
+
 function MemoryDiagnosticsGroup(): ReactNode {
   const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
   const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
 
   const captureMutation = useMutation({
     mutationKey: runnerMutationKeys.captureHeapSnapshot(),
+    // `scope` is what actually serializes mutations in TanStack Query -
+    // `mutationKey` alone does not. Without it the only thing standing
+    // between a double-click and two concurrent multi-gigabyte heap walks
+    // is the `disabled` prop, which cannot help a second mounted panel.
+    scope: { id: HEAP_SNAPSHOT_MUTATION_SCOPE },
     mutationFn: (): Promise<string | null> =>
       bridge === null ? Promise.resolve(null) : bridge.takeHeapSnapshot(),
     onSuccess: (path) => {
@@ -215,8 +223,13 @@ function MemoryDiagnosticsGroup(): ReactNode {
         toast.error("Couldn't capture a heap snapshot");
       }
     },
-    onError: (error) =>
-      toastFromRunnerError(error, "Couldn't capture a heap snapshot"),
+    onError: (error) => {
+      // Clear the previous run's path. Leaving it rendered under a failure
+      // toast offers a Copy button for a file this capture never wrote -
+      // the user pastes it into a report as the snapshot they just took.
+      setSnapshotPath(null);
+      toastFromRunnerError(error, "Couldn't capture a heap snapshot");
+    },
   });
 
   if (bridge === null) {

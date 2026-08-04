@@ -65,8 +65,10 @@ export const runnerMutationKeys = {
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
   // On-demand V8 heap snapshot of this renderer (Diagnostics → Memory).
-  // Keyed so the capture dedups - it freezes the renderer while the heap is
-  // walked, so a double-click must not queue a second walk.
+  // The key identifies the mutation; it does NOT serialize it - TanStack
+  // Query only serializes on `scope`, which the caller sets, and which is
+  // what keeps a double-click from starting a second renderer-freezing
+  // heap walk.
   captureHeapSnapshot: () =>
     ["runner.diagnostics.captureHeapSnapshot"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h

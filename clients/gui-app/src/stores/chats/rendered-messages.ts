@@ -1838,9 +1838,25 @@ function assistantRecordSignature(message: AssistantMessage): string {
   return computed;
 }
 
+/**
+ * Cache key for a turn's merged block list.
+ *
+ * A single-record turn can key on that record's own `blocksVersion`, which its
+ * writer bumps on every mutation. A MULTI-record turn cannot: records are
+ * minted at `blocksVersion: 0` and each carries its own counter, so two
+ * different merged lists can produce the same positional `v:0|v:0` key - and a
+ * writer that replaces one record's blocks without advancing that record's
+ * counter (a snapshot replacement rebuilding the list with persisted counters
+ * that restart at 0) would then be served the previous render forever, leaving
+ * the turn visibly frozen at older content.
+ *
+ * So the moment a second record joins, fall back to hashing the merged list.
+ * That is what the pre-accumulator code did, and it is what makes this class
+ * of stale-cache miss impossible rather than merely unlikely.
+ */
 function turnBlocksSignature(acc: AssistantTurnAccumulator): string {
   if (acc.signatureParts.length === 1) return acc.signatureParts[0];
-  return acc.signatureParts.join("|");
+  return `h:${turnSignature(acc.blocks)}`;
 }
 
 interface AssistantTurnRenderInput {

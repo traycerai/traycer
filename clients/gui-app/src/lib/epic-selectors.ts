@@ -20,7 +20,7 @@
  * to satisfy `@typescript-eslint/no-unnecessary-condition` while keeping
  * runtime safety.
  */
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { createSelector, lruMemoize } from "reselect";
@@ -921,7 +921,11 @@ export function useEpicArtifactBodyLease(artifactId: string | null): void {
   const artifactRoomId = useStore(handle.store, (s) =>
     artifactId === null ? null : s.getArtifactRoomId(artifactId),
   );
-  useEffect(() => {
+  // Layout, not passive: the lease is what keeps the room from cooling under a
+  // mounted editor, and a passive effect runs after paint. `getArtifactFragment`
+  // materializes on read so the first render already has its fragment - this
+  // only has to pin it before the browser paints.
+  useLayoutEffect(() => {
     if (artifactId === null || artifactRoomId === null) return;
     return handle.store.getState().acquireArtifactBodyLease(artifactId);
   }, [handle, artifactId, artifactRoomId]);

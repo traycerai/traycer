@@ -54,6 +54,13 @@ export function useEpicExportArtifacts() {
           archive: input.archive,
           archiveTitle: input.archiveTitle ?? firstArtifact.title,
         });
+        // The blob is fully built, so the fragments are dead from here on.
+        // Release before the save dialog: `saveBlobToDisk` blocks on native OS
+        // UI the user may leave open for minutes, and a leased room can never
+        // be cooled - holding them across the dialog would pin every exported
+        // body for that whole time. Releases are idempotent, so the `finally`
+        // stays as the throw-path backstop.
+        releases.forEach((release) => release());
         return await saveBlobToDisk(output.blob, output.suggestedName);
       } finally {
         releases.forEach((release) => release());
