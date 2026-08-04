@@ -12,6 +12,7 @@ import {
   fireEvent,
   render,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
@@ -34,7 +35,9 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
 import {
+  enableLegendListBrowserScrollEvents,
   installLegendListViewportMetrics,
+  setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
@@ -57,7 +60,11 @@ import {
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/surface-host/tile-surface-membership";
-import { resetTileSurfaceEnvironmentRegistryForTesting } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
+import {
+  getTileSurfaceEnvironment,
+  publishTileSurfaceEnvironment,
+  resetTileSurfaceEnvironmentRegistryForTesting,
+} from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import { resetTileSurfaceGeometryCoordinatorForTesting } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 import { resetChatRemoteDeletionRegistryForTesting } from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
 import {
@@ -72,6 +79,15 @@ import { getChatsMap } from "@/stores/epics/open-epic/projection-helpers";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
+import {
+  evictChatTabState,
+  peekSavedChatTabState,
+  saveChatTabState,
+} from "@/stores/chats/chat-tab-state-cache";
+import { chatTabPersistenceTabKey } from "@/stores/chats/chat-tab-persistence-key";
+import { evictChatTabPersistenceForEpic } from "@/stores/chats/chat-tab-persistence-eviction";
+import { resetPendingHydrationRestoreForTesting } from "@/stores/chats/chat-tab-pending-hydration-restore";
+import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 /**
  * Ticket 21 slice 5 (jsdom half): the PERMANENT lifecycle-matrix gate for the
@@ -340,9 +356,88 @@ function restoreChatToLiveDoc(chat: EpicCanvasTileRef): void {
   chatsMap.set(chat.id, buildChatYMap(chat));
 }
 
+const LEGEND_LIST_HEADER_PX = 40;
+const LEGEND_LIST_ROW_HEIGHT_PX = 90;
+
+function buildUserSnapshotMessage(
+  chat: EpicCanvasTileRef,
+  index: number,
+): Message {
+  return {
+    role: "user",
+    messageId: `${chat.id}-message-${index}`,
+    sender: { type: "user", userId: "owner-1" },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: `${chat.name} seed message ${index}`,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    timestamp: index + 1,
+    sessionAnchor: null,
+  };
+}
+
+function buildAssistantSnapshotMessage(
+  chat: EpicCanvasTileRef,
+  index: number,
+): Message {
+  return {
+    role: "assistant",
+    messageId: `${chat.id}-message-${index}`,
+    startedAt: index + 1,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude",
+      displayName: "Claude",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: `${chat.id}-block-${index}`,
+        text: `${chat.name} assistant reply ${index}`,
+        status: "completed",
+        timestamp: index + 1,
+        providerNotice: null,
+      },
+    ],
+    timestamp: index + 1,
+    turnId: `${chat.id}-turn-${index}`,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+}
+
+function buildLongTranscriptMessages(
+  chat: EpicCanvasTileRef,
+  count: number,
+): Message[] {
+  return Array.from({ length: count }, (_unused, index) =>
+    index % 2 === 0
+      ? buildUserSnapshotMessage(chat, index)
+      : buildAssistantSnapshotMessage(chat, index),
+  );
+}
+
 function emitChatSnapshot(
   chat: EpicCanvasTileRef,
   callbacks: ChatStreamCallbacks,
+  messages: ReadonlyArray<Message> | undefined,
 ): void {
   callbacks.onSnapshot({
     kind: "snapshot",
@@ -363,29 +458,7 @@ function emitChatSnapshot(
         settings: CHAT_RUN_SETTINGS,
         activeSessionChain: null,
         claudePendingWakes: [],
-        messages: [
-          {
-            role: "user",
-            messageId: `${chat.id}-message-1`,
-            sender: { type: "user", userId: "owner-1" },
-            message: {
-              kind: "user",
-              content: {
-                type: "doc",
-                content: [
-                  {
-                    type: "paragraph",
-                    content: [
-                      { type: "text", text: `${chat.name} seed message` },
-                    ],
-                  },
-                ],
-              },
-            },
-            timestamp: 1,
-            sessionAnchor: null,
-          },
-        ],
+        messages: [...(messages ?? [buildUserSnapshotMessage(chat, 1)])],
         events: [],
       },
       access: { role: "owner", ownerUserId: "owner-1", canAct: true },
@@ -402,25 +475,67 @@ function emitChatSnapshot(
   });
 }
 
+interface ChatStreamFactoryHandle {
+  /**
+   * Re-emit a chat.subscribe snapshot with a new messages array. Updates the
+   * seed used on later remounts as well, so growth while a same-pane tab is
+   * unmounted still appears when that tab is selected again.
+   */
+  readonly pushMessages: (
+    chatId: string,
+    messages: ReadonlyArray<Message>,
+  ) => void;
+}
+
+function installChatStreamFactory(
+  messagesByChatId: ReadonlyMap<string, ReadonlyArray<Message>> | undefined,
+): ChatStreamFactoryHandle {
+  const messagesStore = new Map<string, ReadonlyArray<Message>>(
+    messagesByChatId ?? [],
+  );
+  const callbacksByChatId = new Map<string, ChatStreamCallbacks>();
+
+  __setChatStreamClientFactoryForTests((_epicId, chatId, callbacks) => {
+    callbacksByChatId.set(chatId, callbacks);
+    setTimeout(() => {
+      callbacks.onConnectionStatus("open", null);
+      const chat = ALL_CHATS.find((candidate) => candidate.id === chatId);
+      if (chat !== undefined) {
+        emitChatSnapshot(chat, callbacks, messagesStore.get(chat.id));
+      }
+    }, 0);
+    const client: Pick<
+      ChatStreamClient,
+      "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+    > = {
+      sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => true,
+      close: () => {
+        if (callbacksByChatId.get(chatId) === callbacks) {
+          callbacksByChatId.delete(chatId);
+        }
+      },
+    };
+    return client;
+  });
+
+  return {
+    pushMessages: (chatId, messages) => {
+      messagesStore.set(chatId, messages);
+      const callbacks = callbacksByChatId.get(chatId);
+      const chat = ALL_CHATS.find((candidate) => candidate.id === chatId);
+      if (callbacks === undefined || chat === undefined) return;
+      act(() => {
+        emitChatSnapshot(chat, callbacks, messages);
+      });
+    },
+  };
+}
+
 function createChatHarness(): { install(): void; teardown(): void } {
   return {
     install: () => {
-      __setChatStreamClientFactoryForTests((_epicId, chatId, callbacks) => {
-        setTimeout(() => {
-          callbacks.onConnectionStatus("open", null);
-          const chat = ALL_CHATS.find((candidate) => candidate.id === chatId);
-          if (chat !== undefined) emitChatSnapshot(chat, callbacks);
-        }, 0);
-        const client: Pick<
-          ChatStreamClient,
-          "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
-        > = {
-          sendAction: () => undefined,
-          sameTurnSteeringProtocolSupported: () => true,
-          close: () => undefined,
-        };
-        return client;
-      });
+      installChatStreamFactory(undefined);
     },
     teardown: () => {
       __setChatStreamClientFactoryForTests(null);
@@ -480,6 +595,24 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   resetFocusedComposerControlsForTests();
   resetSurfaceHostModules();
+  // Visibility-boundary / bottom-follow rows seed free-scrolling or
+  // following-end coordinates into BOTH halves of the dual-key cache for
+  // this epic's chat tiles. Clear durable (epic) AND tab-key (instance)
+  // entries so later rows never inherit a leftover restore.
+  evictChatTabPersistenceForEpic(EPIC_ID);
+  evictChatTabState(
+    ALL_CHATS.map((chat) =>
+      chatTabPersistenceTabKey({ tileInstanceId: chat.instanceId }),
+    ),
+  );
+  // Review P2: the pending-hydration registry is module-scope and private to
+  // chat-messages.tsx, so it survives an ordinary cache eviction. Rows 16
+  // onward reuse the fixed CHAT_TRACKED/CHAT_SIBLING instance ids - without
+  // this, a missing-anchor mount in one row can leave a pending entry a
+  // later row's mount still reads, even though its own visible cache was
+  // cleared above.
+  resetPendingHydrationRestoreForTesting();
+  setLegendListScrollContainerScrollHeightOverride(null);
   vi.restoreAllMocks();
 });
 
@@ -715,6 +848,173 @@ function expectRefsStable(
   expect(chatTileRoot(container, instanceId)).toBe(before.chatTile);
   expect(messagesScroll(container, instanceId)).toBe(before.messagesScroll);
   expect(firstMessageRow(container, instanceId)).toBe(before.firstRow);
+}
+
+// ---------------------------------------------------------------------------
+// Scroll / same-pane switch helpers (internal-tab-bottom-follow coverage)
+// ---------------------------------------------------------------------------
+
+const PILL_SHOW_DEBOUNCE_MS = 150;
+
+function maxScrollTopFor(scrollNode: HTMLElement): number {
+  return Math.max(0, scrollNode.scrollHeight - scrollNode.clientHeight);
+}
+
+function transcriptScrollHeightPx(messageCount: number): number {
+  return LEGEND_LIST_HEADER_PX + messageCount * LEGEND_LIST_ROW_HEIGHT_PX + 40;
+}
+
+function isScrollToEndPillVisible(
+  container: HTMLElement,
+  instanceId: string,
+): boolean {
+  const record = queryHostedRecord(container, instanceId);
+  if (record === null) return false;
+  const pill = within(record).queryByRole<HTMLButtonElement>("button", {
+    name: "Scroll to end",
+  });
+  if (pill === null) return false;
+  return (
+    pill.classList.contains("opacity-100") &&
+    !pill.classList.contains("opacity-0")
+  );
+}
+
+async function waitForPillVisible(
+  container: HTMLElement,
+  instanceId: string,
+): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 40);
+    });
+  });
+  await waitFor(() => {
+    expect(isScrollToEndPillVisible(container, instanceId)).toBe(true);
+  });
+}
+
+/**
+ * Real gesture to strict bottom: leave the end first (so this is not just the
+ * fresh-mount bootstrap default), then land at max scrollTop.
+ */
+async function gestureToTrueBottom(scrollNode: HTMLElement): Promise<void> {
+  act(() => {
+    scrollNode.scrollTop = 1000;
+  });
+  await settleLegendList();
+  expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+  act(() => {
+    scrollNode.scrollTop = maxScrollTopFor(scrollNode);
+  });
+  await settleLegendList();
+  expect(scrollNode.dataset.scrollMode).toBe("following-end");
+}
+
+/**
+ * Seed the mount-time clamped free-scrolling restore race (row 16): a saved
+ * free-scrolling anchor that is missing from `messages` arms convergence
+ * that used to trap `restorePersistencePendingRef` when the reader reached
+ * true bottom mid-flight. Call BEFORE first mount of that instance.
+ */
+function seedMissingFreeScrollingAnchor(
+  chat: EpicCanvasTileRef,
+  anchorIndex: number,
+): void {
+  saveChatTabState({
+    identity: {
+      tileInstanceId: chat.instanceId,
+      epicId: EPIC_ID,
+      chatId: chat.id,
+    },
+    mode: "free-scrolling",
+    anchorMessageId: "totally-missing-id",
+    anchorIndex,
+    offset: 12,
+  });
+}
+
+/**
+ * Race the mount-time free-restore: keep forcing true bottom across frames
+ * until mode flips to following-end, then settle. Pair with
+ * `seedMissingFreeScrollingAnchor` + a mount that has NOT yet settled.
+ */
+async function raceTrueBottomPastInFlightFreeRestore(
+  scrollNode: HTMLElement,
+): Promise<void> {
+  for (let frame = 0; frame < 8; frame += 1) {
+    act(() => {
+      scrollNode.scrollTop = maxScrollTopFor(scrollNode);
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    });
+    if (scrollNode.dataset.scrollMode === "following-end") break;
+  }
+  await settleLegendList();
+  expect(scrollNode.dataset.scrollMode).toBe("following-end");
+}
+
+async function switchSamePaneTab(
+  container: HTMLElement,
+  toInstanceId: string,
+  options: { readonly settle: boolean } | undefined,
+): Promise<void> {
+  act(() => {
+    useEpicCanvasStore
+      .getState()
+      .setActiveTileTab(VIEW_TAB_ID, "p1", toInstanceId);
+  });
+  if (options?.settle === false) {
+    await waitFor(() => {
+      expect(queryHostedRecord(container, toInstanceId)).not.toBeNull();
+    });
+    return;
+  }
+  await waitForHostedChatLoaded(container, toInstanceId);
+}
+
+function appendLongTranscriptTail(
+  chat: EpicCanvasTileRef,
+  existing: ReadonlyArray<Message>,
+  extraCount: number,
+): Message[] {
+  const start = existing.length;
+  const extras = Array.from({ length: extraCount }, (_unused, offset) => {
+    const index = start + offset;
+    return index % 2 === 0
+      ? buildUserSnapshotMessage(chat, index)
+      : buildAssistantSnapshotMessage(chat, index);
+  });
+  return [...existing, ...extras];
+}
+
+function seedSamePaneLongPair(
+  trackedMessages: ReadonlyArray<Message>,
+  siblingMessages: ReadonlyArray<Message>,
+): ChatStreamFactoryHandle {
+  setLegendListScrollContainerScrollHeightOverride(
+    Math.max(
+      transcriptScrollHeightPx(trackedMessages.length),
+      transcriptScrollHeightPx(siblingMessages.length),
+    ),
+  );
+  enableLegendListBrowserScrollEvents();
+  const stream = installChatStreamFactory(
+    new Map([
+      [CHAT_TRACKED.id, trackedMessages],
+      [CHAT_SIBLING.id, siblingMessages],
+    ]),
+  );
+  seedCanvas(
+    pane("p1", [CHAT_TRACKED.instanceId, CHAT_SIBLING.instanceId]),
+    [CHAT_TRACKED, CHAT_SIBLING],
+    "p1",
+  );
+  return stream;
 }
 
 // ---------------------------------------------------------------------------
@@ -1351,5 +1651,756 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     // is that a real remount happens here, unlike every survives row above.
     expect(mountCount(CHAT_TRACKED.instanceId)).toBe(2);
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(1);
+  });
+
+  it("row 14 - production visibility boundary: topLevelVisible handoff through real hosted chain restores free-reading position", async () => {
+    // Fixup requirement 3 / review P2: every existing visibility-handoff
+    // case in `chat-messages.test.tsx` drives `ChatMessages.visible` via a
+    // direct prop re-render, so a broken
+    // `environment.presentation.topLevelVisible` bridge would still pass.
+    // This row is the only gate that flips visibility through the REAL
+    // production chain:
+    //   publishTileSurfaceEnvironment(presentation.topLevelVisible)
+    //   -> StableTileSurfaceHost record (subscribes via environment registry)
+    //   -> HostedChatSurfaceContextBridge (re-provides PaneVisibilityContext)
+    //   -> ChatTile (usePaneVisible() && useTabBodySelected() -> surfaceVisible)
+    //   -> ChatMessages visible prop
+    //
+    // jsdom cannot reproduce the real geometry-coordinator 0x0 loss:
+    // `installLegendListViewportMetrics` reads every dimension from element
+    // ROLE (not CSS/inline style), and the global ResizeObserver mock never
+    // fires. Keep the same terminal-symptom injection the unit handoff tests
+    // use (`scrollTop = 0` on the scroll node) for the browser-zeroing
+    // symptom; the NEW coverage here is that the production
+    // `topLevelVisible` publish is what drives `visible` false/true.
+    const messageCount = 80;
+    const anchorIndex = 20;
+    const savedViewOffset = 24;
+    const longMessages = buildLongTranscriptMessages(
+      CHAT_TRACKED,
+      messageCount,
+    );
+    const anchorMessageId = longMessages[anchorIndex]?.messageId ?? null;
+    expect(anchorMessageId).toBeTruthy();
+
+    installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
+    setLegendListScrollContainerScrollHeightOverride(
+      LEGEND_LIST_HEADER_PX + messageCount * LEGEND_LIST_ROW_HEIGHT_PX + 40,
+    );
+    saveChatTabState({
+      identity: {
+        tileInstanceId: CHAT_TRACKED.instanceId,
+        epicId: EPIC_ID,
+        chatId: CHAT_TRACKED.id,
+      },
+      mode: "free-scrolling",
+      anchorMessageId,
+      anchorIndex,
+      offset: savedViewOffset,
+    });
+
+    seedCanvas(pane("p1", [CHAT_TRACKED.instanceId]), [CHAT_TRACKED], "p1");
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    // Second settle covers restore-promise + double-rAF quiet window so the
+    // free-scroll landing has fully validated (and the last-visible mirror
+    // is populated) before we hide.
+    await settleLegendList();
+
+    const scrollNode = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+    const beforeHide = scrollNode.scrollTop;
+    expect(beforeHide).toBeGreaterThan(0);
+
+    const readyEnvironment = getTileSurfaceEnvironment(CHAT_TRACKED.instanceId);
+    if (readyEnvironment === null) {
+      throw new Error(
+        "expected a published ReadyTileSurfaceEnvironment for the tracked chat",
+      );
+    }
+    expect(readyEnvironment.presentation.topLevelVisible).toBe(true);
+
+    // Terminal symptom only: real browser zeroes scrollTop when the hosted
+    // record becomes 0x0; jsdom cannot drive that via the geometry
+    // coordinator (see block comment above).
+    act(() => {
+      scrollNode.scrollTop = 0;
+    });
+    act(() => {
+      publishTileSurfaceEnvironment({
+        ...readyEnvironment,
+        presentation: {
+          topLevelVisible: false,
+          topLevelFocused: false,
+        },
+      });
+    });
+    await settleLegendList();
+    expect(messagesScroll(container, CHAT_TRACKED.instanceId).scrollTop).toBe(
+      0,
+    );
+    expect(
+      getTileSurfaceEnvironment(CHAT_TRACKED.instanceId)?.presentation
+        .topLevelVisible,
+    ).toBe(false);
+
+    act(() => {
+      publishTileSurfaceEnvironment({
+        ...readyEnvironment,
+        presentation: {
+          topLevelVisible: true,
+          topLevelFocused: readyEnvironment.presentation.topLevelFocused,
+        },
+      });
+    });
+    await settleLegendList();
+
+    const restored = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(restored.scrollTop).toBe(beforeHide);
+    expect(restored.dataset.scrollMode).toBe("free-scrolling");
+    expect(
+      getTileSurfaceEnvironment(CHAT_TRACKED.instanceId)?.presentation
+        .topLevelVisible,
+    ).toBe(true);
+    // Content identity must survive the visibility cycle (keep-alive, not
+    // remount-and-restore).
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+  });
+
+  it("row 15 - internal-tab-bottom-follow: same-pane switch preserves strict bottom-follow", async () => {
+    const longMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
+    setLegendListScrollContainerScrollHeightOverride(
+      LEGEND_LIST_HEADER_PX +
+        longMessages.length * LEGEND_LIST_ROW_HEIGHT_PX +
+        40,
+    );
+    enableLegendListBrowserScrollEvents();
+    seedCanvas(
+      pane("p1", [CHAT_TRACKED.instanceId, CHAT_SIBLING.instanceId]),
+      [CHAT_TRACKED, CHAT_SIBLING],
+      "p1",
+    );
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    // Real gesture: leave the bottom, then scroll back down to the true max -
+    // not just the untouched fresh-mount bootstrap default.
+    act(() => {
+      trackedScroll.scrollTop = 1000;
+    });
+    await settleLegendList();
+    expect(trackedScroll.dataset.scrollMode).toBe("free-scrolling");
+    act(() => {
+      trackedScroll.scrollTop =
+        trackedScroll.scrollHeight - trackedScroll.clientHeight;
+    });
+    await settleLegendList();
+    expect(trackedScroll.dataset.scrollMode).toBe("following-end");
+    const bottomTop = trackedScroll.scrollTop;
+    expect(bottomTop).toBeGreaterThan(0);
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_SIBLING.instanceId);
+    });
+    await waitFor(() => {
+      expect(queryHostedRecord(container, CHAT_TRACKED.instanceId)).toBeNull();
+    });
+    await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_TRACKED.instanceId);
+    });
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+
+    const restoredScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(restoredScroll.dataset.scrollMode).toBe("following-end");
+    expect(restoredScroll.scrollTop).toBe(bottomTop);
+  });
+
+  it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
+    // Regression for the live-Electron identity-pinned P1: a saved
+    // free-scrolling anchor that is missing from `messages` at mount
+    // (branch edit / suffix removal) arms a mount-time clamped restore
+    // convergence AND `pendingHydrationRestoreAnchorIdRef`. If the reader
+    // reaches strict bottom (a real, demonstrably-past-the-clamped-target
+    // scroll) WHILE that convergence is still in flight, its own
+    // `isAborted` fires - and `settleChatTimelineNavigation`'s abort path
+    // calls neither `onSettledValid` nor `onSettledInvalid`, so nothing
+    // else ever released `restorePersistencePendingRef` for this mount.
+    // Every later persist (scroll mirror, unmount save) then silently
+    // no-ops, leaving the STALE free-scrolling entry in the tab-key cache
+    // across the next same-pane remount - reproducing the live evidence's
+    // stable, repeatable detached landing (identical scrollTop every
+    // cycle, since the cache is never touched again).
+    const longMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
+    setLegendListScrollContainerScrollHeightOverride(
+      LEGEND_LIST_HEADER_PX +
+        longMessages.length * LEGEND_LIST_ROW_HEIGHT_PX +
+        40,
+    );
+    enableLegendListBrowserScrollEvents();
+    saveChatTabState({
+      identity: {
+        tileInstanceId: CHAT_TRACKED.instanceId,
+        epicId: EPIC_ID,
+        chatId: CHAT_TRACKED.id,
+      },
+      mode: "free-scrolling",
+      anchorMessageId: "totally-missing-id",
+      anchorIndex: 40,
+      offset: 12,
+    });
+    seedCanvas(
+      pane("p1", [CHAT_TRACKED.instanceId, CHAT_SIBLING.instanceId]),
+      [CHAT_TRACKED, CHAT_SIBLING],
+      "p1",
+    );
+    const { container } = renderMatrix(undefined);
+    // Deliberately NOT waitForHostedChatLoaded/settleLegendList here: the
+    // mount-time clamped free-scrolling restore convergence must still be
+    // IN FLIGHT when the reader reaches true bottom, to reproduce the abort
+    // race (isAborted fires once mode flips away from "free-scrolling").
+    await waitFor(() => {
+      const record = queryHostedRecord(container, CHAT_TRACKED.instanceId);
+      expect(record).not.toBeNull();
+      expect(record?.querySelector("[data-message-id]")).not.toBeNull();
+    });
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    // The mount-time clamped free-scrolling restore's own bounded
+    // validate/retry loop is racing to land at row 40. Keep re-asserting the
+    // true-bottom scrollTop across several frames so a real scroll to bottom
+    // wins at least one settle-check before that loop's own reissue would
+    // otherwise keep winning.
+    for (let frame = 0; frame < 8; frame += 1) {
+      act(() => {
+        trackedScroll.scrollTop =
+          trackedScroll.scrollHeight - trackedScroll.clientHeight;
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await act(async () => {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      });
+      if (trackedScroll.dataset.scrollMode === "following-end") break;
+    }
+    await settleLegendList();
+    expect(trackedScroll.dataset.scrollMode).toBe("following-end");
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_SIBLING.instanceId);
+    });
+    await waitFor(() => {
+      expect(queryHostedRecord(container, CHAT_TRACKED.instanceId)).toBeNull();
+    });
+    await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_TRACKED.instanceId);
+    });
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+
+    const restoredScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(restoredScroll.dataset.scrollMode).toBe("following-end");
+  });
+
+  it("row 17 - internal-tab-bottom-follow: A bottom survives 3+ A↔B round trips without drift", async () => {
+    // Lock the race across repeated cache round-trips: seed the missing
+    // free-scrolling anchor, race true bottom past the in-flight restore,
+    // then thrash A↔B. Without the isDemonstrablyPastTarget gate release,
+    // every cycle reloads the stale free entry (live A_bottom evidence).
+    const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
+    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 40);
+    seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitFor(() => {
+      const record = queryHostedRecord(container, CHAT_TRACKED.instanceId);
+      expect(record).not.toBeNull();
+      expect(record?.querySelector("[data-message-id]")).not.toBeNull();
+    });
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    await raceTrueBottomPastInFlightFreeRestore(trackedScroll);
+    const baselineTop = trackedScroll.scrollTop;
+    expect(baselineTop).toBeGreaterThan(0);
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+      const restored = messagesScroll(container, CHAT_TRACKED.instanceId);
+      expect(restored.dataset.scrollMode).toBe("following-end");
+      expect(restored.scrollTop).toBe(baselineTop);
+    }
+  });
+
+  it("row 18 - internal-tab-bottom-follow: B bottom survives 3+ B↔A round trips (not A-specific)", async () => {
+    const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
+    seedMissingFreeScrollingAnchor(CHAT_SIBLING, 40);
+    seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+
+    // Select B without a full settle so the missing-anchor free restore is
+    // still converging when we race true bottom.
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_SIBLING.instanceId);
+    });
+    await waitFor(() => {
+      const record = queryHostedRecord(container, CHAT_SIBLING.instanceId);
+      expect(record).not.toBeNull();
+      expect(record?.querySelector("[data-message-id]")).not.toBeNull();
+    });
+    const siblingScroll = messagesScroll(container, CHAT_SIBLING.instanceId);
+    await raceTrueBottomPastInFlightFreeRestore(siblingScroll);
+    const baselineTop = siblingScroll.scrollTop;
+    expect(baselineTop).toBeGreaterThan(0);
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+      const restored = messagesScroll(container, CHAT_SIBLING.instanceId);
+      expect(restored.dataset.scrollMode).toBe("following-end");
+      expect(restored.scrollTop).toBe(baselineTop);
+    }
+  });
+
+  it("row 19 - internal-tab-bottom-follow: independent A free-scrolling + B following-end survive mixed cycles", async () => {
+    const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
+    const freeAnchorIndex = 20;
+    const freeViewOffset = 24;
+    const freeAnchorId = trackedMessages[freeAnchorIndex]?.messageId ?? null;
+    expect(freeAnchorId).toBeTruthy();
+    const freeMidTop =
+      LEGEND_LIST_HEADER_PX +
+      freeAnchorIndex * LEGEND_LIST_ROW_HEIGHT_PX -
+      freeViewOffset;
+    // Deterministic free-reading seed (row 14 style) - avoids gesture
+    // flakiness after earlier bottom-follow race rows in the same file.
+    saveChatTabState({
+      identity: {
+        tileInstanceId: CHAT_TRACKED.instanceId,
+        epicId: EPIC_ID,
+        chatId: CHAT_TRACKED.id,
+      },
+      mode: "free-scrolling",
+      anchorMessageId: freeAnchorId,
+      anchorIndex: freeAnchorIndex,
+      offset: freeViewOffset,
+    });
+    seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    // Second settle covers restore-promise + quiet window (row 14 precedent).
+    await settleLegendList();
+
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(trackedScroll.dataset.scrollMode).toBe("free-scrolling");
+    expect(trackedScroll.scrollTop).toBe(freeMidTop);
+
+    await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+    const siblingScroll = messagesScroll(container, CHAT_SIBLING.instanceId);
+    await gestureToTrueBottom(siblingScroll);
+    const siblingBottomTop = siblingScroll.scrollTop;
+
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+      const restoredA = messagesScroll(container, CHAT_TRACKED.instanceId);
+      expect(restoredA.dataset.scrollMode).toBe("free-scrolling");
+      expect(restoredA.scrollTop).toBe(freeMidTop);
+
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+      const restoredB = messagesScroll(container, CHAT_SIBLING.instanceId);
+      expect(restoredB.dataset.scrollMode).toBe("following-end");
+      expect(restoredB.scrollTop).toBe(siblingBottomTop);
+    }
+  });
+
+  it("row 20 - internal-tab-bottom-follow: rapid A↔B thrash without full settle keeps following-end", async () => {
+    const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
+    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 40);
+    seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitFor(() => {
+      const record = queryHostedRecord(container, CHAT_TRACKED.instanceId);
+      expect(record).not.toBeNull();
+      expect(record?.querySelector("[data-message-id]")).not.toBeNull();
+    });
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    await raceTrueBottomPastInFlightFreeRestore(trackedScroll);
+
+    // Mirror the live thrash dimension: switch faster than restore
+    // convergence / settleLegendList can finish between hops.
+    for (let thrash = 0; thrash < 6; thrash += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_SIBLING.instanceId, {
+        settle: false,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await switchSamePaneTab(container, CHAT_TRACKED.instanceId, {
+        settle: false,
+      });
+    }
+
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    const restored = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(restored.dataset.scrollMode).toBe("following-end");
+    expect(restored.scrollTop).toBe(maxScrollTopFor(restored));
+  });
+
+  it("row 21 - internal-tab-bottom-follow: visible stream growth then same-pane switch keeps following at NEW bottom", async () => {
+    let trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 60);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
+    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 30);
+    const stream = seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitFor(() => {
+      const record = queryHostedRecord(container, CHAT_TRACKED.instanceId);
+      expect(record).not.toBeNull();
+      expect(record?.querySelector("[data-message-id]")).not.toBeNull();
+    });
+
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    await raceTrueBottomPastInFlightFreeRestore(trackedScroll);
+    const beforeGrowthTop = trackedScroll.scrollTop;
+
+    trackedMessages = appendLongTranscriptTail(
+      CHAT_TRACKED,
+      trackedMessages,
+      20,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      transcriptScrollHeightPx(trackedMessages.length),
+    );
+    stream.pushMessages(CHAT_TRACKED.id, trackedMessages);
+    await settleLegendList();
+
+    const grownScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(grownScroll.dataset.scrollMode).toBe("following-end");
+    expect(grownScroll.scrollTop).toBeGreaterThan(beforeGrowthTop);
+    expect(grownScroll.scrollTop).toBe(maxScrollTopFor(grownScroll));
+    const postGrowthTop = grownScroll.scrollTop;
+
+    await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+    await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+
+    const restored = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(restored.dataset.scrollMode).toBe("following-end");
+    expect(restored.scrollTop).toBe(postGrowthTop);
+    expect(restored.scrollTop).toBe(maxScrollTopFor(restored));
+    expect(isScrollToEndPillVisible(container, CHAT_TRACKED.instanceId)).toBe(
+      false,
+    );
+  });
+
+  it("row 22 - internal-tab-bottom-follow: free-reading mid + tail growth then switch does not reattach to bottom", async () => {
+    let trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
+    const freeAnchorIndex = 20;
+    const freeViewOffset = 24;
+    const freeAnchorId = trackedMessages[freeAnchorIndex]?.messageId ?? null;
+    expect(freeAnchorId).toBeTruthy();
+    const freeMidTop =
+      LEGEND_LIST_HEADER_PX +
+      freeAnchorIndex * LEGEND_LIST_ROW_HEIGHT_PX -
+      freeViewOffset;
+    saveChatTabState({
+      identity: {
+        tileInstanceId: CHAT_TRACKED.instanceId,
+        epicId: EPIC_ID,
+        chatId: CHAT_TRACKED.id,
+      },
+      mode: "free-scrolling",
+      anchorMessageId: freeAnchorId,
+      anchorIndex: freeAnchorIndex,
+      offset: freeViewOffset,
+    });
+    const stream = seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    await settleLegendList();
+
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(trackedScroll.dataset.scrollMode).toBe("free-scrolling");
+    expect(trackedScroll.scrollTop).toBe(freeMidTop);
+    await waitForPillVisible(container, CHAT_TRACKED.instanceId);
+
+    trackedMessages = appendLongTranscriptTail(
+      CHAT_TRACKED,
+      trackedMessages,
+      24,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      transcriptScrollHeightPx(trackedMessages.length),
+    );
+    stream.pushMessages(CHAT_TRACKED.id, trackedMessages);
+    await settleLegendList();
+
+    const afterGrowth = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(afterGrowth.dataset.scrollMode).toBe("free-scrolling");
+    expect(afterGrowth.scrollTop).toBe(freeMidTop);
+    expect(afterGrowth.scrollTop).toBeLessThan(
+      maxScrollTopFor(afterGrowth) - 1,
+    );
+
+    await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+    await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+
+    const restored = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(restored.dataset.scrollMode).toBe("free-scrolling");
+    expect(restored.scrollTop).toBe(freeMidTop);
+    await waitForPillVisible(container, CHAT_TRACKED.instanceId);
+  });
+
+  it("row 23 - internal-tab-bottom-follow: growth while switched-away keeps pill coherent with restored mode", async () => {
+    let trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
+    const freeAnchorIndex = 18;
+    const freeViewOffset = 12;
+    const freeAnchorId = trackedMessages[freeAnchorIndex]?.messageId ?? null;
+    expect(freeAnchorId).toBeTruthy();
+    const freeMidTop =
+      LEGEND_LIST_HEADER_PX +
+      freeAnchorIndex * LEGEND_LIST_ROW_HEIGHT_PX -
+      freeViewOffset;
+    saveChatTabState({
+      identity: {
+        tileInstanceId: CHAT_TRACKED.instanceId,
+        epicId: EPIC_ID,
+        chatId: CHAT_TRACKED.id,
+      },
+      mode: "free-scrolling",
+      anchorMessageId: freeAnchorId,
+      anchorIndex: freeAnchorIndex,
+      offset: freeViewOffset,
+    });
+    const stream = seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    await settleLegendList();
+
+    // Case A: free-scrolling park, growth while unmounted, restore stays free
+    // with pill visible.
+    expect(
+      messagesScroll(container, CHAT_TRACKED.instanceId).dataset.scrollMode,
+    ).toBe("free-scrolling");
+    expect(messagesScroll(container, CHAT_TRACKED.instanceId).scrollTop).toBe(
+      freeMidTop,
+    );
+    await waitForPillVisible(container, CHAT_TRACKED.instanceId);
+
+    await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+    trackedMessages = appendLongTranscriptTail(
+      CHAT_TRACKED,
+      trackedMessages,
+      16,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      Math.max(
+        transcriptScrollHeightPx(trackedMessages.length),
+        transcriptScrollHeightPx(siblingMessages.length),
+      ),
+    );
+    // Unmounted: pushMessages only updates the seed; remount consumes it.
+    stream.pushMessages(CHAT_TRACKED.id, trackedMessages);
+
+    await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+    const freeRestored = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(freeRestored.dataset.scrollMode).toBe("free-scrolling");
+    expect(freeRestored.scrollTop).toBe(freeMidTop);
+    await waitForPillVisible(container, CHAT_TRACKED.instanceId);
+
+    // Case B: reach true bottom, growth while away, restore following-end with
+    // pill hidden (must track the NEW true bottom, not a stale free entry).
+    await gestureToTrueBottom(freeRestored);
+    expect(isScrollToEndPillVisible(container, CHAT_TRACKED.instanceId)).toBe(
+      false,
+    );
+
+    await switchSamePaneTab(container, CHAT_SIBLING.instanceId, undefined);
+    trackedMessages = appendLongTranscriptTail(
+      CHAT_TRACKED,
+      trackedMessages,
+      12,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      Math.max(
+        transcriptScrollHeightPx(trackedMessages.length),
+        transcriptScrollHeightPx(siblingMessages.length),
+      ),
+    );
+    stream.pushMessages(CHAT_TRACKED.id, trackedMessages);
+
+    await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+    const bottomRestored = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(bottomRestored.dataset.scrollMode).toBe("following-end");
+    expect(bottomRestored.scrollTop).toBe(maxScrollTopFor(bottomRestored));
+    expect(isScrollToEndPillVisible(container, CHAT_TRACKED.instanceId)).toBe(
+      false,
+    );
+  });
+
+  it("row 24 - internal-tab-bottom-follow: same-group reorder (no remount) preserves following-end", async () => {
+    // Row 2's precedent: moveTabOnTabStrip within one pane never remounts.
+    // Bottom-follow must hold live without a cache round-trip.
+    // Do not pin firstMessageRow identity: virtualization recycles which
+    // message is the first mounted shell after a true-bottom park.
+    const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
+    seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    await gestureToTrueBottom(trackedScroll);
+    const chatTileBefore = chatTileRoot(container, CHAT_TRACKED.instanceId);
+    const scrollBefore = messagesScroll(container, CHAT_TRACKED.instanceId);
+    const bottomTop = trackedScroll.scrollTop;
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+
+    act(() => {
+      useEpicCanvasStore.getState().moveTabOnTabStrip(VIEW_TAB_ID, {
+        sourcePaneId: "p1",
+        tabId: CHAT_TRACKED.instanceId,
+        targetPaneId: "p1",
+        targetIndex: 1,
+      });
+    });
+    await settleLegendList();
+
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+    expect(chatTileRoot(container, CHAT_TRACKED.instanceId)).toBe(
+      chatTileBefore,
+    );
+    expect(messagesScroll(container, CHAT_TRACKED.instanceId)).toBe(
+      scrollBefore,
+    );
+    const afterReorder = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(afterReorder.dataset.scrollMode).toBe("following-end");
+    expect(afterReorder.scrollTop).toBe(bottomTop);
+  });
+
+  it("row 25 - internal-tab-bottom-follow: edge-drop split (stable-host no remount) preserves following-end", async () => {
+    // Residual-risk matrix documents paint/edge-drop as remount-class under
+    // the pre-stable-host mental model. With STABLE_TILE_SURFACE_HOST_ENABLED
+    // this suite's rows 4-7 prove the painted body does NOT remount - so the
+    // contract here is live following-end survival (not a cache round-trip).
+    // Same-pane remount round-trip is covered by rows 15-20.
+    const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
+    seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    await gestureToTrueBottom(trackedScroll);
+    const chatTileBefore = chatTileRoot(container, CHAT_TRACKED.instanceId);
+    const scrollBefore = messagesScroll(container, CHAT_TRACKED.instanceId);
+    const bottomTop = trackedScroll.scrollTop;
+
+    act(() => {
+      useEpicCanvasStore.getState().splitPaneWithTab(VIEW_TAB_ID, {
+        sourcePaneId: "p1",
+        tabId: CHAT_TRACKED.instanceId,
+        targetPaneId: "p1",
+        position: "right",
+      });
+    });
+    await settleLegendList();
+
+    const after = currentCanvas();
+    if (after.root === null || after.root.kind !== "group") {
+      throw new Error("expected the split to wrap the bare root pane");
+    }
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+    expect(chatTileRoot(container, CHAT_TRACKED.instanceId)).toBe(
+      chatTileBefore,
+    );
+    expect(messagesScroll(container, CHAT_TRACKED.instanceId)).toBe(
+      scrollBefore,
+    );
+    const afterSplit = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(afterSplit.dataset.scrollMode).toBe("following-end");
+    expect(afterSplit.scrollTop).toBe(bottomTop);
+  });
+
+  it("row 26 - internal-tab-bottom-follow: reorder then immediate inner-tab switch under growth", async () => {
+    let trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 70);
+    const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 50);
+    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 35);
+    const stream = seedSamePaneLongPair(trackedMessages, siblingMessages);
+    const { container } = renderMatrix(undefined);
+    await waitFor(() => {
+      const record = queryHostedRecord(container, CHAT_TRACKED.instanceId);
+      expect(record).not.toBeNull();
+      expect(record?.querySelector("[data-message-id]")).not.toBeNull();
+    });
+
+    const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
+    await raceTrueBottomPastInFlightFreeRestore(trackedScroll);
+
+    // Growth still in flight while we reorder + thrash the active tab.
+    trackedMessages = appendLongTranscriptTail(
+      CHAT_TRACKED,
+      trackedMessages,
+      18,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      Math.max(
+        transcriptScrollHeightPx(trackedMessages.length),
+        transcriptScrollHeightPx(siblingMessages.length),
+      ),
+    );
+    stream.pushMessages(CHAT_TRACKED.id, trackedMessages);
+
+    act(() => {
+      useEpicCanvasStore.getState().moveTabOnTabStrip(VIEW_TAB_ID, {
+        sourcePaneId: "p1",
+        tabId: CHAT_TRACKED.instanceId,
+        targetPaneId: "p1",
+        targetIndex: 1,
+      });
+    });
+    // Immediate same-pane switch without waiting for growth settle.
+    await switchSamePaneTab(container, CHAT_SIBLING.instanceId, {
+      settle: false,
+    });
+    await switchSamePaneTab(container, CHAT_TRACKED.instanceId, undefined);
+
+    const restored = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(restored.dataset.scrollMode).toBe("following-end");
+    expect(restored.scrollTop).toBe(maxScrollTopFor(restored));
+    expect(
+      peekSavedChatTabState({
+        tileInstanceId: CHAT_TRACKED.instanceId,
+        epicId: EPIC_ID,
+        chatId: CHAT_TRACKED.id,
+      })?.mode,
+    ).toBe("following-end");
   });
 });

@@ -13,30 +13,18 @@ import {
  * while `following-end`: the tail is the whole story, so there is nothing to
  * anchor to. While `free-scrolling` they capture exactly which row was at
  * the reading line and how many px into (or past) it the scroll had gone, so
- * restore reproduces the same pixel position, not just "some row is visible"
- * While `anchoring-new-turn`, the anchor is semantic: the current turn's
- * query/setup-card row. Remounting must recreate the reply reserve and anchor
- * engine around that row; reducing it to a free-scrolling pixel snapshot makes
- * the anchored position unreachable once the reserve disappears.
- * `replyReserveMessageId` is deliberately independent of `mode` and
- * `anchorMessageId`: a reader gesture can release scroll-mover ownership while
- * the same streaming turn still owns reserved reply geometry. Persisting those
- * as one state caused each tab switch to discard the reserve, clamp the
- * viewport, and make the shifted landing the next save's baseline. `anchorIndex`
- * is the anchor row's index at save time - kept alongside the id so a stale
- * free-scrolling anchor can clamp to the nearest surviving neighbor instead of
- * falling back to the top of the list. A stale new-turn anchor safely degrades
- * to that same free-scrolling fallback.
+ * restore reproduces the same pixel position, not just "some row is visible".
+ * `anchorIndex` is the anchor row's index at save time - kept alongside the
+ * id so a stale anchor can clamp to the nearest surviving neighbor instead of
+ * falling back to the top of the list.
  */
-export type ChatTabScrollMode =
-  "following-end" | "anchoring-new-turn" | "free-scrolling";
+export type ChatTabScrollMode = "following-end" | "free-scrolling";
 
 export interface SavedChatTabScrollState {
   readonly mode: ChatTabScrollMode;
   readonly anchorMessageId: string | null;
   readonly anchorIndex: number | null;
   readonly offset: number;
-  readonly replyReserveMessageId: string | null;
 }
 
 const CHAT_TAB_STATE_CACHE_LIMIT = 200;
@@ -47,7 +35,6 @@ const DEFAULT_CHAT_TAB_SCROLL_STATE: SavedChatTabScrollState = {
   anchorMessageId: null,
   anchorIndex: null,
   offset: 0,
-  replyReserveMessageId: null,
 };
 
 // Survives remounts because it lives at module scope, outside the React tree.
@@ -64,25 +51,6 @@ const durableChatTabStateCache =
   createChatDurableCache<SavedChatTabScrollState>(
     CHAT_TAB_STATE_DURABLE_CACHE_LIMIT,
   );
-
-/**
- * Whether `identity` has a real cache entry (tab-key OR chat-key), as
- * opposed to `restoreChatTabState` falling back to
- * `DEFAULT_CHAT_TAB_SCROLL_STATE` - the two are indistinguishable from the
- * restored value alone (a genuinely-cached following-end tab has the exact
- * same shape as the default). The controller's fresh-open policy (decision
- * #15) needs this distinction: "no saved state" anchors the last user
- * message (or seeds following-end while streaming - decision #29); a
- * restored `following-end` tab keeps following the tail.
- */
-export function hasSavedChatTabState(
-  identity: ChatTabPersistenceIdentity,
-): boolean {
-  return (
-    chatTabStateCache.has(chatTabPersistenceTabKey(identity)) ||
-    durableChatTabStateCache.get(identity) !== undefined
-  );
-}
 
 /**
  * Returns the raw, unclamped persisted state. Hydration-aware restoration
@@ -107,102 +75,53 @@ export function restoreChatTabState(
     chatTabStateCache.get(chatTabPersistenceTabKey(identity)) ??
     durableChatTabStateCache.get(identity);
   if (saved === undefined) return DEFAULT_CHAT_TAB_SCROLL_STATE;
-  const replyReserveMessageId =
-    saved.mode !== "following-end" &&
-    saved.replyReserveMessageId !== null &&
-    messages.some((message) => message.id === saved.replyReserveMessageId)
-      ? saved.replyReserveMessageId
-      : null;
-  const normalized =
-    replyReserveMessageId === saved.replyReserveMessageId
-      ? saved
-      : { ...saved, replyReserveMessageId };
-  if (normalized.anchorMessageId === null) {
-    return normalized.mode === "anchoring-new-turn"
-      ? { ...normalized, mode: "free-scrolling", offset: 0 }
-      : normalized;
-  }
-  if (messages.some((message) => message.id === normalized.anchorMessageId)) {
-    return normalized;
+  if (saved.anchorMessageId === null) return saved;
+  if (messages.some((message) => message.id === saved.anchorMessageId)) {
+    return saved;
   }
   // The anchored message is gone (branch edit / suffix removal): clamp the
   // saved index into the current list and anchor the nearest surviving
   // neighbor instead of falling back to the top of the list. `offset` resets
   // to 0 - the substituted row's own pixel offset carries no meaning for a
   // different anchor.
-  if (messages.length === 0 || normalized.anchorIndex === null) {
+  if (messages.length === 0 || saved.anchorIndex === null) {
     return {
-      mode:
-        normalized.mode === "anchoring-new-turn"
-          ? "free-scrolling"
-          : normalized.mode,
+      mode: saved.mode,
       anchorMessageId: null,
       anchorIndex: null,
       offset: 0,
-      replyReserveMessageId,
     };
   }
   const clampedIndex = Math.min(
-    Math.max(normalized.anchorIndex, 0),
+    Math.max(saved.anchorIndex, 0),
     messages.length - 1,
   );
   const neighbor = messages[clampedIndex];
   return {
-    mode:
-      normalized.mode === "anchoring-new-turn"
-        ? "free-scrolling"
-        : normalized.mode,
+    mode: saved.mode,
     anchorMessageId: neighbor.id,
     anchorIndex: clampedIndex,
     offset: 0,
-    replyReserveMessageId,
   };
 }
 
-export interface SaveChatTabStateInput {
+export interface SaveChatTabStateInput extends SavedChatTabScrollState {
   readonly identity: ChatTabPersistenceIdentity;
-  readonly mode: ChatTabScrollMode;
-  readonly anchorMessageId: string | null;
-  readonly anchorIndex: number | null;
-  readonly offset: number;
-  /**
-   * Required only when geometry cannot be derived from mode: a detached
-   * free-scrolling reader retaining a streaming turn's reserve. Anchoring
-   * mode derives the reserve from its semantic anchor; all other callers
-   * naturally default to no reserve.
-   */
-  readonly replyReserveMessageId?: string | null;
-}
-
-function toSavedChatTabScrollState(
-  input: SaveChatTabStateInput,
-): SavedChatTabScrollState {
-  return {
-    mode: input.mode,
-    anchorMessageId: input.anchorMessageId,
-    anchorIndex: input.anchorIndex,
-    offset: input.offset,
-    replyReserveMessageId:
-      input.mode === "following-end"
-        ? null
-        : (input.replyReserveMessageId ??
-          (input.mode === "anchoring-new-turn" ? input.anchorMessageId : null)),
-  };
 }
 
 /** Writes BOTH the tab-key and durable chat-key entries - the live-unmount
  *  path (tab switch / pane move), where the tab-key entry legitimately
  *  survives for a same-instanceId remount to restore from. */
 export function saveChatTabState(input: SaveChatTabStateInput): void {
-  const value = toSavedChatTabScrollState(input);
-  const tabKey = chatTabPersistenceTabKey(input.identity);
+  const { identity, ...value } = input;
+  const tabKey = chatTabPersistenceTabKey(identity);
   // Delete-then-set refreshes insertion order so eviction is LRU, not FIFO.
   chatTabStateCache.delete(tabKey);
   chatTabStateCache.set(tabKey, value);
   pruneChatTabStateCache();
   // Every save also writes the durable chat-key entry (decision #29) -
   // last-writer-wins across multiple open views of the same chat.
-  durableChatTabStateCache.set(input.identity, value);
+  durableChatTabStateCache.set(identity, value);
 }
 
 /**
@@ -218,10 +137,8 @@ export function saveChatTabState(input: SaveChatTabStateInput): void {
 export function commitChatTabStateToDurable(
   input: SaveChatTabStateInput,
 ): void {
-  durableChatTabStateCache.set(
-    input.identity,
-    toSavedChatTabScrollState(input),
-  );
+  const { identity, ...value } = input;
+  durableChatTabStateCache.set(identity, value);
 }
 
 /**

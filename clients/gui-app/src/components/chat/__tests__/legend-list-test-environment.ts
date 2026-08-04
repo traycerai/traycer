@@ -6,6 +6,7 @@ const VIEWPORT_WIDTH_PX = 800;
 const ITEM_HEIGHT_PX = 90;
 const SPACER_HEIGHT_PX = 40;
 const LARGE_CONTENT_ROW_COUNT = 400;
+const BROWSER_FRAME_MS = 16;
 
 /**
  * Optional override for the scroll container's `scrollHeight` (not list-item
@@ -17,6 +18,7 @@ const LARGE_CONTENT_ROW_COUNT = 400;
 let scrollContainerScrollHeightOverridePx: number | null = null;
 let messageRowHeightOverrides = new Map<string, number>();
 let syntheticScrollEventsEnabled = true;
+let legendListTestClockInstalled = false;
 
 /**
  * Real browsers fire `scroll` (and, where supported, `scrollend`) for
@@ -37,6 +39,17 @@ export function setLegendListSyntheticScrollEventsEnabled(
   });
 }
 
+/**
+ * Opt-in browser-faithful mode: when true, programmatic `scrollTop` /
+ * `scrollTo` writes also dispatch a bubbling native `scroll` event.
+ * Default stays false so existing suites that park geometry during setup
+ * without wanting `onIsAtEndChange` to run are unaffected. Enable per test
+ * via `enableLegendListBrowserScrollEvents()`.
+ */
+let dispatchBrowserScrollEventsOnProgrammaticScroll = false;
+let browserScrollEventDispatchDepth = 0;
+const MAX_BROWSER_SCROLL_EVENT_DISPATCH_DEPTH = 16;
+
 export function setLegendListScrollContainerScrollHeightOverride(
   heightPx: number | null,
 ): void {
@@ -55,6 +68,34 @@ export function setLegendListMessageRowHeightOverrides(
   onTestFinished(() => {
     messageRowHeightOverrides = new Map();
   });
+}
+
+/**
+ * Makes subsequent `scrollTop` / `scrollTo` writes on HTMLElements fire a
+ * browser-like `scroll` event (bubbling). Auto-resets when the current test
+ * finishes. Use only when a regression must exercise production's
+ * `onScroll` → `onIsAtEndChange` chain after a programmatic restore/land.
+ */
+export function enableLegendListBrowserScrollEvents(): void {
+  dispatchBrowserScrollEventsOnProgrammaticScroll = true;
+  onTestFinished(() => {
+    dispatchBrowserScrollEventsOnProgrammaticScroll = false;
+  });
+}
+
+function maybeDispatchBrowserScrollEvent(element: HTMLElement): void {
+  if (!dispatchBrowserScrollEventsOnProgrammaticScroll) return;
+  if (
+    browserScrollEventDispatchDepth >= MAX_BROWSER_SCROLL_EVENT_DISPATCH_DEPTH
+  ) {
+    return;
+  }
+  browserScrollEventDispatchDepth += 1;
+  try {
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  } finally {
+    browserScrollEventDispatchDepth -= 1;
+  }
 }
 
 function rectOf(x: number, y: number, width: number, height: number): DOMRect {
@@ -175,7 +216,14 @@ export function installLegendListViewportMetrics(): void {
   const scrollTopSetSpy = vi
     .spyOn(HTMLElement.prototype, "scrollTop", "set")
     .mockImplementation(function (this: HTMLElement, value: number) {
+      const previous = scrollTopByElement.get(this) ?? 0;
       scrollTopByElement.set(this, value);
+      // Mirror browsers: only fire when the stored offset actually changed.
+      // The comparison suppresses same-offset re-entrant writes; divergent
+      // writers are bounded by maybeDispatchBrowserScrollEvent's depth guard.
+      if (previous !== value) {
+        maybeDispatchBrowserScrollEvent(this);
+      }
     });
   const scrollLeftGetSpy = vi
     .spyOn(HTMLElement.prototype, "scrollLeft", "get")
@@ -221,9 +269,9 @@ export function installLegendListViewportMetrics(): void {
   // Browser contract (partially) restored for programmatic scrolls (see
   // `setLegendListSyntheticScrollEventsEnabled`): a real browser fires
   // `scrollend` once a `scrollTo` it issued itself stops moving. Dispatch it
-  // a frame later (rAF, deliberately NOT setTimeout - the highlight-expiry
-  // tests fake setTimeout and must not freeze this) so listeners registered
-  // synchronously after the `scrollTo` call still catch it.
+  // in a later animation frame so listeners registered synchronously after
+  // the `scrollTo` call still catch it. The shared browser clock advances
+  // these frames and LegendList's timers together.
   //
   // Deliberately NO synthetic `scroll` event: ticket 19's capture-phase
   // classifier and the scroll-only reader-departure detection both key off
@@ -239,8 +287,8 @@ export function installLegendListViewportMetrics(): void {
   // scroll state (`isAtEnd` etc.) with the DOM; a scrollend that wakes
   // `awaitScrollSettle` before that timer lets `validate` read stale state
   // (the retry-exhaustion test settles "valid" off a pre-reconcile
-  // `isAtEnd`). Frames rather than setTimeout so fake-timer tests don't
-  // freeze the dispatch.
+  // `isAtEnd`). Frames preserve the browser's paint-order relationship
+  // between the library reconciliation and the later `scrollend` event.
   const dispatchSyntheticScrollEnd = (target: HTMLElement): void => {
     if (!syntheticScrollEventsEnabled) return;
     let remainingFrames = 10;
@@ -265,6 +313,8 @@ export function installLegendListViewportMetrics(): void {
       if (typeof first === "number") {
         const second = args[1];
         this.scrollLeft = first;
+        // Assigning scrollTop goes through the setter above, which optionally
+        // dispatches a browser-like scroll event under the opt-in flag.
         this.scrollTop = typeof second === "number" ? second : 0;
         dispatchSyntheticScrollEnd(this);
         return;
@@ -300,27 +350,118 @@ export function installLegendListViewportMetrics(): void {
 }
 
 /**
- * LegendList's `initialScrollAtEnd` bootstrap and layout measurement need a
- * few frames in jsdom, plus its NON-animated scroll finish - a plain 100ms
- * `setTimeout(finishScrollTo)` in the vendored source that no event can
- * accelerate. The synthetic scroll/scrollend dispatch above already collapses
- * every event-driven settle to frame scale; the sleep here only needs to
- * outlast that 100ms timer (which starts during the frame loop) plus commit
- * slack, not the library's old 1500ms animated watchdog.
+ * Own the nondeterministic browser clock at the test boundary while leaving
+ * the real LegendList implementation mounted. This virtualizes only browser
+ * scheduling primitives used by the list and ChatMessages; React, DOM layout
+ * shims, observers, list measurement, and scroll event handling stay
+ * integrated.
+ */
+export function installLegendListTestClock(): void {
+  if (legendListTestClockInstalled) {
+    restoreLegendListTestClock();
+  }
+
+  // DOM Testing Library only recognizes fake timers when a Jest-compatible
+  // clock is present. Vitest uses the same Sinon clock but does not expose the
+  // `jest` facade, so bridge the one method waitFor needs. Without this,
+  // waitFor installs a fake interval and then waits forever for real time.
+  const originalJestDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "jest",
+  );
+  Object.defineProperty(globalThis, "jest", {
+    configurable: true,
+    writable: true,
+    value: {
+      advanceTimersByTime: (milliseconds: number): void => {
+        vi.advanceTimersByTime(milliseconds);
+      },
+    },
+  });
+  onTestFinished(() => {
+    if (originalJestDescriptor === undefined) {
+      Reflect.deleteProperty(globalThis, "jest");
+      return;
+    }
+    Object.defineProperty(globalThis, "jest", originalJestDescriptor);
+  });
+
+  vi.useFakeTimers({
+    toFake: [
+      "Date",
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+    ],
+  });
+  legendListTestClockInstalled = true;
+
+  // Keep the fake browser scheduler test-scoped even when another teardown
+  // hook throws before it reaches its normal restoration path. Vitest reuses
+  // forks between files, so leaking it would contaminate an unrelated suite.
+  onTestFinished(() => {
+    restoreLegendListTestClock();
+  });
+}
+
+/** Discard scheduled work from the unmounted list and restore wall time. */
+export function restoreLegendListTestClock(): void {
+  if (!legendListTestClockInstalled) return;
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  legendListTestClockInstalled = false;
+}
+
+/** Advance browser time inside React's update boundary. */
+export async function advanceLegendListTime(
+  milliseconds: number,
+): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  });
+}
+
+/**
+ * Advance frame-by-frame so work scheduled by one render/effect participates
+ * in the next frame exactly as it does in a browser.
+ */
+export async function advanceLegendListFrames(
+  frameCount: number,
+): Promise<void> {
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    await advanceLegendListTime(BROWSER_FRAME_MS);
+  }
+}
+
+/**
+ * LegendList's `initialScrollAtEnd` bootstrap and layout measurement need 12
+ * frames in jsdom. That window also crosses the installed library's 100ms
+ * non-animated `finishScrollTo` deadline and the synthetic `scrollend` fired
+ * on frame 10. Virtual time makes the contract deterministic without replacing
+ * LegendList or sleeping on the runner's wall clock.
  */
 export async function settleLegendList(): Promise<void> {
-  await act(async () => {
-    for (let frame = 0; frame < 12; frame += 1) {
+  // The base branch's split ChatMessages suites install the virtual browser
+  // clock above. This branch replaces those suites with one consolidated
+  // integration suite whose race coverage intentionally keeps the real
+  // scheduler. Preserve both contracts: virtualize callers that opt in, and
+  // retain the prior browser-like settle for callers that do not.
+  if (!legendListTestClockInstalled) {
+    await act(async () => {
+      for (let frame = 0; frame < 12; frame += 1) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      }
       await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
+        setTimeout(resolve, 80);
       });
-    }
-    // The 12 frames are load-bearing for bootstrap convergence (8 frames
-    // fails ~25 tests). Frames (~190ms at jsdom's 16ms cadence) already
-    // outlast the library's 100ms non-animated finish timer; the sleep is
-    // commit slack.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 80);
     });
-  });
+    return;
+  }
+
+  await advanceLegendListFrames(12);
 }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { StateSnapshot } from "react-virtuoso";
 import {
   useTileScrollAnchorStore,
   type TileScrollAnchor,
@@ -11,10 +12,12 @@ const NATIVE: TileScrollAnchor = {
   scrollHeight: 800,
   scrollWidth: 400,
 };
-const CHAT: TileScrollAnchor = {
-  kind: "chat",
-  followingBottom: false,
-  scrollTop: 42,
+const BUNDLE_DIFF: TileScrollAnchor = {
+  kind: "bundle-diff",
+  virtuosoState: {
+    scrollTop: 42,
+    ranges: [{ startIndex: 0, endIndex: 10 }],
+  } as StateSnapshot,
 };
 
 function reset(): void {
@@ -38,8 +41,10 @@ describe("useTileScrollAnchorStore", () => {
   it("overwrites an existing anchor", () => {
     const store = useTileScrollAnchorStore.getState();
     store.setAnchor("t1", NATIVE);
-    store.setAnchor("t1", CHAT);
-    expect(useTileScrollAnchorStore.getState().getAnchor("t1")).toEqual(CHAT);
+    store.setAnchor("t1", BUNDLE_DIFF);
+    expect(useTileScrollAnchorStore.getState().getAnchor("t1")).toEqual(
+      BUNDLE_DIFF,
+    );
   });
 
   it("clears a single anchor", () => {
@@ -58,12 +63,12 @@ describe("useTileScrollAnchorStore", () => {
   it("clears a subset and leaves the rest intact", () => {
     const store = useTileScrollAnchorStore.getState();
     store.setAnchor("t1", NATIVE);
-    store.setAnchor("t2", CHAT);
+    store.setAnchor("t2", BUNDLE_DIFF);
     store.setAnchor("t3", NATIVE);
     store.clearAnchors(["t1", "t3", "absent"]);
     const after = useTileScrollAnchorStore.getState();
     expect(after.getAnchor("t1")).toBeUndefined();
-    expect(after.getAnchor("t2")).toEqual(CHAT);
+    expect(after.getAnchor("t2")).toEqual(BUNDLE_DIFF);
     expect(after.getAnchor("t3")).toBeUndefined();
   });
 
@@ -73,5 +78,13 @@ describe("useTileScrollAnchorStore", () => {
     const before = useTileScrollAnchorStore.getState().anchors;
     store.clearAnchors(["x", "y"]);
     expect(useTileScrollAnchorStore.getState().anchors).toBe(before);
+  });
+
+  it("keeps multiple distinct kinds coexisting", () => {
+    const store = useTileScrollAnchorStore.getState();
+    store.setAnchor("native-tile", NATIVE);
+    store.setAnchor("bundle-tile", BUNDLE_DIFF);
+    expect(store.getAnchor("native-tile")).toEqual(NATIVE);
+    expect(store.getAnchor("bundle-tile")).toEqual(BUNDLE_DIFF);
   });
 });

@@ -336,6 +336,9 @@ describe("cloud notifications store", () => {
     expect(client.subscribedMethods).toEqual([
       "host.notifications.cloudFeed.subscribe",
     ]);
+    expect(useCloudNotificationsStore.getState().connectionState).toBe(
+      "connecting",
+    );
     client.sessions[0].emitClosed(fatalClose("INTERNAL"));
     expect(useCloudNotificationsStore.getState().connectionState).toBe(
       "unavailable",
