@@ -191,6 +191,32 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     cleanup();
   });
 
+  // Rows are keyed `source:path`, so the SAME name under two roots is a shape
+  // the protocol allows outright. An `aria-label` replaces every descendant
+  // string, so a name-only label hides the source badge that distinguishes
+  // them and hands a screen reader two identical "Open find-skills" buttons.
+  // Asserted through a strict role query, which THROWS on an ambiguous match -
+  // a `getAllBy` length check here would pass just as well with both labels
+  // identical.
+  it("distinguishes same-named skills from different roots by accessible name", () => {
+    skillMocks.skills = [
+      FIND_SKILLS,
+      {
+        ...FIND_SKILLS,
+        path: "/Users/dev/.codex/skills/find-skills",
+        source: "provider",
+      },
+    ];
+    renderTab();
+
+    expect(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Open find-skills (Provider-only)" }),
+    ).toBeDefined();
+  });
+
   it("does not mount the file read until a row is opened", () => {
     renderTab();
     expect(screen.getByText("find-skills")).toBeDefined();
@@ -203,7 +229,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     // and the host query is what makes the tab need a QueryClient at all.
     expect(skillMocks.readFileCalls).toHaveLength(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
     expect(skillMocks.readFileCalls.length).toBeGreaterThan(0);
   });
 
@@ -217,7 +243,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     expect(screen.queryByText("fs")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     const dialog = screen.getByRole("dialog");
     expect(dialog.querySelector("img")).toBeNull();
@@ -229,7 +255,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   it("opens the skill and renders its body without the frontmatter", () => {
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain("When to use");
@@ -256,7 +282,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     };
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     expect(screen.getByRole("dialog").textContent).toContain(
       "File is unavailable.",
@@ -265,7 +291,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
 
   it("offers no Remove action when the contract advertises no remove scope", () => {
     renderTab();
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
   });
@@ -273,7 +299,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   it("confirms, then removes with the name AND path the row was rendered from", () => {
     skillMocks.removeScopes = ["global"];
     renderTab();
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     // Destructive and irreversible (the host `rm -rf`s the directory), so it
@@ -312,7 +338,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     skillMocks.removeScopes = ["global"];
     skillMocks.mutateIsPending = true;
     renderTab();
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     const remove = screen.getByRole("button", { name: "Remove" });
     // Not yet: pending is true, but no REMOVE is the pending one.
@@ -336,7 +362,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     skillMocks.removeScopes = ["global"];
     skillMocks.skills = [{ ...FIND_SKILLS, source: "managed" }];
     renderTab();
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
     expect(screen.getByRole("dialog").textContent).toContain("Built-in skills");
@@ -350,7 +376,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       },
     );
     renderTab();
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     fireEvent.click(confirmAction());
 
@@ -374,7 +400,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       },
     );
     renderTab();
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     fireEvent.click(confirmAction());
 
@@ -400,7 +426,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     };
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     expect(screen.getByRole("dialog").textContent).toContain("no instructions");
   });

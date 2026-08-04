@@ -35,6 +35,15 @@ export function useProvidersPluginsList(args: {
     options: {
       enabled: args.enabled,
       staleTime: 30_000,
+      // MUST stay false, exactly as on the MCP list and the icon query.
+      // `providers.list` is a condition-polled method and condition queries
+      // join the table-owned poll BY DEFAULT - and `refetchInterval` fires
+      // regardless of `staleTime`, so omitting this re-lists on the shared
+      // ~800ms cadence. On Codex that is not a cheap read: every list spawns
+      // `codex plugin list --json` for the enabled flags, so the tab would sit
+      // there launching a CLI process per tick. Plugin state only changes
+      // through `mutatePlugins`, which invalidates this key itself.
+      poll: false,
     },
   });
 }

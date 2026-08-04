@@ -75,7 +75,15 @@ const worktreeMocks = vi.hoisted(() => ({
     }>;
     scripts: null;
   }>,
-  isPending: false,
+  // TWO independent flags, mirroring the two the real query exposes, rather
+  // than one tri-state: `data` is undefined until a fetch SUCCEEDS - while
+  // pending and after a failure alike - and `isPending` is what separates
+  // those. Keeping them separate is what lets a case say "not loaded, NOT
+  // pending", which is the failed lookup, and the one a pending-based gate
+  // waves through. A mock that always handed back a `data` object could not
+  // fail either way.
+  loaded: true,
+  pending: false,
 }));
 
 const resolvedWorkspaceMocks = vi.hoisted(() => ({
@@ -159,8 +167,10 @@ vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
 // which is the convention the rest of this file already follows.
 vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
   useWorktreeListByWorkspacePathsForClient: () => ({
-    data: { workspaces: worktreeMocks.workspaces },
-    isPending: worktreeMocks.isPending,
+    data: worktreeMocks.loaded
+      ? { workspaces: worktreeMocks.workspaces }
+      : undefined,
+    isPending: worktreeMocks.pending,
   }),
 }));
 
@@ -393,7 +403,8 @@ describe("<ProviderMcpTab />", () => {
     mcpMocks.mutateIsPending = false;
     mcpMocks.listCalls = [];
     worktreeMocks.workspaces = [];
-    worktreeMocks.isPending = false;
+    worktreeMocks.loaded = true;
+    worktreeMocks.pending = false;
     toastMocks.errors = [];
     folderActionMocks.pickAndPrepareFolders.mockReset();
     folderActionMocks.pickAndPrepareFolders.mockResolvedValue(null);
@@ -663,39 +674,52 @@ describe("<ProviderMcpTab />", () => {
     );
   });
 
-  it("does not fall back to the workspace root while a stored worktree is unresolved", () => {
-    // `targets` gains worktree paths only once the worktree query resolves, so
-    // a stored WORKTREE selection reads as invalid until then. Falling back to
-    // the single workspace in that window points the list - and any add or
-    // remove - at the PARENT repo's `.mcp.json`, which is a different file.
-    useWorkspaceFoldersStore.setState({
-      folders: ["/Users/dev/app"],
-      folderInfoByPath: {
-        "/Users/dev/app": {
-          path: "/Users/dev/app",
-          name: "app",
-          repoIdentifier: null,
-          hostId: "host-1",
+  // Parameterised over the two ways worktree metadata can be missing, because
+  // they are indistinguishable to the tab and only one of them is intuitive.
+  // A gate written against `isPending` passes the first row and fails the
+  // second: a failed lookup ALSO leaves `targets` worktree-less, but leaves
+  // `isPending` false, so the stored worktree reads as invalid and the
+  // single-workspace default silently takes over.
+  it.each([
+    ["is still in flight", true],
+    ["has FAILED", false],
+  ])(
+    "does not fall back to the workspace root while the worktree lookup %s",
+    (_label, stillPending) => {
+      // Falling back to the single workspace in that window points the list -
+      // and any add or remove - at the PARENT repo's `.mcp.json`, a different
+      // file in a different repo.
+      useWorkspaceFoldersStore.setState({
+        folders: ["/Users/dev/app"],
+        folderInfoByPath: {
+          "/Users/dev/app": {
+            path: "/Users/dev/app",
+            name: "app",
+            repoIdentifier: null,
+            hostId: "host-1",
+          },
         },
-      },
-    });
-    resolvedWorkspaceMocks.folders = [
-      { kind: "local-only", path: "/Users/dev/app", name: "app" },
-    ];
-    useProvidersWorkspaceSelectionStore.setState({
-      selectedByHostId: { "host-1": "/Users/dev/worktrees/app-feature" },
-    });
-    // Still in flight, so the worktree has not entered `targets` yet.
-    worktreeMocks.workspaces = [];
-    worktreeMocks.isPending = true;
-    renderTab(FULL_CAPS, "codex");
+      });
+      resolvedWorkspaceMocks.folders = [
+        { kind: "local-only", path: "/Users/dev/app", name: "app" },
+      ];
+      useProvidersWorkspaceSelectionStore.setState({
+        selectedByHostId: { "host-1": "/Users/dev/worktrees/app-feature" },
+      });
+      // No data either way, so the worktree has not entered `targets`. Only
+      // `isPending` differs, which is precisely what must NOT decide this.
+      worktreeMocks.workspaces = [];
+      worktreeMocks.loaded = false;
+      worktreeMocks.pending = stillPending;
+      renderTab(FULL_CAPS, "codex");
 
-    expect(
-      mcpMocks.listCalls.some(
-        (c) => c.enabled && c.workspaceRoot === "/Users/dev/app",
-      ),
-    ).toBe(false);
-  });
+      expect(
+        mcpMocks.listCalls.some(
+          (c) => c.enabled && c.workspaceRoot === "/Users/dev/app",
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("reports a browse that REJECTS instead of failing silently", async () => {
     // `pickAndPrepareFolders` guards only its prepare step; the pickers ahead

@@ -92,22 +92,30 @@ function resolveLockedScope(
  * repo, and this value drives both the list and every add/remove — so an
  * action landing there writes a different repo's `.mcp.json`.
  *
- * Gating on `worktreesPending` is safe only because it guards the branch that
- * already requires exactly one workspace, which is precisely when that query is
- * enabled. With zero workspaces it is disabled and stays pending forever, so a
- * wider gate here would strand the empty-host states behind it.
+ * The gate is "have we got worktree data", NOT "is the query still pending".
+ * A FAILED lookup also leaves `targetPaths` worktree-less, but leaves
+ * `isPending` false - so gating on pending would hand the error path the exact
+ * silent retarget the gate exists to prevent. `data === undefined` is the one
+ * predicate that covers both, and it is what `targetPaths` is derived from, so
+ * the two cannot drift apart; it also survives a failed BACKGROUND refetch,
+ * where cached targets are still the right answer.
+ *
+ * Gating this way is safe only because it guards the branch that already
+ * requires exactly one workspace, which is precisely when that query is
+ * enabled. With zero workspaces it is disabled and never resolves, so a wider
+ * gate here would strand the empty-host states behind it.
  */
 function resolveWorkspaceRoot(args: {
   readonly selected: string | undefined;
   readonly targetPaths: readonly string[];
   readonly hostPaths: readonly string[];
-  readonly worktreesPending: boolean;
+  readonly worktreesLoaded: boolean;
 }): string | null {
-  const { selected, targetPaths, hostPaths, worktreesPending } = args;
+  const { selected, targetPaths, hostPaths, worktreesLoaded } = args;
   // Validated against every offered target, not just the open workspaces, so a
   // stored worktree selection survives a reload.
   if (selected !== undefined && targetPaths.includes(selected)) return selected;
-  if (selected !== undefined && worktreesPending) return null;
+  if (selected !== undefined && !worktreesLoaded) return null;
   // Still defaults the single-workspace host to its one workspace - but the
   // picker now RENDERS that as a selected control instead of a static line, so
   // the default is visible as a choice that can be changed (including to one
@@ -375,7 +383,7 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
     selected,
     targetPaths,
     hostPaths,
-    worktreesPending: worktreeQuery.isPending,
+    worktreesLoaded: worktreeQuery.data !== undefined,
   });
 
   const setWorkspaceRoot = useCallback(

@@ -602,6 +602,13 @@ function ProviderDetail({
   // explicit prop since it's also reused by the picker's tab-scoped flow.
   const hostClient = useHostClient();
   const switchId = useId();
+  // The API-key draft outlives the `account` tab body that renders it. Radix
+  // unmounts an inactive `TabsContent`, so holding this inside the section
+  // would blank a pasted key on any tab switch. Held HERE for the same reason
+  // `selectedProfileId` is below: `ProvidersRailLayout` keys `<ProviderDetail>`
+  // by provider, so a provider switch still discards the draft - a key typed
+  // for one provider must never appear in another's field.
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [addProfileOpen, setAddProfileOpen] = useState(false);
   const [failedProfileAttempt, setFailedProfileAttempt] =
     useState<FailedProviderProfileAttempt | null>(null);
@@ -758,6 +765,8 @@ function ProviderDetail({
                 state={state}
                 providers={providers}
                 profileTab={profileTab}
+                apiKeyDraft={apiKeyDraft}
+                onApiKeyDraftChange={setApiKeyDraft}
               />
             </TabsContent>
           ))}
@@ -805,11 +814,15 @@ function ProviderTabBody({
   state,
   providers,
   profileTab,
+  apiKeyDraft,
+  onApiKeyDraftChange,
 }: {
   readonly tab: ProviderTabKey;
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
   readonly profileTab: ProviderProfileTabProps;
+  readonly apiKeyDraft: string;
+  readonly onApiKeyDraftChange: (draft: string) => void;
 }): ReactNode {
   switch (tab) {
     case "general":
@@ -834,8 +847,18 @@ function ProviderTabBody({
     // shows this tab exactly when `apiKey.supported`, so the section's own
     // `if (!supported) return null` guard is unreachable from here - kept
     // there because the section is not otherwise gated at its call site.
+    //
+    // The draft is threaded in because this body is UNMOUNTED whenever another
+    // tab is active (Radix `TabsContent`), which the section used to survive by
+    // sitting outside the tab bar entirely.
     case "account":
-      return <ProviderApiKeySection state={state} />;
+      return (
+        <ProviderApiKeySection
+          state={state}
+          draft={apiKeyDraft}
+          onDraftChange={onApiKeyDraftChange}
+        />
+      );
     case "usage":
       return (
         <div className="flex flex-col gap-3">

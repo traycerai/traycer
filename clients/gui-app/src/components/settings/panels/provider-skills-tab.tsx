@@ -719,7 +719,13 @@ function SkillRow({
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`Open ${skill.name}`}
+        // The source belongs IN the name. An `aria-label` replaces every
+        // descendant string, so without it the badge and description below are
+        // not announced at all - and the protocol deliberately allows the same
+        // skill name under `shared`, `provider`, `plugin` and `managed` roots
+        // (rows are keyed `source:path`), which would leave a screen reader
+        // with several buttons all reading "Open deploy".
+        aria-label={`Open ${skill.name} (${badge})`}
         className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {/* No leading tile. A skill is a markdown directory; no provider's

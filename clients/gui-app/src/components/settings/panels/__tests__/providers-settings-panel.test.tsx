@@ -662,6 +662,7 @@ function providerState(input: {
   readonly nativeCapabilities?: ProviderNativeCapabilities;
   readonly profiles?: readonly ProviderProfile[];
   readonly terminalAgentArgs?: string;
+  readonly apiKey?: ProviderCliState["apiKey"];
 }): ProviderCliState {
   return {
     providerId: input.providerId,
@@ -677,7 +678,11 @@ function providerState(input: {
     },
     authPending: false,
     checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
+    apiKey: input.apiKey ?? {
+      supported: false,
+      configured: false,
+      source: null,
+    },
     terminalAgentArgs: input.terminalAgentArgs ?? "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
@@ -1685,6 +1690,50 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
     ).toBe("active");
+  });
+
+  // The Account tab renders the API-key field, and Radix UNMOUNTS an inactive
+  // `TabsContent`. Held inside the section, a pasted key would be destroyed by
+  // an ordinary tab switch - the section used to escape that by sitting outside
+  // the tab bar entirely, so moving it onto a tab is what put the draft at
+  // risk. A provider switch is the one case that MUST still clear it: a key
+  // typed for Cursor appearing in Devin's field would be a far worse bug than
+  // losing it.
+  it("keeps a typed API key across tab switches, but not across providers", () => {
+    const apiKeyProvider = (
+      providerId: ProviderCliState["providerId"],
+    ): ProviderCliState =>
+      providerState({
+        providerId,
+        selected: { kind: "bundled" },
+        candidates: [],
+        envOverrides: [],
+        nativeCapabilities: CURSOR_TABS,
+        apiKey: { supported: true, configured: false, source: null },
+      });
+    providerMocks.listResult.data = {
+      providers: [apiKeyProvider("cursor"), apiKeyProvider("devin")],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Account");
+    const field = (): HTMLInputElement =>
+      within(screen.getByRole("tabpanel")).getByLabelText("API key");
+    fireEvent.change(field(), { target: { value: "sk-live-secret" } });
+    expect(field().value).toBe("sk-live-secret");
+
+    selectTab("Env");
+    selectTab("Account");
+    expect(field().value).toBe("sk-live-secret");
+
+    fireEvent.click(screen.getByRole("button", { name: "Devin" }));
+    selectTab("Account");
+    expect(field().value).toBe("");
   });
 
   it("falls back to the first supported tab when the current tab is missing", () => {
