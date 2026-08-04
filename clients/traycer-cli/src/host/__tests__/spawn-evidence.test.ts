@@ -381,7 +381,7 @@ describe("spawn-evidence substrate", () => {
   // written against the constant would follow a rename that silently broke
   // every log written before it.
   describe("writer identity across incremental reads", () => {
-    it("stays strict after the cap evicts the verified marker", async () => {
+    it("rejects a marker-shaped burst without losing the stamped marker", async () => {
       const baseline = await captureLogFileBaseline(mocks.logPath);
       const reader = createPostBaselineMarkerReader(baseline);
 
@@ -391,10 +391,10 @@ describe("spawn-evidence substrate", () => {
       );
       expect(await reader.read()).toHaveLength(1);
 
-      // The host now emits a burst of marker-shaped output - more than the
-      // reader's 64-entry buffer, so the one verified marker is evicted.
-      // Re-deriving the era from the retained window would find no verified
-      // line, fall back to legacy, and hand back all 64 forgeries.
+      // A burst of marker-shaped host output, larger than the reader's
+      // window. None of it may be trusted, and it must not displace the
+      // real marker either - filtering happens before the cap, so the
+      // burst never occupies the window in the first place.
       const burst = Array.from(
         { length: 70 },
         (_unused, i) =>
@@ -402,7 +402,9 @@ describe("spawn-evidence substrate", () => {
       ).join("\n");
       await appendFile(mocks.logPath, `${burst}\n`);
 
-      expect(await reader.read()).toHaveLength(0);
+      const markers = await reader.read();
+      expect(markers).toHaveLength(1);
+      expect(markers[0]?.phase).toBe("crashed");
     });
 
     it("reads the era from the whole file, not just the post-baseline slice", async () => {
@@ -450,6 +452,57 @@ describe("spawn-evidence substrate", () => {
 
       // Reading only forward would never see the verified marker.
       expect(await reader.read()).toHaveLength(0);
+    });
+
+    it("does not let raw output evict an authentic marker from the window", async () => {
+      // `runTaskAndVerifyStart` polls this reader and gives up if no marker
+      // appears. Capping before filtering would let a burst of marker-shaped
+      // host output push the real terminal marker out of the window, so a
+      // spawn that DID leave evidence reports none and the verifier times out.
+      await writeFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:01:00.000Z] phase=crashed code=134 writer=supervisor\n",
+      );
+      expect(await reader.read()).toHaveLength(1);
+
+      const burst = Array.from(
+        { length: 200 },
+        (_unused, i) =>
+          `[2026-01-01T00:02:${String(i % 60).padStart(2, "0")}.000Z] phase=starting`,
+      ).join("\n");
+      await appendFile(mocks.logPath, `${burst}\n`);
+
+      const markers = await reader.read();
+      expect(markers).toHaveLength(1);
+      expect(markers[0]?.phase).toBe("crashed");
+      expect(findPostBaselineTerminalMarker(markers)?.phase).toBe("crashed");
+    });
+
+    it("scans a pre-baseline region larger than one chunk without buffering it whole", async () => {
+      // The prefix is streamed in 64KiB chunks, so a stamped marker beyond
+      // the first chunk must still be found - and a marker split across a
+      // chunk boundary must not be missed.
+      const filler = `${"x".repeat(120)}\n`.repeat(2000); // ~240KB, > 3 chunks
+      await writeFile(
+        mocks.logPath,
+        `${filler}[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n${filler}`,
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:05.000Z] phase=starting\n",
+      );
+
+      expect(await readPostBaselineMarkers(baseline)).toHaveLength(0);
     });
 
     it("keeps pre-boundary lines but rejects what follows the first stamped marker", async () => {

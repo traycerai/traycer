@@ -180,15 +180,76 @@ function offsetForBaseline(baseline: LogFileBaseline, info: Stats): number {
   return info.size < baseline.size ? 0 : baseline.size;
 }
 
+/**
+ * Prefix scan window. The pre-baseline region is only ever asked a yes/no
+ * question, so it is streamed in fixed chunks rather than buffered whole:
+ * `host-log-rotation.ts` caps `host.log` only at START, and states plainly
+ * that a long-lived host can grow it past the cap within one lifetime. This
+ * reader runs inside the 250ms `runTaskAndVerifyStart` poll loop on the
+ * failure path, which must time out and report Last Run Result - allocating
+ * a multi-megabyte stale log there could block or OOM the very path whose
+ * job is to give up cleanly.
+ */
+const PREFIX_SCAN_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Upper bound on a partial line carried between chunks. Marker lines are far
+ * shorter (`stderrTail` itself is capped in `crash-diagnostics.ts`), so a
+ * "line" past this length is host output that cannot be a marker; dropping
+ * the excess keeps the carry bounded on a log with no newlines at all.
+ */
+const MAX_CARRY_BYTES = 64 * 1024;
+
+/**
+ * Answers only "did the writer stamp a marker before `prefixBytes`?", in
+ * bounded memory, returning at the first stamped marker.
+ *
+ * The carry is kept as BYTES, not a decoded string: a chunk boundary can
+ * land mid-sequence in UTF-8, and decoding each chunk independently would
+ * corrupt the characters that straddle it.
+ */
+async function prefixIdentifiesWriter(
+  handle: FileHandle,
+  prefixBytes: number,
+): Promise<boolean> {
+  if (prefixBytes <= 0) return false;
+  const chunk = Buffer.alloc(Math.min(PREFIX_SCAN_CHUNK_BYTES, prefixBytes));
+  let carry = Buffer.alloc(0);
+  let position = 0;
+  while (position < prefixBytes) {
+    const want = Math.min(chunk.length, prefixBytes - position);
+    const { bytesRead } = await handle.read(chunk, 0, want, position);
+    if (bytesRead === 0) break;
+    position += bytesRead;
+    const combined = Buffer.concat([carry, chunk.subarray(0, bytesRead)]);
+    const lastNewline = combined.lastIndexOf(0x0a);
+    if (lastNewline === -1) {
+      carry =
+        combined.length > MAX_CARRY_BYTES
+          ? combined.subarray(combined.length - MAX_CARRY_BYTES)
+          : combined;
+      continue;
+    }
+    carry = combined.subarray(lastNewline + 1);
+    const complete = combined.subarray(0, lastNewline).toString("utf8");
+    if (markersIdentifyWriter(parseMarkerLines(complete))) return true;
+  }
+  return (
+    carry.length > 0 &&
+    markersIdentifyWriter(parseMarkerLines(carry.toString("utf8")))
+  );
+}
+
 interface BaselineSlicedLog {
-  /** What preceded the baseline; decides whether the slice is post-boundary. */
-  readonly preBaselineText: string;
+  /** Whether the writer had already stamped a marker before the baseline. */
+  readonly writerIdentifiedBefore: boolean;
   /** Only what was appended after the baseline, the evidence window. */
   readonly postBaselineText: string;
 }
 
 /**
- * Reads the pre-baseline region and the post-baseline slice from ONE open.
+ * Resolves the pre-baseline boundary answer and the post-baseline slice
+ * from ONE open.
  *
  * Evidence is drawn only from the slice, but whether the slice sits past
  * the writer-identity boundary depends on what came BEFORE it: the
@@ -205,7 +266,7 @@ async function readBaselineSlicedLog(
   baseline: LogFileBaseline,
 ): Promise<BaselineSlicedLog> {
   const empty: BaselineSlicedLog = {
-    preBaselineText: "",
+    writerIdentifiedBefore: false,
     postBaselineText: "",
   };
   let handle: FileHandle;
@@ -220,16 +281,16 @@ async function readBaselineSlicedLog(
     // open can observe the old log while open lands on a rotated replacement.
     const offset = offsetForBaseline(baseline, info);
     if (info.size === 0) return empty;
-    const buffer = Buffer.alloc(info.size);
-    const { bytesRead } = await handle.read(buffer, 0, info.size, 0);
-    const read = buffer.subarray(0, bytesRead);
-    // Slice the BUFFER, not the decoded string: `offset` is a byte offset,
-    // and slicing the string would mis-cut any multi-byte sequence ahead
-    // of it.
-    const split = Math.min(offset, bytesRead);
+    const split = Math.min(offset, info.size);
+    const writerIdentifiedBefore = await prefixIdentifiesWriter(handle, split);
+    if (info.size <= split)
+      return { writerIdentifiedBefore, postBaselineText: "" };
+    const length = info.size - split;
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, split);
     return {
-      preBaselineText: read.subarray(0, split).toString("utf8"),
-      postBaselineText: read.subarray(split).toString("utf8"),
+      writerIdentifiedBefore,
+      postBaselineText: buffer.subarray(0, bytesRead).toString("utf8"),
     };
   } finally {
     await handle.close();
@@ -302,20 +363,11 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         }
         if (!seeded) {
           seeded = true;
-          if (readOffset > 0) {
-            const head = Buffer.alloc(readOffset);
-            const { bytesRead: headBytes } = await handle.read(
-              head,
-              0,
-              readOffset,
-              0,
-            );
-            writerIdentified =
-              writerIdentified ||
-              markersIdentifyWriter(
-                parseMarkerLines(head.subarray(0, headBytes).toString("utf8")),
-              );
-          }
+          // Streamed, not buffered whole: this runs in a 250ms poll loop
+          // against a log that may have outgrown its start-time cap.
+          writerIdentified =
+            writerIdentified ||
+            (await prefixIdentifiesWriter(handle, readOffset));
         }
         dev = info.dev;
         ino = info.ino;
@@ -331,18 +383,21 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         const lines = text.split(/\r?\n/);
         pending = lines.pop() ?? "";
         const combined = [...observed, ...parseMarkerLines(lines.join("\n"))];
-        // The boundary is positional, so anything the cap evicts has to be
-        // remembered as "already past it" - otherwise dropping the stamped
-        // marker out of the window would make the survivors look
-        // pre-boundary and readmit exactly the lines this rejects.
-        const overflow = combined.length - MAX_RETAINED_MARKERS;
-        if (overflow > 0) {
-          writerIdentified =
-            writerIdentified ||
-            markersIdentifyWriter(combined.slice(0, overflow));
-        }
-        observed = combined.slice(-MAX_RETAINED_MARKERS);
-        return retainAuthenticMarkers(observed, writerIdentified);
+        // Retain BEFORE capping. Capping first lets marker-shaped host
+        // output consume the window: a real `starting` or terminal marker
+        // followed by more than MAX_RETAINED_MARKERS raw lines would be
+        // evicted, the reader would report no marker, and
+        // `runTaskAndVerifyStart` would time out on a spawn that had in
+        // fact left evidence.
+        const retained = retainAuthenticMarkers(combined, writerIdentified);
+        // Retaining first also makes the cap safe for the positional
+        // boundary, without needing to remember what it evicted. Everything
+        // kept past the boundary is stamped, and the cap keeps the most
+        // RECENT entries - so once a stamped marker has been seen, the
+        // window still holds one. The boundary can never fall out from
+        // under the survivors and leave them looking pre-boundary.
+        observed = retained.slice(-MAX_RETAINED_MARKERS);
+        return observed;
       } finally {
         await handle.close();
       }
@@ -381,11 +436,11 @@ export async function readPostBaselineMarkers(
   // let a pre-baseline `writer=supervisor` marker fall outside the window
   // and hand `collectSpawnEvidence` a host stderr line as a
   // `starting-marker`.
-  const { preBaselineText, postBaselineText } =
+  const { writerIdentifiedBefore, postBaselineText } =
     await readBaselineSlicedLog(baseline);
   return retainAuthenticMarkers(
     parseMarkerLines(postBaselineText),
-    markersIdentifyWriter(parseMarkerLines(preBaselineText)),
+    writerIdentifiedBefore,
   );
 }
 
