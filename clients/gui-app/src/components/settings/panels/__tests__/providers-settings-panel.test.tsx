@@ -230,6 +230,16 @@ vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
   useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
 }));
 
+// Same reason: the MCP tab's scope picker reads the host's worktree listing,
+// which is a real TanStack query. This panel suite is about the tab shell, not
+// worktree rows, so it reports none.
+vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
+  useWorktreeListByWorkspacePathsForClient: () => ({
+    data: { workspaces: [] },
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
   useProvidersSetSelection: () => ({
     mutate: providerMocks.setSelectionMutate,
@@ -460,6 +470,25 @@ vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   }),
 }));
 
+// Same reason: the MCP scope picker can add a workspace folder, and the real
+// action hook opens with `useQueryClient()` - which THROWS, not degrades, with
+// no provider above it. Every host hook in this file is stubbed the same way.
+vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
+  useWorkspaceFolderActionsForClient: () => ({
+    isPreparing: false,
+    isRemoving: false,
+    prepareFoldersMutation: null,
+    removeEpicRepoMutation: null,
+    pickAndPrepareFolders: () => Promise.resolve(null),
+  }),
+  preparedWorkspaceFolderToWorkspaceFolderInfo: () => ({
+    path: "",
+    name: "",
+    repoIdentifier: null,
+    hostId: null,
+  }),
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -633,6 +662,7 @@ function providerState(input: {
   readonly nativeCapabilities?: ProviderNativeCapabilities;
   readonly profiles?: readonly ProviderProfile[];
   readonly terminalAgentArgs?: string;
+  readonly apiKey?: ProviderCliState["apiKey"];
 }): ProviderCliState {
   return {
     providerId: input.providerId,
@@ -648,7 +678,11 @@ function providerState(input: {
     },
     authPending: false,
     checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
+    apiKey: input.apiKey ?? {
+      supported: false,
+      configured: false,
+      source: null,
+    },
     terminalAgentArgs: input.terminalAgentArgs ?? "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
@@ -984,12 +1018,56 @@ function createRunnerHost(): MockRunnerHost {
 }
 
 /**
- * Profiles render on the "Profiles & Limits" tab, not General, so every profile
- * assertion has to activate that tab after mounting. Kept as one helper so the
- * next time the section moves this is a one-line change, not forty.
+ * Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
+ * tab, so every profile assertion has to activate that tab after mounting.
+ * Kept as one helper so the next time the section moves (or the label changes
+ * again) this is a one-line change, not forty.
  */
 function openProfilesTab(): void {
   selectTab("Profiles & Limits");
+}
+
+/**
+ * The provider header and tab rail are PINNED rows; only the active tab's body
+ * scrolls.
+ *
+ * Asserted structurally (what contains what) plus the one class that carries
+ * the mechanism, because jsdom has no layout engine - it reports every element
+ * as 0×0 and never computes an overflow, so "does this scroll?" has no
+ * observable answer here beyond the declaration. The containment checks are the
+ * load-bearing half: the regression this guards against is the rail or the
+ * header drifting back INSIDE the scroll box, which is exactly a parent/child
+ * relationship and is checked as one.
+ */
+function expectPinnedRailLayout(): void {
+  const panel = screen.getByRole("tabpanel");
+  expect(panel.className).toContain("overflow-y-auto");
+
+  // The rail must be a SIBLING of the scrolling body, not a descendant of it -
+  // a sticky-positioned rail inside the scroll box would satisfy neither this
+  // nor the background constraint that motivated the flex layout.
+  const list = screen.getByRole("tablist");
+  expect(panel.contains(list)).toBe(false);
+
+  // Same for the provider header. `openProfilesTab` has run, so the enable
+  // switch is the header's stable anchor regardless of which tab is active.
+  expect(panel.contains(screen.getByRole("switch"))).toBe(false);
+
+  // ...and nothing else scrolls above it, which is what made the pin possible:
+  // the column that used to own `overflow-y-auto` must have handed it over.
+  const scrollers: string[] = [];
+  for (
+    let node: HTMLElement | null = panel.parentElement;
+    node !== null;
+    node = node.parentElement
+  ) {
+    if (node.className.includes("overflow-y-auto")) {
+      scrollers.push(node.className);
+    }
+  }
+  // The provider rail `<nav>` is a sibling, never an ancestor, so it is not in
+  // this chain.
+  expect(scrollers).toEqual([]);
 }
 
 describe("<ProvidersSettingsPanel />", () => {
@@ -1557,7 +1635,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    expect(screen.getByRole("tab", { name: "General" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(
       screen.getByRole("tab", { name: "Profiles & Limits" }),
@@ -1566,9 +1644,11 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
 
+    expectPinnedRailLayout();
+
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
 
-    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Profiles & Limits" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
@@ -1610,6 +1690,50 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
     ).toBe("active");
+  });
+
+  // The Account tab renders the API-key field, and Radix UNMOUNTS an inactive
+  // `TabsContent`. Held inside the section, a pasted key would be destroyed by
+  // an ordinary tab switch - the section used to escape that by sitting outside
+  // the tab bar entirely, so moving it onto a tab is what put the draft at
+  // risk. A provider switch is the one case that MUST still clear it: a key
+  // typed for Cursor appearing in Devin's field would be a far worse bug than
+  // losing it.
+  it("keeps a typed API key across tab switches, but not across providers", () => {
+    const apiKeyProvider = (
+      providerId: ProviderCliState["providerId"],
+    ): ProviderCliState =>
+      providerState({
+        providerId,
+        selected: { kind: "bundled" },
+        candidates: [],
+        envOverrides: [],
+        nativeCapabilities: CURSOR_TABS,
+        apiKey: { supported: true, configured: false, source: null },
+      });
+    providerMocks.listResult.data = {
+      providers: [apiKeyProvider("cursor"), apiKeyProvider("devin")],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Account");
+    const field = (): HTMLInputElement =>
+      within(screen.getByRole("tabpanel")).getByLabelText("API key");
+    fireEvent.change(field(), { target: { value: "sk-live-secret" } });
+    expect(field().value).toBe("sk-live-secret");
+
+    selectTab("Env");
+    selectTab("Account");
+    expect(field().value).toBe("sk-live-secret");
+
+    fireEvent.click(screen.getByRole("button", { name: "Devin" }));
+    selectTab("Account");
+    expect(field().value).toBe("");
   });
 
   it("falls back to the first supported tab when the current tab is missing", () => {
@@ -1706,7 +1830,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
     expect(
       screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
     ).toBe("active");
@@ -1748,7 +1872,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    selectTab("General");
+    selectTab("CLI & Args");
     const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
     fireEvent.change(input, { target: { value: "--foo" } });
 
@@ -1781,7 +1905,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    selectTab("General");
+    selectTab("CLI & Args");
     const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
     fireEvent.change(input, { target: { value: args } });
     fireEvent.blur(input);
