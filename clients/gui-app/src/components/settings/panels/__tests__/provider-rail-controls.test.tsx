@@ -7,6 +7,7 @@
  * component owns is host-free, so it renders on its own with no provider hooks.
  */
 import { useState } from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ProviderRailControls } from "@/components/settings/panels/provider-rail-controls";
@@ -111,63 +112,51 @@ describe("<ProviderRailControls />", () => {
     });
   });
 
-  it("clears the query on Escape", () => {
+  it("does not act on Escape at all", () => {
     const { onViewChange } = renderControls({
       initial: { query: "kimi", status: PROVIDER_RAIL_STATUS.All },
       resultCount: 1,
     });
 
-    fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Search providers" }),
-      {
-        key: "Escape",
-      },
-    );
-
-    expect(onViewChange).toHaveBeenCalledWith({
-      query: "",
-      status: PROVIDER_RAIL_STATUS.All,
-    });
-  });
-
-  it("lets Escape through to close the modal once the box is empty", () => {
-    const { onViewChange } = renderControls({
-      initial: DEFAULT_PROVIDER_RAIL_VIEW,
-      resultCount: 18,
-    });
-
-    const event = fireEvent.keyDown(
+    const notPrevented = fireEvent.keyDown(
       screen.getByRole("textbox", { name: "Search providers" }),
       { key: "Escape" },
     );
 
-    // Not defaultPrevented and no view change: an empty box has nothing to
-    // clear, so Escape must keep meaning "close Settings".
-    expect(event).toBe(true);
+    expect(notPrevented).toBe(true);
     expect(onViewChange).not.toHaveBeenCalled();
   });
 
-  it("keeps the first Escape from reaching the Settings dialog", () => {
-    // The Settings modal dismisses on a DOCUMENT-level keydown, so "clear the
-    // box" and "close Settings" are the same keystroke unless propagation is
-    // stopped. Asserting `defaultPrevented` alone would not catch that: the
-    // dialog does not consult it.
-    renderControls({
-      initial: { query: "kimi", status: PROVIDER_RAIL_STATUS.All },
-      resultCount: 1,
-    });
-    const dialogWouldClose = vi.fn();
-    document.addEventListener("keydown", dialogWouldClose);
+  it("leaves Escape alone inside a real Settings dialog", () => {
+    // Against a REAL Radix Dialog, not a hand-rolled document listener. Radix
+    // registers its Escape hook on the document with `capture: true`, so it
+    // runs BEFORE anything this component could do from a React bubble
+    // handler - a `stopPropagation()` here would still let the dialog close
+    // and additionally eat the query, which is the worst of both.
+    const onOpenChange = vi.fn();
+    const onViewChange = vi.fn();
+    render(
+      <DialogPrimitive.Root open onOpenChange={onOpenChange}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Content aria-describedby={undefined}>
+            <DialogPrimitive.Title>Settings</DialogPrimitive.Title>
+            <Harness
+              initial={{ query: "kimi", status: PROVIDER_RAIL_STATUS.All }}
+              onViewChange={onViewChange}
+              resultCount={1}
+            />
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>,
+    );
 
-    const input = screen.getByRole("textbox", { name: "Search providers" });
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(dialogWouldClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      { key: "Escape" },
+    );
 
-    // Second Escape, now that the box is empty, must reach it.
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(dialogWouldClose).toHaveBeenCalledTimes(1);
-
-    document.removeEventListener("keydown", dialogWouldClose);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onViewChange).not.toHaveBeenCalled();
   });
 
   it("selects a status through the menu", () => {

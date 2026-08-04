@@ -10,7 +10,6 @@
  * never grows, so there is no "too small to be worth it" state to gate on.
  */
 import { ListFilter, Search, X } from "lucide-react";
-import type { KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -44,16 +43,16 @@ export function ProviderRailControls(props: {
   const { view, onViewChange } = props;
   const setQuery = (query: string): void => onViewChange({ ...view, query });
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    // Escape clears rather than exits: there is no search MODE to leave here,
-    // and a rail showing a filtered subset is the thing to get out of.
-    if (event.key !== "Escape" || view.query.length === 0) return;
-    event.preventDefault();
-    // The Settings dialog dismisses on a document-level keydown, so without
-    // this the same Escape that clears the box also closes the modal.
-    event.stopPropagation();
-    setQuery("");
-  };
+  // NOTE: no Escape-to-clear here, deliberately. Escape belongs to the Settings
+  // dialog, and this component cannot take it back: Radix registers its Escape
+  // hook on the document with `capture: true`, so it runs before any React
+  // handler on the input. A `stopPropagation()` here does not stop the dialog -
+  // it closes anyway - and the handler then ALSO wipes the query on the way
+  // out, which is worse than doing nothing. The first-party seam is
+  // `onEscapeKeyDown` on the Dialog content (see `command-palette-shell`), and
+  // that lives five levels up in `PromotableModalFrame`, shared by every system
+  // overlay. Clearing is the X button's job; `provider-rail-controls.test`
+  // pins Escape reaching a real Dialog untouched.
 
   return (
     <div className="flex shrink-0 items-center gap-1 px-2 pt-2 pb-1">
@@ -65,7 +64,6 @@ export function ProviderRailControls(props: {
           type="text"
           value={view.query}
           onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={handleKeyDown}
           placeholder="Search"
           aria-label="Search providers"
           autoComplete="off"
