@@ -16,6 +16,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import type { MessageSegment } from "@/stores/composer/chat-store";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
   useRenderedMessages,
@@ -5868,5 +5869,56 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(second.blocks).toHaveLength(1);
     // ...and the rendered turn still carries both records' content.
     expect(result.current.length).toBeGreaterThan(0);
+  });
+});
+describe("assistant turn render cache invalidation", () => {
+  it("re-renders a single-record turn whose blocks are replaced at the same blocksVersion", () => {
+    // An authoritative snapshot can rebuild a record with the SAME messageId,
+    // timestamp and persisted counter (counters restart at 0 on a rebuild).
+    // Keying on the counter alone then serves the previous render forever and
+    // the transcript stays visibly frozen at the older content.
+    const first = assistantMessage("turn-1", 10_000);
+    const firstRecord = {
+      ...first,
+      blocksVersion: 0,
+      blocks: [plainTextBlock("b1", 10_000, "original answer")],
+    };
+
+    const { result, rerender } = renderHook(
+      (props: { readonly record: typeof firstRecord }) =>
+        useRenderedMessages(
+          {
+            messages: [userMessage("m1"), props.record],
+            events: [],
+            pendingUserMessages: [],
+            liveAssistantMessage: null,
+            activeTurn: null,
+            runStatus: "idle",
+            ...BINDING,
+          },
+          displayContext,
+        ),
+      { initialProps: { record: firstRecord } },
+    );
+
+    const textOf = (
+      row: { readonly segments: ReadonlyArray<MessageSegment> } | undefined,
+    ): string =>
+      (row?.segments ?? [])
+        .map((segment) => (segment.kind === "text" ? segment.markdown : ""))
+        .join("");
+
+    const before = result.current.find((row) => row.role === "assistant");
+    expect(textOf(before)).toContain("original answer");
+
+    // Same id, same timestamp, same counter - only the blocks array is new.
+    const replaced = {
+      ...firstRecord,
+      blocks: [plainTextBlock("b1", 10_000, "corrected answer")],
+    };
+    rerender({ record: replaced });
+
+    const after = result.current.find((row) => row.role === "assistant");
+    expect(textOf(after)).toContain("corrected answer");
   });
 });

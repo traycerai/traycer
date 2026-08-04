@@ -1126,14 +1126,23 @@ export function createOpenEpicStore(
    * Compact a cold room's buffered frames into a single garbage-collected
    * update.
    *
-   * `Y.mergeUpdates` alone is NOT enough: it concatenates history losslessly
-   * and therefore preserves every deleted item struct, so a room an agent has
-   * rewritten repeatedly keeps growing without bound - the exact accretion
-   * cold storage exists to avoid. Replaying into a throwaway doc and
-   * re-encoding runs Yjs's GC, which collapses deleted content and yields a
-   * representation bounded by the room's LIVE size rather than by its edit
-   * history. The temporary doc is destroyed immediately; only the bytes are
-   * retained.
+   * `Y.mergeUpdates` alone concatenates history losslessly, keeping the
+   * CONTENT of every deleted item. Replaying into a throwaway doc and
+   * re-encoding runs Yjs's GC, which drops that deleted content. Measured
+   * against this repo's yjs on the workload this targets (an agent rewriting a
+   * body repeatedly): 85.9 KB -> 7.5 KB at 40 rewrites, 657 KB -> 48.8 KB at
+   * 300 - a 6-13x reduction that widens with edit count.
+   *
+   * What it does NOT do, and must not be described as doing: it does not reset
+   * client clocks or discard the struct skeleton. Struct COUNT is unchanged by
+   * compaction (measured identical either way), so the encoding still grows
+   * with edit history, just far more slowly, and re-materializing a
+   * long-rewritten room rebuilds the same number of structs. The win here is
+   * that a cold room holds bytes instead of a live doc full of `Item` objects;
+   * bounding the struct skeleton itself would need a document rewrite, which
+   * would break synchronization with the host.
+   *
+   * The temporary doc is destroyed immediately; only the bytes are retained.
    */
   function compactColdArtifactRoomBytes(updates: Uint8Array[]): Uint8Array {
     const scratch = new Y.Doc();

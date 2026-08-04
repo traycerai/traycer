@@ -1828,9 +1828,36 @@ function ownedTurnBlocks(acc: AssistantTurnAccumulator): ContentBlock[] {
  */
 const assistantRecordSignatureCache = new WeakMap<AssistantMessage, string>();
 
+/**
+ * Stable per-array identity token.
+ *
+ * `blocksVersion` alone is not sufficient even for a single record: an
+ * authoritative snapshot can replace a record's blocks while preserving its
+ * `messageId`, its timestamp AND its persisted counter (counters restart at 0
+ * on a rebuild), which produces an identical key for different content and
+ * serves the previous render indefinitely. Hashing the blocks instead would
+ * reintroduce the O(blocks-in-transcript) work per pass that keying on a
+ * counter exists to avoid.
+ *
+ * A replacement always mints a NEW array, so array identity separates the two
+ * cases at O(1): same array plus same counter really is the same content;
+ * a new array is a replacement regardless of what the counter says.
+ */
+let blocksIdentityCounter = 0;
+const blocksIdentity = new WeakMap<ReadonlyArray<ContentBlock>, number>();
+function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
+  const existing = blocksIdentity.get(blocks);
+  if (existing !== undefined) return existing;
+  blocksIdentityCounter += 1;
+  blocksIdentity.set(blocks, blocksIdentityCounter);
+  return blocksIdentityCounter;
+}
+
 function assistantRecordSignature(message: AssistantMessage): string {
   const version = message.blocksVersion;
-  if (version !== undefined) return `v:${version}`;
+  if (version !== undefined) {
+    return `v:${version}#${blocksIdentityToken(message.blocks)}`;
+  }
   const cached = assistantRecordSignatureCache.get(message);
   if (cached !== undefined) return cached;
   const computed = `h:${turnSignature(message.blocks)}`;
@@ -1841,18 +1868,17 @@ function assistantRecordSignature(message: AssistantMessage): string {
 /**
  * Cache key for a turn's merged block list.
  *
- * A single-record turn can key on that record's own `blocksVersion`, which its
- * writer bumps on every mutation. A MULTI-record turn cannot: records are
- * minted at `blocksVersion: 0` and each carries its own counter, so two
- * different merged lists can produce the same positional `v:0|v:0` key - and a
- * writer that replaces one record's blocks without advancing that record's
- * counter (a snapshot replacement rebuilding the list with persisted counters
- * that restart at 0) would then be served the previous render forever, leaving
- * the turn visibly frozen at older content.
+ * A single-record turn keys on that record's signature, which pairs its
+ * `blocksVersion` with its blocks' array identity so a replacement is caught
+ * even when the counter is preserved (see `assistantRecordSignature`).
  *
- * So the moment a second record joins, fall back to hashing the merged list.
- * That is what the pre-accumulator code did, and it is what makes this class
- * of stale-cache miss impossible rather than merely unlikely.
+ * A MULTI-record turn needs more than that. Records are minted at
+ * `blocksVersion: 0`, so joining per-record parts positionally is only as
+ * strong as the weakest part, and the merged list is what the render actually
+ * consumes: two different merges can be assembled from parts that each look
+ * unchanged. So the moment a second record joins, hash the merged list. That
+ * is what the pre-accumulator code did, and it is what makes this class of
+ * stale-cache miss impossible rather than merely unlikely.
  */
 function turnBlocksSignature(acc: AssistantTurnAccumulator): string {
   if (acc.signatureParts.length === 1) return acc.signatureParts[0];

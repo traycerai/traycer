@@ -567,3 +567,27 @@ describe("compactChatTurnMinimapPreview surrogate safety", () => {
     expect(preview).toBe("hi \u{1F600} there");
   });
 });
+
+describe("compactChatTurnMinimapPreview whitespace-heavy input", () => {
+  it("finds the visible text after a long run of whitespace", () => {
+    // A fixed-length prefix scan normalized this to the empty string and lost
+    // the preview entirely - and with it the jump target's accessible name.
+    const text = `${" ".repeat(900)}the actual message`;
+    expect(compactChatTurnMinimapPreview(text)).toBe("the actual message");
+  });
+
+  it("still collapses interior whitespace to single spaces", () => {
+    expect(compactChatTurnMinimapPreview("a\n\n\n  b\t\tc")).toBe("a b c");
+  });
+
+  it("truncates on visible characters, not on source offset", () => {
+    const text = `${"\n".repeat(500)}${"z".repeat(400)}`;
+    const preview = compactChatTurnMinimapPreview(text);
+    if (preview === null) throw new Error("expected a preview");
+    expect(preview.startsWith("z".repeat(50))).toBe(true);
+    expect(preview.endsWith("\u2026")).toBe(true);
+    expect(preview.length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
+  });
+});

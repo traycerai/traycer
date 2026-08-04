@@ -207,9 +207,6 @@ export function resolveChatTurnMinimapRowViewportDistance(
 /** Every preview is clamped to three lines on screen (and one is also reused
  * as a jump target's accessible name), so nothing past this is perceivable. */
 export const CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS = 200;
-/** Whitespace collapsing can shrink text a lot - indented code, blank lines -
- * so read a generous head to be sure the budget above can still be filled. */
-const PREVIEW_SCAN_CHARS = CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS * 4;
 
 /**
  * Builds the rail's preview text for one message.
@@ -236,13 +233,49 @@ function sliceWholeCodePoints(text: string, maxUnits: number): string {
   return endsOnLeadingSurrogate ? cut.slice(0, -1) : cut;
 }
 
+/**
+ * Collapse whitespace while walking the source, stopping as soon as enough
+ * VISIBLE characters have been collected.
+ *
+ * A fixed-length prefix would be wrong twice over: scanning the whole string
+ * allocates a second full copy of every turn (the cost this preview exists to
+ * avoid), but slicing a fixed prefix first means a turn whose opening is
+ * mostly whitespace - pasted content after a long run of blank lines -
+ * normalizes to nothing and loses its preview and its accessible name
+ * entirely. Walking with an output budget bounds the work by what is shown
+ * rather than by the turn's length, and never runs out of input early.
+ */
+const WHITESPACE_RE = /\s/;
+
+function collapseWhitespaceUpTo(text: string, maxOut: number): string {
+  let out = "";
+  let pendingSpace = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (WHITESPACE_RE.test(ch)) {
+      if (out.length > 0) pendingSpace = true;
+      continue;
+    }
+    if (pendingSpace) {
+      out += " ";
+      pendingSpace = false;
+    }
+    out += ch;
+    // One past the budget is enough to know truncation is needed, and keeps a
+    // trailing surrogate pair intact for the caller to trim whole.
+    if (out.length > maxOut + 1) break;
+  }
+  return out;
+}
+
 export function compactChatTurnMinimapPreview(
   text: string | null | undefined,
 ): string | null {
   if (text === null || text === undefined) return null;
-  const compact = sliceWholeCodePoints(text, PREVIEW_SCAN_CHARS)
-    .replace(/\s+/g, " ")
-    .trim();
+  const compact = collapseWhitespaceUpTo(
+    text,
+    CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  );
   if (compact.length === 0) return null;
   if (compact.length <= CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS) return compact;
   return `${sliceWholeCodePoints(
