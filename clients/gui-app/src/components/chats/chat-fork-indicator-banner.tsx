@@ -12,14 +12,12 @@ import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
  * whenever the host holds an open episode, independent of whether the
  * dialog was ever opened or dismissed.
  *
- * A GLOBAL banner rather than a per-chat sidebar badge: the settled UX calls
- * for the affected chat to carry the indicator, and integrating into the
- * existing per-chat indicator rollup (`epic-sidebar-chat-tree.tsx`'s
- * `NotificationIndicatorState`) is the more precise fit. Deferred to a
- * follow-up rather than a rushed edit to that file under this ticket's time
- * budget - see the implementation report. This banner is a correct interim:
- * it is never fully silent, and clicking it opens the exact same dialog a
- * per-chat badge would.
+ * The per-chat sidebar indicator is now the precise primary surface. This
+ * banner remains as the secondary app-wide safety net: it stays visible when
+ * the affected epic is closed, filtered, or collapsed, and it also preserves
+ * ticket 09's degrade path while connected to an older host that cannot send
+ * the additive `pendingFork` indicator bit. Both surfaces open the same dialog
+ * and read the same host-owned episode.
  */
 export function ChatForkIndicatorBanner() {
   const openDialog = useAppDialogStore((state) => state.openDialog);

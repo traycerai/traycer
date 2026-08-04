@@ -9,6 +9,8 @@ import {
   hostNotificationEntrySchema,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
+  hostNotificationsIndicatorStateUpgradeV10ToV11,
+  hostNotificationsIndicatorStateV10,
   hostNotificationsListV10,
   hostNotificationsListV20,
   hostNotificationsListRequestSchema,
@@ -447,7 +449,7 @@ describe("host.notifications.clearAll@1.0", () => {
   });
 });
 
-describe("host.notifications.indicatorState@1.0", () => {
+describe("host.notifications.indicatorState", () => {
   it("accepts bounded separate epic and chat batches", () => {
     expect(
       hostNotificationsIndicatorState.requestSchema.parse({
@@ -479,6 +481,48 @@ describe("host.notifications.indicatorState@1.0", () => {
         chats: {},
       }).success,
     ).toBe(false);
+  });
+
+  it("adds an all-false pendingFork flag when bridging an older host", () => {
+    expect(
+      hostNotificationsIndicatorStateUpgradeV10ToV11.upgradeResponse({
+        epics: {
+          "epic-1": {
+            pendingApproval: false,
+            pendingInterview: true,
+            unreadFailure: false,
+            unreadDone: false,
+          },
+        },
+        chats: {
+          "chat-1": {
+            pendingApproval: false,
+            pendingInterview: false,
+            unreadFailure: true,
+            unreadDone: false,
+          },
+        },
+      }),
+    ).toEqual({
+      epics: {
+        "epic-1": {
+          pendingApproval: false,
+          pendingInterview: true,
+          pendingFork: false,
+          unreadFailure: false,
+          unreadDone: false,
+        },
+      },
+      chats: {
+        "chat-1": {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: true,
+          unreadDone: false,
+        },
+      },
+    });
   });
 });
 
@@ -925,6 +969,10 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsMarkAllRead);
     expect(
       hostRpcRegistry["host.notifications.indicatorState"][1].versions[0]
+        .contract,
+    ).toBe(hostNotificationsIndicatorStateV10);
+    expect(
+      hostRpcRegistry["host.notifications.indicatorState"][1].versions[1]
         .contract,
     ).toBe(hostNotificationsIndicatorState);
   });
