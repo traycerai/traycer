@@ -584,60 +584,9 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 // inline + always-open so tests can select a row without fighting
 // pointer-open semantics in jsdom (mirrors the established mock in
 // worktrees-settings-panel.test / folder-controls.test).
-vi.mock("@/components/ui/dropdown-menu", () => {
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
-  return {
-    DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
-    DropdownMenuItem: (props: {
-      readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
-      readonly "aria-label": string | undefined;
-      readonly "aria-current": "true" | undefined;
-      readonly className: string | undefined;
-      readonly disabled: boolean | undefined;
-      readonly title: string | undefined;
-    }): ReactNode => (
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={props["aria-label"]}
-        aria-current={props["aria-current"]}
-        className={props.className}
-        disabled={props.disabled}
-        title={props.title}
-        onClick={props.onSelect}
-      >
-        {props.children}
-      </button>
-    ),
-    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
-    DropdownMenuShortcut: (props: {
-      readonly children: ReactNode;
-      readonly "data-testid": string | undefined;
-    }): ReactNode => (
-      <span data-testid={props["data-testid"]}>{props.children}</span>
-    ),
-    // The provider rail's status filter. Present so the always-open passthrough
-    // above does not crash on it, and deliberately ROLE-FREE: a stand-in that
-    // claimed `menuitemradio` would have to invent an `aria-checked` it cannot
-    // know, so a test could assert against a checked state this mock made up.
-    // Selecting a status is covered against the real Radix menu in
-    // provider-rail-controls.test instead.
-    DropdownMenuLabel: (props: { readonly children: ReactNode }): ReactNode => (
-      <div>{props.children}</div>
-    ),
-    DropdownMenuRadioGroup: (props: {
-      readonly children: ReactNode;
-    }): ReactNode => <div>{props.children}</div>,
-    DropdownMenuRadioItem: (props: {
-      readonly children: ReactNode;
-      readonly value: string;
-    }): ReactNode => <div data-value={props.value}>{props.children}</div>,
-  };
-});
+vi.mock("@/components/ui/dropdown-menu", async () => ({
+  ...(await import("./dropdown-menu-passthrough-mock")),
+}));
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
@@ -1480,13 +1429,13 @@ describe("<ProvidersSettingsPanel />", () => {
       { target: { value: "no-such-provider" } },
     );
 
-    expect(screen.getByTestId("provider-rail-empty")).toBeDefined();
-    expect(
-      within(screen.getByRole("navigation", { name: "Providers" })).queryByRole(
-        "list",
-        { name: "Providers" },
-      ),
-    ).toBeNull();
+    const nav = within(screen.getByRole("navigation", { name: "Providers" }));
+    expect(nav.queryByRole("list", { name: "Providers" })).toBeNull();
+    expect(nav.getByRole("status").textContent).toBe("No providers match.");
+    // Twice: the live region AND the visible row. The region is `sr-only`, so
+    // asserting only the announcement would let the visible copy be deleted
+    // and leave a sighted user staring at a blank rail.
+    expect(nav.getAllByText("No providers match.")).toHaveLength(2);
   });
 
   it("restores every row when the search is cleared", () => {

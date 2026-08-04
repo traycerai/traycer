@@ -517,10 +517,7 @@ function ProvidersRailLayout({
         />
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-2">
           {visibleProviders.length === 0 ? (
-            <p
-              className="px-2.5 py-2 text-ui-xs text-muted-foreground"
-              data-testid="provider-rail-empty"
-            >
+            <p className="px-2.5 py-2 text-ui-xs text-muted-foreground">
               No providers match.
             </p>
           ) : (
