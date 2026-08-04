@@ -124,7 +124,6 @@ describe("<WorkspaceFileRenderer />", () => {
         fileName="source.ts"
         language="typescript"
         editing={false}
-        cacheKey="workspace-file:source.ts"
         editAdapter={editAdapter}
         revealLine={null}
         revealNonce={null}
@@ -154,7 +153,6 @@ describe("<WorkspaceFileRenderer />", () => {
         fileName="source.ts"
         language="typescript"
         editing
-        cacheKey="workspace-file:source.ts"
         editAdapter={editAdapter}
         revealLine={null}
         revealNonce={null}
@@ -189,7 +187,6 @@ describe("<WorkspaceFileRenderer />", () => {
         fileName="source.ts"
         language="typescript"
         editing={false}
-        cacheKey="workspace-file:source.ts"
         editAdapter={editAdapter}
         revealLine={null}
         revealNonce={null}
@@ -216,7 +213,6 @@ describe("<WorkspaceFileRenderer />", () => {
           fileName="empty.txt"
           language="plaintext"
           editing={false}
-          cacheKey="workspace-file:empty.txt"
           editAdapter={createEditAdapter(vi.fn(), undefined)}
           revealLine={null}
           revealNonce={null}
@@ -241,7 +237,6 @@ describe("<WorkspaceFileRenderer />", () => {
           fileName="source.ts"
           language="typescript"
           editing={false}
-          cacheKey="workspace-file:source.ts"
           editAdapter={createEditAdapter(vi.fn(), undefined)}
           revealLine={null}
           revealNonce={null}
@@ -261,7 +256,6 @@ describe("<WorkspaceFileRenderer />", () => {
           fileName="empty.txt"
           language="plaintext"
           editing
-          cacheKey="workspace-file:empty.txt"
           editAdapter={createEditAdapter(vi.fn(), {
             activateEmptyOrigin: vi.fn(),
             attached: true,
@@ -285,7 +279,6 @@ describe("<WorkspaceFileRenderer />", () => {
           fileName="empty.txt"
           language="plaintext"
           editing={false}
-          cacheKey="workspace-file:empty.txt"
           editAdapter={createEditAdapter(vi.fn(), {
             activateEmptyOrigin,
             attached: false,
@@ -310,7 +303,6 @@ describe("<WorkspaceFileRenderer />", () => {
           fileName="empty.txt"
           language="plaintext"
           editing={false}
-          cacheKey="workspace-file:empty.txt"
           editAdapter={createEditAdapter(vi.fn(), {
             activateEmptyOrigin,
             attached: false,
@@ -339,7 +331,6 @@ describe("<WorkspaceFileRenderer />", () => {
           fileName="empty.txt"
           language="plaintext"
           editing={false}
-          cacheKey="workspace-file:empty.txt"
           editAdapter={createEditAdapter(vi.fn(), {
             activateEmptyOrigin: vi.fn(),
             attached: false,
@@ -366,7 +357,6 @@ describe("<WorkspaceFileRenderer />", () => {
           fileName="empty.txt"
           language="plaintext"
           editing
-          cacheKey="workspace-file:empty.txt"
           editAdapter={createEditAdapter(vi.fn(), {
             activateEmptyOrigin: vi.fn(),
             attached: true,
@@ -403,7 +393,6 @@ describe("<WorkspaceFileRenderer />", () => {
         fileName="source.ts"
         language="typescript"
         editing={false}
-        cacheKey="workspace-file:source.ts"
         editAdapter={createEditAdapter(vi.fn(), undefined)}
         revealLine={null}
         revealNonce={null}
@@ -449,7 +438,6 @@ describe("<WorkspaceFileRenderer />", () => {
         fileName="source.ts"
         language="typescript"
         editing={false}
-        cacheKey="workspace-file:source.ts"
         editAdapter={createEditAdapter(vi.fn(), undefined)}
         revealLine={2}
         revealNonce={1}
@@ -494,7 +482,6 @@ describe("<WorkspaceFileRenderer />", () => {
         fileName="source.ts"
         language="typescript"
         editing={false}
-        cacheKey="workspace-file:source.ts"
         editAdapter={createEditAdapter(vi.fn(), undefined)}
         revealLine={2}
         revealNonce={1}
@@ -533,7 +520,6 @@ describe("<WorkspaceFileRenderer />", () => {
       fileName: "source.ts",
       language: "typescript",
       editing: false,
-      cacheKey: "workspace-file:source.ts",
       editAdapter: createEditAdapter(vi.fn(), undefined),
       revealLine: null,
       revealNonce: null,

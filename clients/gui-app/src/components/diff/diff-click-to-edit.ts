@@ -19,6 +19,13 @@ export function registerDiffEditor(
   };
 }
 
+/** Test-only accessor for the real editor a surface's adapter registered - lets a regression test drive it the same way `focusRegisteredDiffEditor` does internally, without duplicating the registry. */
+export function getRegisteredDiffEditor(
+  surfaceId: string,
+): Editor<undefined> | undefined {
+  return attachedEditors.get(surfaceId);
+}
+
 export function focusRegisteredDiffEditor(
   surfaceId: string,
   caret: DiffEditCaret | null,

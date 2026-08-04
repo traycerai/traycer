@@ -44,7 +44,6 @@ import {
 import type { DiffContentFrameFileIdentity } from "@/components/diff/diff-content-primitive";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { hostQueryKeys } from "@/lib/query-keys";
-import { fileEditIdentityKey } from "@/lib/workspace/file-edit-runtime";
 import { useQueryClient } from "@tanstack/react-query";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -420,7 +419,6 @@ function WorkspaceFileTileLive(props: {
             sourceFindTarget={sourceFindTarget}
             editing={editing}
             editAdapter={editAdapter}
-            cacheKey={fileEditIdentityKey(editIdentity)}
             fileIdentity={{
               findFilePath: node.filePath,
               bundleFindFileId: node.id,
@@ -509,7 +507,6 @@ function WorkspaceFilePreviewContent(props: {
   readonly sourceFindTarget: WorkspaceFileSourceFindTargetWithNonce | null;
   readonly editing: boolean;
   readonly editAdapter: DiffClickToEditAdapter;
-  readonly cacheKey: string;
   readonly fileIdentity: DiffContentFrameFileIdentity | null;
   readonly onMarkdownPreviewRootChange: (root: HTMLElement | null) => void;
   readonly onRevealConsumed: () => void;
@@ -575,7 +572,6 @@ function WorkspaceFilePreviewContent(props: {
       language={props.language}
       fileName={props.fileName}
       editing={props.editing}
-      cacheKey={props.cacheKey}
       editAdapter={props.editAdapter}
       revealLine={props.revealLine}
       revealNonce={props.revealNonce}

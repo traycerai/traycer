@@ -60,7 +60,6 @@ export function WorkspaceFileRenderer(props: {
   readonly fileName: string;
   readonly language: string;
   readonly editing: boolean;
-  readonly cacheKey: string;
   readonly editAdapter: DiffClickToEditAdapter;
   readonly revealLine: number | null;
   readonly revealNonce: number | null;
@@ -87,14 +86,38 @@ export function WorkspaceFileRenderer(props: {
   const { resolvedTheme } = useResolvedTheme();
   const themeName = resolveDiffThemeName(resolvedTheme);
   const [container, setContainer] = useState<HTMLElement | null>(null);
+  // `cacheKey` must stay unique-and-stable for as long as `Editor`'s
+  // `persistState` (always on - see `editorOptions` in
+  // `use-diff-click-to-edit.ts`) needs to recognize "this is the same
+  // session" - but it must NOT stay stable forever, because
+  // `@pierre/diffs`' line-count cache only compares `contents` for an
+  // UNKEYED file (`FileRenderer.isLineCacheForFile`); a cacheKey that's
+  // stable across editing sessions tells it "same key, trust the cache"
+  // regardless of content, so a render whose content shrank back (e.g. a
+  // discarded draft reverting an empty file after typing, once blurred)
+  // can leave the cached line count higher than what the freshly-rendered
+  // code actually has, and `processFileResult` throws reading a line that
+  // no longer exists. Bumping a generation on every `editing` transition -
+  // the render-phase "storing information from previous renders" pattern
+  // (https://react.dev/reference/react/useState#storing-information-from-previous-renders),
+  // not an effect, so the very next render already carries the new key -
+  // keeps the key stable for the whole of one attached session (persistState
+  // still works) while guaranteeing the key differs the moment that session
+  // ends, so a post-session render can never hit the stale cache above.
+  const [wasEditing, setWasEditing] = useState(editing);
+  const [cacheKeyGeneration, setCacheKeyGeneration] = useState(0);
+  if (wasEditing !== editing) {
+    setWasEditing(editing);
+    setCacheKeyGeneration((generation) => generation + 1);
+  }
   const file = useMemo<FileContents>(
     () => ({
       name: fileName,
       contents: content,
       lang: language,
-      cacheKey: props.cacheKey,
+      cacheKey: `${fileName}:${String(cacheKeyGeneration)}`,
     }),
-    [content, fileName, language, props.cacheKey],
+    [content, fileName, language, cacheKeyGeneration],
   );
   const highlightReady = useDiffsFileHighlightReady({
     file,
