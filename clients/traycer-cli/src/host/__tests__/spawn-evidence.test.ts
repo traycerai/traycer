@@ -452,7 +452,7 @@ describe("spawn-evidence substrate", () => {
       expect(await reader.read()).toHaveLength(0);
     });
 
-    it("demotes earlier unverified lines when a verified marker arrives later", async () => {
+    it("keeps pre-boundary lines but rejects what follows the first stamped marker", async () => {
       const baseline = await captureLogFileBaseline(mocks.logPath);
       const reader = createPostBaselineMarkerReader(baseline);
 
@@ -460,18 +460,22 @@ describe("spawn-evidence substrate", () => {
         mocks.logPath,
         "[2026-01-01T00:00:00.000Z] phase=starting\n",
       );
-      // Nothing has identified a writer yet, so this reads as legacy.
+      // Nothing has stamped yet, so this may be the previous CLI's marker.
       expect(await reader.read()).toHaveLength(1);
 
       await appendFile(
         mocks.logPath,
-        "[2026-01-01T00:00:01.000Z] phase=crashed code=9 writer=supervisor\n",
+        "[2026-01-01T00:00:01.000Z] phase=crashed code=9 writer=supervisor\n" +
+          "[2026-01-01T00:00:02.000Z] phase=starting\n",
       );
-      // The verified marker proves the writer stamps its lines, which
-      // retroactively reclassifies the earlier one as host output.
+
+      // The first line stays - it precedes the boundary, so demoting it
+      // would delete a genuine older marker on every upgrade. The third
+      // does not: it arrives after the writer proved it stamps.
       const markers = await reader.read();
-      expect(markers).toHaveLength(1);
-      expect(markers[0]?.phase).toBe("crashed");
+      expect(markers.map((m) => m.phase)).toEqual(["starting", "crashed"]);
+      expect(markers[0]?.writer).toBe("unverified");
+      expect(markers[1]?.writer).toBe("supervisor");
     });
   });
 

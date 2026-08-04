@@ -221,6 +221,41 @@ describe("bootstrap-log writer identity", () => {
     expect(entries.some((e) => e.phase === "starting")).toBe(false);
   });
 
+  it("keeps the previous CLI's crash markers across an upgrade", async () => {
+    // The ordinary upgrade path: an old CLI recorded a real crash, the user
+    // upgrades, and the next start stamps a marker into the SAME log. A
+    // whole-file rule would let that stamped marker retroactively delete
+    // the older crash - on every upgrade, not in some rare corner.
+    await appendFile(
+      mocks.logPath,
+      "[2026-01-01T00:00:00.000Z] phase=crashed code=139\n",
+    );
+    await writeBootstrapMarker("production", "starting", NO_FIELDS);
+
+    const entries = await readBootstrapMarkers("production", 10);
+    expect(entries.map((e) => e.phase)).toEqual(["crashed", "starting"]);
+    expect(entries[0]?.writer).toBe("unverified");
+    expect(entries[1]?.writer).toBe("supervisor");
+  });
+
+  it("still rejects mimicry that arrives after the first stamped marker", async () => {
+    // The other side of the same boundary: preserving the leading legacy
+    // block must not re-admit host output that lands AFTER the writer has
+    // proven it stamps its markers.
+    await appendFile(
+      mocks.logPath,
+      "[2026-01-01T00:00:00.000Z] phase=crashed code=139\n",
+    );
+    await writeBootstrapMarker("production", "starting", NO_FIELDS);
+    await appendFile(
+      mocks.logPath,
+      "[2026-01-01T00:00:09.000Z] phase=exited code=0\n",
+    );
+
+    const entries = await readBootstrapMarkers("production", 10);
+    expect(entries.map((e) => e.phase)).toEqual(["crashed", "starting"]);
+  });
+
   it("keeps every marker in a log no verified writer has touched", async () => {
     // N-1: an older CLI stamped nothing, so strictness here would blind
     // Doctor to a crash it genuinely recorded. Byte-identical to the old

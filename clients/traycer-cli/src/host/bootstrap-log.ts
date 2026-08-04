@@ -44,23 +44,30 @@ const openRawFd = promisify(openCallback);
 // ## N-1 overlap: strictness is latched on the file's own evidence
 //
 // Markers written by an older CLI carry no `writer` field, and they persist
-// in `host.log` across restarts until rotation. Dropping unverified lines
+// in `host.log` across restarts until rotation. Dropping unstamped lines
 // unconditionally would blind Doctor to a genuine crash recorded by the
 // previous version; trusting them unconditionally leaves the hole open. So
-// {@link retainAuthenticMarkers} decides per file:
+// {@link retainAuthenticMarkers} splits the file at a POSITION - the first
+// stamped marker:
 //
-//   - the file contains NO verified marker -> legacy era, the writer is not
-//     yet capable of identifying itself, so every marker-shaped line is kept
-//     (byte-identical behaviour to before this change);
-//   - the file contains ANY verified marker -> the writer demonstrably emits
-//     the field, so an unverified marker-shaped line in that same file did
-//     not come from it, and is raw output.
+//   - before it -> the writer had not yet identified itself, so every
+//     marker-shaped line is kept (byte-identical behaviour to before);
+//   - from it onward -> the writer demonstrably stamps its markers, so an
+//     unstamped marker-shaped line is raw output.
+//
+// The boundary has to be positional rather than a property of the whole
+// file, because the ORDINARY upgrade puts both eras in one log: an old CLI
+// records a real `phase=crashed`, the user upgrades, and the next start
+// appends a stamped `phase=starting` to the same file. A whole-file rule
+// would let that stamped marker retroactively delete the older real crash
+// on every upgrade - destroying the history this compatibility path exists
+// to protect.
 //
 // Known limitation, accepted deliberately: if an OLDER CLI writes markers
-// into a log that already holds newer ones (a downgrade, or a stale binary
-// earlier on PATH), the latch reads those as raw output and Doctor loses
-// them. That is rarer than the collision it closes, and fails in the same
-// direction - under-reporting - rather than inventing a crash.
+// AFTER a stamped one (a downgrade, or a stale binary earlier on PATH),
+// those land past the boundary and are read as raw output. That is far
+// rarer than the upgrade path, and it fails in the same direction as the
+// collision it closes - under-reporting - rather than inventing a crash.
 
 export type BootstrapPhase =
   "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
@@ -252,29 +259,44 @@ export function markersIdentifyWriter(
 }
 
 /**
- * Applies the N-1 latch described at the top of this file: with no
- * identified writer, keep every marker-shaped line (legacy era); once the
- * writer is known to identify itself, keep only the lines that do.
+ * Applies the N-1 latch described at the top of this file. The boundary is
+ * POSITIONAL, not a property of the whole region: entries before the first
+ * stamped marker are kept as-is, and only from that marker onward is an
+ * unstamped line treated as raw output.
  *
- * `writerIdentified` is a parameter rather than re-derived from `entries`
- * because capability is MONOTONIC while `entries` may be a truncated
- * window. A caller that caps its buffer can evict the one verified marker
- * and be left holding unverified lines - re-deriving there would flip the
- * era back to legacy and trust exactly the lines this exists to reject.
- * Whole-file callers pass {@link markersIdentifyWriter} of the same array;
- * incremental readers pass a bit that latches on and never clears.
+ * Position matters because the ordinary upgrade path puts both eras in one
+ * file. An old CLI records a genuine `phase=crashed`, the user upgrades,
+ * and the next start appends a stamped `phase=starting` to the same
+ * `host.log`. Filtering the region as a whole would let that first stamped
+ * marker retroactively delete the older real crash - destroying exactly the
+ * history the N-1 path exists to preserve, on every upgrade rather than in
+ * some rare corner.
+ *
+ * `writerIdentifiedBefore` says the writer had already stamped a marker
+ * STRICTLY BEFORE this region, which makes the whole region post-boundary.
+ * It is a parameter rather than something re-derived from `entries` because
+ * capability is monotonic while `entries` may be a truncated window: a
+ * caller that caps its buffer can evict the stamped marker and be left
+ * holding unstamped lines, and re-deriving there would reopen the hole.
  *
  * Pure and idempotent, so an accumulating caller can hold the labelled
  * entries and re-derive the authoritative view on each read - which it
- * must, since a verified marker arriving in a later chunk retroactively
- * demotes the unverified lines that preceded it.
+ * must, since a stamped marker arriving in a later chunk retroactively
+ * demotes the unstamped lines that followed the boundary.
  */
 export function retainAuthenticMarkers(
   entries: readonly BootstrapLogEntry[],
-  writerIdentified: boolean,
+  writerIdentifiedBefore: boolean,
 ): readonly BootstrapLogEntry[] {
-  if (!writerIdentified) return entries;
-  return entries.filter((entry) => entry.writer === "supervisor");
+  if (writerIdentifiedBefore) {
+    return entries.filter((entry) => entry.writer === "supervisor");
+  }
+  const boundary = entries.findIndex((entry) => entry.writer === "supervisor");
+  if (boundary === -1) return entries;
+  return [
+    ...entries.slice(0, boundary),
+    ...entries.slice(boundary).filter((entry) => entry.writer === "supervisor"),
+  ];
 }
 
 function parseLine(line: string): BootstrapLogEntry | null {
@@ -342,13 +364,12 @@ export async function readBootstrapMarkers(
     const parsed = parseLine(line);
     if (parsed !== null) entries.push(parsed);
   }
-  // Latch over the WHOLE file, then take the tail. Doing it the other way
-  // round would decide the era from the last `maxEntries` lines, so a log
-  // whose recent tail happens to hold only unverified lines would read as
-  // legacy and trust them.
-  return retainAuthenticMarkers(entries, markersIdentifyWriter(entries)).slice(
-    -maxEntries,
-  );
+  // Locate the boundary in the WHOLE file, then take the tail. The other
+  // order would look for it only within the last `maxEntries` lines, so a
+  // log whose recent tail happens to hold nothing stamped would read as
+  // pre-boundary and trust it. Nothing precedes the start of a file, hence
+  // `false`.
+  return retainAuthenticMarkers(entries, false).slice(-maxEntries);
 }
 
 export async function readBootstrapLogTail(
