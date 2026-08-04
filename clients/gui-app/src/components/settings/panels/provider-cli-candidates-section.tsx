@@ -28,6 +28,7 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
+import { hidesCliCandidates } from "./provider-cli-candidates-visibility";
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
 // the Path column guarantees it shrinks/truncates instead of pushing the
@@ -59,12 +60,6 @@ function candidateConfigForProvider(
     selected: state.selected,
     candidates: opencode?.candidates ?? state.candidates,
   };
-}
-
-function hidesCliCandidates(
-  providerId: ProviderCliState["providerId"],
-): boolean {
-  return providerId === "cursor" || providerId === "amp";
 }
 
 /**

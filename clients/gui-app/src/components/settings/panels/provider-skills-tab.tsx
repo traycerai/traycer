@@ -6,13 +6,13 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import type {
   ProviderSkill,
-  ProviderSkillSourceBadge,
   ProviderSkillsCapabilities,
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { ChevronDown, Plus, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, Sparkles } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -24,15 +24,14 @@ import {
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { cn } from "@/lib/utils";
+import { ProviderSkillDetailDialog } from "./provider-skill-detail-dialog";
+import { skillRemovability } from "./provider-skill-removable";
+import {
+  SKILL_SOURCE_LABEL,
+  SKILL_SOURCE_TONE,
+} from "./provider-skill-source-badge";
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-
-const SOURCE_BADGE_LABEL: Record<ProviderSkillSourceBadge, string> = {
-  shared: "Shared",
-  provider: "Provider-only",
-  plugin: "Plugin",
-  managed: "Built-in",
-};
 
 export function ProviderSkillsTab({
   state,
@@ -89,6 +88,14 @@ function ProviderSkillsTabBody({
   const [providerScoped, setProviderScoped] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
+  // own (the list is keyed by `source:path`), and the dialog wants the same
+  // frontmatter the row already has rather than re-deriving it.
+  const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
+  // Separate from `localError`, which renders on the TAB - behind the open
+  // skill dialog, where a failed removal would be invisible.
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   const skills = listQuery.data?.skills ?? [];
   const isMutating = mutate.isPending;
@@ -101,6 +108,7 @@ function ProviderSkillsTabBody({
   // `SkillsListBody`'s `listLoading: boolean` prop — same reason
   // `deleteDialogPending` is hoisted in provider-mcp-tab.tsx.
   const listLoading = canList && (listQuery.isLoading || listQuery.isPending);
+  const removePending = isRemovePending(isMutating, pendingKey);
 
   const nameError = useMemo(() => {
     const trimmed = createName.trim();
@@ -140,6 +148,45 @@ function ProviderSkillsTabBody({
         onError: (err) => {
           setPendingKey(null);
           setLocalError(err.message);
+        },
+      },
+    );
+  }
+
+  /**
+   * Removal gets its own path rather than reusing `runMutation`: its success
+   * and failure land in different places. Success must close BOTH dialogs (the
+   * open skill no longer exists) and must not touch the create/import draft
+   * fields; failure has to surface inside the skill dialog, not on the tab
+   * behind it.
+   */
+  function onRemove(skill: ProviderSkill): void {
+    setRemoveError(null);
+    setPendingKey(`remove:${skill.path}`);
+    mutate.mutate(
+      {
+        providerId,
+        scope: "global",
+        workspaceRoot: null,
+        // `name` AND `path`: the host re-lists and matches on both (plus a
+        // realpath containment check) before deleting anything, so sending the
+        // pair the row was rendered from is what lets it refuse a stale one.
+        mutation: { action: "remove", name: skill.name, path: skill.path },
+        suppressToast: true,
+      },
+      {
+        onSuccess: () => {
+          setPendingKey(null);
+          setRemoveTarget(null);
+          setOpenSkill(null);
+        },
+        onError: (err) => {
+          setPendingKey(null);
+          // Close the confirmation but keep the skill dialog open: that is
+          // where the error renders, and re-confirming an operation that just
+          // failed is not the next step.
+          setRemoveTarget(null);
+          setRemoveError(err.message);
         },
       },
     );
@@ -273,8 +320,86 @@ function ProviderSkillsTabBody({
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
         skills={skills}
+        onOpenSkill={setOpenSkill}
+      />
+
+      {openSkill === null ? null : (
+        <ProviderSkillDetailDialog
+          skill={openSkill}
+          removal={skillRemovability({
+            removeScopes: caps.actionScopes.remove,
+            source: openSkill.source,
+          })}
+          removePending={removePending}
+          removeDisabled={isMutating}
+          removeError={removeError}
+          onRequestRemove={() => {
+            setRemoveTarget(openSkill);
+          }}
+          onClose={() => {
+            setOpenSkill(null);
+            setRemoveError(null);
+          }}
+        />
+      )}
+
+      <SkillRemoveConfirm
+        target={removeTarget}
+        pending={removePending}
+        onCancel={() => {
+          setRemoveTarget(null);
+        }}
+        onConfirm={onRemove}
       />
     </div>
+  );
+}
+
+/**
+ * Scoped to the remove key so a concurrent create/import spinner never locks
+ * the Remove button, and vice versa. A plain function rather than an inline
+ * `&&` chain because `eslint --fix` (react/jsx-no-leaked-render) rewrites a
+ * logical `&&` inside a JSX attribute into `cond ? value : null`, widening a
+ * boolean prop to `boolean | null`.
+ */
+function isRemovePending(isMutating: boolean, pendingKey: string | null) {
+  return isMutating && pendingKey !== null && pendingKey.startsWith("remove:");
+}
+
+function SkillRemoveConfirm({
+  target,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  readonly target: ProviderSkill | null;
+  readonly pending: boolean;
+  readonly onCancel: () => void;
+  readonly onConfirm: (skill: ProviderSkill) => void;
+}): ReactNode {
+  return (
+    <ConfirmDestructiveDialog
+      open={target !== null}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+      title="Remove skill"
+      // Names the PATH, not just the skill: removal deletes a directory, and
+      // which of the four skill roots it sits in is the part the name alone
+      // cannot tell you.
+      description={
+        target === null
+          ? ""
+          : `Delete “${target.name}” from disk? Its folder and SKILL.md are removed from ${target.path}.`
+      }
+      cascadeSummary={null}
+      actionLabel="Remove"
+      isPending={pending}
+      onConfirm={() => {
+        if (target === null) return;
+        onConfirm(target);
+      }}
+    />
   );
 }
 
@@ -484,11 +609,13 @@ function SkillsListBody({
   listError,
   errorMessage,
   skills,
+  onOpenSkill,
 }: {
   readonly listLoading: boolean;
   readonly listError: boolean;
   readonly errorMessage: string | null;
   readonly skills: readonly ProviderSkill[];
+  readonly onOpenSkill: (skill: ProviderSkill) => void;
 }): ReactNode {
   if (listLoading) {
     return (
@@ -522,7 +649,13 @@ function SkillsListBody({
   return (
     <ul className="flex flex-col gap-2">
       {skills.map((skill) => (
-        <SkillRow key={`${skill.source}:${skill.path}`} skill={skill} />
+        <SkillRow
+          key={`${skill.source}:${skill.path}`}
+          skill={skill}
+          onOpen={() => {
+            onOpenSkill(skill);
+          }}
+        />
       ))}
     </ul>
   );
@@ -568,34 +701,61 @@ function SkillScopeFieldset({
   );
 }
 
-function SkillRow({ skill }: { readonly skill: ProviderSkill }): ReactNode {
-  const badge = SOURCE_BADGE_LABEL[skill.source];
+/**
+ * A skill row opens its full SKILL.md. The row itself can only ever show
+ * frontmatter (name + description) — the instructions the agent actually
+ * follows live in the file body, and until this was clickable there was no way
+ * to read them from the app at all.
+ */
+function SkillRow({
+  skill,
+  onOpen,
+}: {
+  readonly skill: ProviderSkill;
+  readonly onOpen: () => void;
+}): ReactNode {
+  const badge = SKILL_SOURCE_LABEL[skill.source];
   return (
-    <li className="rounded-lg border border-border/60 px-3 py-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="truncate text-ui-sm font-medium text-foreground">
-          {skill.name}
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        // The source belongs IN the name. An `aria-label` replaces every
+        // descendant string, so without it the badge and description below are
+        // not announced at all - and the protocol deliberately allows the same
+        // skill name under `shared`, `provider`, `plugin` and `managed` roots
+        // (rows are keyed `source:path`), which would leave a screen reader
+        // with several buttons all reading "Open deploy".
+        aria-label={`Open ${skill.name} (${badge})`}
+        className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        {/* No leading tile. A skill is a markdown directory; no provider's
+            format carries artwork for one, so anything here would be a glyph
+            we invented rather than the skill's own identity. The source badge
+            beside the name is the real differentiator. Plugin rows keep their
+            tile because plugins DO ship icons. */}
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="truncate text-ui-sm font-medium text-foreground">
+              {skill.name}
+            </span>
+            <span
+              className={cn(
+                "rounded border px-1.5 py-0.5 text-ui-xs",
+                SKILL_SOURCE_TONE[skill.source],
+              )}
+            >
+              {badge}
+            </span>
+          </span>
+          {skill.description !== null && skill.description.length > 0 ? (
+            <span className="mt-0.5 block truncate text-ui-xs text-muted-foreground">
+              {skill.description}
+            </span>
+          ) : null}
         </span>
-        <span
-          className={cn(
-            "rounded border px-1.5 py-0.5 text-ui-xs",
-            skill.source === "shared" &&
-              "border-sky-500/40 text-sky-700 dark:text-sky-300",
-            skill.source === "provider" &&
-              "border-emerald-500/40 text-emerald-700 dark:text-emerald-300",
-            skill.source === "plugin" &&
-              "border-violet-500/40 text-violet-700 dark:text-violet-300",
-            skill.source === "managed" && "border-border text-muted-foreground",
-          )}
-        >
-          {badge}
-        </span>
-      </div>
-      {skill.description !== null && skill.description.length > 0 ? (
-        <p className="mt-1 text-ui-xs text-muted-foreground">
-          {skill.description}
-        </p>
-      ) : null}
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+      </button>
     </li>
   );
 }

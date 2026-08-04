@@ -642,8 +642,58 @@ export const providerPluginSchema = z.object({
    * defaults to null for providers that don't populate it yet.
    */
   description: z.string().nullable().default(null).optional(),
+  /**
+   * Human-facing name from the provider's own manifest ("PDF", "Default
+   * templates") where `name` is the install id ("pdf", "openai-templates").
+   * Additive; renderers fall back to `name`.
+   */
+  displayName: z.string().nullable().default(null).optional(),
+  /**
+   * The provider ships artwork for this plugin AND the file is present on
+   * disk. A presence flag, not the image: icons are fetched one at a time
+   * through the `pluginIcon` list arm, because the rows carry megabytes of
+   * PNG in aggregate and this listing is re-fetched on a 30s staleTime.
+   * Renderers that see `false` skip the round trip and draw their fallback.
+   */
+  hasIcon: z.boolean().default(false).optional(),
+  /**
+   * The provider ships a SEPARATE dark-theme asset for this plugin.
+   *
+   * Rare (3 of 13 on a stock Codex install). It exists so renderers only vary
+   * their icon request by theme where the answer actually differs: without it,
+   * flipping theme would miss the cache for every row and re-fetch the whole
+   * ~900 KB set to receive identical bytes.
+   */
+  hasDarkIcon: z.boolean().default(false).optional(),
 });
 export type ProviderPlugin = z.infer<typeof providerPluginSchema>;
+
+/**
+ * Which theme variant of a plugin icon to resolve. Hosts fall back to the
+ * light asset when a plugin ships no dark one, so `dark` is always answerable.
+ */
+export const providerPluginIconThemeSchema = z.enum(["light", "dark"]);
+export type ProviderPluginIconTheme = z.infer<
+  typeof providerPluginIconThemeSchema
+>;
+
+/**
+ * One plugin's artwork, inlined as a `data:` URI.
+ *
+ * A data URI rather than a path or a `file://` URL because BOTH of the other
+ * shapes are unreachable from the renderer: desktop CSP is
+ * `img-src 'self' data: blob: https:` (no `file:`), the `app://` handler is
+ * sealed to the renderer bundle, and a host-local path renders nothing at all
+ * against a REMOTE host - which is a shipped, paid mode here. Bytes over the
+ * existing websocket work identically for local and remote.
+ */
+export const providerPluginIconSchema = z.object({
+  /** `data:<mime>;base64,<bytes>`, or null when unreadable/absent/oversized. */
+  dataUri: z.string().nullable(),
+  /** Why there is no icon, for logs. Not surfaced as an error state. */
+  error: z.string().nullable(),
+});
+export type ProviderPluginIcon = z.infer<typeof providerPluginIconSchema>;
 
 export const providerSkillSourceBadgeSchema = z.enum([
   "shared",
@@ -814,6 +864,22 @@ export const nativeListQuerySchema = z
        */
       forceRefresh: z.boolean(),
     }),
+    /**
+     * One plugin's artwork, addressed BY ID rather than by a path taken from
+     * the `plugins` row. The host re-resolves the file from its own walk, so
+     * no client-supplied filesystem path is ever opened - the same reason
+     * `assertRemovableSkill` re-lists instead of trusting the row it was
+     * handed. Split off `plugins` so the megabyte-scale bytes are not re-sent
+     * on that list's 30s refetch.
+     */
+    z.object({
+      kind: z.literal("pluginIcon"),
+      providerId: providerIdSchema,
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+      pluginId: z.string().min(1),
+      theme: providerPluginIconThemeSchema,
+    }),
   ])
   .superRefine(refineProviderNativeScope);
 export type NativeListQuery = z.infer<typeof nativeListQuerySchema>;
@@ -838,6 +904,11 @@ const nativeListSuccessResultSchema = z.discriminatedUnion("kind", [
     ok: z.literal(true),
     kind: z.literal("mcpDiscover"),
     server: providerMcpServerSchema,
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("pluginIcon"),
+    icon: providerPluginIconSchema,
   }),
 ]);
 

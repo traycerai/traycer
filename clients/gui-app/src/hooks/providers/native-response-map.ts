@@ -6,6 +6,7 @@ import type {
   ProviderNativeErrorCode,
   ProviderNativeErrorResult,
   ProviderPlugin,
+  ProviderPluginIcon,
   ProviderSkill,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -30,6 +31,7 @@ export type McpListData = { readonly servers: readonly ProviderMcpServer[] };
 export type PluginsListData = { readonly plugins: readonly ProviderPlugin[] };
 export type SkillsListData = { readonly skills: readonly ProviderSkill[] };
 export type McpDiscoverData = { readonly server: ProviderMcpServer };
+export type PluginIconData = { readonly icon: ProviderPluginIcon };
 
 /** External mutate success shapes (response-equals-state). */
 export type McpMutateData = McpListData;
@@ -129,6 +131,28 @@ export function mapProvidersListToMcpDiscover(args: {
     });
   }
   return { server: native.server };
+}
+
+/**
+ * An icon is decoration: a host that cannot produce one answers
+ * `{ dataUri: null }` rather than failing, and this mapper keeps that shape
+ * instead of throwing. It DOES throw on a native error result or a mismatched
+ * arm, because those mean the request itself did not do what was asked - an
+ * older host that has never heard of `pluginIcon`, for instance.
+ */
+export function mapProvidersListToPluginIcon(args: {
+  readonly response: ProvidersListWireResponse;
+}): PluginIconData {
+  const native = args.response.native;
+  throwIfNativeError(native, "providers.list");
+  if (native === null || native.kind !== "pluginIcon") {
+    throw new ProviderNativeRpcError({
+      code: "unsupported_action",
+      detail: "Plugin icons are not supported by this host.",
+      method: "providers.list",
+    });
+  }
+  return { icon: native.icon };
 }
 
 export function mapNativeMutateToMcpMutate(args: {

@@ -1,6 +1,13 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 /**
  * The host picker's paid-plan gating: on a free plan, remote rows are inert
@@ -15,6 +22,11 @@ const mocks = vi.hoisted(() => ({
   selectById: vi.fn(),
   openExternalLink: vi.fn(() => Promise.resolve()),
   requestClose: vi.fn(),
+  // `HostClient` keeps the active host outside React and announces swaps
+  // through `onChange`, so the fake has to be a real listener store for the
+  // picker's subscription to be observable.
+  activeHostId: "local-1",
+  hostClientListeners: new Set<() => void>(),
 }));
 
 vi.mock("@/hooks/host/use-remote-hosts-plan-gate", () => ({
@@ -41,8 +53,13 @@ vi.mock("@/lib/host", () => ({
       onChange: () => ({ dispose: () => undefined }),
     },
     hostClient: {
-      onChange: () => () => undefined,
-      getActiveHostId: () => "local-1",
+      onChange: (listener: () => void) => {
+        mocks.hostClientListeners.add(listener);
+        return () => {
+          mocks.hostClientListeners.delete(listener);
+        };
+      },
+      getActiveHostId: () => mocks.activeHostId,
     },
   }),
 }));
@@ -75,8 +92,23 @@ vi.mock("@/hooks/host/use-host-picker-list", () => ({
 
 import { HostPicker } from "@/components/layout/header/host-picker";
 
+/**
+ * The picker invalidates its own list query on directory / host-client
+ * changes, so it needs a real client even though the list hook itself is
+ * mocked here.
+ */
+function renderPicker(): void {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <HostPicker />
+    </QueryClientProvider>,
+  );
+}
+
 beforeEach(() => {
   mocks.planRestricted.mockReturnValue(false);
+  mocks.activeHostId = "local-1";
+  mocks.hostClientListeners.clear();
 });
 
 afterEach(() => {
@@ -87,7 +119,7 @@ afterEach(() => {
 describe("HostPicker paid-plan gating", () => {
   it("free plan: remote rows are inert with a Paid plan affordance, and the upsell links to subscription management", () => {
     mocks.planRestricted.mockReturnValue(true);
-    render(<HostPicker />);
+    renderPicker();
 
     const remote = screen.getByTestId("host-picker-option-remote-1");
     expect(remote.getAttribute("data-plan-restricted")).toBe("true");
@@ -111,7 +143,7 @@ describe("HostPicker paid-plan gating", () => {
 
   it("paid plan: remote rows select normally and no upsell renders", () => {
     mocks.planRestricted.mockReturnValue(false);
-    render(<HostPicker />);
+    renderPicker();
 
     expect(screen.queryByTestId("host-picker-remote-upsell")).toBeNull();
     const remote = screen.getByTestId("host-picker-option-remote-1");
@@ -120,5 +152,29 @@ describe("HostPicker paid-plan gating", () => {
     fireEvent.click(remote);
     expect(mocks.selectById).toHaveBeenCalledWith("remote-1");
     expect(mocks.requestClose).toHaveBeenCalled();
+  });
+
+  it("moves the checked row when the active host changes while the dialog is open", () => {
+    // REGRESSION: the picker used to re-render on `hostClient.onChange` via a
+    // revision counter that also keyed the list query. The query key is now
+    // stable, and a host swap leaves the directory contents untouched - so
+    // structural sharing preserves `data` and the query is NOT a render
+    // signal for the active host. The selected row must come from a
+    // subscription, not from a render-time `getActiveHostId()` read.
+    renderPicker();
+
+    const checkedState = (name: RegExp): string | null =>
+      screen.getByRole("radio", { name }).getAttribute("aria-checked");
+
+    expect(checkedState(/This Mac/)).toBe("true");
+    expect(checkedState(/Office workstation/)).toBe("false");
+
+    act(() => {
+      mocks.activeHostId = "remote-1";
+      for (const listener of mocks.hostClientListeners) listener();
+    });
+
+    expect(checkedState(/Office workstation/)).toBe("true");
+    expect(checkedState(/This Mac/)).toBe("false");
   });
 });

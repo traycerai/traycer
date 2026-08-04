@@ -1,6 +1,9 @@
 import type { QueryKey } from "@tanstack/react-query";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderNativeScope,
+  ProviderPluginIconTheme,
+} from "@traycer/protocol/host/provider-native-schemas";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -56,6 +59,24 @@ export function nativeSkillsListParams(
       providerId: args.providerId,
       scope: args.scope,
       workspaceRoot: args.workspaceRoot,
+    },
+  };
+}
+
+export function nativePluginIconParams(
+  args: NativeListScopeParams & {
+    readonly pluginId: string;
+    readonly theme: ProviderPluginIconTheme;
+  },
+): ProvidersListWireParams {
+  return {
+    native: {
+      kind: "pluginIcon",
+      providerId: args.providerId,
+      scope: args.scope,
+      workspaceRoot: args.workspaceRoot,
+      pluginId: args.pluginId,
+      theme: args.theme,
     },
   };
 }
@@ -120,6 +141,54 @@ export const providersNativeQueryKeys = {
     "native",
     "plugins",
   ],
+
+  // `version` rides the KEY but not `nativePluginIconParams` - it is cache
+  // identity, not a request field. The host always serves the newest installed
+  // version, so the request needs only the id; the version is what retires the
+  // previous version's entry, which `staleTime: Infinity` would otherwise
+  // strand. Must stay in step with `useProvidersPluginIcon`'s
+  // `cacheKeyIdentity`, or a key built here would address nothing.
+  pluginIcon: (
+    hostId: string | null,
+    params: NativeListScopeParams & {
+      readonly pluginId: string;
+      readonly theme: ProviderPluginIconTheme;
+      readonly version: string | null;
+    },
+  ): QueryKey => [
+    ...hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      hostId,
+      "providers.list",
+      nativePluginIconParams(params),
+    ),
+    "providers",
+    "native",
+    "pluginIcon",
+    params.version,
+  ],
+
+  /**
+   * Matches EVERY cached icon on one host, whatever plugin, theme or version.
+   *
+   * A predicate rather than a prefix because the discriminating segments sit on
+   * both sides of the request params: `pluginId` and `theme` ride inside them,
+   * and `version` trails after. No prefix covers the family, and a per-plugin
+   * one would still miss the case this exists for.
+   *
+   * Needed because `version` is NULLABLE. For a versioned plugin a reinstall
+   * changes the key and retires the old entry by itself; for one that reports
+   * no version the key is identical across reinstalls, and with
+   * `staleTime: Infinity` and no polling that entry would serve the previous
+   * install's artwork for the rest of the session.
+   */
+  isPluginIconKey: (hostId: string | null, key: QueryKey): boolean => {
+    const scope = hostQueryKeys.scope(hostId);
+    if (key.length < scope.length) return false;
+    for (let i = 0; i < scope.length; i += 1) {
+      if (key[i] !== scope[i]) return false;
+    }
+    return key.includes("pluginIcon");
+  },
 
   skillsList: (
     hostId: string | null,
