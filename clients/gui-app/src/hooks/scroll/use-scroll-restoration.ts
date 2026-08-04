@@ -1,10 +1,25 @@
-import { useCallback, useLayoutEffect, useRef, type RefObject } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import type {
   ScrollRestorationAdapter,
   TileScrollAnchor,
 } from "@/hooks/scroll/scroll-restoration-adapter";
-import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
 import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
+import {
+  clearReadingPositionTombstones,
+  readReadingPosition,
+  readingPositionIdentityForTileInstance,
+  registerReadingPositionCapture,
+  saveReadingPosition,
+  subscribeReadingPosition,
+  type ReadingPositionIdentity,
+} from "@/lib/reading-position";
+import { isTileScrollAnchor } from "@/hooks/scroll/scroll-anchor-types";
 
 /** Frames to keep retrying a restore while content is still laying out. */
 const MAX_RESTORE_FRAMES = 8;
@@ -29,12 +44,23 @@ interface RetryState {
  * remount/async path so restore waits until the surface actually has content to
  * scroll (messages loaded, diff fetched, file read).
  */
+export interface UseScrollRestorationResult {
+  readonly cancelRetry: () => void;
+  readonly commit: () => void;
+}
+
 export function useScrollRestoration(
-  instanceId: string,
+  identityInput: ReadingPositionIdentity | string,
   adapter: ScrollRestorationAdapter,
   visible: boolean,
   contentReady: boolean,
-): () => void {
+): UseScrollRestorationResult {
+  const surfaceKind = adapter.surfaceKind;
+  const [identity] = useState<ReadingPositionIdentity>(() =>
+    typeof identityInput === "string"
+      ? readingPositionIdentityForTileInstance(identityInput)
+      : identityInput,
+  );
   // Kept fresh in a layout effect (writing a ref during render trips the React
   // Compiler's `react-hooks/refs` rule); adapters are stable so it never churns.
   const adapterRef = useRef(adapter);
@@ -45,6 +71,7 @@ export function useScrollRestoration(
   const wasVisibleRef = useRef(visible);
   const mountedRef = useRef(false);
   const restoredRef = useRef(false);
+  const reconciledExternalRef = useRef(false);
   const retryRef = useRef<RetryState>({ rafId: 0, frame: 0 });
 
   const cancelRetry = useCallback((): void => {
@@ -58,9 +85,9 @@ export function useScrollRestoration(
   const commit = useCallback((): void => {
     const anchor = adapterRef.current.captureAnchor();
     if (anchor !== null) {
-      useTileScrollAnchorStore.getState().setAnchor(instanceId, anchor);
+      saveReadingPosition(identity, surfaceKind, anchor);
     }
-  }, [instanceId]);
+  }, [identity, surfaceKind]);
 
   // On unmount we save ONLY if the tile is still live (LRU eviction / hide for
   // reopen). A permanent close removes the tile from the canvas first, which
@@ -68,24 +95,55 @@ export function useScrollRestoration(
   // save here is what stops this later cleanup from resurrecting that anchor.
   // Clearing is the sweep's job alone - the hook never clears.
   const commitIfTileLive = useCallback((): void => {
-    if (isEpicCanvasTileInstanceLive(instanceId)) commit();
-  }, [commit, instanceId]);
+    if (isEpicCanvasTileInstanceLive(identity.viewKey)) commit();
+  }, [commit, identity.viewKey]);
 
   const runRestore = useCallback((): void => {
     if (restoredRef.current) return;
     if (retryRef.current.rafId !== 0) return; // a retry loop is already in flight
-    const anchor = useTileScrollAnchorStore.getState().getAnchor(instanceId);
-    if (anchor === undefined) {
+    const resolvedAnchor = readReadingPosition(
+      identity,
+      surfaceKind,
+      isTileScrollAnchor,
+    );
+    if (resolvedAnchor === null) {
       restoredRef.current = true;
       return;
     }
-    const result = adapterRef.current.applyAnchor(anchor);
+    const result = adapterRef.current.applyAnchor(resolvedAnchor);
     if (result === "retry" || result === "defend") {
-      scheduleRestoreRetry(adapterRef, retryRef, restoredRef, anchor);
+      scheduleRestoreRetry(adapterRef, retryRef, restoredRef, resolvedAnchor);
       return;
     }
     restoredRef.current = true;
-  }, [instanceId]);
+  }, [identity, surfaceKind]);
+
+  useLayoutEffect(() => {
+    clearReadingPositionTombstones(identity);
+  }, [identity]);
+
+  useLayoutEffect(
+    () =>
+      registerReadingPositionCapture({
+        captureKey: identity.viewKey,
+        identity,
+        capture: commit,
+      }),
+    [commit, identity],
+  );
+
+  useLayoutEffect(() => {
+    const reconcile = (): void => {
+      if (reconciledExternalRef.current || !visible || !contentReady) return;
+      // A real local scroll populates the adapter's coherent mirror. Never let
+      // a late cross-window storage event jump over that newer interaction.
+      if (adapterRef.current.captureAnchor() !== null) return;
+      reconciledExternalRef.current = true;
+      restoredRef.current = false;
+      runRestore();
+    };
+    return subscribeReadingPosition(identity, surfaceKind, reconcile);
+  }, [contentReady, identity, runRestore, surfaceKind, visible]);
 
   useLayoutEffect(() => {
     const firstRun = !mountedRef.current;
@@ -116,7 +174,7 @@ export function useScrollRestoration(
     };
   }, [commitIfTileLive, cancelRetry]);
 
-  return cancelRetry;
+  return { cancelRetry, commit };
 }
 
 /**

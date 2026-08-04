@@ -2,9 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { epicCanvasKey } from "@/lib/persist";
 import {
-  useTileScrollAnchorStore,
+  readExactReadingPosition,
+  readReadingPosition,
+  readingPositionIdentityForTileInstance,
+  resetReadingPositionServiceForTests,
+  saveReadingPosition,
+} from "@/lib/reading-position";
+import {
+  isTileScrollAnchor,
   type TileScrollAnchor,
-} from "@/stores/epics/canvas/tile-scroll-anchor-store";
+} from "@/hooks/scroll/scroll-anchor-types";
 import {
   evictChatTabState,
   evictChatTabStateForEpic,
@@ -97,6 +104,7 @@ function identityFor(epicId: string): ChatTabPersistenceIdentity {
     tileInstanceId: CHAT_A.instanceId,
     epicId,
     chatId: CHAT_A.id,
+    hostId: CHAT_A.hostId,
   };
 }
 
@@ -240,7 +248,7 @@ beforeEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.persist.setOptions({ name: epicCanvasKey(null) });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useTileScrollAnchorStore.setState({ anchors: {} });
+  resetReadingPositionServiceForTests();
   useToolOpenStore.setState({ openIds: new Set() });
   useSubagentOpenStore.setState({ openIds: new Set() });
   evictChatTabState([SPEC_A.instanceId]);
@@ -255,6 +263,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetReadingPositionServiceForTests();
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useToolOpenStore.setState({ openIds: new Set() });
   useSubagentOpenStore.setState({ openIds: new Set() });
@@ -269,31 +278,36 @@ afterEach(() => {
 });
 
 describe("canvas store scroll-anchor sweep", () => {
-  it("evicts a tile's anchor when its canvas is permanently removed", () => {
+  it("evicts a closed tile's exact anchor while retaining its content fallback", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-evict", "Evict Me");
     store.openTileInTab(tabId, SPEC_A);
-    useTileScrollAnchorStore.getState().setAnchor(SPEC_A.instanceId, ANCHOR);
+    const identity = readingPositionIdentityForTileInstance(SPEC_A.instanceId);
+    saveReadingPosition(identity, "native", ANCHOR);
 
     useEpicCanvasStore.getState().closeTabsForEpics(["epic-evict"]);
 
     expect(
-      useTileScrollAnchorStore.getState().getAnchor(SPEC_A.instanceId),
-    ).toBeUndefined();
+      readExactReadingPosition(identity, "native", isTileScrollAnchor),
+    ).toBeNull();
+    expect(readReadingPosition(identity, "native", isTileScrollAnchor)).toEqual(
+      ANCHOR,
+    );
   });
 
   it("preserves the anchor across a hide-for-reopen close (tile stays live)", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-hide", "Hide Me");
     store.openTileInTab(tabId, SPEC_A);
-    useTileScrollAnchorStore.getState().setAnchor(SPEC_A.instanceId, ANCHOR);
+    const identity = readingPositionIdentityForTileInstance(SPEC_A.instanceId);
+    saveReadingPosition(identity, "native", ANCHOR);
 
     // closeTab hides the tab but keeps its canvas (and tiles) for reopen, so the
     // instanceId never leaves the live set and the sweep must NOT clear it.
     store.closeTab(tabId);
 
     expect(
-      useTileScrollAnchorStore.getState().getAnchor(SPEC_A.instanceId),
+      readExactReadingPosition(identity, "native", isTileScrollAnchor),
     ).toEqual(ANCHOR);
   });
 });

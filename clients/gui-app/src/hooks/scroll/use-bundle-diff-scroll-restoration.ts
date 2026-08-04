@@ -3,7 +3,11 @@ import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import type { ScrollRestorationAdapter } from "@/hooks/scroll/scroll-restoration-adapter";
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
-import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
+import {
+  readReadingPosition,
+  readingPositionIdentityForTileInstance,
+} from "@/lib/reading-position";
+import { isTileScrollAnchor } from "@/hooks/scroll/scroll-anchor-types";
 
 interface BundleDiffScrollRestoration {
   readonly virtuosoRef: RefObject<VirtuosoHandle | null>;
@@ -33,26 +37,28 @@ export function useBundleDiffScrollRestoration(
   contentReady: boolean,
 ): BundleDiffScrollRestoration {
   const visible = useTileBodyVisible();
+  const identity = useMemo(
+    () => readingPositionIdentityForTileInstance(instanceId),
+    [instanceId],
+  );
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const lastStateRef = useRef<StateSnapshot | null>(null);
 
   // Seed the initial mount from any anchor saved before a prior unmount.
   const [restoreStateFrom] = useState<StateSnapshot | undefined>(() => {
-    const anchor = useTileScrollAnchorStore.getState().getAnchor(instanceId);
-    return anchor !== undefined && anchor.kind === "bundle-diff"
+    const anchor = readReadingPosition(
+      identity,
+      "bundle-diff",
+      isTileScrollAnchor,
+    );
+    return anchor !== null && anchor.kind === "bundle-diff"
       ? anchor.virtuosoState
       : undefined;
   });
 
-  const isScrolling = useCallback((scrolling: boolean): void => {
-    if (scrolling) return;
-    virtuosoRef.current?.getState((state) => {
-      lastStateRef.current = state;
-    });
-  }, []);
-
   const adapter = useMemo<ScrollRestorationAdapter>(
     () => ({
+      surfaceKind: "bundle-diff",
       captureAnchor: () => {
         const state = lastStateRef.current;
         if (state === null) return null;
@@ -69,7 +75,23 @@ export function useBundleDiffScrollRestoration(
     [],
   );
 
-  useScrollRestoration(instanceId, adapter, visible, contentReady);
+  const { commit } = useScrollRestoration(
+    identity,
+    adapter,
+    visible,
+    contentReady,
+  );
+
+  const isScrolling = useCallback(
+    (scrolling: boolean): void => {
+      if (scrolling) return;
+      virtuosoRef.current?.getState((state) => {
+        lastStateRef.current = state;
+        commit();
+      });
+    },
+    [commit],
+  );
 
   return { virtuosoRef, restoreStateFrom, isScrolling };
 }
