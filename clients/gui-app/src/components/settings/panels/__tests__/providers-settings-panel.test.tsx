@@ -584,44 +584,9 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 // inline + always-open so tests can select a row without fighting
 // pointer-open semantics in jsdom (mirrors the established mock in
 // worktrees-settings-panel.test / folder-controls.test).
-vi.mock("@/components/ui/dropdown-menu", () => {
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
-  return {
-    DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
-    DropdownMenuItem: (props: {
-      readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
-      readonly "aria-label": string | undefined;
-      readonly "aria-current": "true" | undefined;
-      readonly className: string | undefined;
-      readonly disabled: boolean | undefined;
-      readonly title: string | undefined;
-    }): ReactNode => (
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={props["aria-label"]}
-        aria-current={props["aria-current"]}
-        className={props.className}
-        disabled={props.disabled}
-        title={props.title}
-        onClick={props.onSelect}
-      >
-        {props.children}
-      </button>
-    ),
-    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
-    DropdownMenuShortcut: (props: {
-      readonly children: ReactNode;
-      readonly "data-testid": string | undefined;
-    }): ReactNode => (
-      <span data-testid={props["data-testid"]}>{props.children}</span>
-    ),
-  };
-});
+vi.mock("@/components/ui/dropdown-menu", async () => ({
+  ...(await import("./dropdown-menu-passthrough-mock")),
+}));
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
@@ -1070,6 +1035,20 @@ function expectPinnedRailLayout(): void {
   expect(scrollers).toEqual([]);
 }
 
+/**
+ * Provider rows currently in the rail, in rendered order. Scoped to the LIST
+ * rather than the nav, which also holds the search row's filter button - and
+ * returns `[]` for the filtered-empty rail, where no list is rendered at all.
+ */
+function railProviderNames(): readonly string[] {
+  const nav = screen.getByRole("navigation", { name: "Providers" });
+  const list = within(nav).queryByRole("list", { name: "Providers" });
+  if (list === null) return [];
+  return within(list)
+    .getAllByRole("button")
+    .map((button) => button.getAttribute("aria-label") ?? "");
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
     useProvidersFocusStore.setState({
@@ -1380,8 +1359,12 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     const nav = screen.getByRole("navigation", { name: "Providers" });
+    // Scoped to the LIST, not the whole nav: the nav also holds the rail's
+    // search row, whose filter trigger is a button too and would otherwise
+    // enter this ordering assertion as a phantom first provider.
+    const list = within(nav).getByRole("list", { name: "Providers" });
     expect(
-      within(nav)
+      within(list)
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
     ).toEqual([
@@ -1393,6 +1376,86 @@ describe("<ProvidersSettingsPanel />", () => {
       "Copilot",
       "Kilo Code",
       "Qwen Code",
+    ]);
+  });
+
+  it("narrows the rail to providers matching the search, keeping rail order", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      { target: { value: "open" } },
+    );
+
+    expect(railProviderNames()).toEqual(["OpenCode", "OpenRouter"]);
+  });
+
+  it("leaves the detail pane on the selected provider when the rail hides it", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // OpenCode is selected on mount (first in rail order for this fixture).
+    expect(screen.getByText("OpenCode CLI agent.")).toBeDefined();
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      { target: { value: "openrouter" } },
+    );
+
+    // The rail is down to one row that is NOT the selected provider, and the
+    // detail pane has not followed it. Re-selecting per keystroke would throw
+    // away whatever was in progress on the right - an unsaved API key, a
+    // half-filled MCP form - for a keystroke that only asked to look.
+    expect(railProviderNames()).toEqual(["OpenRouter"]);
+    expect(screen.getByText("OpenCode CLI agent.")).toBeDefined();
+  });
+
+  it("says so when nothing matches, instead of an empty rail", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      { target: { value: "no-such-provider" } },
+    );
+
+    const nav = within(screen.getByRole("navigation", { name: "Providers" }));
+    expect(nav.queryByRole("list", { name: "Providers" })).toBeNull();
+    expect(nav.getByRole("status").textContent).toBe("No providers match.");
+    // Twice: the live region AND the visible row. The region is `sr-only`, so
+    // asserting only the announcement would let the visible copy be deleted
+    // and leave a sighted user staring at a blank rail.
+    expect(nav.getAllByText("No providers match.")).toHaveLength(2);
+  });
+
+  it("restores every row when the search is cleared", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Search providers" });
+    fireEvent.change(input, { target: { value: "openrouter" } });
+    expect(railProviderNames()).toEqual(["OpenRouter"]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear provider search" }),
+    );
+    expect(railProviderNames()).toEqual([
+      "OpenCode",
+      "Traycer Inference",
+      "OpenRouter",
     ]);
   });
 
