@@ -73,7 +73,14 @@ describe("computeStableChatTimelineRows", () => {
         stoppedAt: 200,
         reason: "user",
         turnHadOutput: true,
-        turnReplyText: "token",
+        turnReplySegments: [
+          {
+            id: "seg-token",
+            kind: "text",
+            markdown: "token",
+            isStreaming: false,
+          },
+        ],
       },
     };
     const afterStopped = computeStableChatTimelineRows(

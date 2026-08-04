@@ -203,3 +203,98 @@ export function resolveChatTurnMinimapRowViewportDistance(
   if (rowBottom <= scrollTop) return scrollTop - rowBottom;
   return Math.max(0, rowTop - scrollBottom);
 }
+
+/** Every preview is clamped to three lines on screen (and one is also reused
+ * as a jump target's accessible name), so nothing past this is perceivable. */
+export const CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS = 200;
+
+/**
+ * Builds the rail's preview text for one message.
+ *
+ * The slice comes BEFORE the whitespace collapse on purpose. Normalizing
+ * first allocates a string as long as the whole turn, so the rail retained a
+ * second full-length copy of every user message and every final assistant
+ * message in the transcript - a heap snapshot of a long session found exactly
+ * that duplication. Reading a bounded head keeps the retained preview
+ * proportional to what can actually be shown.
+ */
+/**
+ * `String.prototype.slice` cuts on UTF-16 code units, so a cut landing
+ * between the halves of a surrogate pair leaves a lone surrogate that
+ * renders as a replacement glyph. This preview doubles as the jump
+ * target's accessible name, so a screen reader would announce the
+ * malformed character too - drop a trailing high surrogate instead.
+ */
+function sliceWholeCodePoints(text: string, maxUnits: number): string {
+  if (text.length <= maxUnits) return text;
+  const cut = text.slice(0, maxUnits);
+  const last = cut.charCodeAt(cut.length - 1);
+  const endsOnLeadingSurrogate = last >= 0xd800 && last <= 0xdbff;
+  return endsOnLeadingSurrogate ? cut.slice(0, -1) : cut;
+}
+
+/**
+ * Collapse whitespace while walking the source, stopping as soon as enough
+ * VISIBLE characters have been collected.
+ *
+ * A fixed-length prefix would be wrong twice over: scanning the whole string
+ * allocates a second full copy of every turn (the cost this preview exists to
+ * avoid), but slicing a fixed prefix first means a turn whose opening is
+ * mostly whitespace - pasted content after a long run of blank lines -
+ * normalizes to nothing and loses its preview and its accessible name
+ * entirely. Walking with an output budget bounds the work by what is shown
+ * rather than by the turn's length, and never runs out of input early.
+ */
+const WHITESPACE_RE = /\s/;
+
+/**
+ * Hard ceiling on how much source the preview scan will read.
+ *
+ * The output budget alone does not bound the loop: a whitespace-only turn, or
+ * one with a very long whitespace prefix, emits nothing and would walk the
+ * entire message. This runs for every user and assistant preview, so a single
+ * large message would cost renderer work proportional to its whole length.
+ *
+ * Generous enough that no realistic leading-whitespace run reaches it - which
+ * is the case the scan was widened for in the first place - while keeping the
+ * worst case constant.
+ */
+const PREVIEW_SOURCE_SCAN_LIMIT = 16_384;
+
+function collapseWhitespaceUpTo(text: string, maxOut: number): string {
+  let out = "";
+  let pendingSpace = false;
+  const scanLimit = Math.min(text.length, PREVIEW_SOURCE_SCAN_LIMIT);
+  for (let index = 0; index < scanLimit; index += 1) {
+    const ch = text[index];
+    if (WHITESPACE_RE.test(ch)) {
+      if (out.length > 0) pendingSpace = true;
+      continue;
+    }
+    if (pendingSpace) {
+      out += " ";
+      pendingSpace = false;
+    }
+    out += ch;
+    // One past the budget is enough to know truncation is needed, and keeps a
+    // trailing surrogate pair intact for the caller to trim whole.
+    if (out.length > maxOut + 1) break;
+  }
+  return out;
+}
+
+export function compactChatTurnMinimapPreview(
+  text: string | null | undefined,
+): string | null {
+  if (text === null || text === undefined) return null;
+  const compact = collapseWhitespaceUpTo(
+    text,
+    CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  );
+  if (compact.length === 0) return null;
+  if (compact.length <= CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS) return compact;
+  return `${sliceWholeCodePoints(
+    compact,
+    CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  ).trimEnd()}…`;
+}

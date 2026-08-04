@@ -135,6 +135,16 @@ export function analyticsCountBucket(
   return "21+";
 }
 
+/** Session age of the renderer process at sample time. Resource retention
+ * bugs show up as heap correlating with this bucket, so it is the axis every
+ * resource sample must carry. */
+export type AnalyticsSessionAgeBucket =
+  "under_1h" | "1_to_4h" | "4_to_12h" | "over_12h";
+
+/** Escalating JS-heap pressure bands. `critical` sits below the renderer's
+ * 4 GB old-space ceiling with room to still report before an OOM. */
+export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
+
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
@@ -362,11 +372,26 @@ export enum AnalyticsEvent {
   ReportIssuePublicOpenAttempted = "report_issue_public_open_attempted",
   AppQuitRequested = "app_quit_requested",
   TabCloseBlocked = "tab_close_blocked",
+  AppResourceSample = "app_resource_sample",
+  AppResourcePressure = "app_resource_pressure",
 }
 
 type SourceProperties = { readonly source: AnalyticsSource };
 type BlockedProperties = SourceProperties & {
   readonly blocker: AnalyticsBlocker;
+};
+/**
+ * Shared body of both resource events, so a periodic sample and a pressure
+ * crossing are directly comparable in one query. A `null` measurement means
+ * the runtime cannot report it (no desktop bridge, or a build without
+ * `performance.memory`) - never "we skipped computing it".
+ */
+type ResourceMeasurementProperties = {
+  readonly js_heap_mb: number;
+  readonly js_heap_limit_mb: number | null;
+  readonly heap_slope_mb_per_h: number | null;
+  readonly session_age_bucket: AnalyticsSessionAgeBucket;
+  readonly open_tabs: number;
 };
 type WorkspaceKind = "local" | "unknown" | "worktree";
 export type AnalyticsTargetKind =
@@ -767,6 +792,10 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.TabCloseBlocked]: {
     readonly decision: "cancel" | "discard";
   };
+  readonly [AnalyticsEvent.AppResourceSample]: ResourceMeasurementProperties;
+  readonly [AnalyticsEvent.AppResourcePressure]: ResourceMeasurementProperties & {
+    readonly pressure_tier: AnalyticsResourcePressureTier;
+  };
 }
 
 export const POSTHOG_CONFIG = {
@@ -1033,6 +1062,19 @@ const ANALYTICS_NOTIFICATION_ACKNOWLEDGMENT_SOURCES = new Set<string>([
   "activation",
 ]);
 
+const ANALYTICS_SESSION_AGE_BUCKETS = new Set<string>([
+  "under_1h",
+  "1_to_4h",
+  "4_to_12h",
+  "over_12h",
+]);
+
+const ANALYTICS_RESOURCE_PRESSURE_TIERS = new Set<string>([
+  "elevated",
+  "high",
+  "critical",
+]);
+
 const ANALYTICS_EVENTS = new Set<string>(Object.values(AnalyticsEvent));
 
 function isAnalyticsEvent(event: string): event is AnalyticsEvent {
@@ -1287,6 +1329,27 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["outcome", "blocker", "attachment_count"],
   ),
   ...eventKeyEntries([AnalyticsEvent.TabCloseBlocked], ["decision"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.AppResourceSample],
+    [
+      "js_heap_mb",
+      "js_heap_limit_mb",
+      "heap_slope_mb_per_h",
+      "session_age_bucket",
+      "open_tabs",
+    ],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.AppResourcePressure],
+    [
+      "pressure_tier",
+      "js_heap_mb",
+      "js_heap_limit_mb",
+      "heap_slope_mb_per_h",
+      "session_age_bucket",
+      "open_tabs",
+    ],
+  ),
 ]);
 
 const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
@@ -1365,9 +1428,11 @@ const EXACT_PROPERTY_VALUES: {
   launch_reason: new Set(["normal", "update_restart"]),
   last_step: ANALYTICS_ONBOARDING_STEPS,
   permission: new Set(["denied", "granted", "unavailable"]),
+  pressure_tier: ANALYTICS_RESOURCE_PRESSURE_TIERS,
   provider: ANALYTICS_PROVIDERS,
   role: new Set(["editor", "owner", "viewer"]),
   section: ANALYTICS_SETTINGS_SECTIONS,
+  session_age_bucket: ANALYTICS_SESSION_AGE_BUCKETS,
   setting: ANALYTICS_SETTINGS,
   source: ANALYTICS_SOURCES,
   step: ANALYTICS_ONBOARDING_STEPS,
@@ -1564,10 +1629,24 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
   "attachment_count",
   "failed_count",
   "file_count",
+  "open_tabs",
   "requested_count",
   "script_count",
   "succeeded_count",
   "workspace_count",
+]);
+
+/**
+ * Resource gauges, as distinct from `COUNT_PROPERTY_KEYS`. A count is a
+ * non-negative integer tally; a measure is a sampled magnitude that is
+ * legitimately fractional (CPU percent), legitimately negative (a heap slope
+ * while memory is being released), and legitimately absent (`null` when the
+ * runtime cannot report it).
+ */
+const MEASURE_PROPERTY_KEYS = new Set<string>([
+  "heap_slope_mb_per_h",
+  "js_heap_limit_mb",
+  "js_heap_mb",
 ]);
 
 function analyticsPropertyHasValidator(
@@ -1575,12 +1654,10 @@ function analyticsPropertyHasValidator(
   key: string,
 ): boolean {
   return (
-    key === "blocker" ||
-    key === "status" ||
-    key === "result_count_bucket" ||
-    key === "has_more" ||
+    EVENT_SCOPED_PROPERTY_KEYS.has(key) ||
     BOOLEAN_PROPERTY_KEYS.has(key) ||
     COUNT_PROPERTY_KEYS.has(key) ||
+    MEASURE_PROPERTY_KEYS.has(key) ||
     EVENT_EXACT_PROPERTY_VALUES.has(`${event}:${key}`) ||
     EXACT_PROPERTY_VALUES[key] !== undefined
   );
@@ -1596,11 +1673,33 @@ function isAnalyticsCount(value: unknown): boolean {
   return count >= 0 && count <= 10_000;
 }
 
-function isAnalyticsPropertyValue(
+/** `null` is a first-class value here: it records "this runtime cannot
+ * measure it", which is different from a zero reading. Non-finite values are
+ * a sampling bug and are rejected rather than shipped as `NaN`. */
+function isAnalyticsMeasure(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  return Math.abs(value) <= 1_000_000;
+}
+
+/**
+ * Keys whose validity depends on which event carries them - each admits
+ * `null` only for the specific events where the absence is meaningful. Held
+ * as one set so the validator and `analyticsPropertyHasValidator` cannot
+ * drift apart on which keys are event-scoped.
+ */
+const EVENT_SCOPED_PROPERTY_KEYS = new Set<string>([
+  "blocker",
+  "has_more",
+  "result_count_bucket",
+  "status",
+]);
+
+function isEventScopedPropertyValue(
   event: AnalyticsEvent,
   key: string,
   value: unknown,
-): value is AnalyticsPropertyValue {
+): boolean {
   if (key === "blocker") {
     if (value === null) {
       return (
@@ -1619,8 +1718,20 @@ function isAnalyticsPropertyValue(
     return typeof value === "boolean";
   }
   if (key === "status") return isAnalyticsStatus(value);
+  return false;
+}
+
+function isAnalyticsPropertyValue(
+  event: AnalyticsEvent,
+  key: string,
+  value: unknown,
+): value is AnalyticsPropertyValue {
+  if (EVENT_SCOPED_PROPERTY_KEYS.has(key)) {
+    return isEventScopedPropertyValue(event, key, value);
+  }
   if (BOOLEAN_PROPERTY_KEYS.has(key)) return typeof value === "boolean";
   if (COUNT_PROPERTY_KEYS.has(key)) return isAnalyticsCount(value);
+  if (MEASURE_PROPERTY_KEYS.has(key)) return isAnalyticsMeasure(value);
   const allowed =
     EVENT_EXACT_PROPERTY_VALUES.get(`${event}:${key}`) ??
     EXACT_PROPERTY_VALUES[key];

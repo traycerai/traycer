@@ -1328,7 +1328,14 @@ describe("ChatMessages scroll policy", () => {
             stoppedAt: 1_700_000_000_000,
             reason: "user",
             turnHadOutput: true,
-            turnReplyText: "partial",
+            turnReplySegments: [
+              {
+                id: "seg-partial",
+                kind: "text",
+                markdown: "partial",
+                isStreaming: false,
+              },
+            ],
           },
           runState: null,
         },
