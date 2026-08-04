@@ -140,6 +140,24 @@ describe("QuoteSelectionPopover - quote action", () => {
   });
 });
 
+describe("QuoteSelectionPopover - translate action", () => {
+  it("prefills the draft with a Spanish translation request and dismisses on click", () => {
+    const { snapshot } = makeAnchoredSnapshot();
+    const onDismiss = vi.fn();
+    renderPopover(snapshot, onDismiss);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Traducir al español" }),
+    );
+
+    const draft = readComposerDraftSnapshot("task-1");
+    const contentText = JSON.stringify(draft.content);
+    expect(contentText).toContain("Traduce al español");
+    expect(contentText).toContain("quotable text");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("QuoteSelectionPopover - anchor guard", () => {
   it("stays mounted while the anchor range is connected and paintable", () => {
     const onDismiss = vi.fn();

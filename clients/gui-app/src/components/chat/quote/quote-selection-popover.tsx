@@ -1,4 +1,9 @@
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  type ReactElement,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   autoUpdate,
@@ -7,7 +12,7 @@ import {
   offset,
   shift,
 } from "@floating-ui/dom";
-import { TextQuote } from "lucide-react";
+import { Languages, TextQuote } from "lucide-react";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { chatBottomOverlayClampedRect } from "@/components/chat/chat-scroll-region-geometry";
 import { cn } from "@/lib/utils";
@@ -15,6 +20,7 @@ import {
   appendQuoteToDraft,
   buildQuoteBlockquote,
 } from "./append-quote-to-draft";
+import { appendTranslateToSpanishToDraft } from "./translate-to-spanish";
 import { firstLineRect, firstVisibleLineRect } from "./quote-anchor-rect";
 import type { QuoteSelectionSnapshot } from "./use-quote-selection";
 
@@ -137,6 +143,14 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     onDismiss();
   };
 
+  const handleTranslateToSpanish = (): void => {
+    // Same contract as the quote action: consume the mouseup snapshot, never the
+    // live Selection.
+    appendTranslateToSpanishToDraft(taskId, snapshot);
+    clearBrowserSelection();
+    onDismiss();
+  };
+
   if (!paneFocused || typeof document === "undefined") return null;
 
   return createPortal(
@@ -150,27 +164,55 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
       // to the anchor. The app's other floating popovers (FloatingDraftPopover,
       // MentionPreviewPanel) position with transform and add no entrance
       // animation for the same reason; match them.
-      className="absolute top-0 left-0 z-50 rounded-md border border-border bg-popover p-0.5 text-popover-foreground shadow-lg"
+      className="absolute top-0 left-0 z-50 flex items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 text-popover-foreground shadow-lg"
     >
-      <button
-        type="button"
-        // preventDefault keeps focus off the button and stops the browser from
-        // collapsing the selection before the click fires; the quote action
-        // runs on click. Its visible "Quote" label is the accessible name.
-        onMouseDown={(event) => event.preventDefault()}
+      <SelectionActionButton
+        label="Quote"
+        icon={<TextQuote className="size-3.5" aria-hidden />}
         onClick={handleQuote}
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-sm px-2 py-1",
-          "text-xs font-medium text-popover-foreground transition-colors",
-          "hover:bg-accent hover:text-accent-foreground",
-          "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-        )}
-      >
-        <TextQuote className="size-3.5" aria-hidden />
-        Quote
-      </button>
+      />
+      <SelectionActionButton
+        label="Traducir al español"
+        icon={<Languages className="size-3.5" aria-hidden />}
+        onClick={handleTranslateToSpanish}
+      />
     </div>,
     document.body,
+  );
+}
+
+interface SelectionActionButtonProps {
+  readonly label: string;
+  readonly icon: ReactElement;
+  readonly onClick: () => void;
+}
+
+/**
+ * A single action in the selection popover. `mousedown` preventDefault keeps
+ * focus off the button and stops the browser from collapsing the selection
+ * before the click fires; the action runs on click. The visible label is the
+ * accessible name.
+ */
+function SelectionActionButton({
+  label,
+  icon,
+  onClick,
+}: SelectionActionButtonProps): ReactElement {
+  return (
+    <button
+      type="button"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-sm px-2 py-1",
+        "text-xs font-medium text-popover-foreground transition-colors",
+        "hover:bg-accent hover:text-accent-foreground",
+        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 
