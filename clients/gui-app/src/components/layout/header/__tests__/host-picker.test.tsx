@@ -163,31 +163,18 @@ describe("HostPicker paid-plan gating", () => {
     // subscription, not from a render-time `getActiveHostId()` read.
     renderPicker();
 
-    expect(
-      screen
-        .getByTestId("host-picker-option-local-1")
-        .getAttribute("data-selected"),
-    ).toBe("true");
-    expect(
-      screen
-        .getByTestId("host-picker-option-remote-1")
-        .getAttribute("data-selected"),
-    ).toBe("false");
+    const checkedState = (name: RegExp): string | null =>
+      screen.getByRole("radio", { name }).getAttribute("aria-checked");
+
+    expect(checkedState(/This Mac/)).toBe("true");
+    expect(checkedState(/Office workstation/)).toBe("false");
 
     act(() => {
       mocks.activeHostId = "remote-1";
       for (const listener of mocks.hostClientListeners) listener();
     });
 
-    expect(
-      screen
-        .getByTestId("host-picker-option-remote-1")
-        .getAttribute("data-selected"),
-    ).toBe("true");
-    expect(
-      screen
-        .getByTestId("host-picker-option-local-1")
-        .getAttribute("data-selected"),
-    ).toBe("false");
+    expect(checkedState(/Office workstation/)).toBe("true");
+    expect(checkedState(/This Mac/)).toBe("false");
   });
 });
