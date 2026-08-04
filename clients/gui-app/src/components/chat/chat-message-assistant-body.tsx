@@ -128,7 +128,7 @@ export function AssistantMessageBody({
   const replyText = useMemo(
     () =>
       segments.length === 0 && stopped !== null && stopped.turnHadOutput
-        ? stopped.turnReplyText
+        ? collectAssistantReplyText(stopped.turnReplySegments)
         : collectAssistantReplyText(segments),
     [segments, stopped],
   );
