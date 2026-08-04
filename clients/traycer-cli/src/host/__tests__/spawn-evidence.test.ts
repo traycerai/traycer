@@ -1,4 +1,5 @@
 import {
+  appendFile,
   mkdtemp,
   open,
   rename,
@@ -372,6 +373,58 @@ describe("spawn-evidence substrate", () => {
       expect(findPostBaselineTerminalMarker(markers)?.phase).toBe(
         "failed-to-spawn",
       );
+    });
+  });
+
+  // Literal `writer=supervisor` throughout rather than the exported
+  // constant: these fixtures stand in for bytes already on disk, and a test
+  // written against the constant would follow a rename that silently broke
+  // every log written before it.
+  describe("writer identity across incremental reads", () => {
+    it("stays strict after the cap evicts the verified marker", async () => {
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=crashed code=134 writer=supervisor\n",
+      );
+      expect(await reader.read()).toHaveLength(1);
+
+      // The host now emits a burst of marker-shaped output - more than the
+      // reader's 64-entry buffer, so the one verified marker is evicted.
+      // Re-deriving the era from the retained window would find no verified
+      // line, fall back to legacy, and hand back all 64 forgeries.
+      const burst = Array.from(
+        { length: 70 },
+        (_unused, i) =>
+          `[2026-01-01T00:01:${String(i % 60).padStart(2, "0")}.000Z] phase=starting`,
+      ).join("\n");
+      await appendFile(mocks.logPath, `${burst}\n`);
+
+      expect(await reader.read()).toHaveLength(0);
+    });
+
+    it("demotes earlier unverified lines when a verified marker arrives later", async () => {
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=starting\n",
+      );
+      // Nothing has identified a writer yet, so this reads as legacy.
+      expect(await reader.read()).toHaveLength(1);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:01.000Z] phase=crashed code=9 writer=supervisor\n",
+      );
+      // The verified marker proves the writer stamps its lines, which
+      // retroactively reclassifies the earlier one as host output.
+      const markers = await reader.read();
+      expect(markers).toHaveLength(1);
+      expect(markers[0]?.phase).toBe("crashed");
     });
   });
 

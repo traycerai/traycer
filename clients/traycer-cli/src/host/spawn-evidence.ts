@@ -1,7 +1,9 @@
 import type { Stats } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import {
+  markersIdentifyWriter,
   parseBootstrapLogLine,
+  retainAuthenticMarkers,
   type BootstrapLogEntry,
   type BootstrapPhase,
 } from "./bootstrap-log";
@@ -213,7 +215,13 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   let dev: number | null = null;
   let ino: number | null = null;
   let pending = "";
-  let entries: readonly BootstrapLogEntry[] = [];
+  // Labelled and unfiltered; the authoritative view is derived per read.
+  let observed: readonly BootstrapLogEntry[] = [];
+  // Sticky: a writer that has identified itself once cannot stop being
+  // capable, and `observed` is capped below - so re-deriving this from the
+  // retained window would let a burst of marker-shaped host output evict
+  // the verified marker and reopen the hole.
+  let writerIdentified = false;
 
   return {
     read: async (): Promise<readonly BootstrapLogEntry[]> => {
@@ -237,12 +245,17 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
             : offsetForBaseline(baseline, info);
         if (!sameOpenFile) {
           pending = "";
-          entries = [];
+          observed = [];
+          // `writerIdentified` deliberately survives a replaced file:
+          // capability belongs to the WRITER, and rotation hands the same
+          // supervisor a fresh file it will keep identifying itself in.
         }
         dev = info.dev;
         ino = info.ino;
         offset = info.size;
-        if (info.size <= readOffset) return entries;
+        if (info.size <= readOffset) {
+          return retainAuthenticMarkers(observed, writerIdentified);
+        }
         const length = info.size - readOffset;
         const buffer = Buffer.alloc(length);
         const { bytesRead } = await handle.read(buffer, 0, length, readOffset);
@@ -250,11 +263,10 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         const text = pending + buffer.subarray(0, bytesRead).toString("utf8");
         const lines = text.split(/\r?\n/);
         pending = lines.pop() ?? "";
-        entries = [
-          ...entries,
-          ...parseBootstrapMarkersFromText(lines.join("\n")),
-        ].slice(-64);
-        return entries;
+        const parsed = parseMarkerLines(lines.join("\n"));
+        writerIdentified = writerIdentified || markersIdentifyWriter(parsed);
+        observed = [...observed, ...parsed].slice(-64);
+        return retainAuthenticMarkers(observed, writerIdentified);
       } finally {
         await handle.close();
       }
@@ -262,9 +274,12 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   };
 }
 
-export function parseBootstrapMarkersFromText(
-  text: string,
-): readonly BootstrapLogEntry[] {
+// Labelled but UNFILTERED - the writer latch is a property of the whole
+// scanned region, so a caller that accumulates across chunks has to apply
+// it itself over everything it has seen (see
+// `createPostBaselineMarkerReader`). Filtering per chunk would let a chunk
+// that happens to contain no verified marker read as legacy.
+function parseMarkerLines(text: string): readonly BootstrapLogEntry[] {
   const entries: BootstrapLogEntry[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (line.length === 0) continue;
@@ -272,6 +287,13 @@ export function parseBootstrapMarkersFromText(
     if (parsed !== null) entries.push(parsed);
   }
   return entries;
+}
+
+export function parseBootstrapMarkersFromText(
+  text: string,
+): readonly BootstrapLogEntry[] {
+  const entries = parseMarkerLines(text);
+  return retainAuthenticMarkers(entries, markersIdentifyWriter(entries));
 }
 
 export async function readPostBaselineMarkers(
