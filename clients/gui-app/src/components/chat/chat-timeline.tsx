@@ -32,6 +32,7 @@ import {
 import {
   useChatTimelineFollowLatch,
   type ChatTimelineFollowLatch,
+  type ChatTimelineReaderGestureIntent,
 } from "./chat-timeline-follow-latch";
 
 /**
@@ -192,10 +193,13 @@ export interface ChatTimelineProps {
   /** Composer + queued-surface overlay height, reserved as bottom content inset. */
   readonly contentInsetEndAdjustment?: number;
   readonly onFollowIntentChange?: (isFollowing: boolean) => void;
+  readonly onReaderGesture?: (intent: ChatTimelineReaderGestureIntent) => void;
   /** Controller bridge for explicit reader/navigation ownership changes. */
   readonly followLatchRef?: RefObject<ChatTimelineFollowLatch | null>;
   /** Explicit bootstrap/restoration ownership gate for automatic correction. */
   readonly isFollowCorrectionSuppressed?: () => boolean;
+  /** Releases that gate only for a controller-validated reader end landing. */
+  readonly resolveSuppressedEndLanding?: () => boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /** Notifies presentational consumers after LegendList remeasures any row. */
@@ -235,8 +239,10 @@ export const ChatTimeline = memo(function ChatTimeline({
   initialScrollIndex = null,
   contentInsetEndAdjustment = 0,
   onFollowIntentChange,
+  onReaderGesture,
   followLatchRef,
   isFollowCorrectionSuppressed,
+  resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
   onItemSizeChanged,
   onListMetricsChange,
@@ -253,7 +259,9 @@ export const ChatTimeline = memo(function ChatTimeline({
     rows.length > 0,
     {
       onFollowIntentChange,
+      onReaderGesture,
       isCorrectionSuppressed: isFollowCorrectionSuppressed,
+      resolveSuppressedEndLanding,
     },
   );
 

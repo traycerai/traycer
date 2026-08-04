@@ -6,7 +6,10 @@ import {
   ChatTimeline,
   type ChatTimelineInitialScrollAnchor,
 } from "@/components/chat/chat-timeline";
-import type { ChatTimelineFollowLatch } from "@/components/chat/chat-timeline-follow-latch";
+import type {
+  ChatTimelineFollowLatch,
+  ChatTimelineReaderGestureIntent,
+} from "@/components/chat/chat-timeline-follow-latch";
 import {
   acceptExhaustedPersistedRestoreFallback,
   buildMessageIdToIndex,
@@ -786,11 +789,6 @@ interface PendingMeasuredFreeRestore {
   readonly viewOffset: number;
 }
 
-interface ChatLiveFollowCancelIntent {
-  readonly freezeInFlightScroll: boolean;
-  readonly publishesReaderPosition: boolean;
-}
-
 function resolvePendingMeasuredFreeRestore(
   restored: SavedChatTabScrollState,
 ): PendingMeasuredFreeRestore | null {
@@ -904,6 +902,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     useState<string | null>(null);
   const navigationHighlightTimeoutRef = useRef<number | null>(null);
   const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
+  const resolveSuppressedEndLanding = useCallback((): boolean => {
+    const resolvePendingEndLanding = resolvePendingRestoreEndLandingRef.current;
+    if (
+      pendingMeasuredFreeRestoreRef.current === null ||
+      resolvePendingEndLanding === null
+    ) {
+      return false;
+    }
+    // A partial transcript can clamp the measured bootstrap to its own end.
+    // Stop that placeholder restore before its valid/exhausted callbacks
+    // normalize durable state. The raw hydration coordinate stays armed
+    // unless the frozen issued target proves the reader moved past it.
+    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current = null;
+    resolvePendingRestoreEndLandingRef.current = null;
+    const isPastTarget = resolvePendingEndLanding();
+    pendingMeasuredFreeRestoreRef.current = null;
+    return isPastTarget;
+  }, []);
   // Native smooth scrolling outlives the JavaScript call that starts it. Track
   // the exact animated imperative operation that currently owns that motion
   // so a physical reader gesture can freeze it without issuing disruptive
@@ -964,11 +981,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // --- Follow-vs-free scroll state (behavior contract: one edge, one rule) --
   //
-  // Bottom ownership is geometry, not a mode machine: `scrollMode`/`isAtEndRef`
-  // are pure mirrors of LegendList's own strict `isAtEnd` (1px library
-  // epsilon). There is no app-owned scroll mode, no reply reserve, no
-  // provenance/generation-ownership classifier.
+  // Bottom permission is geometry, not a mode machine: `scrollMode` and
+  // `isAtEndRef` are render/persistence mirrors of the latch's fresh-DOM
+  // strict edge (the library's same 1px epsilon). Transient correction and
+  // explicit-navigation ownership live only inside that latch.
   const initialIsAtEnd = restoredTabState.mode === "following-end";
+  const [initialScrollAtEnd] = useState(initialIsAtEnd);
   const initialScrollMode: ChatTimelineScrollMode = initialIsAtEnd
     ? "following-end"
     : "free-scrolling";
@@ -1067,27 +1085,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // release below: a passive geometry report must not publish the temporary
   // tail as durably authoritative while that coordinate is still pending.
   const setFollowingEndFromTimelinePosition = useCallback((): void => {
-    const resolvePendingEndLanding = resolvePendingRestoreEndLandingRef.current;
-    if (
-      pendingHydrationRestoreAnchorIdRef.current !== null &&
-      pendingMeasuredFreeRestoreRef.current !== null &&
-      resolvePendingEndLanding !== null
-    ) {
-      // A partial transcript can clamp the measured bootstrap to its own end.
-      // Stop that placeholder restore before its valid/exhausted callbacks
-      // normalize durable state; the raw hydration coordinate remains armed
-      // for the later full snapshot.
-      activeNavigationSettleCleanupRef.current?.();
-      activeNavigationSettleCleanupRef.current = null;
-      resolvePendingRestoreEndLandingRef.current = null;
-      resolvePendingEndLanding();
-      pendingMeasuredFreeRestoreRef.current = null;
+    if (pendingHydrationRestoreAnchorIdRef.current !== null) {
+      resolveSuppressedEndLanding();
     }
-    setTimelineMode(
-      "following-end",
-      pendingHydrationRestoreAnchorIdRef.current === null,
-    );
-  }, [setTimelineMode]);
+    if (pendingHydrationRestoreAnchorIdRef.current !== null) {
+      setTimelineMode("free-scrolling", false);
+      setShowScrollToBottom(true);
+      return;
+    }
+    setTimelineMode("following-end", true);
+  }, [resolveSuppressedEndLanding, setTimelineMode]);
 
   // Decision #6: ANY pointerdown in the transcript - expanding a card,
   // Decision #6/#5/#7: any real reader input (pointerdown, keyboard) freezes
@@ -1098,11 +1105,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // scroll event (if any) is what actually determines follow via
   // latch report; this only corrects the ownership bookkeeping for an
   // operation a real gesture just superseded.
-  const cancelTimelineLiveFollowForUserNavigation = useCallback(
+  const handleTimelineReaderGesture = useCallback(
     ({
       freezeInFlightScroll,
       publishesReaderPosition,
-    }: ChatLiveFollowCancelIntent): void => {
+    }: ChatTimelineReaderGestureIntent): void => {
+      clearNavigationHighlight();
       const hadActiveAnimatedImperativeScroll =
         activeAnimatedImperativeScrollGenerationRef.current !== null;
       // This cancel supersedes the operation immediately. Its eventual settle
@@ -1110,8 +1118,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // to a newer operation.
       activeAnimatedImperativeScrollGenerationRef.current = null;
       anchorUserScrollGenerationRef.current += 1;
-      followLatchRef.current?.noteReaderGesture();
-      pendingMeasuredFreeRestoreRef.current = null;
+      // A bare pointer preflight is not yet a published reading position.
+      // Keep the measured restore target armed so a subsequent strict-bottom
+      // landing can still prove it moved past that frozen target atomically.
+      // Explicit navigation has already cleared the hydration id before it
+      // reaches here, while wheel/touch/keyboard publish immediately.
+      if (
+        publishesReaderPosition ||
+        pendingHydrationRestoreAnchorIdRef.current === null
+      ) {
+        pendingMeasuredFreeRestoreRef.current = null;
+      }
       if (publishesReaderPosition) {
         pendingHydrationRestoreAnchorIdRef.current = null;
         forgetPendingHydrationRestore(identity);
@@ -1136,25 +1153,30 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         }
       }
     },
-    [identity],
+    [clearNavigationHighlight, identity],
   );
-  const cancelTimelineLiveFollowForRealUserGesture = useCallback(
-    (intent: ChatLiveFollowCancelIntent): void => {
-      clearNavigationHighlight();
-      cancelTimelineLiveFollowForUserNavigation(intent);
+  const cancelTimelineLiveFollowForUserNavigation = useCallback(
+    (intent: ChatTimelineReaderGestureIntent): void => {
+      const followLatch = followLatchRef.current;
+      if (followLatch) {
+        followLatch.noteReaderGesture(intent);
+      } else {
+        handleTimelineReaderGesture(intent);
+      }
     },
-    [cancelTimelineLiveFollowForUserNavigation, clearNavigationHighlight],
+    [handleTimelineReaderGesture],
   );
   const handleTranscriptPointerDown = useCallback((): void => {
     // Inline artifact/A2A navigation starts with pointerdown and can unmount
     // this tile before a later passive scroll snapshot runs. Capture the
     // exact source viewport synchronously, before cancellation changes mode.
     persistCurrentScrollRef.current();
-    cancelTimelineLiveFollowForRealUserGesture({
+    cancelTimelineLiveFollowForUserNavigation({
+      direction: "indeterminate",
       freezeInFlightScroll: true,
       publishesReaderPosition: false,
     });
-  }, [cancelTimelineLiveFollowForRealUserGesture]);
+  }, [cancelTimelineLiveFollowForUserNavigation]);
 
   // ChatTimeline unmounts LegendList entirely for an empty transcript
   // (ChatEmptyState instead), so this - not just `messages` identity - is
@@ -1176,6 +1198,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // hydration id is cleared above and the gate always releases.
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
+      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current = null;
       pendingHydrationRestoreAnchorIdRef.current = null;
       forgetPendingHydrationRestore(identity);
       setTimelineMode("following-end", true);
@@ -1184,6 +1208,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (!list) return;
       const imperativeScrollGeneration =
         beginImperativeScrollOperation(animated);
+      followLatchRef.current?.beginOwnedEndNavigation();
       void list.scrollToEnd({ animated });
       const scrollNode = list.getScrollableNode();
       activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
@@ -1194,24 +1219,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             CHAT_ANCHOR_SETTLE_FALLBACK_MS,
           ),
         isAborted: () =>
-          anchorUserScrollGenerationRef.current !== generationAtIssue ||
-          timelineScrollModeRef.current !== "following-end",
+          anchorUserScrollGenerationRef.current !== generationAtIssue,
         // The pill-click "go live" path has no reader-departure detection of
         // its own - a real gesture already bumps the generation and is
         // caught by `isAborted` above.
         shouldYieldToReader: () => false,
-        validate: () => list.getState().isAtEnd,
+        validate: () => followLatchRef.current?.isAtStrictEnd() === true,
         reissue: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          followLatchRef.current?.beginOwnedEndNavigation();
           void list.scrollToEnd({ animated: false });
         },
         onSettledValid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          followLatchRef.current?.completeOwnedEndNavigation(true);
         },
         // Ticket 10: free-scrolling with the pill visible beats silently
         // claiming ownership from an invalid landing.
         onSettledInvalid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          followLatchRef.current?.completeOwnedEndNavigation(false);
           reconcileInvalidTimelineLanding();
         },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
@@ -1273,13 +1300,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // apply this key's deterministic step as the replacement movement. The
       // resulting native `scroll` event is what determines follow, via
       // the latch's geometry observer - no separate reattach check needed here.
-      cancelTimelineLiveFollowForRealUserGesture({
+      cancelTimelineLiveFollowForUserNavigation({
+        direction:
+          scrollAction === "page-down" ||
+          scrollAction === "line-down" ||
+          scrollAction === "bottom"
+            ? "toward-end"
+            : "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
       });
       applyChatKeyboardScroll(scroller, scrollAction);
     },
-    [cancelTimelineLiveFollowForRealUserGesture],
+    [cancelTimelineLiveFollowForUserNavigation],
   );
 
   useLayoutEffect(() => {
@@ -2079,6 +2112,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       forgetPendingHydrationRestore(identity);
       pendingHydrationRestoreAnchorIdRef.current = null;
       cancelTimelineLiveFollowForUserNavigation({
+        direction: "indeterminate",
         freezeInFlightScroll: false,
         publishesReaderPosition: false,
       });
@@ -2170,6 +2204,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     forgetPendingHydrationRestore(identity);
     pendingHydrationRestoreAnchorIdRef.current = null;
     cancelTimelineLiveFollowForUserNavigation({
+      direction: "indeterminate",
       freezeInFlightScroll: false,
       publishesReaderPosition: false,
     });
@@ -2326,12 +2361,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             nextStepActions={nextStepActions}
             listRef={chatTimelineRef}
             onScroll={handleScroll}
-            initialScrollAtEnd={scrollMode === "following-end"}
+            initialScrollAtEnd={initialScrollAtEnd}
             initialScrollIndex={initialScrollIndexAnchor}
             contentInsetEndAdjustment={endInset}
             onFollowIntentChange={onFollowIntentChange}
+            onReaderGesture={handleTimelineReaderGesture}
             followLatchRef={followLatchRef}
             isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
+            resolveSuppressedEndLanding={resolveSuppressedEndLanding}
             navigationHighlightedMessageId={navigationHighlightedMessageId}
             onItemSizeChanged={onTimelineItemSizeChanged}
             onListMetricsChange={onListMetricsChange}

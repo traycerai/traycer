@@ -467,7 +467,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     expectAtTrueEnd(node);
 
     act(() => {
-      followLatchRef.current?.noteReaderGesture();
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
       node.scrollTop = Math.max(0, maxScrollTop(node) - 240);
       fireNativeScroll(node);
     });
