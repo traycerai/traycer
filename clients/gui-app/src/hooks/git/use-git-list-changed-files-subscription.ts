@@ -679,6 +679,23 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   // a pending state forever (the stuck git-diff skeleton incident).
   session.onStatusChange((status, reason) => {
     if (sessionClosed || generation !== shared.sessionGeneration) return;
+    if (status === "reconnecting") {
+      // A recoverable drop never reaches `"closed"` - `resetForReconnect()`
+      // parks the logical session here - so `markTerminal` is not on this
+      // path. Without an explicit clear, a degraded value would survive the
+      // whole backoff, or an indefinite outage, while NO frame can arrive to
+      // contradict it: the panel keeps stating "Periodic refresh" as fact when
+      // the client has no current evidence for anything.
+      //
+      // Deliberately not the same as the error-frame rule: a non-fatal git
+      // error still arrives over a live stream, so the last watcher value is
+      // still the host's most recent word. A dead stream is not.
+      if (shared.lastWatcherStatus !== null) {
+        shared.lastWatcherStatus = null;
+        notifyConsumers(shared);
+      }
+      return;
+    }
     if (status !== "closed") return;
     markTerminal({
       type: "error",

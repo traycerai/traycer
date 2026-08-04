@@ -1834,14 +1834,54 @@ describe("useGitListChangedFilesSubscription", () => {
         watcher: { state: "not-a-real-state", detail: null },
       };
       session.emitFrame(malformed, null);
-      await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // Neither the payload nor the watcher moved: the frame was dropped.
-      expect(result.current.data?.fingerprint).toBe("parent-1");
+      // ORDERING, not a sleep: `emitFrame` runs the handler synchronously, so
+      // once a LATER well-formed frame is visible the malformed one has
+      // provably already been processed. A fixed delay would add dead time to
+      // every run and stay timing-dependent under load.
+      // Narrowed before the spread: `v13Snapshot` is typed as the whole union,
+      // and spreading it unnarrowed leaves `type` as a union, so TS cannot pick
+      // the member the extra `fingerprint` belongs to.
+      const base = v13Snapshot({
+        state: "degraded-capacity",
+        detail: "over budget",
+      });
+      if (base.type !== "snapshot") throw new Error("expected a snapshot");
+      const after: GitSubscribeStatusEventV13 = {
+        ...base,
+        fingerprint: "parent-after",
+      };
+      session.emitFrame(after, null);
+      await waitFor(() =>
+        expect(result.current.data?.fingerprint).toBe("parent-after"),
+      );
+
+      // The malformed frame's payload never landed, and the watcher it carried
+      // never displaced the known-good value.
+      expect(result.current.data?.fingerprint).not.toBe("parent-malformed");
       expect(result.current.watcherStatus).toEqual({
         state: "degraded-capacity",
         detail: "over budget",
       });
+    });
+
+    it("clears watcher health while the socket is RECONNECTING, not only on close", async () => {
+      // A recoverable drop parks the logical session at "reconnecting", never
+      // "closed", so `markTerminal` is not on that path. Without an explicit
+      // clear the notice survives the whole backoff - stating "Periodic
+      // refresh" as fact while no frame can arrive to contradict it.
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      session.emitStatus("reconnecting", null);
+      await waitFor(() => expect(result.current.watcherStatus).toBeNull());
+      // Not terminal: the stream is still expected to recover, so this must
+      // not masquerade as a fatal error.
+      expect(result.current.error).toBeNull();
     });
 
     it("drops watcher health when the session is REPLACED, not only when it terminates", async () => {
