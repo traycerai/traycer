@@ -87,6 +87,9 @@ vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
       repoState: data?.repoState ?? null,
       repoMode: data?.repoMode ?? null,
       pollStartedAtMs: 1_000,
+      // Unreported watcher health - what a host below `subscribeStatus@1.3`
+      // yields, and the state these switcher tests are indifferent to.
+      watcherStatus: null,
     };
   },
 }));

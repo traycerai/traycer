@@ -41,7 +41,6 @@ import type {
   DesktopPerWindowStatePatch,
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
-import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
 import { evictChatTabState } from "@/stores/chats/chat-tab-state-cache";
 import { evictPendingHydrationRestores } from "@/stores/chats/chat-tab-pending-hydration-restore";
 import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
@@ -3000,7 +2999,12 @@ function resolveClosedChatIdentity(
     if (!("type" in node) || node.type !== "chat") return null;
     const epicId = priorTabsById[tabId]?.epicId;
     if (epicId === undefined) return null;
-    return { tileInstanceId, epicId, chatId: node.id };
+    return {
+      tileInstanceId,
+      epicId,
+      chatId: node.id,
+      hostId: node.hostId,
+    };
   }
   return null;
 }
@@ -3051,7 +3055,6 @@ useEpicCanvasStore.subscribe((state) => {
         if (identity !== null) promoteChatTabPersistenceToDurable(identity);
       }
     }
-    useTileScrollAnchorStore.getState().clearAnchors(removed);
     // Ticket 5: chat-tile-only per-tab persistence, evicted the same way -
     // proactively on a permanent close, not just LRU/registry-capped. The
     // reading-position cache and the collapse-state registries key by the

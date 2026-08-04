@@ -31,6 +31,7 @@ import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
+import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-position-persist-lifecycle-bridge";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
@@ -212,11 +213,15 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <WorktreeChangedStreamMount />
                           </HostScopeReady>
                           <AppLocalNotificationsPersistLifecycleBridge>
-                            <NotificationsSessionProvider
-                              navigate={props.router.navigate}
-                            >
-                              <TraycerAppRuntimeSurface router={props.router} />
-                            </NotificationsSessionProvider>
+                            <ReadingPositionPersistLifecycleBridge>
+                              <NotificationsSessionProvider
+                                navigate={props.router.navigate}
+                              >
+                                <TraycerAppRuntimeSurface
+                                  router={props.router}
+                                />
+                              </NotificationsSessionProvider>
+                            </ReadingPositionPersistLifecycleBridge>
                           </AppLocalNotificationsPersistLifecycleBridge>
                         </HostStreamProvider>
                       </LandingTerminalPersistLifecycleBridge>

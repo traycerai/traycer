@@ -224,6 +224,17 @@ async function flush(): Promise<void> {
  * `openAck` that echoes that manifest so the mirror compatibility check
  * passes. Returns after the `subscribe` frame has been emitted.
  */
+/**
+ * Read from the LIVE registry rather than hardcoded, because
+ * `completeHandshake` echoes the client's own manifest back: pinning a literal
+ * minor here would make every future `git.subscribeStatus` bump fail a test
+ * that is about per-session ROUTING, not about any particular version.
+ */
+const GIT_STATUS_VERSION = {
+  major: 1,
+  minor: hostStreamRpcRegistry["git.subscribeStatus"][1].latestMinor,
+};
+
 function completeHandshake(socket: StubStreamWebSocket): void {
   socket.fireOpen();
   const openRaw = socket.textSent[0];
@@ -970,7 +981,7 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
-  it("preserves Git v1.2 routing on one repo while another Git session reconnects", async () => {
+  it("preserves Git routing on one repo while another Git session reconnects", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -1004,16 +1015,14 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(2);
     completeHandshake(sockets[0].socket);
     completeHandshake(sockets[1].socket);
-    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
-      major: 1,
-      minor: 2,
-    });
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual(
+      GIT_STATUS_VERSION,
+    );
 
     reconnectingGitSession.requestReconnect();
-    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
-      major: 1,
-      minor: 2,
-    });
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual(
+      GIT_STATUS_VERSION,
+    );
     sockets[1].socket.fireText({
       kind: "update",
       hasBinaryPayload: false,
@@ -1023,22 +1032,23 @@ describe("WsStreamClient", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(sockets).toHaveLength(3);
     completeHandshake(sockets[2].socket);
-    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
-      major: 1,
-      minor: 2,
-    });
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual(
+      GIT_STATUS_VERSION,
+    );
     sockets[1].socket.fireText({
       kind: "update",
       hasBinaryPayload: false,
       value: { type: "error", message: "after reconnect", isFatal: false },
     });
-    expect(routedGitMinors).toEqual([2, 2]);
+    expect(routedGitMinors).toEqual([
+      GIT_STATUS_VERSION.minor,
+      GIT_STATUS_VERSION.minor,
+    ]);
 
     reconnectingGitSession.close();
-    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
-      major: 1,
-      minor: 2,
-    });
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual(
+      GIT_STATUS_VERSION,
+    );
     liveGitSession.close();
     expect(client.getMethodSchemaVersion("git.subscribeStatus")).toBeNull();
   });
