@@ -228,6 +228,34 @@ describe("useCommGraphSnapshot cloud authority", () => {
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     expect(cloudRequests[0].hostId).toBe("relay-a");
   });
+
+  it("retries a rejected remote relay after its public key rotates", async () => {
+    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    let acceptsRelay = false;
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      if (!acceptsRelay) throw new Error("remote relay key rejected");
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    directoryEntries.current = [
+      directoryEntry("relay-a", { publicKey: "public-key-a" }),
+    ];
+    const { rerender } = renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["relay-a"]),
+    );
+    expect(cloudRequests).toHaveLength(0);
+
+    acceptsRelay = true;
+    directoryEntries.current = [
+      directoryEntry("relay-a", { publicKey: "public-key-b" }),
+    ];
+    rerender();
+
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    expect(cloudRequests[0].hostId).toBe("relay-a");
+  });
 });
 
 function directoryEntry(
@@ -241,6 +269,18 @@ function directoryEntry(
     websocketUrl: `ws://${hostId}/rpc`,
     status: "available",
     version: null,
+    publicKey: "public-key-a",
+    remoteStatus: {
+      presenceLease: "fresh",
+      hostRelayAttached: true,
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      busy: false,
+      busySessionCount: 0,
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
     ...overrides,
   };
 }

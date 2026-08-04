@@ -55,6 +55,7 @@ import {
   dialableHostEndpoint,
   hostTransportKey,
 } from "@/lib/host/transport-key";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 
 const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
@@ -143,12 +144,20 @@ export function useCommGraphSnapshot(
         : hostDirectory.data
             .map(
               (entry) =>
-                hostTransportKey(entry) ??
                 [
-                  entry.hostId,
-                  entry.status,
-                  entry.version ?? "",
-                  entry.websocketUrl ?? "",
+                  hostTransportKey(entry) ??
+                    [
+                      entry.hostId,
+                      entry.status,
+                      entry.version ?? "",
+                      entry.websocketUrl ?? "",
+                    ].join("\u0000"),
+                  // A remote host can be re-enrolled without changing its ID,
+                  // endpoint, or version. That rotates its Noise key and must
+                  // clear a retained failed-relay verdict, but deliberately
+                  // stays out of hostTransportKey so live transports do not
+                  // churn on a same-endpoint directory re-emit.
+                  isRemoteHostDirectoryEntry(entry) ? entry.publicKey : "",
                 ].join("\u0000"),
             )
             .sort()
