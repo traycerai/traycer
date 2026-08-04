@@ -82,7 +82,16 @@ export function useFileEditSession(props: {
     }
     const diskContent = props.diskContent;
     let cancelled = false;
-    void fileContentRevision(diskContent).then((revision) => {
+    // A runtime this effect just auto-attached can still be "recovering" -
+    // `refreshCleanDisk` no-ops outside `status === "clean"`, and nothing
+    // else re-checks the freshest disk content once recovery settles. Wait
+    // for `whenRecovered()` (the same primitive `activate()` already awaits
+    // above) alongside the revision hash so a reconciliation that lands
+    // mid-recovery isn't silently dropped instead of merely deferred.
+    void Promise.all([
+      current.runtime.whenRecovered(),
+      fileContentRevision(diskContent),
+    ]).then(([, revision]) => {
       if (!cancelled && attachmentRef.current === current) {
         current.runtime.refreshCleanDisk({
           content: diskContent,
