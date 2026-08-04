@@ -28,7 +28,16 @@ describe("<HostConnectionDegradedBanner />", () => {
 
   it("says the connection is degraded while a compatible verdict is held", () => {
     const retry = vi.fn();
-    renderBanner({ status: "compatible", degraded: true, retry });
+    renderBanner({
+      status: "compatible",
+      degraded: true,
+      retry,
+      hostStatus: {
+        busy: false,
+        busySessionCount: 0,
+        hostVersion: "1.0.0",
+      },
+    });
 
     expect(queryBanner()).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
@@ -40,6 +49,11 @@ describe("<HostConnectionDegradedBanner />", () => {
       status: "compatible",
       degraded: false,
       retry: () => undefined,
+      hostStatus: {
+        busy: false,
+        busySessionCount: 0,
+        hostVersion: "1.0.0",
+      },
     });
 
     expect(queryBanner()).toBeNull();

@@ -20,6 +20,7 @@ describe("<ErrorSegment />", () => {
       <ErrorSegment
         message="Boom went the host"
         code="RUNTIME_THROWN"
+        recoverable={false}
         findUnitId={null}
       />,
     );
@@ -31,7 +32,12 @@ describe("<ErrorSegment />", () => {
 
   it("omits the code badge when there is no code", () => {
     render(
-      <ErrorSegment message="Something failed" code={null} findUnitId={null} />,
+      <ErrorSegment
+        message="Something failed"
+        code={null}
+        recoverable={false}
+        findUnitId={null}
+      />,
     );
 
     expect(screen.getByText("Error")).toBeDefined();
@@ -47,6 +53,7 @@ describe("<ErrorSegment />", () => {
         <ErrorSegment
           message="Something failed"
           code={hostileCode}
+          recoverable={false}
           findUnitId={null}
         />
       </TooltipProvider>,
@@ -54,6 +61,123 @@ describe("<ErrorSegment />", () => {
 
     expect(screen.getByText(hostileCode)).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Agent error",
+      message: null,
+      code: null,
+      source: "Chat",
+    });
+  });
+
+  // The public prefill stays null-bodied (host/harness free text is not
+  // redacted there); the transcript message/code reach only the private
+  // diagnostics branch so support can still cluster the real failure.
+  it("carries the transcript message and code in private diagnostics only", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const draftIdBefore = useDesktopDialogStore.getState().reportIssueDraftId;
+
+    render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Boom went the host"
+          code="RUNTIME_THROWN"
+          recoverable={false}
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const state = useDesktopDialogStore.getState();
+    expect(state.reportIssueContext).toEqual({
+      title: "Agent error",
+      message: null,
+      code: null,
+      source: "Chat",
+    });
+    expect(state.reportIssueDraftId).toBe(draftIdBefore + 1);
+    const cause = state.reportIssueDraftContext?.privateDiagnostics.cause;
+    expect(cause).toEqual(
+      expect.objectContaining({
+        type: "AgentError",
+        message: "Boom went the host",
+        errorCode: "RUNTIME_THROWN",
+        sourceAction: "agent-turn",
+        stack: null,
+        componentStack: null,
+      }),
+    );
+    expect(
+      state.reportIssueDraftContext?.privateDiagnostics.fingerprint,
+    ).toMatch(/^fp:v1:/);
+  });
+
+  // The runtime accumulator can replace a same-blockId error's fields while
+  // the row stays mounted (blockId is the React key), so the report draft
+  // must follow the props, not freeze at mount.
+  it("reports the updated cause after a mounted row's error is replaced", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    const { rerender } = render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="First failure"
+          code="RUNTIME_THROWN"
+          recoverable={false}
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+    rerender(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Please re-authenticate"
+          code="auth"
+          recoverable
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+    expect(cause).toEqual(
+      expect.objectContaining({
+        type: "AgentErrorRecoverable",
+        message: "Please re-authenticate",
+        errorCode: "auth",
+      }),
+    );
+  });
+
+  it("marks a recoverable agent error with the AgentErrorRecoverable type", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Please re-authenticate"
+          code="auth"
+          recoverable
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+    expect(cause).toEqual(
+      expect.objectContaining({
+        type: "AgentErrorRecoverable",
+        message: "Please re-authenticate",
+        errorCode: "auth",
+        sourceAction: "agent-turn",
+      }),
+    );
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
       title: "Agent error",
       message: null,

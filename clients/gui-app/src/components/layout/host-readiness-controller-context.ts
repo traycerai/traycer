@@ -1,6 +1,7 @@
 import { createContext, use } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
+import type { HostStatusSnapshot } from "@/lib/host/compatibility-state";
 import type { AuthStatus } from "@/stores/auth/auth-store";
 
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
@@ -23,6 +24,14 @@ export interface DefaultHostReadinessPresentation {
   readonly localHostState: "unknown" | "ready" | "unavailable";
   readonly stage: "loading" | "slow";
   readonly progress: MutationProgress | null;
+  /**
+   * Last boot-progress event of the current provisioning attempt, non-null
+   * only once that attempt has FAILED (when `progress` above has already
+   * nulled out). Report surfaces read it so a settled install failure can
+   * still say where it died; live surfaces keep reading `progress`, and a
+   * successful attempt leaves nothing behind for later unrelated reports.
+   */
+  readonly lastProgress: MutationProgress | null;
   readonly provisioningError: Error | null;
   readonly provisioning: boolean;
   readonly removed: boolean;
@@ -56,6 +65,14 @@ export interface DefaultHostReadinessPresentation {
      * problems.
      */
     readonly unreachable: boolean;
+    /**
+     * What the host's last `host.status` answer said about itself. Only a
+     * `compatible` verdict has an answer to hold; the other states never
+     * heard one, so this is null there. Carried for the pre-filled report's
+     * health line - a busy host serving turns (traycer#860) must not read
+     * like a host that never started.
+     */
+    readonly hostStatus: HostStatusSnapshot | null;
   };
 }
 
@@ -74,6 +91,7 @@ const EMPTY_DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
   localHostState: "unknown",
   stage: "loading",
   progress: null,
+  lastProgress: null,
   provisioningError: null,
   provisioning: false,
   removed: false,
@@ -92,6 +110,7 @@ const EMPTY_DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
     retry: () => undefined,
     degraded: false,
     unreachable: false,
+    hostStatus: null,
   },
 };
 

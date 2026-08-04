@@ -191,6 +191,7 @@ function presentationFromLifecycle(args: {
     localHostState: args.lifecycle.localHostState,
     stage: args.lifecycle.slowStartStage,
     progress: args.lifecycle.provisioning.progress,
+    lastProgress: args.lifecycle.provisioning.lastProgress,
     provisioningError: args.lifecycle.provisioning.error,
     provisioning: args.lifecycle.provisioning.isProvisioning,
     removed: args.lifecycle.provisioning.removed,
@@ -218,6 +219,7 @@ function compatibilityPresentation(
       retry: compatibility.retry,
       degraded: false,
       unreachable: compatibility.unreachable,
+      hostStatus: null,
     };
   }
   if (compatibility.status === "incompatible") {
@@ -228,6 +230,7 @@ function compatibilityPresentation(
       retry: compatibility.retry,
       degraded: false,
       unreachable: false,
+      hostStatus: null,
     };
   }
   if (compatibility.status === "checking") {
@@ -238,6 +241,7 @@ function compatibilityPresentation(
       retry: compatibility.retry,
       degraded: false,
       unreachable: false,
+      hostStatus: null,
     };
   }
   return {
@@ -247,6 +251,7 @@ function compatibilityPresentation(
     retry: compatibility.retry,
     degraded: compatibility.degraded,
     unreachable: false,
+    hostStatus: compatibility.hostStatus,
   };
 }
 
@@ -645,7 +650,10 @@ function describeHostHealth(
   if (presentation.removed) parts.push("removed");
   if (presentation.hostBusy) parts.push("busy");
   if (presentation.stage === "slow") parts.push("slow start");
-  const progress = presentation.progress;
+  // Fall back to the retained last event once the mutation has settled: a
+  // failed install's report must still say where it died (traycer#862's
+  // report carried no stage at all because the live value nulls on settle).
+  const progress = presentation.progress ?? presentation.lastProgress;
   if (progress !== null) {
     const percent =
       progress.percent === null ? "" : ` ${Math.round(progress.percent)}%`;
@@ -658,6 +666,19 @@ function describeCompatHealth(
   presentation: DefaultHostReadinessPresentation,
 ): string {
   const compatibility = presentation.compatibility;
+  const verdict = compatVerdict(compatibility);
+  // The host's own last answer, not the desktop's converge outcome (that is
+  // the separate `hostBusy` part): a host that reported itself busy serving
+  // turns was up and working, whatever else this report says (traycer#860).
+  const hostStatus = compatibility.hostStatus;
+  if (hostStatus === null || !hostStatus.busy) return verdict;
+  const sessions = hostStatus.busySessionCount === 1 ? "session" : "sessions";
+  return `${verdict}, busy ${hostStatus.busySessionCount} ${sessions}`;
+}
+
+function compatVerdict(
+  compatibility: DefaultHostReadinessPresentation["compatibility"],
+): string {
   if (compatibility.status === "failed") {
     return compatibility.unreachable ? "unreachable" : "rejected";
   }
