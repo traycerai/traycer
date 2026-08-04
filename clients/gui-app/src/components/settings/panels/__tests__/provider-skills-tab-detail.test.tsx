@@ -1,0 +1,336 @@
+import "../../../../../__tests__/test-browser-apis";
+import type {
+  ProviderNativeScope,
+  ProviderSkill,
+  ProvidersSkillsMutateAction,
+} from "@traycer/protocol/host/provider-native-schemas";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
+
+const skillMocks = vi.hoisted(() => ({
+  skills: [] as ProviderSkill[],
+  removeScopes: [] as string[],
+  mutate: vi.fn(),
+  // Captured through the wrapper below rather than read off
+  // `mutate.mock.calls`, which types as `any[]` and trips the repo's
+  // no-unsafe-member-access rule the moment a test looks inside it.
+  mutations: [] as ProvidersSkillsMutateAction[],
+  mutateIsPending: false,
+  readFileCalls: [] as Array<{
+    workspacePath: string | null;
+    filePath: string | null;
+  }>,
+  readFile: {
+    data: undefined as
+      | {
+          content: string | null;
+          truncated: boolean;
+          error: string | null;
+        }
+      | undefined,
+    isPending: false,
+    isError: false,
+    error: null as { message: string } | null,
+  },
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
+  useProvidersSkillsList: () => ({
+    data: { skills: skillMocks.skills },
+    isLoading: false,
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
+  useProvidersSkillsMutate: () => ({
+    mutate: (
+      variables: { mutation: ProvidersSkillsMutateAction },
+      opts: {
+        onSuccess: () => void;
+        onError: (err: { message: string }) => void;
+      },
+    ) => {
+      skillMocks.mutations.push(variables.mutation);
+      skillMocks.mutate(variables, opts);
+    },
+    isPending: skillMocks.mutateIsPending,
+  }),
+}));
+
+// The dialog reads SKILL.md off disk. Mocked at the hook so the suite can say
+// what came back - including the failure shape `workspace.readFile` actually
+// uses, which RESOLVES with `content: null` and an `error` string rather than
+// rejecting.
+vi.mock("@/hooks/workspace/use-read-file-query", () => ({
+  useWorkspaceReadFile: (
+    workspacePath: string | null,
+    filePath: string | null,
+  ) => {
+    skillMocks.readFileCalls.push({ workspacePath, filePath });
+    return skillMocks.readFile;
+  },
+}));
+
+function removeScopes(): ProviderNativeScope[] {
+  // Narrowed off the mock's loose `string[]` so a typo in a test reads as an
+  // empty scope list (no Remove button) instead of type-checking as one.
+  return skillMocks.removeScopes.flatMap((scope) =>
+    scope === "global" || scope === "project" ? [scope] : [],
+  );
+}
+
+function skillsState(): ProviderCliState {
+  // `list` only by default: create/import are deliberately empty so the "New"
+  // dropdown never mounts here - this suite is about opening an existing skill.
+  return {
+    providerId: "codex",
+    enabled: true,
+    disabledBy: null,
+    nativeCapabilities: {
+      supportedTabs: ["skills"],
+      mcp: null,
+      plugins: null,
+      skills: {
+        actionScopes: {
+          list: ["global"],
+          add: [],
+          create: [],
+          import: [],
+          remove: removeScopes(),
+        },
+      },
+    },
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    profiles: [],
+  };
+}
+
+function renderTab(): void {
+  render(<ProviderSkillsTab state={skillsState()} />);
+}
+
+const FIND_SKILLS: ProviderSkill = {
+  name: "find-skills",
+  description: "Helps users discover and install agent skills.",
+  path: "/Users/dev/.agents/skills/find-skills",
+  source: "shared",
+};
+
+describe("<ProviderSkillsTab /> skill detail", () => {
+  beforeEach(() => {
+    skillMocks.skills = [FIND_SKILLS];
+    skillMocks.removeScopes = [];
+    skillMocks.mutate.mockReset();
+    skillMocks.mutations = [];
+    skillMocks.mutateIsPending = false;
+    skillMocks.readFileCalls = [];
+    skillMocks.readFile = {
+      data: {
+        content:
+          '---\nname: find-skills\ndescription: "Helps"\n---\n\n# When to use\n\nAsk for a skill.\n',
+        truncated: false,
+        error: null,
+      },
+      isPending: false,
+      isError: false,
+      error: null,
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("does not mount the file read until a row is opened", () => {
+    renderTab();
+    expect(screen.getByText("find-skills")).toBeDefined();
+
+    // Asserted as a COUNT, not as "every call was disabled": the dialog is
+    // mounted conditionally, so a `.every()` over an empty array would pass
+    // for the wrong reason (and keep passing if the gate were removed but the
+    // hook happened to be called with nulls). The list may hold dozens of
+    // skills; reading every body on mount pays for content nobody asked for,
+    // and the host query is what makes the tab need a QueryClient at all.
+    expect(skillMocks.readFileCalls).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    expect(skillMocks.readFileCalls.length).toBeGreaterThan(0);
+  });
+
+  it("gives a skill no icon tile, in the row or the dialog", () => {
+    // Skills have no artwork source in any provider's format, so a tile here
+    // could only be a glyph we invented. Now that plugin rows render a real
+    // `<img>` and nothing else, the element check is the meaningful one - and
+    // "fs" (what the deleted monogram would have drawn for "find-skills")
+    // guards against a text-based tile coming back in its place.
+    const { container } = render(<ProviderSkillsTab state={skillsState()} />);
+    expect(screen.queryByText("fs")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector("img")).toBeNull();
+    expect(screen.queryByText("fs")).toBeNull();
+    // The badge is what actually distinguishes one skill from another here.
+    expect(dialog.textContent).toContain("Shared");
+  });
+
+  it("opens the skill and renders its body without the frontmatter", () => {
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("When to use");
+    expect(dialog.textContent).toContain("Ask for a skill.");
+    // The header already shows name + description; re-printing the raw
+    // frontmatter would show them twice, as a `---`-delimited paragraph.
+    expect(dialog.textContent).not.toContain("description:");
+
+    expect(
+      skillMocks.readFileCalls.some(
+        (call) =>
+          call.workspacePath === FIND_SKILLS.path &&
+          call.filePath === "SKILL.md",
+      ),
+    ).toBe(true);
+  });
+
+  it("reports a readFile that resolves with an error instead of rendering blank", () => {
+    skillMocks.readFile = {
+      data: { content: null, truncated: false, error: "File is unavailable." },
+      isPending: false,
+      isError: false,
+      error: null,
+    };
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "File is unavailable.",
+    );
+  });
+
+  it("offers no Remove action when the contract advertises no remove scope", () => {
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+  });
+
+  it("confirms, then removes with the name AND path the row was rendered from", () => {
+    skillMocks.removeScopes = ["global"];
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    // Destructive and irreversible (the host `rm -rf`s the directory), so it
+    // goes through the shared confirmation rather than firing on one click.
+    expect(skillMocks.mutate).not.toHaveBeenCalled();
+    const confirm = screen.getByTestId("confirm-destructive-dialog");
+    expect(confirm.textContent).toContain(FIND_SKILLS.name);
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // The host re-lists and matches on BOTH before deleting anything, so a
+    // request carrying only one of them could not be refused when stale.
+    expect(skillMocks.mutations).toEqual([
+      {
+        action: "remove",
+        name: FIND_SKILLS.name,
+        path: FIND_SKILLS.path,
+      },
+    ]);
+  });
+
+  it("blocks removal of a built-in skill and says why, under the same provider", () => {
+    // The contract advertises `remove` here - what stops it is the SOURCE.
+    // Offering the button would offer a guaranteed host-side failure.
+    skillMocks.removeScopes = ["global"];
+    skillMocks.skills = [{ ...FIND_SKILLS, source: "managed" }];
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByRole("dialog").textContent).toContain("Built-in skills");
+  });
+
+  it("closes both dialogs once the removal succeeds", () => {
+    skillMocks.removeScopes = ["global"];
+    skillMocks.mutate.mockImplementation(
+      (_vars: unknown, opts: { onSuccess: () => void }) => {
+        opts.onSuccess();
+      },
+    );
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // The open skill no longer exists on disk; leaving its dialog up would
+    // leave a readFile pointed at a deleted path.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+
+  it("keeps the skill dialog open and shows the host error when removal fails", () => {
+    skillMocks.removeScopes = ["global"];
+    skillMocks.mutate.mockImplementation(
+      (
+        _vars: unknown,
+        opts: { onError: (err: { message: string }) => void },
+      ) => {
+        opts.onError({
+          message:
+            'Cannot remove skill "find-skills": path is outside writable skill roots',
+        });
+      },
+    );
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // The confirmation closes (re-confirming what just failed is not the next
+    // step) but the skill dialog stays - the tab's own error banner would be
+    // behind it and invisible.
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "outside writable skill roots",
+    );
+  });
+
+  it("says so when a skill is frontmatter with no instructions", () => {
+    skillMocks.readFile = {
+      data: {
+        content: "---\nname: find-skills\ndescription: x\n---\n",
+        truncated: false,
+        error: null,
+      },
+      isPending: false,
+      isError: false,
+      error: null,
+    };
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open find-skills" }));
+
+    expect(screen.getByRole("dialog").textContent).toContain("no instructions");
+  });
+});

@@ -56,7 +56,7 @@ export function ProviderApiKeySection({
   };
 
   return (
-    <div className="mb-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3">
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
       <div className="flex items-center justify-between gap-2">
         <label
           htmlFor={inputId}

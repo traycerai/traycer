@@ -4,7 +4,6 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
-import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -49,10 +48,7 @@ import { settingsHostOptionLabel } from "./settings-host-labels";
 import { ProviderMcpTab } from "./provider-mcp-tab";
 import { ProviderPluginsTab } from "./provider-plugins-tab";
 import { ProviderSkillsTab } from "./provider-skills-tab";
-import {
-  isRateLimitCapableProvider,
-  resolveRateLimitFetchEligibility,
-} from "@/lib/rate-limit-providers";
+import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
 import {
   AddProviderProfileDialog,
   type FailedProviderProfileAttempt,
@@ -67,6 +63,11 @@ import { ProviderApiKeySection } from "./provider-api-key-section";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
+import {
+  providerTabInputs,
+  supportedTabsFor as resolveSupportedTabs,
+  type ProviderTabKey,
+} from "./provider-settings-tabs";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type ProviderId = ProviderCliState["providerId"];
@@ -75,39 +76,24 @@ type ProvidersListQuery = UseQueryResult<
   HostRpcError
 >;
 
-// Stable display order for the capability-driven tab bar. Unsupported tabs are
-// filtered out per provider via `nativeCapabilities.supportedTabs`.
-const PROVIDER_TAB_ORDER: readonly ProviderSettingsTab[] = [
-  "general",
-  "usage",
-  "env",
-  "mcp",
-  "plugins",
-  "skills",
-];
-
-// The `usage` id is the wire enum member (`providerSettingsTabSchema`), not a
-// display string: it rides `supportedTabs`, which a released client decodes
-// through a single `.catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES)` on the whole
+// Wire ids (`providerSettingsTabSchema`) are NOT display strings: they ride
+// `supportedTabs`, which a released client decodes through a single
+// `.catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES)` on the whole
 // `nativeCapabilities` object. An id this side renames that an older client
 // cannot parse fails the enum and drops that ENTIRE object, silently taking
-// MCP/Plugins/Skills with it. So the tab that now carries Profiles is relabeled
-// here and keeps its id.
-const PROVIDER_TAB_LABELS: Record<ProviderSettingsTab, string> = {
-  general: "General",
-  env: "Env",
+// MCP/Plugins/Skills with it. So every rename lands here, on the label, and
+// never on the id - `general` shows as "CLI & Args" and `usage` as
+// "Profiles & Limits". "General" said nothing about what the tab holds; each
+// label now names its own content.
+const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
+  general: "CLI & Args",
+  account: "Account",
   usage: "Profiles & Limits",
+  env: "Env",
   mcp: "MCP",
   plugins: "Plugins",
   skills: "Skills",
 };
-
-function supportedTabsFor(
-  state: ProviderCliState,
-): readonly ProviderSettingsTab[] {
-  const advertised = new Set(state.nativeCapabilities.supportedTabs);
-  return PROVIDER_TAB_ORDER.filter((tab) => advertised.has(tab));
-}
 
 // The provider to select on mount: the deep-link focus target (mapped from its
 // GUI harness id) when one was requested and is present,
@@ -130,10 +116,14 @@ function initialActiveProviderId(
 function initialActiveTab(
   providers: readonly ProviderCliState[],
   providerId: ProviderId,
-): ProviderSettingsTab {
+): ProviderTabKey {
   const state =
     providers.find((p) => p.providerId === providerId) ?? providers[0];
-  const tabs = supportedTabsFor(state);
+  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  // `focusTab` stays typed as the WIRE tab: a deep link is an inbound contract
+  // (route search / other surfaces), and `account` is client-only, so nothing
+  // outside this pane can name it. `ProviderSettingsTab ⊂ ProviderTabKey`, so
+  // the comparison below still narrows correctly.
   const focusTab = useProvidersFocusStore.getState().focusTab;
   if (focusTab !== null) {
     const match = tabs.find((tab) => tab === focusTab);
@@ -146,39 +136,29 @@ function initialActiveTab(
 // it; otherwise fall back to that provider's first tab.
 function resolveTabForProvider(
   state: ProviderCliState,
-  preferred: ProviderSettingsTab,
-): ProviderSettingsTab {
-  const tabs = supportedTabsFor(state);
+  preferred: ProviderTabKey,
+): ProviderTabKey {
+  const tabs = resolveSupportedTabs(providerTabInputs(state));
   if (tabs.includes(preferred)) return preferred;
   return tabs[0] ?? "general";
 }
 
-function tabHasContent(
-  tab: ProviderSettingsTab,
-  state: ProviderCliState,
-): boolean {
-  switch (tab) {
-    case "general":
-      return (
-        state.candidates.length > 0 || state.terminalAgentArgs.trim().length > 0
-      );
-    case "env":
-      return state.envOverrides.length > 0;
-    case "usage":
-      // Profiles moved onto this tab, so they carry its dot now.
-      return (
-        state.profiles.length > 0 ||
-        isRateLimitCapableProvider(state.providerId) ||
-        state.providerId === "traycer"
-      );
-    case "mcp":
-    case "plugins":
-    case "skills":
-      // Truthful content dots need cached list length; without a cheap cache
-      // probe here we keep false (honest "unknown / empty").
-      return false;
-  }
-}
+// NOTE: the per-tab "has content" dot that used to render here is gone on
+// purpose, not by oversight. It claimed "this tab holds something" but could
+// not tell the truth about it: `general` lit up for every CLI-backed provider
+// (candidates are never empty) INCLUDING cursor/amp, whose tab rendered
+// nothing; `usage` lit up unconditionally for every rate-limit-capable
+// provider whether or not anything was configured; and mcp/plugins/skills -
+// the only three tabs that hold user-installed content - were hardcoded to
+// never light up, so the tabs with real content were the ones that looked
+// empty. It also drew in `bg-primary`, reading as "needs attention" for what
+// was at best "is configured", using the same 1.5-unit dot the provider rail
+// already spends on "provider disabled".
+//
+// If a per-tab signal comes back, split the two meanings and keep them split:
+// a muted COUNT on mcp/plugins/skills once their list query is cached, and a
+// warning-toned dot reserved for genuine attention (expired auth, config
+// parse failure). Never one glyph for both.
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   "claude-code": "Anthropic's Claude Code CLI.",
@@ -466,7 +446,7 @@ function ProvidersRailLayout({
   const [activeId, setActiveId] = useState<ProviderId>(() =>
     initialActiveProviderId(orderedProviders, initialFocus.harnessId),
   );
-  const [activeTab, setActiveTab] = useState<ProviderSettingsTab>(() =>
+  const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,
       initialActiveProviderId(orderedProviders, null),
@@ -497,7 +477,7 @@ function ProvidersRailLayout({
     // providers never resizes the box and the detail pane - not the outer
     // overlay - owns the scroll. Height follows the viewport: on shorter
     // screens it shrinks to fit the modal instead of overflowing it.
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0">
       <nav
         aria-label="Providers"
         className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2"
@@ -518,7 +498,13 @@ function ProvidersRailLayout({
           }))}
         />
       </nav>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
+      {/* The detail COLUMN no longer scrolls - the active tab's body does (see
+          `ProviderDetail`), so the provider header and tab rail stay pinned.
+          Horizontal padding lives here rather than on each row so the rail's
+          `border-b` keeps exactly the width it had when this element owned the
+          scroll; the tab body cancels it with `-mx-5 px-5` to put its scrollbar
+          on the pane edge instead of 5 units inside it. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col px-5 pt-5">
         <ProviderDetail
           key={`${hostId}:${active.providerId}`}
           state={active}
@@ -596,8 +582,8 @@ function ProviderDetail({
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
-  readonly activeTab: ProviderSettingsTab;
-  readonly onActiveTabChange: (tab: ProviderSettingsTab) => void;
+  readonly activeTab: ProviderTabKey;
+  readonly onActiveTabChange: (tab: ProviderTabKey) => void;
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly initialProfileId: string | null;
@@ -641,10 +627,10 @@ function ProviderDetail({
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
-  const tabs = supportedTabsFor(state);
+  const tabs = resolveSupportedTabs(providerTabInputs(state));
   // Bundled once here (rather than threaded as eight separate props) since
-  // only the "general" tab body needs the profile-management surface - the
-  // provider-level tabs (env/usage/mcp/plugins/skills) never see it.
+  // only the "usage" ("Profiles & Limits") tab body needs the profile-
+  // management surface - the other tabs never see it.
   const profileTab: ProviderProfileTabProps = {
     hostId,
     isSelectedHostLocal,
@@ -658,8 +644,12 @@ function ProviderDetail({
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-4">
+    // Three rows: provider header, tab rail, tab body - and only the last one
+    // scrolls. `min-h-0` repeats down every level because a flex item's default
+    // `min-height: auto` refuses to shrink below its content, which would push
+    // the overflow back up to the column and un-pin the two rows above.
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <div className="flex shrink-0 items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <div className="font-medium text-foreground">
@@ -702,41 +692,63 @@ function ProviderDetail({
       </div>
       <div
         className={cn(
-          "flex flex-col transition-opacity",
+          "flex min-h-0 flex-1 flex-col transition-opacity",
           state.enabled ? "" : "pointer-events-none opacity-50",
         )}
         {...(!state.enabled ? { inert: true } : {})}
       >
-        <ProviderApiKeySection state={state} />
-
+        {/* Nothing renders between the provider header and the tab rail. The
+            API-key card used to sit here, above the bar, so a provider's only
+            real setting appeared outside the tabs that were supposed to hold
+            its settings; it is now the whole body of the `account` tab. That
+            matters more now that the rail is PINNED: anything parked here would
+            occupy fixed height at the top of the pane forever, not just until
+            you scrolled past it. */}
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
             const next = tabs.find((tab) => tab === value);
             if (next !== undefined) onActiveTabChange(next);
           }}
-          className="gap-3"
+          // `gap-0`, with the rail-to-body spacing moved INSIDE the scroll box
+          // as `pt-4`. With a gap here the scroll box would start 4 units below
+          // the rail's rule, so content vanished in mid-air above itself; owned
+          // by the body, the clip edge and the rule are the same line.
+          className="flex min-h-0 flex-1 flex-col gap-0"
         >
-          <TabsList className="h-auto w-full max-w-full flex-wrap justify-start">
+          {/* Line (underline) tabs, not the filled default. Seven unrelated
+              panes is NAVIGATION, and a filled track reads as a segmented
+              control - which is for re-presenting one dataset, and tops out
+              around four options. The old bar also cancelled the primitive's
+              `w-fit` with `w-full` while keeping content-width triggers, so
+              the filled slab spanned the pane and every unused pixel piled up
+              on the right as dead space. Full width is kept here for the
+              BORDER (a rail spanning the pane), while the track itself is
+              transparent, so there is nothing left to look empty. */}
+          <TabsList
+            variant="line"
+            className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+          >
             {tabs.map((tab) => (
-              <TabsTrigger
-                key={tab}
-                value={tab}
-                className="flex-none px-3 text-ui-xs"
-              >
-                <span>{PROVIDER_TAB_LABELS[tab]}</span>
-                {tabHasContent(tab, state) ? (
-                  <span
-                    aria-hidden
-                    className="size-1.5 rounded-full bg-primary"
-                  />
-                ) : null}
+              <TabsTrigger key={tab} value={tab} className="flex-none px-3">
+                {PROVIDER_TAB_LABELS[tab]}
               </TabsTrigger>
             ))}
           </TabsList>
 
+          {/* The scroll owner. Radix mounts only the ACTIVE content, so there
+              is exactly one scroll box at a time and switching tabs starts it
+              at the top - which is what you want when the panes are unrelated.
+              Pinning the rail this way (a sibling row outside the scroll box)
+              rather than with `position: sticky` is what avoids the background
+              problem: nothing ever passes UNDER the rail, so it needs no opaque
+              fill over the pane's translucent `bg-card/40`. */}
           {tabs.map((tab) => (
-            <TabsContent key={tab} value={tab} className="mt-0">
+            <TabsContent
+              key={tab}
+              value={tab}
+              className="-mx-5 mt-0 min-h-0 overflow-y-auto px-5 pt-4 pb-5"
+            >
               <ProviderTabBody
                 tab={tab}
                 state={state}
@@ -764,12 +776,14 @@ function ProviderDetail({
 
 // Profile-management surface handed to the "usage" ("Profiles & Limits") tab
 // body - the only tab that renders `ProviderProfileScopedSection` (add/rename/
-// remove/recolor, switch active profile). It sits with the usage limits because
-// the section already owns the SELECTED PROFILE's limits; splitting them across
-// two tabs meant a provider's limits were reported in two places at once.
-// Bundled into one object rather than eight individual props on
-// `ProviderTabBody`, since the other five tabs (general/env/mcp/plugins/skills)
-// are provider-level and never touch it.
+// remove/recolor, switch active profile). Profiles and limits stay on ONE tab
+// because the section already owns the SELECTED PROFILE's limits; splitting
+// those two meant a provider's limits were reported in two places at once. The
+// API key is a different question (how the provider authenticates at all) and
+// moved to its own `account` tab. Bundled into one object rather than eight
+// individual props on `ProviderTabBody`, since the other tabs
+// (general/account/env/mcp/plugins/skills) are provider-level and never touch
+// it.
 interface ProviderProfileTabProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
@@ -788,7 +802,7 @@ function ProviderTabBody({
   providers,
   profileTab,
 }: {
-  readonly tab: ProviderSettingsTab;
+  readonly tab: ProviderTabKey;
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
   readonly profileTab: ProviderProfileTabProps;
@@ -811,6 +825,13 @@ function ProviderTabBody({
           overrides={state.envOverrides}
         />
       );
+    // The key IS the account for these providers, so it owns a tab rather than
+    // floating above the tab bar as its own pre-tab region. `supportedTabsFor`
+    // shows this tab exactly when `apiKey.supported`, so the section's own
+    // `if (!supported) return null` guard is unreachable from here - kept
+    // there because the section is not otherwise gated at its call site.
+    case "account":
+      return <ProviderApiKeySection state={state} />;
     case "usage":
       return (
         <div className="flex flex-col gap-3">

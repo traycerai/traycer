@@ -36,13 +36,6 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -54,17 +47,25 @@ import { useProvidersMcpAuth } from "@/hooks/providers/use-providers-mcp-auth-mu
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
+import {
+  preparedWorkspaceFolderToWorkspaceFolderInfo,
+  useWorkspaceFolderActionsForClient,
+} from "@/hooks/workspace/use-workspace-folder-actions";
+import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
 import { useHostBinding } from "@/lib/host";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { redactLogText } from "@/lib/logger";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import type { McpPendingAuthEntry } from "@/stores/settings/mcp-pending-auth-store";
 import { useMcpPendingAuthStore } from "@/stores/settings/mcp-pending-auth-store";
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { ProviderMcpAddDialog } from "./provider-mcp-add-dialog";
+import {
+  McpScopePicker,
+  type McpScopeTarget,
+} from "./provider-mcp-scope-picker";
 
 const EMPTY_MCP_SERVERS: readonly ProviderMcpServer[] = [];
 
@@ -231,11 +232,19 @@ function mcpMutationFlags(
 }
 
 function useMcpScope(capabilities: ProviderMcpCapabilities) {
-  const hostId = useReactiveActiveHostId();
+  // Subscribed for the RE-RENDER, not for the value: the app-wide active host
+  // changing has to repaint this hook. The id below is read off the BOUND
+  // client instead, because Settings can target a non-active host through a
+  // transient `HostRuntimeContext` override - and then `targets` come from
+  // that host while the selection would have been filed under the active
+  // one's key, so a stored path could never validate against the list it was
+  // picked from.
+  const activeHostId = useReactiveActiveHostId();
   // Prefer the runtime binding when present; null is valid (tests / host-less
   // shells) and falls through to local-only resolution.
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
+  const hostId = client?.getActiveHostId() ?? activeHostId;
   const folders = useWorkspaceFoldersStore((s) => s.folders);
   const folderInfoByPath = useWorkspaceFoldersStore((s) => s.folderInfoByPath);
   const folderSource = useMemo(
@@ -268,22 +277,76 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
     [workspaces],
   );
 
+  // Worktrees are targets, not trivia. A Traycer-managed worktree is a real
+  // project root with its own `.mcp.json`, and previously it could only be
+  // picked here by coincidence - if its path happened to sit in the global
+  // recent-folders store - and then showed as a bare basename indistinguishable
+  // from its sibling worktrees. Listing them explicitly, with their branch, is
+  // what makes "which folder?" answerable.
+  const worktreeQuery = useWorktreeListByWorkspacePathsForClient(client, {
+    workspacePaths: hostPaths,
+    enabled: hostPaths.length > 0,
+  });
+
+  const targets = useMemo<readonly McpScopeTarget[]>(() => {
+    const summaries = worktreeQuery.data?.workspaces ?? [];
+    const out: McpScopeTarget[] = [];
+    const seen = new Set<string>();
+    const push = (target: McpScopeTarget): void => {
+      if (seen.has(target.path)) return;
+      seen.add(target.path);
+      out.push(target);
+    };
+    for (const ws of workspaces) {
+      const summary =
+        summaries.find((entry) => entry.workspacePath === ws.path) ?? null;
+      const entries = summary?.worktrees ?? [];
+      const self = entries.find((wt) => wt.worktreePath === ws.path) ?? null;
+      // Emission order IS the grouping the picker relies on: a workspace
+      // immediately followed by its own sibling worktrees, so no group headers
+      // are needed to see which repo a worktree belongs to.
+      push({
+        path: ws.path,
+        name: ws.name,
+        branch: self?.branch ?? null,
+        isWorktree: self !== null && !self.isMain,
+      });
+      // Deduped against `seen` because a repo listed under two open folders
+      // reports the same worktree set twice.
+      for (const wt of entries) {
+        if (wt.worktreePath === ws.path) continue;
+        push({
+          path: wt.worktreePath,
+          name: workspaceFolderName(wt.worktreePath),
+          branch: wt.branch,
+          isWorktree: !wt.isMain,
+        });
+      }
+    }
+    return out;
+  }, [workspaces, worktreeQuery.data]);
+
+  const targetPaths = useMemo(
+    () => targets.map((target) => target.path),
+    [targets],
+  );
+
   const selected = hostId === null ? undefined : selectedByHostId[hostId];
+  // Validated against every offered target, not just the open workspaces, so a
+  // stored worktree selection survives a reload.
   const selectedValid =
-    selected !== undefined && hostPaths.includes(selected) ? selected : null;
+    selected !== undefined && targetPaths.includes(selected) ? selected : null;
 
   let workspaceRoot: string | null = null;
   if (selectedValid !== null) {
     workspaceRoot = selectedValid;
   } else if (hostPaths.length === 1) {
+    // Still defaults the single-workspace host to its one workspace - but the
+    // picker now RENDERS that as a selected control instead of a static line,
+    // so the default is visible as a choice that can be changed (including to
+    // one of that repo's worktrees).
     workspaceRoot = hostPaths[0];
   }
-
-  const workspaceName =
-    workspaceRoot === null
-      ? null
-      : (workspaces.find((w) => w.path === workspaceRoot)?.name ??
-        workspaceFolderName(workspaceRoot));
 
   const setWorkspaceRoot = useCallback(
     (path: string) => {
@@ -294,6 +357,29 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
   );
 
   const multiWorkspace = hostPaths.length > 1;
+
+  // Adding a folder here is the escape hatch for the case the old control had
+  // no answer to at all: this client has opened no folders on this host, so
+  // `targets` is empty and Global is the only reachable destination. Bound to
+  // the SETTINGS-selected client, not the app-wide one, so a folder picked
+  // while viewing host B is prepared on B.
+  const folderActions = useWorkspaceFolderActionsForClient(client);
+  const addResolvedFolders = useWorkspaceFoldersStore(
+    (s) => s.addResolvedFolders,
+  );
+  const { pickAndPrepareFolders } = folderActions;
+  const browseForWorkspace = useCallback(async (): Promise<string | null> => {
+    const result = await pickAndPrepareFolders();
+    if (result === null) return null;
+    addResolvedFolders(
+      result.folders.map((folder) =>
+        // `result.hostId` is the dispatch-time identity the action captured
+        // and re-validated across every await - never re-read the client here.
+        preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
+      ),
+    );
+    return result.folders[0]?.workspacePath ?? null;
+  }, [addResolvedFolders, pickAndPrepareFolders]);
 
   const listScopes = capabilities.actionScopes.list;
   const supportsGlobal = listScopes.includes("global");
@@ -314,10 +400,11 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
 
   return {
     hostId,
-    workspaces,
+    targets,
     workspaceRoot,
-    workspaceName,
     setWorkspaceRoot,
+    browseForWorkspace,
+    browsePending: folderActions.isPreparing,
     multiWorkspace,
     multiScope,
     effectiveScope,
@@ -326,6 +413,11 @@ function useMcpScope(capabilities: ProviderMcpCapabilities) {
     projectDisabled,
     listWorkspaceRoot,
     listEnabled: !projectNeedsWorkspace,
+    // Only the workspace resolution gates the empty states. The worktree query
+    // is ENRICHMENT layered on rows that already exist, and it is `enabled:
+    // false` with zero workspaces - where `isPending` stays true forever, so
+    // folding it in here would strand the "open a workspace" state behind a
+    // spinner that never resolves.
     workspacesLoading: resolved.isLoading,
   };
 }
@@ -339,10 +431,11 @@ export function ProviderMcpTab(props: {
   const scopeState = useMcpScope(capabilities);
   const {
     hostId,
-    workspaces,
+    targets,
     workspaceRoot,
-    workspaceName,
     setWorkspaceRoot,
+    browseForWorkspace,
+    browsePending,
     multiWorkspace,
     multiScope,
     effectiveScope,
@@ -759,6 +852,17 @@ export function ProviderMcpTab(props: {
     setRowError,
   ]);
 
+  // A freshly added folder is what the user just went looking for, so it
+  // becomes the selection - otherwise the picker closes back onto Global and
+  // the add reads as having done nothing.
+  const handleBrowse = useCallback(() => {
+    void browseForWorkspace().then((path) => {
+      if (path === null) return;
+      setWorkspaceRoot(path);
+      setScope("project");
+    });
+  }, [browseForWorkspace, setScope, setWorkspaceRoot]);
+
   const handleDialogOpenChange = useCallback((open: boolean) => {
     if (!open) {
       setAddOpen(false);
@@ -783,25 +887,21 @@ export function ProviderMcpTab(props: {
       <McpScopeHeader
         multiScope={multiScope}
         effectiveScope={effectiveScope}
+        targets={targets}
+        workspaceRoot={workspaceRoot}
+        workspacesLoading={workspacesLoading}
         canAdd={canAdd}
         projectNeedsWorkspace={projectNeedsWorkspace}
         projectDisabled={projectDisabled}
+        browsePending={browsePending}
+        onBrowse={handleBrowse}
         onScopeChange={setScope}
+        onWorkspaceRootChange={setWorkspaceRoot}
         onAdd={() => {
           setEditTarget(null);
           setAddOpen(true);
         }}
       />
-
-      {effectiveScope === "project" ? (
-        <ProjectWorkspacePicker
-          multiWorkspace={multiWorkspace}
-          workspaceRoot={workspaceRoot}
-          workspaceName={workspaceName}
-          workspaces={workspaces}
-          onWorkspaceRootChange={setWorkspaceRoot}
-        />
-      ) : null}
 
       <McpCapabilityNotices
         capabilities={capabilities}
@@ -873,98 +973,67 @@ export function ProviderMcpTab(props: {
   );
 }
 
-function ProjectWorkspacePicker(props: {
-  readonly multiWorkspace: boolean;
-  readonly workspaceRoot: string | null;
-  readonly workspaceName: string | null;
-  readonly workspaces: readonly {
-    readonly path: string;
-    readonly name: string;
-  }[];
-  readonly onWorkspaceRootChange: (value: string) => void;
-}): ReactNode {
-  const {
-    multiWorkspace,
-    workspaceRoot,
-    workspaceName,
-    workspaces,
-    onWorkspaceRootChange,
-  } = props;
-  if (multiWorkspace) {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-ui-xs text-muted-foreground">Project:</span>
-        <Select
-          value={workspaceRoot ?? undefined}
-          onValueChange={onWorkspaceRootChange}
-        >
-          <SelectTrigger
-            className="h-8 w-[min(90vw,16rem)]"
-            aria-label="Project workspace"
-          >
-            <SelectValue placeholder="Select workspace" />
-          </SelectTrigger>
-          <SelectContent>
-            {workspaces.map((ws) => (
-              <SelectItem key={ws.path} value={ws.path}>
-                {ws.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    );
-  }
-  if (workspaceRoot !== null) {
-    return (
-      <p className="text-ui-xs text-muted-foreground">
-        Project:{" "}
-        <span className="font-medium text-foreground">{workspaceName}</span>
-      </p>
-    );
-  }
-  return null;
-}
-
 function McpScopeHeader(props: {
   readonly multiScope: boolean;
   readonly effectiveScope: ProviderNativeScope;
+  readonly targets: readonly McpScopeTarget[];
+  readonly workspaceRoot: string | null;
+  readonly workspacesLoading: boolean;
   readonly canAdd: boolean;
   readonly projectNeedsWorkspace: boolean;
   readonly projectDisabled: boolean;
+  readonly browsePending: boolean;
+  readonly onBrowse: () => void;
   readonly onScopeChange: (scope: ProviderNativeScope) => void;
+  readonly onWorkspaceRootChange: (path: string) => void;
   readonly onAdd: () => void;
 }): ReactNode {
-  const scopeOnlyLabel =
-    props.effectiveScope === "global"
-      ? "Global scope only"
-      : "Project scope only";
+  // A provider that lists only globally has no destination to choose, so it
+  // gets a plain statement rather than a picker holding one dead option. The
+  // wording is the same promise the Global row makes inside the picker, so the
+  // two surfaces never describe the same scope differently.
+  const globalOnly = !props.multiScope && props.effectiveScope === "global";
+  // Zero resolvable workspaces AND no Global to fall back to: there is nothing
+  // to pick. With Global available the picker stays live so Global is still
+  // reachable. Computed here rather than inline in the prop because
+  // `jsx-no-leaked-render`'s autofix rewrites an inline `a && b` into
+  // `a ? b : null`, which silently widens a boolean prop to `boolean | null`.
+  // NOTE: this no longer needs to cover "zero workspaces" on its own - the
+  // picker now carries the add-a-folder action, so an empty list is a state
+  // the user can act on rather than a dead control.
+  const pickerDisabled = props.projectDisabled && !props.multiScope;
 
+  // One toolbar row, two controls of the SAME height (`h-7` / `size="sm"`).
+  // `items-center` rather than `items-start`: nothing here is taller than one
+  // line any more, which is the whole point of the single-line trigger.
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      {props.multiScope ? (
-        <div className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/30 p-0.5">
-          <ScopeChip
-            label="Global"
-            active={props.effectiveScope === "global"}
-            disabled={false}
-            title={null}
-            onClick={() => {
-              props.onScopeChange("global");
-            }}
-          />
-          <ScopeChip
-            label="Project"
-            active={props.effectiveScope === "project"}
-            disabled={props.projectDisabled}
-            title={props.projectDisabled ? "Open a workspace first" : null}
-            onClick={() => {
-              props.onScopeChange("project");
-            }}
-          />
-        </div>
+      {globalOnly ? (
+        <p className="text-ui-xs text-muted-foreground">
+          Applies to every workspace on this host.
+        </p>
       ) : (
-        <p className="text-ui-xs text-muted-foreground">{scopeOnlyLabel}</p>
+        <McpScopePicker
+          multiScope={props.multiScope}
+          effectiveScope={props.effectiveScope}
+          targets={props.targets}
+          workspaceRoot={props.workspaceRoot}
+          loading={props.workspacesLoading}
+          disabled={pickerDisabled}
+          browsePending={props.browsePending}
+          onBrowse={props.onBrowse}
+          onSelectGlobal={() => {
+            props.onScopeChange("global");
+          }}
+          onSelectProject={(path) => {
+            // Order matters only for readability - both land in the same commit
+            // phase - but picking a folder IS picking Project scope. Making the
+            // row do both is the point: the old chip pair let you sit in Global
+            // with a folder selected and no indication which one.
+            props.onWorkspaceRootChange(path);
+            props.onScopeChange("project");
+          }}
+        />
       )}
       {props.canAdd && !props.projectNeedsWorkspace ? (
         <Button type="button" size="sm" variant="outline" onClick={props.onAdd}>
@@ -1141,46 +1210,6 @@ function McpServerList(props: {
         />
       ))}
     </ul>
-  );
-}
-
-function ScopeChip(props: {
-  readonly label: string;
-  readonly active: boolean;
-  readonly disabled: boolean;
-  readonly title: string | null;
-  readonly onClick: () => void;
-}): ReactNode {
-  return (
-    <TooltipWrapper
-      label={props.title}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      {/* Span between the tooltip and the button because a `disabled` button
-          emits no pointer events for Radix to hover-detect - and the reason it
-          is disabled is exactly what this tooltip says. */}
-      <span className="inline-flex">
-        <button
-          type="button"
-          onClick={props.onClick}
-          disabled={props.disabled}
-          aria-pressed={props.active}
-          className={cn(
-            "inline-flex items-center rounded-sm px-3 py-1 text-ui-sm transition-colors",
-            props.active
-              ? "bg-card text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-            props.disabled
-              ? "cursor-not-allowed opacity-50 hover:text-muted-foreground"
-              : null,
-          )}
-        >
-          {props.label}
-        </button>
-      </span>
-    </TooltipWrapper>
   );
 }
 

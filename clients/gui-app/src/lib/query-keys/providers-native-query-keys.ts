@@ -1,6 +1,9 @@
 import type { QueryKey } from "@tanstack/react-query";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderNativeScope,
+  ProviderPluginIconTheme,
+} from "@traycer/protocol/host/provider-native-schemas";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -56,6 +59,24 @@ export function nativeSkillsListParams(
       providerId: args.providerId,
       scope: args.scope,
       workspaceRoot: args.workspaceRoot,
+    },
+  };
+}
+
+export function nativePluginIconParams(
+  args: NativeListScopeParams & {
+    readonly pluginId: string;
+    readonly theme: ProviderPluginIconTheme;
+  },
+): ProvidersListWireParams {
+  return {
+    native: {
+      kind: "pluginIcon",
+      providerId: args.providerId,
+      scope: args.scope,
+      workspaceRoot: args.workspaceRoot,
+      pluginId: args.pluginId,
+      theme: args.theme,
     },
   };
 }
@@ -119,6 +140,23 @@ export const providersNativeQueryKeys = {
     "providers",
     "native",
     "plugins",
+  ],
+
+  pluginIcon: (
+    hostId: string | null,
+    params: NativeListScopeParams & {
+      readonly pluginId: string;
+      readonly theme: ProviderPluginIconTheme;
+    },
+  ): QueryKey => [
+    ...hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      hostId,
+      "providers.list",
+      nativePluginIconParams(params),
+    ),
+    "providers",
+    "native",
+    "pluginIcon",
   ],
 
   skillsList: (
