@@ -427,21 +427,31 @@ export async function writeDesktopReconcileState(
 }
 
 /**
- * Locate a `traycer` executable on the user's PATH. Returns `null` when
- * not found.
+ * Locate every `traycer` executable on the user's PATH, in PATH order.
+ *
+ * All matches, not just the first: the name can be squatted, and a
+ * squatter sitting ahead of a real CLI must not hide it. The caller vets
+ * candidates in order and takes the first that answers `--version`, so a
+ * rejected entry costs one (cached) probe rather than the whole PATH
+ * lookup. Duplicate PATH entries are collapsed so the same binary is
+ * never considered twice.
  */
-export async function findCliOnPath(): Promise<string | null> {
+export async function findCliCandidatesOnPath(): Promise<string[]> {
   const pathEnv = process.env.PATH;
-  if (typeof pathEnv !== "string" || pathEnv.length === 0) return null;
+  if (typeof pathEnv !== "string" || pathEnv.length === 0) return [];
   const binary = cliBinaryName();
+  const seen = new Set<string>();
+  const candidates: string[] = [];
   for (const dir of pathEnv.split(delimiter)) {
     if (dir.length === 0) continue;
     const candidate = join(dir, binary);
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
     if (await isExecutable(candidate)) {
-      return candidate;
+      candidates.push(candidate);
     }
   }
-  return null;
+  return candidates;
 }
 
 export function isNpmCliPackagePath(path: string): boolean {
@@ -619,11 +629,14 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
   // non-dev slots (e.g. internal `staging`) use their bundled/slot CLI - the
   // same reason the dev slot skips PATH above.
   if (config.environment === "production") {
-    const pathCli = await findCliOnPath();
-    if (pathCli !== null) {
-      const vetted = await vetPathCliCandidate(pathCli);
+    // Walk PATH in order and take the first candidate that passes the
+    // vet. Stopping at the first *executable* instead would let a
+    // squatter earlier in PATH hide a real CLI behind it (and report
+    // "no CLI anywhere" when the app ships no bundled binary).
+    for (const candidate of await findCliCandidatesOnPath()) {
+      const vetted = await vetPathCliCandidate(candidate);
       if (vetted !== null) {
-        return { kind: "path", binaryPath: pathCli, ...vetted };
+        return { kind: "path", binaryPath: candidate, ...vetted };
       }
     }
   }
