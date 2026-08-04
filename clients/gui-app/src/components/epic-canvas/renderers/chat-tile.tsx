@@ -2272,6 +2272,7 @@ function ChatSessionMessagesSurface(
               taskTitle={props.node.name}
               taskId={props.node.id}
               epicId={props.epicId}
+              hostId={props.tabHostId}
               messages={props.messages}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}

@@ -63,6 +63,10 @@ import {
   clearChatKeyTombstone,
   clearEpicPrefixTombstone,
 } from "@/stores/chats/chat-tab-persistence-tombstone";
+import {
+  clearReadingPositionTombstones,
+  readingPositionIdentityForChat,
+} from "@/lib/reading-position";
 import { useChatScopedOpenStoreDualKeySeed } from "@/stores/chats/chat-scoped-open-store-dual-key";
 import {
   toolOpenDurableCache,
@@ -101,6 +105,8 @@ interface ChatMessagesProps {
   /** The epic this chat belongs to - the other half of the ticket-15
    *  dual-key `(epicId, chatId)` durable identity. */
   epicId: string;
+  /** Host this chat tab is bound to for its full lifetime. */
+  hostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
   /** Live host-owned background items; undefined means the connected host lacks support. */
@@ -700,6 +706,7 @@ export function ChatMessages(props: ChatMessagesProps) {
     tileInstanceId: props.instanceId,
     epicId: props.epicId,
     chatId: props.taskId,
+    hostId: props.hostId,
   }));
   // Ticket 15 review round 3: opening a chat clears its own tombstone (a
   // prior deletion is over; this is the SAME chatId only if the host has
@@ -716,6 +723,7 @@ export function ChatMessages(props: ChatMessagesProps) {
   useLayoutEffect(() => {
     clearChatKeyTombstone(chatTabPersistenceChatKey(identity));
     clearEpicPrefixTombstone(identity.epicId);
+    clearReadingPositionTombstones(readingPositionIdentityForChat(identity));
   }, [identity]);
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded A2A
   // cards survive the chat tile's full remount on tab switch (decision #17) -
@@ -1523,12 +1531,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // rejects transient bootstrap measurements.
   useLayoutEffect(
     () =>
-      registerChatTabViewportCapture(instanceId, () => {
-        const snapshot = captureLiveChatTabScrollSnapshot();
-        if (snapshot !== null) {
-          saveChatTabState({ identity, ...snapshot });
-        }
-      }),
+      registerChatTabViewportCapture(
+        instanceId,
+        () => {
+          const snapshot = captureLiveChatTabScrollSnapshot();
+          if (snapshot !== null) {
+            saveChatTabState({ identity, ...snapshot });
+          }
+        },
+        readingPositionIdentityForChat(identity),
+      ),
     [captureLiveChatTabScrollSnapshot, identity, instanceId],
   );
 

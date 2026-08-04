@@ -1,4 +1,5 @@
-import type { TileScrollAnchor } from "@/stores/epics/canvas/tile-scroll-anchor-store";
+import type { TileScrollAnchor } from "@/hooks/scroll/scroll-anchor-types";
+import type { ReadingPositionSurfaceKind } from "@/lib/reading-position";
 
 export type { TileScrollAnchor };
 
@@ -29,6 +30,7 @@ export type ApplyAnchorResult = "applied" | "retry" | "defend" | "gave-up";
  * `display:none` and reads a zeroed `scrollTop`.
  */
 export interface ScrollRestorationAdapter {
+  readonly surfaceKind: ReadingPositionSurfaceKind;
   /**
    * Snapshot the surface's current scroll position into a storable anchor, or
    * `null` when there is nothing worth saving yet (never scrolled, or the

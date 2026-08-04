@@ -2536,6 +2536,14 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
         () => {
           throw captureFailure;
         },
+        {
+          viewKey: throwingChat.instanceId,
+          contentKey: null,
+          deletionKey: null,
+          epicId: "epic-t20",
+          hostId: throwingChat.hostId,
+          durability: "renderer-live",
+        },
       );
     onTestFinished(unregisterThrowing);
     const healthyCapture = vi.fn();
@@ -2543,6 +2551,14 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
       chatTabViewportHandoff.registerChatTabViewportCapture(
         healthyChat.instanceId,
         healthyCapture,
+        {
+          viewKey: healthyChat.instanceId,
+          contentKey: null,
+          deletionKey: null,
+          epicId: "epic-t20",
+          hostId: healthyChat.hostId,
+          durability: "renderer-live",
+        },
       );
     onTestFinished(unregisterHealthy);
     const logError = vi.spyOn(appLogger, "error").mockImplementation(() => {});
@@ -2555,8 +2571,8 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
 
     expect(healthyCapture).toHaveBeenCalledTimes(1);
     expect(logError).toHaveBeenCalledWith(
-      "chat tab viewport capture failed during structural handoff",
-      { instanceId: throwingChat.instanceId },
+      "reading position capture failed during structural handoff",
+      { viewKey: throwingChat.instanceId },
       captureFailure,
     );
     expect(

@@ -42,7 +42,15 @@ import {
   shouldApplyDesktopTabsSnapshot,
   updateDesktopTabsActiveRoute,
 } from "@/stores/tabs/desktop-tabs-persistence";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  setEpicCanvasDesktopProjectionBridge,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
+import {
+  createDebouncedDesktopPerWindowProjectionBridge,
+  setActiveDesktopPerWindowProjectionBridge,
+} from "@/lib/windows/per-window-projection-debounce";
+import { SPEC_A } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
@@ -265,6 +273,8 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
   afterEach(() => {
     cleanup();
     setDesktopEpicOwnershipBridge(null);
+    setEpicCanvasDesktopProjectionBridge(null);
+    setActiveDesktopPerWindowProjectionBridge(null);
     clearDesktopTabsPersistence();
     __getOpenEpicRegistryForTests().disposeAll();
     resetTabStructuralLockForTesting();
@@ -347,6 +357,47 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
     expect(windows.openInNewWindowCalls).toEqual([
       { epicId: "epic-moving", title: "Moving", tabId: MOVING.id },
     ]);
+  });
+
+  it("flushes a just-mutated canvas projection before the move IPC", async () => {
+    seedPairedSplit();
+    const windows = createControllableWindowsBridge();
+    setDesktopEpicOwnershipBridge(windows.bridge);
+    const persistence = installControllableDesktopTabsPersistence();
+    const order: string[] = [];
+    const projection = createDebouncedDesktopPerWindowProjectionBridge(
+      {
+        update: (patch) => {
+          order.push("canvas-projection");
+          expect(patch.canvasByTabId?.[MOVING.id]).toBeDefined();
+          return Promise.resolve();
+        },
+      },
+      60_000,
+    );
+    setActiveDesktopPerWindowProjectionBridge(projection);
+    setEpicCanvasDesktopProjectionBridge(projection);
+    useEpicCanvasStore.getState().openTileInTab(MOVING.id, SPEC_A);
+
+    renderFlow();
+    await flush();
+    act(() => {
+      flowRef?.requestOpenInNewWindow({
+        epicId: "epic-moving",
+        tabId: MOVING.id,
+        title: "Moving",
+      });
+    });
+    await flush();
+    expect(windows.openInNewWindowCalls).toEqual([]);
+
+    act(() => {
+      persistence.resolve({ capabilities: CAPABILITIES, revision: 1 });
+    });
+    await flush();
+    if (windows.openInNewWindowCalls.length > 0) order.push("move-ipc");
+
+    expect(order).toEqual(["canvas-projection", "move-ipc"]);
   });
 
   it("aborts cleanly and never calls the move IPC if the tab is closed while the flush is in flight", async () => {

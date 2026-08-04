@@ -780,6 +780,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           taskTitle={options.taskTitle ?? "Test chat"}
           taskId={taskId}
           epicId={epicId}
+          hostId={null}
           messages={state.messages}
           backgroundItems={state.backgroundItems}
           getMessageActions={() => null}
@@ -3302,6 +3303,7 @@ describe("ChatMessages scroll policy", () => {
             taskTitle="Test chat"
             taskId="task-1"
             epicId="epic-1"
+            hostId={null}
             messages={messages}
             backgroundItems={undefined}
             getMessageActions={() => null}
