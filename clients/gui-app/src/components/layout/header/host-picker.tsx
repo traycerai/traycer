@@ -16,6 +16,7 @@ import {
   useHostPickerList,
 } from "@/hooks/host/use-host-picker-list";
 import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -141,6 +142,12 @@ function HostPickerList(props: HostPickerListProps) {
 
   const query = useHostPickerList(directoryId);
   const remoteRestricted = useRemoteHostsPlanRestricted();
+  // Subscribed, not read at render time: `getActiveHostId()` lives outside
+  // React, and the list query is no longer a proxy render signal for it - a
+  // host swap leaves the directory contents (and, through structural
+  // sharing, `data`'s identity) untouched, so nothing here would re-render
+  // and the selected row would keep pointing at the previous host.
+  const activeId = useReactiveActiveHostId();
 
   if (directory === null || query.isLoading) {
     return (
@@ -191,7 +198,6 @@ function HostPickerList(props: HostPickerListProps) {
     );
   }
 
-  const activeId = hostClient === null ? null : hostClient.getActiveHostId();
   const showUpsell =
     remoteRestricted && entries.some((entry) => entry.kind === "remote");
 

@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 /**
@@ -16,6 +22,11 @@ const mocks = vi.hoisted(() => ({
   selectById: vi.fn(),
   openExternalLink: vi.fn(() => Promise.resolve()),
   requestClose: vi.fn(),
+  // `HostClient` keeps the active host outside React and announces swaps
+  // through `onChange`, so the fake has to be a real listener store for the
+  // picker's subscription to be observable.
+  activeHostId: "local-1",
+  hostClientListeners: new Set<() => void>(),
 }));
 
 vi.mock("@/hooks/host/use-remote-hosts-plan-gate", () => ({
@@ -42,8 +53,13 @@ vi.mock("@/lib/host", () => ({
       onChange: () => ({ dispose: () => undefined }),
     },
     hostClient: {
-      onChange: () => () => undefined,
-      getActiveHostId: () => "local-1",
+      onChange: (listener: () => void) => {
+        mocks.hostClientListeners.add(listener);
+        return () => {
+          mocks.hostClientListeners.delete(listener);
+        };
+      },
+      getActiveHostId: () => mocks.activeHostId,
     },
   }),
 }));
@@ -91,6 +107,8 @@ function renderPicker(): void {
 
 beforeEach(() => {
   mocks.planRestricted.mockReturnValue(false);
+  mocks.activeHostId = "local-1";
+  mocks.hostClientListeners.clear();
 });
 
 afterEach(() => {
@@ -134,5 +152,42 @@ describe("HostPicker paid-plan gating", () => {
     fireEvent.click(remote);
     expect(mocks.selectById).toHaveBeenCalledWith("remote-1");
     expect(mocks.requestClose).toHaveBeenCalled();
+  });
+
+  it("moves the checked row when the active host changes while the dialog is open", () => {
+    // REGRESSION: the picker used to re-render on `hostClient.onChange` via a
+    // revision counter that also keyed the list query. The query key is now
+    // stable, and a host swap leaves the directory contents untouched - so
+    // structural sharing preserves `data` and the query is NOT a render
+    // signal for the active host. The selected row must come from a
+    // subscription, not from a render-time `getActiveHostId()` read.
+    renderPicker();
+
+    expect(
+      screen
+        .getByTestId("host-picker-option-local-1")
+        .getAttribute("data-selected"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByTestId("host-picker-option-remote-1")
+        .getAttribute("data-selected"),
+    ).toBe("false");
+
+    act(() => {
+      mocks.activeHostId = "remote-1";
+      for (const listener of mocks.hostClientListeners) listener();
+    });
+
+    expect(
+      screen
+        .getByTestId("host-picker-option-remote-1")
+        .getAttribute("data-selected"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByTestId("host-picker-option-local-1")
+        .getAttribute("data-selected"),
+    ).toBe("false");
   });
 });
