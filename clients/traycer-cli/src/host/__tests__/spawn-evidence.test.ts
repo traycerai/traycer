@@ -316,6 +316,49 @@ describe("spawn-evidence substrate", () => {
       expect(legacyView).toEqual({ phase: "crashed", error: "boom" });
     });
 
+    it("tolerates crash-diagnostic fields while still extracting known keys", () => {
+      // Additive fields (exitMeaning/report/stderrTail) must not break
+      // consumers that only project phase + code/error — the same contract
+      // host-status, spawn-evidence, and the GUI bootstrap-attempt summary
+      // rely on.
+      const line =
+        '[2026-01-01T00:00:00.000Z] phase=crashed code=3221226505 exitMeaning="0xC0000409 STATUS_STACK_BUFFER_OVERRUN" report=report.2026.json stderrTail="FATAL ERROR:\\nheap OOM" attempt=a1 supervisorPid=9';
+      const parsed = parseBootstrapLogLine(line);
+      expect(parsed).not.toBeNull();
+      expect(parsed?.phase).toBe("crashed");
+      expect(parsed?.fields.code).toBe("3221226505");
+      expect(parsed?.fields.exitMeaning).toContain("0xC0000409");
+      expect(parsed?.fields.report).toBe("report.2026.json");
+      expect(parsed?.fields.stderrTail).toBe("FATAL ERROR:\\nheap OOM");
+
+      // host-status formatPhaseDetail projection (code/signal/error only).
+      const hostStatusView = {
+        phase: parsed!.phase,
+        code: parsed!.fields.code,
+        signal: parsed!.fields.signal,
+        error: parsed!.fields.error,
+      };
+      expect(hostStatusView).toEqual({
+        phase: "crashed",
+        code: "3221226505",
+        signal: undefined,
+        error: undefined,
+      });
+
+      // bootstrap-attempt-summary-style projection (phase + code for describeOutcome).
+      const attemptSummaryView = {
+        phase: parsed!.phase,
+        code: parsed!.fields.code ?? "?",
+      };
+      expect(attemptSummaryView).toEqual({
+        phase: "crashed",
+        code: "3221226505",
+      });
+
+      // spawn-evidence terminal reason still names the phase.
+      expect(parsed!.phase).toBe("crashed");
+    });
+
     it("parseBootstrapMarkersFromText and find helpers pick starting / terminal", () => {
       const text = [
         "[2026-01-01T00:00:00.000Z] phase=starting attempt=a supervisorPid=1",
@@ -344,6 +387,31 @@ describe("spawn-evidence substrate", () => {
         [
           "[2026-01-01T00:00:00.000Z] phase=starting attempt=a supervisorPid=1",
           "[2026-01-01T00:00:01.000Z] phase=crashed error=boom attempt=a supervisorPid=1",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      mocks.readHostPidMetadata.mockResolvedValue(pidMeta(1));
+
+      const evidence = await collectSpawnEvidence(
+        { log: logBaseline, pidMetadata: pidBaseline },
+        "production",
+      );
+      expect(evidence?.kind).toBe("terminal-marker");
+      expect(evidence?.reason).toContain("crashed");
+    });
+
+    it("still collects terminal evidence when the crashed marker carries diagnostic fields", async () => {
+      const logBaseline = await captureLogFileBaseline(mocks.logPath);
+      const pidBaseline = await capturePidMetadataBaseline(
+        mocks.pidPath,
+        "production",
+      );
+      await writeFile(
+        mocks.logPath,
+        [
+          "[2026-01-01T00:00:00.000Z] phase=starting attempt=a supervisorPid=1",
+          '[2026-01-01T00:00:01.000Z] phase=crashed code=3221226505 exitMeaning="0xC0000409 STATUS_STACK_BUFFER_OVERRUN" report=r.json stderrTail="FATAL\\nOOM" attempt=a supervisorPid=1',
           "",
         ].join("\n"),
         "utf8",
