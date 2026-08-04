@@ -3,6 +3,8 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
 import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import type { FileEditRuntime } from "@/lib/workspace/file-edit-runtime";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
@@ -132,11 +134,20 @@ function WorkspaceFileTileLive(props: {
     node.filePath,
   );
   const rawContent = readFileContent(query.data);
+  const payloadError = readFilePayloadError(query.data);
   const displayError = readFileDisplayError(
-    readFilePayloadError(query.data),
+    payloadError,
     query.isError,
     query.error,
   );
+  // The current cached payload reporting an error (e.g. a permission-denied
+  // read) can still carry `content: ""` - empty-origin editing made "" a
+  // meaningful, editable value, so it can no longer stand in for "no
+  // content" the way `null` does. A payload error must never be treated as
+  // valid disk content to seed or reconcile editing from; a transport-only
+  // failure (query.isError with query.data retained from the last good
+  // fetch) is unaffected, since that retained payload's own error is null.
+  const validatedContent = payloadError === null ? rawContent : null;
   const truncated = readFileTruncated(query.data);
   const language = useMemo(() => languageForFileName(node.name), [node.name]);
   const markdownFile = useMemo(
@@ -154,16 +165,29 @@ function WorkspaceFileTileLive(props: {
     [node.filePath, node.workspacePath, tabHostId, userId],
   );
   const editSurfaceId = `${props.viewTabId}:workspace-file:${node.instanceId}`;
+  // A later payload error must never yank ownership away from a surface that
+  // already owns this file's runtime (an active or dirty draft) - only gate
+  // the FIRST attach on payload validity. Read the registry directly (not
+  // `editSession.state` below, computed from THIS same decision) to break
+  // the circularity; `editSession`'s own subscription already guarantees a
+  // re-render whenever this ownership changes, so this read is never stale.
+  const editingProtected = isWorkspaceFileEditingProtected(
+    fileEditRuntimeRegistry.get(editIdentity),
+    editSurfaceId,
+  );
   const editEnabled = isWorkspaceFileEditEnabled({
     isActive: props.isActive,
-    hasContent: rawContent !== null,
+    hasContent: hasEditableWorkspaceFileContent(
+      validatedContent,
+      editingProtected,
+    ),
     truncated,
     supportsWrite,
   });
   const editSession = useFileEditSession({
     client: tabHostClient,
     identity: editIdentity,
-    diskContent: rawContent,
+    diskContent: validatedContent,
     surfaceId: editSurfaceId,
     autoAttach: editEnabled,
   });
@@ -174,7 +198,7 @@ function WorkspaceFileTileLive(props: {
     active: editing,
     onActivate: async (request) => {
       await request.editorReady;
-      return editSession.activate(request, rawContent ?? "");
+      return editSession.activate(request, validatedContent ?? "");
     },
     onActivationError: () => {
       reportableErrorToast(
@@ -194,11 +218,11 @@ function WorkspaceFileTileLive(props: {
   });
   // Stays byte-exact raw: this seeds the Diffs editor's own live buffer once
   // it mounts editable, and onChange later submits that buffer's full
-  // content back for autosave. Normalizing it (or the fallback `rawContent`)
-  // here would make the very first edit silently rewrite every CRLF/lone-CR
-  // line ending in the file. Only a read-only projection (markdown preview,
-  // find) may normalize - never what's rendered/seeded.
-  const renderedContent = editSession.state?.draftContent ?? rawContent;
+  // content back for autosave. Normalizing it (or the fallback
+  // `validatedContent`) here would make the very first edit silently rewrite
+  // every CRLF/lone-CR line ending in the file. Only a read-only projection
+  // (markdown preview, find) may normalize - never what's rendered/seeded.
+  const renderedContent = editSession.state?.draftContent ?? validatedContent;
   // Find offsets are computed against this normalized copy so CRLF/lone-CR
   // don't throw off the match position, but it is never rendered or fed to
   // Diffs - see `renderedContent` above. Memoized: `normalizeWorkspaceFileContent`
@@ -709,6 +733,20 @@ function isWorkspaceFileEditEnabled(args: {
   return (
     args.isActive && args.hasContent && !args.truncated && args.supportsWrite
   );
+}
+
+function isWorkspaceFileEditingProtected(
+  runtime: FileEditRuntime | null,
+  surfaceId: string,
+): boolean {
+  return runtime?.store.getState().ownerSurfaceId === surfaceId;
+}
+
+function hasEditableWorkspaceFileContent(
+  validatedContent: string | null,
+  editingProtected: boolean,
+): boolean {
+  return validatedContent !== null || editingProtected;
 }
 
 function isSettledUnconsumableWorkspaceFile(args: {
