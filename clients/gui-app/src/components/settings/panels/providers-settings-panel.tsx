@@ -60,6 +60,12 @@ import {
   providerSignInUnavailableHint,
 } from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
+import { ProviderRailControls } from "./provider-rail-controls";
+import {
+  DEFAULT_PROVIDER_RAIL_VIEW,
+  filterProviderRail,
+  type ProviderRailView,
+} from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
@@ -466,6 +472,20 @@ function ProvidersRailLayout({
     orderedProviders[0];
   const resolvedTab = resolveTabForProvider(active, activeTab);
 
+  // The rail's own view state. Resolved against `orderedProviders` for the ROWS
+  // only - `active` above is deliberately unaffected, so narrowing the rail
+  // never yanks the detail pane onto a different provider mid-keystroke. The
+  // cost is that a filter can hide the selected row; that reads as "the rail is
+  // showing a subset", where re-selecting on every keystroke would silently
+  // discard whatever you were in the middle of doing on the right.
+  const [railView, setRailView] = useState<ProviderRailView>(
+    DEFAULT_PROVIDER_RAIL_VIEW,
+  );
+  const visibleProviders = useMemo(
+    () => filterProviderRail(orderedProviders, railView),
+    [orderedProviders, railView],
+  );
+
   const onSelectProvider = (providerId: ProviderId): void => {
     setInitialFocus({ harnessId: null, profileId: null, startSignIn: false });
     setActiveId(providerId);
@@ -482,25 +502,45 @@ function ProvidersRailLayout({
     // overlay - owns the scroll. Height follows the viewport: on shorter
     // screens it shrinks to fit the modal instead of overflowing it.
     <div className="flex h-full min-h-0">
+      {/* The search row is a pinned SIBLING of the scroll box rather than the
+          first child of a scrolling column - the same shape the tab rail uses
+          below, and for the same reason: scrolling the list must never carry
+          the control that filters it out of reach. */}
       <nav
         aria-label="Providers"
-        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2"
+        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col border-r border-border/60"
       >
-        <ProviderList
-          ariaLabel="Providers"
-          variant="settings"
-          className="gap-1"
-          rows={orderedProviders.map((state) => ({
-            providerId: state.providerId,
-            active: state.providerId === active.providerId,
-            dimmed: false,
-            enabled: state.enabled,
-            badge: null,
-            description: null,
-            trailing: null,
-            onSelect: onSelectProvider,
-          }))}
+        <ProviderRailControls
+          view={railView}
+          onViewChange={setRailView}
+          resultCount={visibleProviders.length}
         />
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-2">
+          {visibleProviders.length === 0 ? (
+            <p
+              className="px-2.5 py-2 text-ui-xs text-muted-foreground"
+              data-testid="provider-rail-empty"
+            >
+              No providers match.
+            </p>
+          ) : (
+            <ProviderList
+              ariaLabel="Providers"
+              variant="settings"
+              className="gap-1"
+              rows={visibleProviders.map((state) => ({
+                providerId: state.providerId,
+                active: state.providerId === active.providerId,
+                dimmed: false,
+                enabled: state.enabled,
+                badge: null,
+                description: null,
+                trailing: null,
+                onSelect: onSelectProvider,
+              }))}
+            />
+          )}
+        </div>
       </nav>
       {/* The detail COLUMN no longer scrolls - the active tab's body does (see
           `ProviderDetail`), so the provider header and tab rail stay pinned.
