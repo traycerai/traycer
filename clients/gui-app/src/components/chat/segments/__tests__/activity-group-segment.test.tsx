@@ -14,7 +14,7 @@ import {
 } from "@/components/chat/chat-collapsible-key";
 import { chatFindActivityGroupChildHeaderUnitId } from "@/components/chat/chat-find";
 import { ActivityGroupSegment } from "@/components/chat/segments/activity-group-segment";
-import { LIVE_ACTIVITY_WINDOW_EXIT_MS } from "@/components/chat/segments/live-activity-window";
+import { LIVE_ACTIVITY_WINDOW_EXIT_MS } from "@/components/chat/segments/live-activity-window-mount";
 import type { ActivityGroupModel } from "@/components/chat/chat-activity-groups";
 import type {
   CommandSegment,
@@ -734,6 +734,57 @@ describe("<ActivityGroupSegment /> live window", () => {
       screen.queryAllByRole("button", { name: "Thought for 2s" }),
     ).toHaveLength(1);
     expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+  });
+
+  // The gap between "shown" and "on screen". `LiveActivityWindow` keeps its rows
+  // in the DOM for the whole 300ms exit, so when a group settles in the SAME
+  // update that adds a second segment, `shown` is already false while the newly
+  // headed reasoning row is still visible. A latch gated on `shown` records
+  // nothing for that window, and the next shrink strips a header the reader saw
+  // - the defect the latch exists to prevent, coming back through its one blind
+  // spot. Gating on the window's mounted state closes it.
+  it("latches a header shown only during the live window's exit animation", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment
+            group={{ ...SHRUNK_GROUP, isActive: true, isStreaming: true }}
+          />
+        </ChatExpansionTestProviders>,
+      );
+
+      // Settles and gains a second segment in one update: the window is told to
+      // close while its rows - now including the child header - stay mounted.
+      rerender(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={TWO_CHILD_GROUP} />
+        </ChatExpansionTestProviders>,
+      );
+
+      // The child header really is on screen during the exit. Without this the
+      // test would pass for a window that had already torn its rows down, and
+      // prove nothing about the gap.
+      expect(screen.getByText("echo hi")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(LIVE_ACTIVITY_WINDOW_EXIT_MS);
+      });
+
+      // Now shrink back and open. The header the reader saw mid-exit survives.
+      rerender(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={SHRUNK_GROUP} />
+        </ChatExpansionTestProviders>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Thought for 2s/ }));
+
+      expect(
+        screen.queryAllByRole("button", { name: "Thought for 2s" }),
+      ).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // A latch that can be evicted is not a latch. Sharing `openIds`' 256-entry

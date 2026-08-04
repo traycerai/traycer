@@ -40,6 +40,7 @@ import { ResolvedApprovalSegment } from "./approval-segment";
 import { CommandSegment } from "./command-segment";
 import { FileChangeSegment } from "./file-change-segment";
 import { LiveActivityWindow } from "./live-activity-window";
+import { useLiveActivityWindowMounted } from "./live-activity-window-mount";
 import { ReasoningSegment } from "./reasoning-segment";
 import { LiveElapsed } from "./segment-elapsed";
 import { SubagentSegment } from "./subagent-segment";
@@ -111,7 +112,16 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   // collapsed group renders neither - so a shrink that happens before anyone
   // opens it must leave the latch untouched, or the first open shows the label
   // twice for a header that was never on screen.
-  const childrenShown = open || liveWindowShown;
+  //
+  // `liveWindowMounted`, NOT `liveWindowShown`: `shown` is the target state and
+  // the rows outlast it by the whole exit animation. When a group settles in the
+  // same update that adds a second segment, `shown` goes false while the newly
+  // headed reasoning row is on screen for another 300ms - and gating on `shown`
+  // there records nothing, so a later shrink strips a header the reader saw.
+  // That is the defect the latch exists to prevent, reintroduced through the
+  // one gap where visible and shown disagree.
+  const liveWindowMounted = useLiveActivityWindowMounted(liveWindowShown);
+  const childrenShown = open || liveWindowMounted;
   // ...and a nested reasoning header only exists when there is reasoning to
   // head. Without this the set filled with command-only groups that never
   // rendered one, which is both meaningless and, when it was capped, actively
