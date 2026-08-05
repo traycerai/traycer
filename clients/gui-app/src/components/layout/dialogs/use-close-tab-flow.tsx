@@ -18,6 +18,9 @@ import { useTabCloseCommand } from "@/components/layout/tabs/use-tab-close-comma
 import { useNeighborTabPicker } from "@/components/layout/tabs/use-neighbor-tab-picker";
 import { useUnsyncedCloseDialog } from "@/components/layout/dialogs/use-unsynced-close-dialog";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 
 export interface CloseTabFlow {
   readonly requestCloseTab: (tab: HeaderTab) => void;
@@ -31,12 +34,17 @@ export function useCloseTabFlow(): CloseTabFlow {
   const closeTab = useTabCloseCommand();
   const picker = useNeighborTabPicker();
   const dialog = useUnsyncedCloseDialog();
+  const windowsBridge = useWindowsBridge();
   const activePathname = useRouterState({
     select: (s) => s.location.pathname,
   });
 
   const requestCloseTab = useCallback(
     (tab: HeaderTab) => {
+      if (windowsBridge !== null && isOnlyBlankStartPage(tab)) {
+        void windowsBridge.requestClose(windowsBridge.windowId);
+        return;
+      }
       const captured = picker.capture(tab);
       const finalize = () => {
         closeTab(tab);
@@ -50,7 +58,7 @@ export function useCloseTabFlow(): CloseTabFlow {
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
     },
-    [closeTab, dialog, picker],
+    [closeTab, dialog, picker, windowsBridge],
   );
 
   const closeOtherTabs = useCallback(
@@ -118,4 +126,16 @@ export function useCloseTabFlow(): CloseTabFlow {
     }),
     [closeActiveTab, closeOtherTabs, dialog.dialog, requestCloseTab],
   );
+}
+
+function isOnlyBlankStartPage(tab: HeaderTab): boolean {
+  if (tab.kind !== "draft") return false;
+  const tabs = getHeaderTabs();
+  if (tabs.length !== 1 || tabs[0]?.kind !== "draft" || tabs[0].id !== tab.id) {
+    return false;
+  }
+  const draft = useLandingDraftStore
+    .getState()
+    .drafts.find((candidate) => candidate.id === tab.id);
+  return draft !== undefined && isEmptyLandingDraftContent(draft.content);
 }
