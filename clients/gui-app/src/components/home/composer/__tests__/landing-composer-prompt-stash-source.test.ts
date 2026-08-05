@@ -15,6 +15,7 @@ import type { RefObject } from "react";
 import { toast } from "sonner";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   landingStashIdentity,
   useLandingPromptStashDestination,
@@ -63,10 +64,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "landing-stash-entry-id"),
-}));
-
 function textDoc(text: string): JsonContent {
   return {
     type: "doc",
@@ -87,8 +84,11 @@ function makeEditorHandle(
       }
     | undefined,
 ): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => options?.ready ?? true,
+    getEditorIncarnation: () =>
+      (options?.ready ?? true) ? editorIncarnation : null,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,

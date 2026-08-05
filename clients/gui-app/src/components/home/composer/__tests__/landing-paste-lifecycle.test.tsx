@@ -151,6 +151,7 @@ vi.mock(
       instance: ComposerPromptEditorHandle,
     ): ComposerPromptEditorHandle => ({
       isReady: () => instance.isReady(),
+      getEditorIncarnation: () => instance.getEditorIncarnation(),
       hasFocus: () => false,
       focus: () => instance.focus(),
       focusAtEnd: () => instance.focusAtEnd(),

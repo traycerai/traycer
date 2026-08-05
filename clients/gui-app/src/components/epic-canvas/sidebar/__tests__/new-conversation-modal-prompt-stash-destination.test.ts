@@ -9,6 +9,10 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { useNewConversationPromptStashDestination } from "@/components/epic-canvas/sidebar/use-new-conversation-prompt-stash-adapters";
+import {
+  createComposerEditorIncarnation,
+  type ComposerEditorIncarnation,
+} from "@/lib/composer/composer-editor-incarnation";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 
@@ -57,6 +61,7 @@ function makeEditorHandle(options: {
   }>;
   setReady: (ready: boolean) => void;
   unmount: () => void;
+  replaceFacade: () => ComposerPromptEditorHandle;
   remount: () => ComposerPromptEditorHandle;
 } {
   let ready = options.ready ?? true;
@@ -65,9 +70,13 @@ function makeEditorHandle(options: {
     content: JsonContent;
     selection: DraftSelection | null;
   }> = [];
+  let editorIncarnation = createComposerEditorIncarnation();
 
-  const buildHandle = (): ComposerPromptEditorHandle => ({
+  const buildHandle = (
+    incarnation: ComposerEditorIncarnation,
+  ): ComposerPromptEditorHandle => ({
     isReady: () => ready,
+    getEditorIncarnation: () => (ready ? incarnation : null),
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
@@ -93,7 +102,7 @@ function makeEditorHandle(options: {
     dismissActiveSuggestion: () => false,
   });
 
-  const handle = buildHandle();
+  const handle = buildHandle(editorIncarnation);
   const editorRef: { current: ComposerPromptEditorHandle | null } = {
     current: handle,
   };
@@ -108,9 +117,15 @@ function makeEditorHandle(options: {
     unmount: () => {
       editorRef.current = null;
     },
+    replaceFacade: () => {
+      const next = buildHandle(editorIncarnation);
+      editorRef.current = next;
+      return next;
+    },
     remount: () => {
       ready = true;
-      const next = buildHandle();
+      editorIncarnation = createComposerEditorIncarnation();
+      const next = buildHandle(editorIncarnation);
       editorRef.current = next;
       return next;
     },
@@ -158,7 +173,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     expect(captured).toEqual({
       surface: "new-conversation",
       identity: epicId,
-      editorGeneration: editor.handle,
+      editorIncarnation: editor.handle.getEditorIncarnation(),
     });
 
     editor.unmount();
@@ -170,7 +185,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     expect(editor.setContents).toHaveLength(0);
   });
 
-  it("returns stale when ready handle remounts under the same epic id", async () => {
+  it("accepts React Compiler handle-facade churn for the same editor incarnation", async () => {
     const editor = makeEditorHandle({ content: emptyDoc() });
     const { result } = renderModalDestination({
       epicId,
@@ -179,11 +194,43 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     });
     const captured = result.current.captureIdentity();
     if (captured === null) throw new Error("expected capture");
-    expect(captured.editorGeneration).toBe(editor.handle);
+
+    const replacement = editor.replaceFacade();
+    expect(replacement).not.toBe(editor.handle);
+    expect(replacement.getEditorIncarnation()).toBe(captured.editorIncarnation);
+
+    const insertResult = await result.current.importAndInsert({
+      identity: captured,
+      content: textDoc("restored after facade churn"),
+    });
+    expect(insertResult).toEqual({ status: "accepted" });
+    expect(editor.setContents).toEqual([
+      {
+        content: textDoc("restored after facade churn"),
+        selection: null,
+      },
+    ]);
+  });
+
+  it("returns stale when the editor remounts under the same epic id", async () => {
+    const editor = makeEditorHandle({ content: emptyDoc() });
+    const { result } = renderModalDestination({
+      epicId,
+      seedContent: emptyDoc(),
+      editorRef: editor.editorRef,
+    });
+    const captured = result.current.captureIdentity();
+    if (captured === null) throw new Error("expected capture");
+    expect(captured.editorIncarnation).toBe(
+      editor.handle.getEditorIncarnation(),
+    );
 
     const remounted = editor.remount();
     expect(remounted).not.toBe(editor.handle);
     expect(editor.editorRef.current).toBe(remounted);
+    expect(remounted.getEditorIncarnation()).not.toBe(
+      captured.editorIncarnation,
+    );
 
     const insertResult = await result.current.importAndInsert({
       identity: captured,
