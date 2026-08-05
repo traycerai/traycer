@@ -133,12 +133,11 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "fixed-entry-id"),
-}));
-
 describe("usePromptStash capture/source CAS", () => {
   beforeEach(() => {
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(
+      "00000000-0000-4000-8000-000000000001",
+    );
     resetActivePromptStashForTests();
     idbData.clear();
     materializeMocks.impl = null;
@@ -298,7 +297,7 @@ describe("usePromptStash capture/source CAS", () => {
       entry: PromptStashEntry;
       imagesByHash: Map<string, { bytes: Uint8Array; mimeType: string }>;
     };
-    expect(snapshot.entry.id).toBe("fixed-entry-id");
+    expect(snapshot.entry.id).toBe("00000000-0000-4000-8000-000000000001");
     // Ticket 5 snapshot shape: blob is bytes + canonical mimeType.
     expect(snapshot.imagesByHash.get(hash)).toEqual({
       bytes: imageBytes,

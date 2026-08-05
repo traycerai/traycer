@@ -7,6 +7,10 @@ import { vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import {
+  createComposerEditorIncarnation,
+  type ComposerEditorIncarnation,
+} from "@/lib/composer/composer-editor-incarnation";
 import { useLandingPromptStashDestination } from "@/components/home/composer/use-landing-prompt-stash-adapters";
 import {
   deleteImage,
@@ -171,6 +175,7 @@ export function makeEditorHandle(options: {
   }>;
   setReady: (ready: boolean) => void;
   unmount: () => void;
+  replaceFacade: () => ComposerPromptEditorHandle;
   remount: () => ComposerPromptEditorHandle;
 } {
   let ready = options.ready ?? true;
@@ -179,9 +184,13 @@ export function makeEditorHandle(options: {
     content: JsonContent;
     selection: DraftSelection | null;
   }> = [];
+  let editorIncarnation = createComposerEditorIncarnation();
 
-  const buildHandle = (): ComposerPromptEditorHandle => ({
+  const buildHandle = (
+    incarnation: ComposerEditorIncarnation,
+  ): ComposerPromptEditorHandle => ({
     isReady: () => ready,
+    getEditorIncarnation: () => (ready ? incarnation : null),
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
@@ -207,7 +216,7 @@ export function makeEditorHandle(options: {
     dismissActiveSuggestion: () => false,
   });
 
-  const handle = buildHandle();
+  const handle = buildHandle(editorIncarnation);
   const editorRef: { current: ComposerPromptEditorHandle | null } = {
     current: handle,
   };
@@ -222,9 +231,15 @@ export function makeEditorHandle(options: {
     unmount: () => {
       editorRef.current = null;
     },
+    replaceFacade: () => {
+      const next = buildHandle(editorIncarnation);
+      editorRef.current = next;
+      return next;
+    },
     remount: () => {
       ready = true;
-      const next = buildHandle();
+      editorIncarnation = createComposerEditorIncarnation();
+      const next = buildHandle(editorIncarnation);
       editorRef.current = next;
       return next;
     },

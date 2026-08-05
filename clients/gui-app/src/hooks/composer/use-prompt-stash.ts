@@ -7,7 +7,6 @@ import {
   type RefObject,
 } from "react";
 
-import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
@@ -164,7 +163,7 @@ export function usePromptStash(
     setSaving(true);
     try {
       const entrySnapshot = await buildPromptStashSnapshot({
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         createdAt: Date.now(),
         content: snapshot.content,
         readHashImage,

@@ -13,6 +13,7 @@ import {
   hookArgs,
   makeDestination,
   makeEditor,
+  makeEditorIncarnation,
   textDoc,
   type MutableDestination,
 } from "./use-prompt-stash-test-helpers";
@@ -128,10 +129,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "fixed-entry-id"),
-}));
-
 describe("usePromptStash restore destination races", () => {
   beforeEach(() => {
     resetActivePromptStashForTests();
@@ -212,7 +209,7 @@ describe("usePromptStash restore destination races", () => {
       expect(toast.error).not.toHaveBeenCalled();
     });
 
-    it("does not insert or consume when ready editor generation remounts under same owner id", async () => {
+    it("does not insert or consume when ready editor incarnation remounts under same owner id", async () => {
       const entry: PromptStashEntry = {
         id: "entry-remount-gen",
         createdAt: 1,
@@ -230,7 +227,7 @@ describe("usePromptStash restore destination races", () => {
         identity: "task-same",
         surface: "chat",
         latestContent: emptyDoc(),
-        editorGeneration: Object.freeze({ generation: "handle-v1" }),
+        editorIncarnation: makeEditorIncarnation(),
       });
       const { result } = renderHook(() =>
         usePromptStash(
@@ -246,9 +243,7 @@ describe("usePromptStash restore destination races", () => {
         restorePromise = result.current.restore(entry);
         await Promise.resolve();
       });
-      destination.setEditorGeneration(
-        Object.freeze({ generation: "handle-v2" }),
-      );
+      destination.setEditorIncarnation(makeEditorIncarnation());
 
       let ok = true;
       await act(async () => {
@@ -410,7 +405,7 @@ describe("usePromptStash restore destination races", () => {
           identity: {
             surface: "test",
             identity: "owner-1",
-            editorGeneration: owner1.getEditorGeneration(),
+            editorIncarnation: owner1.getEditorIncarnation(),
           },
         }),
       );
@@ -433,11 +428,11 @@ describe("usePromptStash restore destination races", () => {
       };
       let currentKey = "key-a";
       let resolveMaterialize: (() => void) | undefined;
-      const editorGeneration = Object.freeze({ generation: "g1" });
+      const editorIncarnation = makeEditorIncarnation();
 
       const destination: MutableDestination = makeDestination({
         identity: "key-a",
-        editorGeneration,
+        editorIncarnation,
         latestContent: emptyDoc(),
         materialize: () =>
           new Promise((resolve) => {
@@ -449,7 +444,7 @@ describe("usePromptStash restore destination races", () => {
           // Live read of currentKey (not closed-over at materialize start).
           if (
             args.identity.identity !== currentKey ||
-            args.identity.editorGeneration !== editorGeneration
+            args.identity.editorIncarnation !== editorIncarnation
           ) {
             return Promise.resolve({ status: "stale" });
           }

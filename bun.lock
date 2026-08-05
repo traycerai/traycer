@@ -169,6 +169,7 @@
         "zustand": "catalog:",
       },
       "devDependencies": {
+        "@rolldown/plugin-babel": "catalog:",
         "@tanstack/eslint-plugin-query": "catalog:",
         "@tanstack/eslint-plugin-router": "catalog:",
         "@tanstack/react-query-devtools": "catalog:",
@@ -182,6 +183,8 @@
         "@types/react-dom": "catalog:",
         "@typescript-eslint/eslint-plugin": "catalog:",
         "@typescript-eslint/parser": "catalog:",
+        "@vitejs/plugin-react": "catalog:",
+        "babel-plugin-react-compiler": "catalog:",
         "eslint": "catalog:",
         "eslint-plugin-jsx-a11y": "catalog:",
         "eslint-plugin-react": "catalog:",

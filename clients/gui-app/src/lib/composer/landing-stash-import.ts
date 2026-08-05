@@ -10,7 +10,6 @@
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-import { v4 as uuidv4 } from "uuid";
 import {
   collectImageAtoms,
   type ComposerImageAtom,
@@ -163,7 +162,7 @@ function rewriteToLandingHashes(
     if (landingHash !== undefined) {
       return {
         ...node,
-        attrs: { ...node.attrs, id: uuidv4(), hash: landingHash },
+        attrs: { ...node.attrs, id: crypto.randomUUID(), hash: landingHash },
       };
     }
   }
