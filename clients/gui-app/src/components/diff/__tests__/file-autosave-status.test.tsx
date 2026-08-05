@@ -45,6 +45,11 @@ const RECOVERY_UNAVAILABLE_STATE: FileEditRuntimeState = {
   recoveryStatus: "unavailable",
 };
 
+const RECOVERED_DRAFT_STATE: FileEditRuntimeState = {
+  ...DIRTY_STATE,
+  ownerSurfaceId: null,
+};
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -52,7 +57,7 @@ afterEach(() => {
 });
 
 describe("<FileAutosaveStatus />", () => {
-  it("shows a perceptible sequence on one fixed-height pill with X-only width changes", () => {
+  it("crossfades ordinary autosave states inside one fixed-size icon", () => {
     vi.useFakeTimers();
     const actions = {
       onRetry: vi.fn(),
@@ -72,8 +77,11 @@ describe("<FileAutosaveStatus />", () => {
     const status = screen.getByTestId("file-autosave-status");
     const pill = screen.getByTestId("file-autosave-pill");
     expect(status.getAttribute("data-status")).toBe("saved");
-    expect(pill.className).toContain("h-6");
-    expect(pill.className).toContain("w-max");
+    expect(pill.getAttribute("data-appearance")).toBe("minimal");
+    expect(pill.className).toContain("size-5");
+    expect(pill.className).not.toContain("w-max");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe("All changes saved");
     expect(
       pill.querySelector('[data-status-transition="crossfade"]'),
     ).toBeTruthy();
@@ -92,6 +100,7 @@ describe("<FileAutosaveStatus />", () => {
     );
     expect(status.getAttribute("data-status")).toBe("dirty");
     expect(screen.getByTestId("file-autosave-pill")).toBe(pill);
+    expect(pill.textContent).toBe("");
 
     act(() => {
       vi.advanceTimersByTime(FILE_AUTOSAVE_SAVING_REVEAL_DELAY_MS);
@@ -124,12 +133,12 @@ describe("<FileAutosaveStatus />", () => {
     // The old spinner remains only for the short opacity exit instead of
     // disappearing in the same frame as the new status arrives.
     expect(screen.queryByTestId("file-autosave-spinner")).toBeTruthy();
-    expect(screen.getByText("Saved")).toBeTruthy();
     expect(screen.getByTestId("file-autosave-pill")).toBe(pill);
-    expect(pill.className).toContain("w-max");
+    expect(screen.queryByText("Saved")).toBeNull();
+    expect(pill.getAttribute("aria-label")).toBe("All changes saved");
   });
 
-  it("supports a quiet document-style treatment without a filled badge", () => {
+  it("uses the same minimal ordinary indicator in compact file headers", () => {
     render(
       <LazyMotion features={domMax}>
         <FileAutosaveStatus
@@ -143,8 +152,8 @@ describe("<FileAutosaveStatus />", () => {
     );
 
     const pill = screen.getByTestId("file-autosave-pill");
-    expect(pill.getAttribute("data-appearance")).toBe("quiet");
-    expect(pill.className).toContain("h-5");
+    expect(pill.getAttribute("data-appearance")).toBe("minimal");
+    expect(pill.className).toContain("size-5");
     expect(pill.className).toContain("text-muted-foreground");
     expect(pill.className).not.toContain("bg-muted/45");
     expect(pill.className).not.toContain("border-border/70");
@@ -167,5 +176,23 @@ describe("<FileAutosaveStatus />", () => {
     const status = screen.getByTestId("file-autosave-status");
     expect(status.getAttribute("data-status")).toBe("recovery-unavailable");
     expect(screen.getByText("Recovery unavailable")).toBeTruthy();
+  });
+
+  it("keeps a detached recovered draft labelled instead of reducing it to an icon", () => {
+    render(
+      <LazyMotion features={domMax}>
+        <FileAutosaveStatus
+          appearance="quiet"
+          state={RECOVERED_DRAFT_STATE}
+          onRetry={vi.fn()}
+          onKeepMine={vi.fn()}
+          onUseDisk={vi.fn()}
+        />
+      </LazyMotion>,
+    );
+
+    const pill = screen.getByTestId("file-autosave-pill");
+    expect(pill.getAttribute("data-appearance")).toBe("quiet");
+    expect(screen.getByText("Recovered draft")).toBeTruthy();
   });
 });

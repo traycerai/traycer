@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, CloudOff, PencilLine } from "lucide-react";
+import { AlertTriangle, CloudCheck, CloudOff, PencilLine } from "lucide-react";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -77,6 +77,7 @@ function VisibleFileAutosaveStatus(props: {
     state.status === "offline" ||
     state.status === "error" ||
     state.status === "conflict";
+  const minimal = !actionable && !shouldShowProminentStatus(state);
 
   return (
     <span
@@ -87,80 +88,42 @@ function VisibleFileAutosaveStatus(props: {
       data-status={presentation.key}
       data-appearance={props.appearance}
     >
-      {actionable ? (
-        <Popover>
-          <PopoverTrigger asChild>
-            <m.button
-              type="button"
-              layout="size"
-              transition={STATUS_PILL_LAYOUT_TRANSITION}
-              className={statusPillClassName(
-                presentation.tone,
-                true,
-                props.appearance,
-              )}
-              aria-label={presentation.label}
-              data-testid="file-autosave-pill"
-              data-appearance={props.appearance}
-            >
-              <StatusPillContents presentation={presentation} />
-            </m.button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-[min(86vw,20rem)]">
-            <PopoverHeader>
-              <PopoverTitle>{presentation.label}</PopoverTitle>
-              <PopoverDescription>
-                {presentation.description}
-              </PopoverDescription>
-            </PopoverHeader>
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              {state.status === "offline" || state.status === "error" ? (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  onClick={props.onRetry}
-                >
-                  Retry
-                </Button>
-              ) : null}
-              {state.status === "conflict" ? (
-                <>
-                  <CopyTextButton
-                    value={state.draftContent}
-                    label="Copy mine"
-                    ariaLabel="Copy my draft"
-                    disabled={false}
-                  />
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    onClick={props.onUseDisk}
-                  >
-                    Use disk
-                  </Button>
-                  <Button type="button" size="xs" onClick={props.onKeepMine}>
-                    Keep mine
-                  </Button>
-                </>
-              ) : null}
-            </div>
-          </PopoverContent>
-        </Popover>
-      ) : (
-        <TooltipWrapper
-          label={presentation.description}
-          side="bottom"
-          sideOffset={4}
-          align="end"
-        >
-          <m.span
+      <FileAutosaveStatusChrome
+        actionable={actionable}
+        minimal={minimal}
+        presentation={presentation}
+        state={state}
+        appearance={props.appearance}
+        onRetry={props.onRetry}
+        onKeepMine={props.onKeepMine}
+        onUseDisk={props.onUseDisk}
+      />
+    </span>
+  );
+}
+
+function FileAutosaveStatusChrome(props: {
+  readonly actionable: boolean;
+  readonly minimal: boolean;
+  readonly presentation: StatusPresentation;
+  readonly state: FileEditRuntimeState;
+  readonly appearance: FileStatusAppearance;
+  readonly onRetry: () => void;
+  readonly onKeepMine: () => void;
+  readonly onUseDisk: () => void;
+}): ReactNode {
+  const { presentation, state } = props;
+  if (props.actionable) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <m.button
+            type="button"
             layout="size"
             transition={STATUS_PILL_LAYOUT_TRANSITION}
             className={statusPillClassName(
               presentation.tone,
-              false,
+              true,
               props.appearance,
             )}
             aria-label={presentation.label}
@@ -168,10 +131,121 @@ function VisibleFileAutosaveStatus(props: {
             data-appearance={props.appearance}
           >
             <StatusPillContents presentation={presentation} />
-          </m.span>
-        </TooltipWrapper>
-      )}
-    </span>
+          </m.button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-[min(86vw,20rem)]">
+          <PopoverHeader>
+            <PopoverTitle>{presentation.label}</PopoverTitle>
+            <PopoverDescription>{presentation.description}</PopoverDescription>
+          </PopoverHeader>
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {state.status === "offline" || state.status === "error" ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={props.onRetry}
+              >
+                Retry
+              </Button>
+            ) : null}
+            {state.status === "conflict" ? (
+              <>
+                <CopyTextButton
+                  value={state.draftContent}
+                  label="Copy mine"
+                  ariaLabel="Copy my draft"
+                  disabled={false}
+                />
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={props.onUseDisk}
+                >
+                  Use disk
+                </Button>
+                <Button type="button" size="xs" onClick={props.onKeepMine}>
+                  Keep mine
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  if (props.minimal) {
+    return (
+      <TooltipWrapper
+        label={presentation.description}
+        side="bottom"
+        sideOffset={4}
+        align="end"
+      >
+        <m.span
+          className="relative inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          aria-label={presentation.description}
+          data-testid="file-autosave-pill"
+          data-appearance="minimal"
+        >
+          <MinimalStatusContents presentation={presentation} />
+        </m.span>
+      </TooltipWrapper>
+    );
+  }
+
+  return (
+    <TooltipWrapper
+      label={presentation.description}
+      side="bottom"
+      sideOffset={4}
+      align="end"
+    >
+      <m.span
+        layout="size"
+        transition={STATUS_PILL_LAYOUT_TRANSITION}
+        className={statusPillClassName(
+          presentation.tone,
+          false,
+          props.appearance,
+        )}
+        aria-label={presentation.label}
+        data-testid="file-autosave-pill"
+        data-appearance={props.appearance}
+      >
+        <StatusPillContents presentation={presentation} />
+      </m.span>
+    </TooltipWrapper>
+  );
+}
+
+function MinimalStatusContents(props: {
+  readonly presentation: StatusPresentation;
+}): ReactNode {
+  const reduceMotion = useReducedMotion() === true;
+  return (
+    <AnimatePresence initial={false} mode="popLayout">
+      <m.span
+        key={props.presentation.key}
+        initial={reduceMotion ? false : { opacity: 0 }}
+        animate={
+          reduceMotion
+            ? { opacity: 1 }
+            : { opacity: 1, transition: STATUS_CONTENT_ENTER_TRANSITION }
+        }
+        exit={
+          reduceMotion
+            ? { opacity: 0 }
+            : { opacity: 0, transition: STATUS_CONTENT_EXIT_TRANSITION }
+        }
+        className="inline-flex size-3.5 items-center justify-center"
+        data-status-transition="crossfade"
+      >
+        <StatusPillGlyph icon={props.presentation.icon} />
+      </m.span>
+    </AnimatePresence>
   );
 }
 
@@ -270,7 +344,7 @@ function StatusPillGlyph(props: { readonly icon: StatusIcon }): ReactNode {
   if (props.icon === "edit") {
     return <PencilLine className="size-3" aria-hidden="true" />;
   }
-  return <Check className="size-3" aria-hidden="true" />;
+  return <CloudCheck className="size-3.5" aria-hidden="true" />;
 }
 
 function statusPillClassName(
@@ -384,6 +458,13 @@ function shouldShowStatus(state: FileEditRuntimeState): boolean {
   );
 }
 
+function shouldShowProminentStatus(state: FileEditRuntimeState): boolean {
+  return (
+    (state.status === "dirty" && state.ownerSurfaceId === null) ||
+    state.recoveryStatus === "unavailable"
+  );
+}
+
 function autosaveStatusPresentation(
   state: FileEditRuntimeState,
 ): StatusPresentation {
@@ -445,15 +526,6 @@ function autosaveStatusPresentation(
       icon: "warning",
     };
   }
-  if (state.lastSavedAt === null) {
-    return {
-      key: "editing",
-      label: "Editing",
-      description,
-      tone: "neutral",
-      icon: "edit",
-    };
-  }
   return {
     key: "saved",
     label: "Saved",
@@ -482,6 +554,6 @@ function statusDescription(state: FileEditRuntimeState): string {
     return "Saved locally in this window; recovery storage is unavailable";
   }
   return state.lastSavedAt === null
-    ? "Editing — changes autosave"
+    ? "No changes to save"
     : "All changes saved";
 }

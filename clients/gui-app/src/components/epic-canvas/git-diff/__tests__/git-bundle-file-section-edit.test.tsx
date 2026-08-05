@@ -352,6 +352,8 @@ describe("<BundleFileSection /> editing", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
     const statusPill = screen.getByTestId("file-autosave-pill");
+    // The test environment intentionally lacks IndexedDB, so the recovery
+    // warning stays labelled instead of collapsing into the ordinary icon.
     expect(statusPill.getAttribute("data-appearance")).toBe("quiet");
     expect(statusPill.className).toContain("h-5");
     expect(statusPill.className).not.toContain("bg-muted/45");
