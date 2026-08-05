@@ -93,6 +93,7 @@ import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
+import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -508,6 +509,7 @@ export function NewConversationModalBody(props: {
   const latestWorkspaceSeed = useModalWorkspaceSeed(
     epicId,
     parentId,
+    hostId,
     hostClient,
   );
   const seed = useNewConversationModalSeed(epicId, latestWorkspaceSeed);
@@ -713,10 +715,7 @@ export function NewConversationModalBody(props: {
   // be created on; without it the user could pick a folder that does not exist
   // over there.
   const workspaceHostScope = useMemo<HostWorkspaceControlsHostScope>(
-    () =>
-      hostId === null || hostClient === null
-        ? { kind: "active" }
-        : { kind: "fixed", hostId, hostClient },
+    () => modalWorkspaceHostScope(hostId, hostClient),
     [hostClient, hostId],
   );
   const workspaceControls = (
@@ -1029,13 +1028,16 @@ export function NewConversationModalBody(props: {
 function useModalWorkspaceSeed(
   epicId: string,
   parentId: string | null,
+  hostId: string | null,
   hostClient: HostClient<HostRpcRegistry> | null,
 ): LatestConversationWorkspaceSeed | null {
   // Only read the latest-conversation seed for a top-level chat; a child must
   // never inherit an unrelated conversation's worktree (see below), so skip the
-  // binding read entirely when adding a child.
+  // binding read entirely when adding a child. A pinned request reads the seed
+  // from (and about) the pinned host, matching the create/picker below.
   const latestConversationSeed = useLatestConversationWorkspaceSeed(
     parentId === null ? epicId : null,
+    hostId === null ? null : { hostId, hostClient },
   );
   // The parent can be a chat or a terminal agent; read its real kind so the
   // binding lookup matches. Defaulting to "chat" would miss a terminal-agent
