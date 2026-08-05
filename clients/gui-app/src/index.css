@@ -59,6 +59,23 @@
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
 
+/* A label-only tooltip must never win hit-testing from what it covers.
+   `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
+   renders the content inside a positioning wrapper of exactly the same size,
+   and that wrapper keeps `pointer-events: auto` (Popper only sets `none` on it
+   for `hideWhenDetached`). So the wrapper still swallowed every click that
+   landed on the tooltip's rect - measured in a real browser against the
+   workspace folder picker, where rows are 28px apart and a `side="top"`
+   tooltip lands squarely on the row above: the covered row's controls never
+   received the click, and the cursor read as a text caret over the tooltip's
+   text (traycerai/traycer#466, #446).
+
+   Scoped by the direct child so only tooltip wrappers opt out - popovers,
+   dropdowns and hover cards hold real controls and must stay hit-testable. */
+[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+  pointer-events: none;
+}
+
 /* Attachment previews stay on one compact, independently scrollable row. */
 [data-composer-attachment-strip] {
   scrollbar-width: none;

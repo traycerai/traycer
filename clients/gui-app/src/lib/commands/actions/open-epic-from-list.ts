@@ -4,8 +4,7 @@ import {
   openEpicFromListIntent,
 } from "@/lib/tab-navigation";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import {
   Analytics,
   AnalyticsEvent,
@@ -74,11 +73,6 @@ function readActiveEmptyDraftId(currentPathname: string): string | null {
   // "Empty" is now derived from content: no typed text AND no image atoms. An
   // image-only draft is real content, so replacing it in-place (which closes it)
   // would silently drop the image - treat it as non-empty.
-  if (
-    extractPlainTextFromComposerJSONContent(draft.content).trim().length > 0
-  ) {
-    return null;
-  }
-  if (containsImageAtoms(draft.content)) return null;
+  if (!isEmptyLandingDraftContent(draft.content)) return null;
   return draft.id;
 }

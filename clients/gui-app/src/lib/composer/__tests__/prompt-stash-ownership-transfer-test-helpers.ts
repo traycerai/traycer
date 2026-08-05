@@ -6,6 +6,10 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
+  createComposerEditorIncarnation,
+  type ComposerEditorIncarnation,
+} from "@/lib/composer/composer-editor-incarnation";
+import {
   pngBytesOfSize,
   twoFrameGifBytesOfSize,
 } from "./prompt-stash-image-fixtures";
@@ -147,9 +151,11 @@ export function makeEditorHandle(
     content: JsonContent;
     selection: { from: number; to: number } | null;
   }> = [];
+  let editorIncarnation = createComposerEditorIncarnation();
 
-  const build = (): EditorHandle => ({
+  const build = (incarnation: ComposerEditorIncarnation): EditorHandle => ({
     isReady: () => ready,
+    getEditorIncarnation: () => (ready ? incarnation : null),
     hasFocus: () => false,
     focus: () => {
       options?.onFocus?.();
@@ -187,7 +193,7 @@ export function makeEditorHandle(
     dismissActiveSuggestion: () => false,
   });
 
-  const handle = build();
+  const handle = build(editorIncarnation);
   const editorRef: { current: EditorHandle | null } = { current: handle };
   return {
     handle,
@@ -195,7 +201,8 @@ export function makeEditorHandle(
     setContents,
     remount: () => {
       ready = true;
-      const next = build();
+      editorIncarnation = createComposerEditorIncarnation();
+      const next = build(editorIncarnation);
       editorRef.current = next;
       return next;
     },

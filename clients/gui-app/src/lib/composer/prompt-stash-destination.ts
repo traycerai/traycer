@@ -1,22 +1,23 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
 
 /**
  * Names the exact active destination surface a restore must land in.
  * Captured before materialization; `importAndInsert` only accepts when the
- * same surface identity *and* the same ready editor generation are still the
+ * same surface identity *and* the same ready editor incarnation are still the
  * active destination afterward. A remounted editor under the same task/draft
- * /epic id is a different generation and must be treated as stale.
+ * /epic id is a different incarnation and must be treated as stale.
  */
 export interface PromptStashDestinationIdentity {
   readonly surface: string;
   readonly identity: string;
   /**
-   * Opaque in-memory token for the exact ready editor generation at capture.
-   * Adapters typically capture the ready handle object itself; identity is by
-   * reference, not by owner id.
+   * Opaque in-memory token for the actual Tiptap editor at capture. This must
+   * not be the React imperative handle: React Compiler-driven renders may
+   * replace that capability facade without replacing the editor.
    */
-  readonly editorGeneration: object;
+  readonly editorIncarnation: ComposerEditorIncarnation;
 }
 
 export type PromptStashDestinationResult =
@@ -74,10 +75,11 @@ export interface PromptStashDestinationAdapter {
    * destination's *latest* canonical content at insertion time. Must not use
    * a pre-materialization content snapshot. Optional-chained missing/unready
    * editors are `stale`, never `accepted`. A ready handle that is not the
-   * captured generation is also `stale`. The destination places the caret at
-   * the end of the resulting document; editor selection is transient state
-   * and is never persisted with a stash, so it cannot make the next
-   * keystroke overwrite restored content.
+   * captured incarnation is also `stale`. A replacement handle facade for the
+   * same incarnation is accepted and used as the freshest capability object.
+   * The destination places the caret at the end of the resulting document;
+   * editor selection is transient state and is never persisted with a stash,
+   * so it cannot make the next keystroke overwrite restored content.
    */
   readonly importAndInsert: (args: {
     readonly identity: PromptStashDestinationIdentity;
