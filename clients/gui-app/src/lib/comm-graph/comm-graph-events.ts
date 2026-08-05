@@ -14,6 +14,12 @@ import type { EpicCommunicationGraphEvent } from "@traycer/protocol/host/epic/co
 export type CommGraphEvent = EpicCommunicationGraphEvent & {
   /** Host whose log this row came from. Scopes `id` (and `sinceCursor`). */
   readonly hostId: string;
+  /** Canonical cloud identity. Absent only on the host-local plane. */
+  readonly eventId?: string;
+  /** Cloud ingestion order. Timeline order remains capture time/origin/id. */
+  readonly ingestVersion?: number;
+  /** Backlog rows render normally but never drive a live arrival pulse. */
+  readonly historicalUpload?: boolean;
 };
 
 export interface CommGraphEventDirection {
@@ -192,6 +198,8 @@ export interface CommGraphSortKey {
   readonly timestamp: number;
   readonly hostId: string;
   readonly id: number;
+  /** Present for cloud rows, whose origin sequence can legally be reused. */
+  readonly eventId?: string;
 }
 
 export function compareCommGraphSortKeys(
@@ -200,7 +208,11 @@ export function compareCommGraphSortKeys(
 ): number {
   if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
   if (a.hostId !== b.hostId) return a.hostId < b.hostId ? -1 : 1;
-  return a.id - b.id;
+  if (a.id !== b.id) return a.id - b.id;
+  const aEventId = a.eventId ?? "";
+  const bEventId = b.eventId ?? "";
+  if (aEventId === bEventId) return 0;
+  return aEventId < bEventId ? -1 : 1;
 }
 
 export function compareCommGraphEvents(

@@ -144,8 +144,8 @@ function renderInlineEdit(dirty: boolean) {
 }
 
 describe("chatMessageEditingForInlineEdit", () => {
-  it("requires a dirty edit before enabling submit", () => {
-    expect(renderInlineEdit(false).canSubmit).toBe(false);
+  it("allows resubmitting unchanged non-empty content", () => {
+    expect(renderInlineEdit(false).canSubmit).toBe(true);
     expect(renderInlineEdit(true).canSubmit).toBe(true);
   });
 
@@ -276,6 +276,7 @@ function runnableQueue(itemCount: number): ChatQueueState {
   return {
     status: "running",
     items: Array.from({ length: itemCount }, (_, index) => ({
+      kind: "prompt" as const,
       queueItemId: `item-${index}`,
       messageId: `message-${index}`,
       message: { kind: "user" as const, content: CONTENT },

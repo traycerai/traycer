@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM,
+  CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  compactChatTurnMinimapPreview,
+  CHAT_TURN_MINIMAP_EDGE_INSET_REM,
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
-  CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_ITEM_SPACING,
   CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS,
   CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS,
   resolveChatTurnMinimapHeightStyle,
+  resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapIndexFromPointer,
-  resolveChatTurnMinimapInteractiveWidth,
   resolveChatTurnMinimapRowHeight,
   resolveChatTurnMinimapRowInView,
   resolveChatTurnMinimapRowTop,
@@ -16,6 +19,9 @@ import {
   resolveChatTurnMinimapTopPercent,
   resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
+import { DEFAULT_UI_FONT_SIZE } from "@/stores/settings/settings-store";
+
+const DEFAULT_UI_ROOT_FONT_SIZE = DEFAULT_UI_FONT_SIZE;
 
 describe("resolveChatTurnMinimapHeightStyle", () => {
   it("adds endpoint hit padding to the visual track height, capped by the viewport and pane", () => {
@@ -186,24 +192,182 @@ describe("resolveChatTurnMinimapIndexFromPointer", () => {
   });
 });
 
-describe("resolveChatTurnMinimapInteractiveWidth", () => {
-  it("returns the collapsed numeric width when not expanded", () => {
+describe("resolveChatTurnMinimapHitStripWidth", () => {
+  it("returns 0 for non-finite or non-positive viewport widths", () => {
     expect(
-      resolveChatTurnMinimapInteractiveWidth(
-        CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
-        false,
-      ),
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 0,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: -10,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: Number.NaN,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: Number.POSITIVE_INFINITY,
+      }),
+    ).toBe(0);
+  });
+
+  it("returns 0 for non-finite or non-positive root font sizes", () => {
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 0,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: -15,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: Number.NaN,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: Number.POSITIVE_INFINITY,
+        viewportWidth: 1200,
+      }),
+    ).toBe(0);
+  });
+
+  it("returns concrete safe budgets for supported UI root sizes", () => {
+    // Reviewer / production-failure cases first.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 20,
+        viewportWidth: 900,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 20,
+        viewportWidth: 1000,
+      }),
+    ).toBe(5);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 17,
+        viewportWidth: 800,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 15,
+        viewportWidth: 800,
+      }),
+    ).toBe(28);
+
+    // Independently calculated expectations across supported roots and common
+    // pane widths. Keeping fixed numbers here prevents a mirrored implementation
+    // from hiding arithmetic regressions.
+    const expectedWidths = [
+      [10, [0, 40, 40, 40, 40, 40]],
+      [15, [0, 28, 40, 40, 40, 40]],
+      [17, [0, 0, 29, 40, 40, 40]],
+      [20, [0, 0, 0, 5, 40, 40]],
+    ] as const;
+    const viewportWidths = [420, 800, 900, 1000, 1200, 2400] as const;
+    for (const [rootFontSize, expectedForRoot] of expectedWidths) {
+      for (const [index, viewportWidth] of viewportWidths.entries()) {
+        expect(
+          resolveChatTurnMinimapHitStripWidth({
+            rootFontSize,
+            viewportWidth,
+          }),
+        ).toBe(expectedForRoot[index]);
+      }
+    }
+  });
+
+  it("returns 0 when the rem content column consumes the viewport (narrow/tiled)", () => {
+    // Default 15px: content max is 720px; at or below that the gutter is 0.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth:
+          CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM * DEFAULT_UI_ROOT_FONT_SIZE,
+      }),
+    ).toBe(0);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 420,
+      }),
+    ).toBe(0);
+    // Barely wider than content max: gutter still smaller than edge inset.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 730,
+      }),
+    ).toBe(0);
+  });
+
+  it("caps the hit strip at the max width in a wide pane", () => {
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 1200,
+      }),
+    ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: DEFAULT_UI_ROOT_FONT_SIZE,
+        viewportWidth: 2400,
+      }),
+    ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
+    // Small root still caps rather than following the full gutter.
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 10,
+        viewportWidth: 800,
+      }),
     ).toBe(CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH);
   });
 
-  it("returns the expanded rem width once the preview is open", () => {
-    expect(resolveChatTurnMinimapInteractiveWidth(0, true)).toBe(
-      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
+  it("uses the remaining side gutter minus rem edge inset when between 0 and max", () => {
+    // font15 / 800: contentMax=720, sideGutter=40, edgeInset=11.25 → 28
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 15,
+        viewportWidth: 800,
+      }),
+    ).toBe(
+      Math.floor(
+        (800 - CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM * 15) / 2 -
+          CHAT_TURN_MINIMAP_EDGE_INSET_REM * 15,
+      ),
     );
-    expect(resolveChatTurnMinimapInteractiveWidth(40, true)).toBe(
-      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
-    );
-    expect(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH).toContain("100vw");
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 15,
+        viewportWidth: 800,
+      }),
+    ).toBe(28);
+    // font20 / 1000: contentMax=960, sideGutter=20, edgeInset=15 → 5
+    expect(
+      resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: 20,
+        viewportWidth: 1000,
+      }),
+    ).toBe(5);
   });
 });
 
@@ -326,5 +490,104 @@ describe("resolveChatTurnMinimapRowViewportDistance", () => {
 
   it("returns null when row geometry is unavailable", () => {
     expect(resolveChatTurnMinimapRowViewportDistance({}, 0)).toBeNull();
+  });
+});
+
+describe("compactChatTurnMinimapPreview", () => {
+  it("normalizes whitespace and drops empty text", () => {
+    expect(compactChatTurnMinimapPreview("  hello\n\n  world  ")).toBe(
+      "hello world",
+    );
+    expect(compactChatTurnMinimapPreview("   \n\t ")).toBeNull();
+    expect(compactChatTurnMinimapPreview(null)).toBeNull();
+    expect(compactChatTurnMinimapPreview(undefined)).toBeNull();
+  });
+
+  it("retains only a bounded head of a very long turn", () => {
+    // The rail holds one of these per turn. Before this bound, a long
+    // transcript kept a second full-length copy of itself here.
+    const long = `Prompt ${"u".repeat(500_000)}`;
+    const preview = compactChatTurnMinimapPreview(long);
+
+    expect(preview).not.toBeNull();
+    expect((preview ?? "").length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
+    expect((preview ?? "").startsWith("Prompt uuu")).toBe(true);
+    // Elided rather than silently cut.
+    expect((preview ?? "").endsWith("…")).toBe(true);
+  });
+
+  it("still fills the budget when the head is mostly whitespace", () => {
+    // Collapsing runs of whitespace can shrink text far below the scan
+    // window, so the scan has to read past the budget to fill it.
+    const spaced = `${"a \n".repeat(100_000)}end`;
+    const preview = compactChatTurnMinimapPreview(spaced);
+
+    // Budget essentially filled (a trailing space may be trimmed before the
+    // ellipsis), rather than starved by the collapse.
+    expect((preview ?? "").length).toBeGreaterThan(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS - 5,
+    );
+    expect((preview ?? "").length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
+    expect((preview ?? "").startsWith("a a a")).toBe(true);
+  });
+
+  it("leaves a short turn untouched and unelided", () => {
+    expect(compactChatTurnMinimapPreview("short reply")).toBe("short reply");
+  });
+});
+
+describe("compactChatTurnMinimapPreview surrogate safety", () => {
+  it("never truncates in the middle of an astral character", () => {
+    // The 200th UTF-16 unit lands inside the emoji, so a code-unit slice would
+    // emit a lone high surrogate - rendered as a replacement glyph, and read
+    // aloud by a screen reader since this text is also the jump target's
+    // accessible name.
+    const text = `${"a".repeat(199)}\u{1F600}${"b".repeat(300)}`;
+    const preview = compactChatTurnMinimapPreview(text);
+    if (preview === null) throw new Error("expected a preview");
+
+    expect(preview).toBe(preview.replace(/\uFFFD/g, ""));
+    for (let index = 0; index < preview.length; index += 1) {
+      const code = preview.charCodeAt(index);
+      const isLead = code >= 0xd800 && code <= 0xdbff;
+      if (!isLead) continue;
+      const next = preview.charCodeAt(index + 1);
+      expect(Number.isNaN(next) ? -1 : next).toBeGreaterThanOrEqual(0xdc00);
+    }
+    // The pair is dropped whole rather than split.
+    expect(preview.endsWith("\u2026")).toBe(true);
+  });
+
+  it("keeps an astral character that fits entirely inside the budget", () => {
+    const preview = compactChatTurnMinimapPreview("hi \u{1F600} there");
+    expect(preview).toBe("hi \u{1F600} there");
+  });
+});
+
+describe("compactChatTurnMinimapPreview whitespace-heavy input", () => {
+  it("finds the visible text after a long run of whitespace", () => {
+    // A fixed-length prefix scan normalized this to the empty string and lost
+    // the preview entirely - and with it the jump target's accessible name.
+    const text = `${" ".repeat(900)}the actual message`;
+    expect(compactChatTurnMinimapPreview(text)).toBe("the actual message");
+  });
+
+  it("still collapses interior whitespace to single spaces", () => {
+    expect(compactChatTurnMinimapPreview("a\n\n\n  b\t\tc")).toBe("a b c");
+  });
+
+  it("truncates on visible characters, not on source offset", () => {
+    const text = `${"\n".repeat(500)}${"z".repeat(400)}`;
+    const preview = compactChatTurnMinimapPreview(text);
+    if (preview === null) throw new Error("expected a preview");
+    expect(preview.startsWith("z".repeat(50))).toBe(true);
+    expect(preview.endsWith("\u2026")).toBe(true);
+    expect(preview.length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
   });
 });

@@ -128,7 +128,7 @@ export function AssistantMessageBody({
   const replyText = useMemo(
     () =>
       segments.length === 0 && stopped !== null && stopped.turnHadOutput
-        ? stopped.turnReplyText
+        ? collectAssistantReplyText(stopped.turnReplySegments)
         : collectAssistantReplyText(segments),
     [segments, stopped],
   );
@@ -762,6 +762,7 @@ function ApprovalSegmentCard({
       decision={segment.decision}
       variant="card"
       headerFindUnitId={findUnitId}
+      initiallyOpen={false}
     />
   );
 }
@@ -799,6 +800,8 @@ function AssistantSegment({
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
           bodyBoundedByParent={false}
+          headerless={false}
+          initiallyExpanded={false}
         />
       );
     case "tool": {
@@ -832,6 +835,7 @@ function AssistantSegment({
           segment={segment}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
     case "file_change_group":
@@ -844,20 +848,27 @@ function AssistantSegment({
           findUnitId={findUnitId}
         />
       );
-    case "command":
+    case "command": {
+      // Same treatment as a promoted tool call: while the host still lists the
+      // command as running background work, the card keeps reading "running"
+      // even though the turn that spawned it already finalized its blocks.
+      const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
         <CommandSegment
           command={segment.command}
           cwd={segment.cwd}
           exitCode={segment.exitCode}
-          isStreaming={segment.isStreaming}
-          endState={segment.endState}
+          isStreaming={segment.isStreaming || isBackgroundRunning}
+          endState={isBackgroundRunning ? null : segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
+    }
     case "subagent":
       return (
         <SubagentSegment
@@ -899,6 +910,7 @@ function AssistantSegment({
         <ErrorSegment
           message={segment.message}
           code={segment.code}
+          recoverable={segment.recoverable}
           findUnitId={findUnitId}
         />
       );

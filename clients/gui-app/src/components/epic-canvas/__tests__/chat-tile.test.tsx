@@ -11,7 +11,10 @@ import {
   within,
 } from "@testing-library/react";
 import {
+  advanceLegendListTime,
+  installLegendListTestClock,
   installLegendListViewportMetrics,
+  restoreLegendListTestClock,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 
@@ -886,6 +889,7 @@ function registerWaitingChatHandoff(): void {
 describe("<ChatTile />", () => {
   beforeEach(() => {
     installLegendListViewportMetrics();
+    installLegendListTestClock();
     window.localStorage.clear();
     useAuthStore.setState({
       status: "signed-in",
@@ -928,6 +932,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    restoreLegendListTestClock();
     vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
@@ -961,9 +966,7 @@ describe("<ChatTile />", () => {
 
     renderChatTile();
     // Flush the epic snapshot (fired via setTimeout(0)) + effects.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
@@ -1119,7 +1122,7 @@ describe("<ChatTile />", () => {
     expect(frame.fromMessageId).toBe("message-1");
   });
 
-  it("sends edit-user-message from the inline editor with current composer settings", async () => {
+  it("resubmits an unchanged inline message with current composer settings", async () => {
     useComposerRunSettingsStore.setState({
       globalLastRunSettings: QUEUED_SETTINGS,
     });
@@ -1146,8 +1149,12 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
-    pasteInlineEditText(" updated");
-    fireEvent.click(getButtonByAriaLabel("Send edit"));
+    const sendEditButton = getButtonByAriaLabel("Send edit");
+    if (!(sendEditButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send edit button");
+    }
+    expect(sendEditButton.disabled).toBe(false);
+    fireEvent.click(sendEditButton);
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
@@ -1841,9 +1848,7 @@ describe("<ChatTile />", () => {
       );
     });
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     act(() => {
       emitChatSnapshotWithMessages({
@@ -2115,9 +2120,7 @@ describe("<ChatTile />", () => {
     renderChatTile();
     expect(chatHarness.sent).toHaveLength(0);
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
@@ -2166,9 +2169,7 @@ describe("<ChatTile />", () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
@@ -2209,9 +2210,7 @@ describe("<ChatTile />", () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
@@ -2300,6 +2299,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     const queueItems: ChatQueuedItem[] = [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-same-turn",
         messageId: "message-same-turn",
         message: {
@@ -2318,6 +2318,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-next-turn",
         messageId: "message-next-turn",
         message: {
@@ -2407,6 +2408,7 @@ describe("<ChatTile />", () => {
     chatHarness.install(
       "owner",
       Array.from({ length: 8 }, (_, index) => ({
+        kind: "prompt" as const,
         queueItemId: `queue-${index}`,
         messageId: `message-${index}`,
         message: {
@@ -2440,6 +2442,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("viewer", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2473,6 +2476,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2546,6 +2550,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2600,6 +2605,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2656,6 +2662,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2674,6 +2681,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-2",
         messageId: "message-queue-2",
         message: {

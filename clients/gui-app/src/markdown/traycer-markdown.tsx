@@ -1,9 +1,8 @@
 import { cn } from "@/lib/utils";
+import { StreamingMarkdown } from "@tailmark/react";
 import { useMemo, type ComponentType } from "react";
+import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
-import remarkGfm from "remark-gfm";
 import { CodeBlock, PreBlock } from "./components/code-block";
 import { MarkdownAnchor } from "./components/markdown-anchor";
 import { MermaidBlock } from "./components/mermaid-block";
@@ -18,7 +17,7 @@ import {
   TableRow,
   TableWrapper,
 } from "./components/table-wrapper";
-import { MarkdownBlock } from "./markdown-block";
+import { markdownUrlTransform } from "./links/markdown-url-transform";
 import {
   TRAYCER_CHAT_TAG,
   TRAYCER_EPIC_TAG,
@@ -31,38 +30,35 @@ import { rehypeTraycerChat } from "./plugins/rehype-traycer-chat";
 import { rehypeTraycerEpic } from "./plugins/rehype-traycer-epic";
 import { rehypeTraycerSpec } from "./plugins/rehype-traycer-spec";
 import { rehypeTraycerTicket } from "./plugins/rehype-traycer-ticket";
-import { remarkDisableIndentedCode } from "./plugins/remark-disable-indented-code";
-import { TRAYCER_SANITIZE_SCHEMA } from "./plugins/rehype-sanitize-schema";
-import { MarkdownStreamingContext } from "./shiki-streaming-context";
-import { useMarkdownBlocks } from "./use-markdown-blocks";
+import { extendTraycerSanitizeSchema } from "./plugins/rehype-sanitize-schema";
+import { getTraycerStreamingHighlighter } from "./traycer-streaming-highlighter";
 
-const DEFAULT_REMARK_PLUGINS: PluggableList = [
-  remarkGfm,
-  remarkDisableIndentedCode,
-];
+const TRAYCER_STREAMING_HIGHLIGHTER = getTraycerStreamingHighlighter();
 
-const DEFAULT_REHYPE_PLUGINS: PluggableList = [
-  rehypeRaw,
+// Product rehype plugins only. Tailmark already runs rehype-raw, sanitize, and
+// its marker policy; do not re-register GFM / disable-indented-code (built-in).
+// Intentionally no Tailmark `repairs` for next-steps - custom repairs force the
+// full-document repair path, and TextSegment peels next-steps before render.
+const PRODUCT_REHYPE_PLUGINS: PluggableList = [
   rehypeCustomMermaid,
   rehypeTraycerChat,
   rehypeTraycerEpic,
   rehypeTraycerSpec,
   rehypeTraycerTicket,
-  [rehypeSanitize, TRAYCER_SANITIZE_SCHEMA],
 ];
 
-const DEFAULT_COMPONENTS: Record<
-  string,
-  ComponentType<Record<string, unknown>>
-> = {
-  a: MarkdownAnchor as ComponentType<Record<string, unknown>>,
-  code: CodeBlock as ComponentType<Record<string, unknown>>,
-  pre: PreBlock as ComponentType<Record<string, unknown>>,
-  table: TableWrapper as ComponentType<Record<string, unknown>>,
-  thead: TableHead as ComponentType<Record<string, unknown>>,
-  th: TableHeader as ComponentType<Record<string, unknown>>,
-  td: TableCell as ComponentType<Record<string, unknown>>,
-  tr: TableRow as ComponentType<Record<string, unknown>>,
+// Product custom tags (mermaid + traycer references) are not on react-markdown's
+// `Components` keyof surface; cast after building the map so StreamingMarkdown
+// still receives a single stable components object.
+const DEFAULT_COMPONENTS = {
+  a: MarkdownAnchor as Components["a"],
+  code: CodeBlock as Components["code"],
+  pre: PreBlock as Components["pre"],
+  table: TableWrapper as Components["table"],
+  thead: TableHead as Components["thead"],
+  th: TableHeader as Components["th"],
+  td: TableCell as Components["td"],
+  tr: TableRow as Components["tr"],
   [TRAYCER_MERMAID_TAG]: MermaidBlock as ComponentType<Record<string, unknown>>,
   [TRAYCER_SPEC_TAG]: TraycerSpecReference as ComponentType<
     Record<string, unknown>
@@ -76,7 +72,7 @@ const DEFAULT_COMPONENTS: Record<
   [TRAYCER_EPIC_TAG]: TraycerEpicReference as ComponentType<
     Record<string, unknown>
   >,
-};
+} as Components;
 
 export interface TraycerMarkdownProps {
   children: string;
@@ -87,10 +83,9 @@ export interface TraycerMarkdownProps {
   rehypePlugins: PluggableList | null;
   quotable: boolean;
   /**
-   * Whether `children` is still growing (a streaming turn). Drives the
-   * streaming-aware code-block highlight path via `MarkdownStreamingContext`:
-   * the open block throttles its re-highlights and skips cache writes until
-   * it settles. Settled blocks are memoized and never re-read this value.
+   * Whether `children` is still growing (a streaming turn). Forwarded to
+   * Tailmark's `StreamingMarkdown`, which drives open-tail memo and the
+   * streaming code-highlight path via `useIsMarkdownStreaming`.
    */
   isStreaming: boolean;
 }
@@ -105,65 +100,48 @@ export function TraycerMarkdown({
   quotable,
   isStreaming,
 }: TraycerMarkdownProps) {
-  const mergedComponents = useMemo(
-    () =>
-      components
-        ? { ...DEFAULT_COMPONENTS, ...components }
-        : DEFAULT_COMPONENTS,
-    [components],
-  );
+  const mergedComponents = useMemo((): Components => {
+    if (!components) return DEFAULT_COMPONENTS;
+    return {
+      ...DEFAULT_COMPONENTS,
+      ...(components as Components),
+    };
+  }, [components]);
 
-  const effectiveRemarkPlugins = useMemo<PluggableList>(
+  // Only caller extras - Tailmark already ships GFM + disable-indented-code.
+  const effectiveRemarkPlugins = useMemo<PluggableList | undefined>(
     () =>
-      remarkPlugins
-        ? [...DEFAULT_REMARK_PLUGINS, ...remarkPlugins]
-        : DEFAULT_REMARK_PLUGINS,
+      remarkPlugins && remarkPlugins.length > 0 ? remarkPlugins : undefined,
     [remarkPlugins],
   );
 
   const effectiveRehypePlugins = useMemo<PluggableList>(() => {
-    if (!rehypePlugins) return DEFAULT_REHYPE_PLUGINS;
-    const sanitizeIndex = DEFAULT_REHYPE_PLUGINS.length - 1;
-    return [
-      ...DEFAULT_REHYPE_PLUGINS.slice(0, sanitizeIndex),
-      ...rehypePlugins,
-      DEFAULT_REHYPE_PLUGINS[sanitizeIndex],
-    ];
+    if (!rehypePlugins || rehypePlugins.length === 0) {
+      return PRODUCT_REHYPE_PLUGINS;
+    }
+    return [...PRODUCT_REHYPE_PLUGINS, ...rehypePlugins];
   }, [rehypePlugins]);
 
-  const { blocks, tailStartIndex } = useMarkdownBlocks(String(children || ""));
-
   return (
-    <MarkdownStreamingContext.Provider value={isStreaming}>
-      <div
-        data-quotable={quotable ? "true" : undefined}
-        className={cn(
-          "prose dark:prose-invert md-prose max-w-none",
-          proseSize === "normal" ? "prose-base" : "prose-sm",
-          className,
-        )}
+    <div
+      data-quotable={quotable ? "true" : undefined}
+      className={cn(
+        "prose dark:prose-invert md-prose max-w-none",
+        proseSize === "normal" ? "prose-base" : "prose-sm",
+        className,
+      )}
+    >
+      <StreamingMarkdown
+        isStreaming={isStreaming}
+        highlighter={TRAYCER_STREAMING_HIGHLIGHTER}
+        sanitizeSchema={extendTraycerSanitizeSchema}
+        urlTransform={markdownUrlTransform}
+        remarkPlugins={effectiveRemarkPlugins}
+        rehypePlugins={effectiveRehypePlugins}
+        components={mergedComponents}
       >
-        {blocks.map((block) =>
-          isStreaming && block.endId >= tailStartIndex ? (
-            <div key={block.id} data-md-unstable="" className="contents">
-              <MarkdownBlock
-                raw={block.raw}
-                remarkPlugins={effectiveRemarkPlugins}
-                rehypePlugins={effectiveRehypePlugins}
-                components={mergedComponents}
-              />
-            </div>
-          ) : (
-            <MarkdownBlock
-              key={block.id}
-              raw={block.raw}
-              remarkPlugins={effectiveRemarkPlugins}
-              rehypePlugins={effectiveRehypePlugins}
-              components={mergedComponents}
-            />
-          ),
-        )}
-      </div>
-    </MarkdownStreamingContext.Provider>
+        {String(children || "")}
+      </StreamingMarkdown>
+    </div>
   );
 }

@@ -331,7 +331,8 @@ export function NotificationsSessionProvider(
 
   // Cloud rows are a relay-session snapshot, not a durable replica. A lost
   // binding or replacement stream client starts a new ownership epoch and
-  // must remain unavailable until that new relay delivers its own snapshot.
+  // stays non-authoritative while the new relay connects and delivers its own
+  // snapshot.
   const resetCloudRelayOwnership = useCallback((): void => {
     resetCloudRelaySession();
   }, [resetCloudRelaySession]);

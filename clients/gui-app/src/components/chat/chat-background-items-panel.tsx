@@ -18,6 +18,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
+import { ManagedCommandStripRows } from "@/components/chat/managed-command-strip-rows";
+import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-command-list-registry";
 import { cn } from "@/lib/utils";
 import {
   BASE_PAD_LEFT,
@@ -353,13 +355,38 @@ function treeHasRunningTask(node: BackgroundTreeNode): boolean {
   return node.children.some((child) => treeHasRunningTask(child));
 }
 
-function backgroundHeaderSummary(
-  runningGroupCount: number,
-  waitingWakeCount: number,
-): string {
-  if (waitingWakeCount === 0) return `${runningGroupCount} running`;
-  if (runningGroupCount === 0) return `${waitingWakeCount} waiting`;
-  return `${runningGroupCount} running · ${waitingWakeCount} waiting`;
+function countedNoun(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * What "Background" actually holds, counted the way the button beside it
+ * behaves. Managed commands are named as their own kinds rather than folded
+ * into the running total, because "Stop all" does not reach them: one summed
+ * "4 running" over a Stop all that leaves three alive is a promise the panel
+ * cannot keep. Naming them also says what they are, which a bare count of
+ * "other things" would not.
+ */
+function backgroundHeaderSummary(input: {
+  readonly runningGroupCount: number;
+  readonly waitingWakeCount: number;
+  readonly monitorCount: number;
+  readonly shellCount: number;
+}): string {
+  const parts: string[] = [];
+  if (input.runningGroupCount > 0) {
+    parts.push(`${input.runningGroupCount} running`);
+  }
+  if (input.waitingWakeCount > 0) {
+    parts.push(`${input.waitingWakeCount} waiting`);
+  }
+  if (input.monitorCount > 0) {
+    parts.push(countedNoun(input.monitorCount, "monitor"));
+  }
+  if (input.shellCount > 0) {
+    parts.push(countedNoun(input.shellCount, "shell"));
+  }
+  return parts.length === 0 ? "0 running" : parts.join(" · ");
 }
 
 function BackgroundTreeRows(props: {
@@ -486,6 +513,8 @@ function BackgroundTreeRow(props: {
 
 export function BackgroundItemsPanel(props: {
   readonly items: ReadonlyArray<BackgroundItem>;
+  readonly epicId: string;
+  readonly chatId: string;
   readonly canAct: boolean;
   readonly readOnly: boolean;
   readonly pendingStopTaskIds: ReadonlySet<string>;
@@ -524,10 +553,18 @@ export function BackgroundItemsPanel(props: {
   const waitingWakeCount = items.filter(
     (item) => item.kind === "wakeup",
   ).length;
-  const headerSummary = backgroundHeaderSummary(
+  // Read from the same store the rows below read, so the header can never
+  // claim a count the list does not show.
+  const managedCommands = useRunningManagedCommandsForChat(
+    props.epicId,
+    props.chatId,
+  );
+  const headerSummary = backgroundHeaderSummary({
     runningGroupCount,
     waitingWakeCount,
-  );
+    monitorCount: managedCommands.filter((c) => c.kind === "monitor").length,
+    shellCount: managedCommands.filter((c) => c.kind === "shell").length,
+  });
   const stopAllDisabled = !stoppable || props.stopAllPending;
 
   return (
@@ -561,7 +598,10 @@ export function BackgroundItemsPanel(props: {
           <span aria-hidden className="shrink-0 text-muted-foreground/40">
             ·
           </span>
-          <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+          <span
+            data-testid="background-header-summary"
+            className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground"
+          >
             {headerSummary}
           </span>
         </CollapsibleTrigger>
@@ -584,7 +624,31 @@ export function BackgroundItemsPanel(props: {
             props.scrollRegionMaxHeightClass,
           )}
         >
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
+          {managedCommands.length > 0 ? (
+            <div className="p-1.5">
+              {/* The subset "Stop all" cannot reach, said once here instead of
+                  once per row - and only when there is something to say it
+                  about. Without it the two row families look interchangeable
+                  and the button above looks broken. */}
+              <div className="flex min-w-0 items-center gap-2 px-2 pb-1">
+                <span className="shrink-0 text-ui-xs font-medium text-muted-foreground">
+                  Monitors and shells
+                </span>
+                <span
+                  aria-hidden
+                  className="h-px min-w-0 flex-1 bg-border/60"
+                />
+                <span className="shrink-0 text-ui-xs text-muted-foreground/70">
+                  Not stopped by Stop all
+                </span>
+              </div>
+              <ManagedCommandStripRows
+                epicId={props.epicId}
+                chatId={props.chatId}
+              />
+            </div>
+          ) : null}
+          <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5 pt-0">
             <BackgroundTreeRows
               nodes={tree}
               depth={0}

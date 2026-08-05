@@ -1,34 +1,28 @@
-import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
-import { formatClockDuration } from "@/lib/format-duration";
-
 interface StreamingActivityFooterProps {
-  /** Wall-clock start (epoch ms) the elapsed counter ticks from. */
-  readonly startedAt: number;
-  /** Latest harness progress line, or null when none is reported. */
-  readonly progress: string | null;
+  /**
+   * Latest harness progress line. Non-empty by construction - callers render
+   * this footer only when there is a line to show, because an empty one still
+   * costs the row a second line of vertical space.
+   */
+  readonly progress: string;
 }
 
 /**
- * Heartbeat shown under a streaming tool/command header: the latest progress
- * line (when the harness reports one) on the left and a 1s-ticking elapsed
- * counter on the right. Mounted only while the activity streams, so the
- * interval lives exactly the in-progress window. Replaces the "frozen card"
- * with a visible sign of life for long-running tools and MCP calls.
+ * The latest progress line, on its own line under a streaming tool header. Long
+ * enough to want the full width, and it changes as the tool works, so it reads
+ * as the tool talking rather than as part of the title.
+ *
+ * The elapsed counter used to share this line, pinned right. That put a lone
+ * "37s" on a second row under every streaming command - commands report no
+ * progress at all, so the row existed purely to hold the number - and split one
+ * activity across two lines. It now sits in the header row itself, immediately
+ * left of the live pulse, which is where the standalone card variant always
+ * showed it. See `resolveToolHeaderElapsed` and `CommandSegment`'s status span.
  */
 export function StreamingActivityFooter(props: StreamingActivityFooterProps) {
-  const { startedAt, progress } = props;
-  const elapsedSeconds = useElapsedSeconds(startedAt, 0, null);
-  const hasProgress = progress !== null && progress.length > 0;
   return (
     <div className="flex min-w-0 items-center gap-2 text-ui-xs text-muted-foreground">
-      {hasProgress ? (
-        <span className="min-w-0 flex-1 truncate">{progress}</span>
-      ) : (
-        <span aria-hidden className="flex-1" />
-      )}
-      <span className="shrink-0 tabular-nums opacity-70">
-        {formatClockDuration(elapsedSeconds)}
-      </span>
+      <span className="min-w-0 flex-1 truncate">{props.progress}</span>
     </div>
   );
 }

@@ -122,6 +122,8 @@ function fakeStreamSession(): IStreamSession {
     sendClientFrame: () => undefined,
     onServerFrame: () => undefined,
     onStatusChange: () => undefined,
+    // Never negotiates: this fake exercises no version-dependent path.
+    getNegotiatedSchemaVersion: () => null,
     requestReconnect: () => undefined,
     close: () => undefined,
   };
@@ -130,6 +132,9 @@ function fakeStreamSession(): IStreamSession {
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => fakeStreamSession(),
+    subscribeWithParamsProvider: () => {
+      throw new Error("not exercised by this test");
+    },
     close: () => undefined,
     isClosed: () => false,
     notifyBearerRotated: () => undefined,

@@ -31,6 +31,7 @@ import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
+import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-position-persist-lifecycle-bridge";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
@@ -45,6 +46,7 @@ import { SupportContextRegistryBridge } from "@/providers/support-context-regist
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
+import { ResourceTelemetryBridge } from "@/providers/resource-telemetry-bridge";
 import { createAppRouter, type AppRouter } from "@/router";
 // Side-effect import: installs the WCO → `.wco` class bridge at module
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
@@ -133,6 +135,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
     <RunnerHostProvider runnerHost={props.runnerHost}>
       <LazyMotion features={domMax}>
         <WindowsBridgeProvider>
+          <ResourceTelemetryBridge />
           <QueryClientProvider client={queryClient}>
             <ThemeProvider>
               <TooltipProvider>
@@ -210,11 +213,15 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <WorktreeChangedStreamMount />
                           </HostScopeReady>
                           <AppLocalNotificationsPersistLifecycleBridge>
-                            <NotificationsSessionProvider
-                              navigate={props.router.navigate}
-                            >
-                              <TraycerAppRuntimeSurface router={props.router} />
-                            </NotificationsSessionProvider>
+                            <ReadingPositionPersistLifecycleBridge>
+                              <NotificationsSessionProvider
+                                navigate={props.router.navigate}
+                              >
+                                <TraycerAppRuntimeSurface
+                                  router={props.router}
+                                />
+                              </NotificationsSessionProvider>
+                            </ReadingPositionPersistLifecycleBridge>
                           </AppLocalNotificationsPersistLifecycleBridge>
                         </HostStreamProvider>
                       </LandingTerminalPersistLifecycleBridge>

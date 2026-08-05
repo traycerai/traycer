@@ -5,6 +5,7 @@ import type {
   ChatApprovalState,
   ChatFileEditApprovalState,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
@@ -30,9 +31,13 @@ import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
-import { lowerScrollRegionMaxHeightClass } from "@/lib/chat/chat-lower-scroll-budget";
+import {
+  chatBackgroundSectionVisible,
+  lowerScrollRegionMaxHeightClass,
+} from "@/lib/chat/chat-lower-scroll-budget";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-command-list-registry";
 import { cn } from "@/lib/utils";
 import type {
   PendingInterviewView,
@@ -131,14 +136,14 @@ export interface ChatLowerApprovalsState {
 }
 
 export interface ChatLowerQueueState {
-  readonly editingItem: ChatQueuedItem | null;
+  readonly editingItem: ChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  readonly onEdit: (item: ChatQueuedItem) => void;
+  readonly onEdit: (item: ChatQueuedPromptItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedItem) => void;
+  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
   readonly onCancelEdit: () => void;
   readonly onStopBackgroundItem: (taskId: string) => string | null;
   readonly onStopAllBackgroundItems: () => string | null;
@@ -146,7 +151,7 @@ export interface ChatLowerQueueState {
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedItem) => void;
+  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
 }
 
 export interface ChatLowerComposerState {
@@ -260,8 +265,16 @@ export function ChatLowerInteractionSurfaces(
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
-  const backgroundVisible =
-    props.backgroundItems !== undefined && props.backgroundItems.length > 0;
+  // Read here rather than inside the dock: the same count decides the dock's
+  // Background section and the spacing of everything below it.
+  const runningManagedCommandCount = useRunningManagedCommandsForChat(
+    props.epicId,
+    props.chatId,
+  ).length;
+  const backgroundVisible = chatBackgroundSectionVisible({
+    backgroundItemCount: props.backgroundItems?.length ?? 0,
+    runningManagedCommandCount,
+  });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
   const approvalVisible = approvalSurfaceVisible(
@@ -348,6 +361,7 @@ export function ChatLowerInteractionSurfaces(
       <ChatLowerDock
         snapshotLoaded={props.runtime.snapshotLoaded}
         epicId={props.epicId}
+        chatId={props.chatId}
         viewTabId={props.viewTabId}
         selfAgent={stopControls.self}
         activeAgents={activeAgents}
@@ -355,6 +369,7 @@ export function ChatLowerInteractionSurfaces(
         restore={props.restoreContext}
         queue={props.queue.value}
         backgroundItems={props.backgroundItems}
+        runningManagedCommandCount={runningManagedCommandCount}
         backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
         backgroundStopAllPending={props.backgroundStopAllPending}
         activeTurnStatus={props.turn.activeTurnStatus}
@@ -582,14 +597,18 @@ function ComposerSlotShell(props: {
   readonly bottomSpacing: ComposerSlotBottomSpacing;
 }) {
   return (
-    <div
-      className={cn(
-        "bg-canvas px-4",
-        props.topSpacing === "normal" ? "pt-4" : "pt-0",
-        props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
-      )}
-    >
-      <div className="mx-auto w-full max-w-3xl">{props.children}</div>
+    <div className="pointer-events-none px-4">
+      <div
+        className={cn(
+          "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas",
+          props.topSpacing === "normal" ? "pt-4" : "pt-0",
+          props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
+          props.bottomSpacing === "normal" &&
+            "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+        )}
+      >
+        {props.children}
+      </div>
     </div>
   );
 }

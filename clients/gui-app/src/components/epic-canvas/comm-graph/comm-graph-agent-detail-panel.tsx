@@ -28,6 +28,7 @@ export interface CommGraphAgentDetailPanelProps {
   readonly agentNames: ReadonlyMap<string, string>;
   /** Already filtered to this agent, in merged-array order. */
   readonly events: ReadonlyArray<CommGraphEvent>;
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -36,9 +37,6 @@ export interface CommGraphAgentDetailPanelProps {
   /** Created-row jump to the child's transcript start - see `CommGraphJump`. */
   readonly canJumpToCreated: (event: CommGraphEvent) => boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  /** Notice-row jump to the idle agent's tail - see `CommGraphJump`. */
-  readonly canJumpToNoticed: (event: CommGraphEvent) => boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   /** Opens an agent's tile with no scroll - an anchor-less heading link. */
   readonly onOpenAgentId: (agentId: string) => void;
   readonly onOpenAgent: (agent: CommGraphAgentNode) => void;
@@ -51,16 +49,15 @@ export function CommGraphAgentDetailPanel(
   const {
     agent,
     agentNames,
+    canOpenAgentForEvent,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     epicId,
     events,
     onClose,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgent,
     onOpenAgentId,
@@ -113,14 +110,13 @@ export function CommGraphAgentDetailPanel(
       epicId={epicId}
       agentNames={agentNames}
       emptyLabel="No captured activity for this agent yet. The graph records messages between agents and broker notices."
+      canOpenAgentForEvent={canOpenAgentForEvent}
       canJump={canJump}
       onJump={onJump}
       canJumpToSender={canJumpToSender}
       onJumpToSender={onJumpToSender}
       canJumpToCreated={canJumpToCreated}
       onJumpToCreated={onJumpToCreated}
-      canJumpToNoticed={canJumpToNoticed}
-      onJumpToNoticed={onJumpToNoticed}
       onOpenAgentId={onOpenAgentId}
       onClose={onClose}
     />

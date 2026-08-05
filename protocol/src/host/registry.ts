@@ -84,9 +84,14 @@ import {
   agentListProviderProfilesUpgradeV20ToV30,
 } from "@traycer/protocol/host/agent/profiles";
 import {
+  agentInboxAckV10,
+  agentInboxReadDowngradeV20ToV10,
   agentInboxReadV10,
+  agentInboxReadUpgradeV10ToV20,
+  agentInboxReadV20,
   agentInboxSubscribeV10,
   agentInboxSubscribeV11,
+  agentInboxSubscribeV12,
 } from "@traycer/protocol/host/agent/inbox";
 import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
 import {
@@ -136,6 +141,7 @@ import {
   chatSubscribeV13,
   chatSubscribeV14,
   chatSubscribeV15,
+  chatSubscribeV16,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -163,6 +169,13 @@ import {
   lifecycleCommitShutdownV10,
   lifecycleReleaseShutdownV10,
 } from "@traycer/protocol/host/lifecycle/contracts";
+import {
+  managedCommandDeleteV10,
+  managedCommandStartV10,
+  managedCommandStopV10,
+  managedCommandSubscribeListV10,
+  managedCommandSubscribeOutputV10,
+} from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -305,6 +318,7 @@ import {
   resourcesSubscribeV11,
   resourcesSubscribeV12,
   resourcesSubscribeV13,
+  resourcesSubscribeV14,
   resourcesKillV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
@@ -319,7 +333,10 @@ import {
 import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
-import { epicCommunicationGraphSubscribeV10 } from "@traycer/protocol/host/epic/communication-graph";
+import {
+  epicCommunicationGraphSubscribeV10,
+  hostCommunicationGraphCloudFeedSubscribeV10,
+} from "@traycer/protocol/host/epic/communication-graph";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -331,6 +348,7 @@ import {
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
   gitSubscribeStatusV12,
+  gitSubscribeStatusV13,
 } from "@traycer/protocol/host/git-contracts";
 import {
   prSubscribeListForEpicV10,
@@ -3759,6 +3777,29 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentInboxReadV20,
+          upgradeFromPreviousVersion: agentInboxReadUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentInboxReadDowngradeV20ToV10 },
+    },
+  },
+  "agent.inbox.ack": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentInboxAckV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "agent.stop": {
     1: {
@@ -4602,6 +4643,48 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: resourcesKillV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The human lifecycle controls for monitors and shells. Brand-new v1.0
+  // methods on the same `degrade: unsupported` channel as `resources.kill`
+  // above: a host without the managed-command subsystem simply lacks them.
+  "managedCommand.start": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandStartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.delete": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandDeleteV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -5550,7 +5633,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
- * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
+ * `terminal.subscribe@1.0`, `git.subscribeStatus@1.3`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
  * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
  * `pr.subscribeListForEpic@1.0`, `pr.subscribeDetail@1.0`, and
@@ -5586,7 +5669,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 //
 // `chat.subscribe` is deliberately declared apart from every other method
 // here, then merged back in via spread into `HOST_STREAM_RPC_REGISTRY_DEFINITION`
-// below: its 6-minor discriminated-union snapshot schema is large enough that
+// below: its 7-minor discriminated-union snapshot schema is large enough that
 // referencing `typeof` on a merged const that includes it - from ANY exported
 // type position - hits TS7056 during `.d.ts` emission, even when that
 // position only picks OTHER methods out of the merge. Keeping this const free
@@ -5687,9 +5770,32 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // The "Monitors & Shells" surface: one stream per epic for the list, one per
+  // command for its output. Both brand-new at 1.0 - a host that lacks the
+  // managed-command subsystem rejects the open as an unknown method.
+  "managedCommand.subscribeList": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandSubscribeListV10,
+        },
+      },
+    },
+  },
+  "managedCommand.subscribeOutput": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandSubscribeOutputV10,
+        },
+      },
+    },
+  },
   "git.subscribeStatus": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
@@ -5706,6 +5812,14 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // explicit in the host resolver because streams have no bridges.
         2: {
           contract: gitSubscribeStatusV12,
+        },
+        // Watcher health: `watcher: { state, detail }` on snapshot/updated
+        // frames, so a client can tell "watching" from "fell back to polling"
+        // - and a user-fixable capacity fallback from a terminal one. Additive;
+        // the open request is v1.2's verbatim. Projection for lower minors
+        // stays explicit in the host resolver (streams have no bridges).
+        3: {
+          contract: gitSubscribeStatusV13,
         },
       },
     },
@@ -5725,7 +5839,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -5739,6 +5853,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         3: {
           contract: resourcesSubscribeV13,
         },
+        // @1.4 widens the owner kind vocabulary by `managed-command`. A peer
+        // below it keeps the frozen three-kind enum and never receives one of
+        // those owners: the resolver folds their usage into `other`, as it did
+        // for every minor before this one.
+        4: {
+          contract: resourcesSubscribeV14,
+        },
       },
     },
   },
@@ -5748,13 +5869,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // FROZEN: a monitor that negotiated it never receives the new kind, and
       // the resolver gates on the negotiated version rather than assuming the
       // peer will tolerate an unknown frame.
-      latestMinor: 1,
+      //
+      // @1.2 adds `eventId` to the EXISTING "message" item (not a new frame
+      // kind) - unlike a new frame kind, an unrecognized extra field inside an
+      // already-known object is silently dropped by a @1.0/@1.1 monitor's own
+      // non-strict zod parse, so the resolver builds the @1.2 shape
+      // unconditionally rather than branching on negotiated minor.
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentInboxSubscribeV10,
         },
         1: {
           contract: agentInboxSubscribeV11,
+        },
+        2: {
+          contract: agentInboxSubscribeV12,
         },
       },
     },
@@ -5785,6 +5915,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: epicCommunicationGraphSubscribeV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream method: the cloud-relayed
+  // counterpart of `epic.communicationGraph.subscribe` above. A host built
+  // without cloud replication, or one that predates this method, never
+  // advertises it, so the client's subscription degrades to `unsupported`
+  // and falls back to the local per-host stream. Never add it to the unary
+  // released floor - that list is fail-closed on the name set.
+  "host.communicationGraph.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostCommunicationGraphCloudFeedSubscribeV10,
         },
       },
     },
@@ -5872,7 +6018,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -5892,6 +6038,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         5: {
           contract: chatSubscribeV15,
         },
+        6: {
+          contract: chatSubscribeV16,
+        },
       },
     },
   },
@@ -5902,7 +6051,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
 // `typeof HOST_STREAM_RPC_REGISTRY_DEFINITION` (which includes it): every
 // OTHER streaming method is built from `typeof
 // HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`, a const that never contains
-// `chat.subscribe`'s 6-minor discriminated-union schema, so `.d.ts` emission
+// `chat.subscribe`'s 7-minor discriminated-union schema, so `.d.ts` emission
 // never has to print it - `keyof HostStreamRpcRegistry` and `ParamsOf<...>`
 // stay precise for every method except `chat.subscribe`. Its callers (e.g.
 // `ChatStreamClient`) lose compile-time verification of their open-request

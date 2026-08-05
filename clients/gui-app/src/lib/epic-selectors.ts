@@ -20,7 +20,7 @@
  * to satisfy `@typescript-eslint/no-unnecessary-condition` while keeping
  * runtime safety.
  */
-import { useMemo, useSyncExternalStore } from "react";
+import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { createSelector, lruMemoize } from "reselect";
@@ -40,6 +40,8 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
+import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommand } from "@/stores/managed-commands/managed-command-list-registry";
 import {
   deriveEpicSyncPillState,
   type EpicHostDirtyState,
@@ -794,7 +796,21 @@ export function useEpicTabDisplayTitle(
     epicId: isTerminal ? epicId : null,
     sessionId: isTerminal ? node.id : null,
   });
-  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
+  // An output window's tile carries no label at all (its persisted shape is
+  // just the command pointer), so the kind-explicit title comes from the live
+  // list stream - and follows a rename the agent makes.
+  const managedCommand = useManagedCommand(
+    epicId,
+    node.type === "managed-command-output" ? node.id : "",
+  );
+  const liveManagedCommandTitle =
+    managedCommand === null ? null : managedCommandTitle(managedCommand);
+  return (
+    liveArtifactTitle ??
+    liveTerminalTitle ??
+    liveManagedCommandTitle ??
+    node.name
+  );
 }
 
 export function useEpicLiveArtifactTitleGenerating(
@@ -842,6 +858,13 @@ export function useEpicArtifactFragment(
   artifactId: string | null,
 ): Y.XmlFragment | null {
   const handle = useOpenEpicHandle();
+  // Takes the lease itself. The store's accessor is a pure read - it cannot
+  // materialize a cold room, because it runs inside a selector - so a caller
+  // that read without pinning would sit in a loading state forever. Bundling
+  // the two makes the hook correct by construction; `getArtifactFragment` on
+  // the store stays the escape hatch for non-React callers, which must lease
+  // explicitly (see `useEpicExportArtifacts`).
+  useEpicArtifactBodyLease(artifactId);
   return useStore(handle.store, (s) => {
     if (artifactId === null) return null;
     return s.getArtifactFragment(artifactId);
@@ -863,6 +886,9 @@ export function useEpicArtifactBodyAwareness(
   artifactId: string | null,
 ): Awareness | null {
   const handle = useOpenEpicHandle();
+  // Same reasoning as `useEpicArtifactFragment`; lease counts are refcounted,
+  // so a component using both hooks simply holds two.
+  useEpicArtifactBodyLease(artifactId);
   return useStore(handle.store, (s) => {
     if (artifactId === null) return null;
     return s.getArtifactBodyAwareness(artifactId);
@@ -883,6 +909,36 @@ export function useEpicArtifactBodyAvailability(
     if (artifactId === null) return "unavailable";
     return s.getArtifactBodyAvailability(artifactId);
   });
+}
+
+/**
+ * Materializes `artifactId`'s artifact-room and holds it materialized for as
+ * long as the calling component is mounted.
+ *
+ * Rooms the host opens are cached as encoded update bytes; taking a lease is
+ * what builds the live `Y.Doc`, and holding it is what stops the room cooling
+ * back down underneath a mounted editor. {@link useEpicArtifactFragment} and
+ * {@link useEpicArtifactBodyAwareness} call this for you - use it directly
+ * only to pin a room whose fragment this component does not itself read.
+ *
+ * The lease is re-taken when the resolved room id changes rather than only
+ * when the artifact id does: an artifact reassigned between two rooms that are
+ * both already `ready` produces no availability transition, so keying the
+ * effect on availability alone would leave the lease on the stale room.
+ */
+export function useEpicArtifactBodyLease(artifactId: string | null): void {
+  const handle = useOpenEpicHandle();
+  const artifactRoomId = useStore(handle.store, (s) =>
+    artifactId === null ? null : s.getArtifactRoomId(artifactId),
+  );
+  // Layout, not passive: this is what materializes the room, and a passive
+  // effect runs after paint - the tile would show its skeleton for a frame
+  // before the fragment resolved. A layout effect lands the lease, and the
+  // resulting store update, before the browser paints.
+  useLayoutEffect(() => {
+    if (artifactId === null || artifactRoomId === null) return;
+    return handle.store.getState().acquireArtifactBodyLease(artifactId);
+  }, [handle, artifactId, artifactRoomId]);
 }
 
 // ─── Doc reference for editor binding ─────────────────────────────────────

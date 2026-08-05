@@ -22,6 +22,7 @@ export interface CommGraphThreadPanelProps {
   readonly edge: CommGraphAggregatedEdge;
   readonly epicId: string;
   readonly agentNames: ReadonlyMap<string, string>;
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -30,9 +31,6 @@ export interface CommGraphThreadPanelProps {
   /** Created-row jump to the child's transcript start - see `CommGraphJump`. */
   readonly canJumpToCreated: (event: CommGraphEvent) => boolean;
   readonly onJumpToCreated: (event: CommGraphEvent) => void;
-  /** Notice-row jump to the idle agent's tail - see `CommGraphJump`. */
-  readonly canJumpToNoticed: (event: CommGraphEvent) => boolean;
-  readonly onJumpToNoticed: (event: CommGraphEvent) => void;
   /** Opens an agent's tile with no scroll - an anchor-less heading link. */
   readonly onOpenAgentId: (agentId: string) => void;
   readonly onClose: () => void;
@@ -41,16 +39,15 @@ export interface CommGraphThreadPanelProps {
 export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
   const {
     agentNames,
+    canOpenAgentForEvent,
     canJump,
     canJumpToCreated,
-    canJumpToNoticed,
     canJumpToSender,
     edge,
     epicId,
     onClose,
     onJump,
     onJumpToCreated,
-    onJumpToNoticed,
     onJumpToSender,
     onOpenAgentId,
   } = props;
@@ -70,14 +67,13 @@ export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
       epicId={epicId}
       agentNames={agentNames}
       emptyLabel="No messages on this pair yet."
+      canOpenAgentForEvent={canOpenAgentForEvent}
       canJump={canJump}
       onJump={onJump}
       canJumpToSender={canJumpToSender}
       onJumpToSender={onJumpToSender}
       canJumpToCreated={canJumpToCreated}
       onJumpToCreated={onJumpToCreated}
-      canJumpToNoticed={canJumpToNoticed}
-      onJumpToNoticed={onJumpToNoticed}
       onOpenAgentId={onOpenAgentId}
       onClose={onClose}
     />

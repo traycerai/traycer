@@ -867,5 +867,36 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       const { result } = currentPromptForModel(null, OPUS);
       expect(selectableLabels(result.current)).toEqual(["Fable only"]);
     });
+
+    it("does not offer a profile with Fable headroom when its shared five-hour limit is exhausted", () => {
+      mocks.providers = [
+        claudeState([
+          profile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Current",
+            rateLimitStatus: "hard_limit",
+            rateLimitLimitedScopes: [
+              { family: "Fable", severity: "hard_limit" },
+            ],
+            authenticated: true,
+          }),
+          profile({
+            profileId: "shared-blocked",
+            kind: "managed",
+            label: "Shared blocked",
+            rateLimitStatus: "hard_limit",
+            // No Fable-specific limit means this profile still has Fable
+            // capacity, but the shared session window gates every model.
+            rateLimitLimitedScopes: [{ family: null, severity: "hard_limit" }],
+            authenticated: true,
+          }),
+        ]),
+      ];
+      const { result } = currentPromptForModel(null, FABLE);
+      const prompt = visiblePrompt(result.current);
+      expect(selectableLabels(prompt)).toEqual([]);
+      expect(prompt.primaryTarget).toBeNull();
+    });
   });
 });

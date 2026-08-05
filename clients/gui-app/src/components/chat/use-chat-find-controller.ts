@@ -12,12 +12,9 @@ import {
 } from "@/components/chat/chat-collapsible-key";
 import {
   chatTimelineLocationForMessage,
-  chatViewportAnchorRowIndex,
   selectActiveUserMessageId,
   type ChatTimelineNavigationLocation,
-  type ChatViewportAnchorListState,
 } from "@/components/chat/chat-messages-scroll-helpers";
-import type { RequestChatMeasuredItemChange } from "@/components/chat/chat-measured-item-change-context";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { useSetChatFindForcedOpen } from "@/stores/chats/chat-find-force-store-context";
 import { arrayShallowEq } from "@/stores/epics/open-epic/projection-helpers";
@@ -56,19 +53,12 @@ interface ChatFindControllerArgs {
   readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
   readonly messageIndexByIdRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
-  /** LegendList's own measured positions (no DOM rect probing - jsdom
-   *  reports unreliable, non-scroll-relative rects for virtualized rows),
-   *  for resolving the row at the viewport's reading line. */
-  readonly getViewportAnchorListState: () => ChatViewportAnchorListState | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
   /** Manual-navigation cancel (decision #21: find performs it first). */
   readonly cancelManualNavigation: () => void;
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,
   ) => void;
-  /** Disclosure-preserving flushSync helper (chat-scroll-disclosure.ts),
-   *  shared with segment toggles - see `requestFindReveal`'s use below. */
-  readonly requestMeasuredItemChange: RequestChatMeasuredItemChange;
 }
 
 interface ChatFindController {
@@ -96,11 +86,9 @@ export function useChatFindController(
     backgroundToolBlockIdsRef,
     messageIndexByIdRef,
     getScroller,
-    getViewportAnchorListState,
     scrollToLocation,
     cancelManualNavigation,
     setScrolledActiveUserMessageIdIfChanged,
-    requestMeasuredItemChange,
   } = args;
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
@@ -234,35 +222,8 @@ export function useChatFindController(
     [setFindForcedOpen],
   );
 
-  // Anchors a find chain-open on the row currently at the viewport's own top
-  // edge (not the reveal target - the target is scrolled to separately right
-  // after) - see requestMeasuredItemChange's caller below and
-  // chat-scroll-disclosure.ts's doc comment for why the top edge specifically.
-  // Resolved from LegendList's own measured positions (no DOM rect probing -
-  // jsdom reports unreliable, non-scroll-relative rects for virtualized rows),
-  // matching viewportActiveUserMessageId's approach; only the final anchor
-  // element itself needs a real DOM node, since
-  // preserveChatScrollAcrossDisclosureChange measures its live rect.
-  const getViewportTopAnchorElement = useCallback((): HTMLElement | null => {
-    const state = getViewportAnchorListState();
-    if (state === null) return null;
-    const rowIndex = chatViewportAnchorRowIndex(
-      state,
-      messagesRef.current.length,
-      0,
-    );
-    if (rowIndex === null) return null;
-    // chatViewportAnchorRowIndex clamps its result to [0, rowCount - 1] - a
-    // non-null return is always a valid index into messagesRef.current.
-    return getMountedMessageRoot(messagesRef.current[rowIndex].id);
-  }, [getMountedMessageRoot, getViewportAnchorListState, messagesRef]);
-
   const applyFindOpenedTarget = useCallback(
-    (
-      target: ChatFindReconcileTarget,
-      forceApply: boolean,
-      preserveScrollAcrossOpen: boolean,
-    ): boolean => {
+    (target: ChatFindReconcileTarget, forceApply: boolean): boolean => {
       const chainKeyIds = target.owningChain.map(serializeChatCollapsibleKey);
       const previousTarget = findOpenedTargetRef.current;
       const targetChanged =
@@ -271,13 +232,10 @@ export function useChatFindController(
         previousTarget.unitId !== target.unitId ||
         !arrayShallowEq(previousTarget.chainKeyIds, chainKeyIds);
       if (!forceApply && !targetChanged) return false;
-      if (preserveScrollAcrossOpen) {
-        requestMeasuredItemChange(getViewportTopAnchorElement(), () =>
-          applyFindOpenedChain(target.owningChain),
-        );
-      } else {
-        applyFindOpenedChain(target.owningChain);
-      }
+      // LegendList's own `maintainVisibleContentPosition` is the sole passive
+      // stability mechanism (behavior contract) - the chain-open flows
+      // directly into it, with no bespoke scroll-preservation wrapper.
+      applyFindOpenedChain(target.owningChain);
       findOpenedTargetRef.current = {
         messageId: target.messageId,
         unitId: target.unitId,
@@ -285,11 +243,7 @@ export function useChatFindController(
       };
       return true;
     },
-    [
-      applyFindOpenedChain,
-      getViewportTopAnchorElement,
-      requestMeasuredItemChange,
-    ],
+    [applyFindOpenedChain],
   );
 
   const releaseFindOpenedChain = useCallback((): void => {
@@ -388,30 +342,11 @@ export function useChatFindController(
       findRevealSkipUnitScrollRef.current = sameUnit;
       // LegendList remeasures a row's height via its own per-row
       // ResizeObserver, so the chain-open below picks up the target row's OWN
-      // layout change without an explicit nudge. What LegendList does not do
-      // is correct the scroll offset for content ABOVE the viewport changing
-      // size (`maintainVisibleContentPosition.size` is off), so an
-      // uncorrected chain-open revealing a deeply nested match can shift the
-      // reader's current view before the deliberate scroll below catches up.
-      // `preserveScrollAcrossOpen: true` closes that gap: the chain-open runs
-      // through the same flushSync + geometric-delta helper segment toggles
-      // use (chat-scroll-disclosure.ts), anchored on the row at the
-      // viewport's own top edge, so the reader's view stays pixel-stable
-      // across the open and this frame's scroll lands cleanly on top of it.
-      // This is safe here because a live find navigation (search/next/
-      // previous) always originates from a real DOM event handler - the one
-      // reachable exception is the tile-find store's registration-time
-      // search REPLAY (an open session restored across a chat tile's
-      // whole-tile remount on tab switch), which runs synchronously inside
-      // this controller's own adapter-registration layout effect; flushSync
-      // there degrades to a warned no-op (see chat-messages.tsx's
-      // scroll-request effect comment for why), so that one path keeps the
-      // pre-ticket-6 jump risk. Not fixed here: doing so would mean deferring
-      // this call (e.g. a microtask) uniformly, which risks the delicate
-      // generation/rAF sequencing above for a narrow, low-stakes case (a
-      // tile that's remounting has no settled reading position to protect
-      // yet).
-      applyFindOpenedTarget(target, true, true);
+      // layout change without an explicit nudge. Content ABOVE the viewport
+      // changing size (a deeply nested chain-open) is corrected by LegendList's
+      // own `maintainVisibleContentPosition`, unconditionally enabled - no
+      // bespoke scroll-preservation wrapper needed here.
+      applyFindOpenedTarget(target, true);
       cancelFindRevealFrame();
       findRevealFrameRef.current = window.requestAnimationFrame(() => {
         findRevealFrameRef.current = null;
@@ -430,9 +365,8 @@ export function useChatFindController(
 
   const requestFindReconcile = useCallback(
     (target: ChatFindReconcileTarget): void => {
-      // Passive streaming resync of an already-active target, not a user-
-      // driven reveal - no scroll-preservation wrapping needed here.
-      applyFindOpenedTarget(target, false, false);
+      // Passive streaming resync of an already-active target.
+      applyFindOpenedTarget(target, false);
     },
     [applyFindOpenedTarget],
   );

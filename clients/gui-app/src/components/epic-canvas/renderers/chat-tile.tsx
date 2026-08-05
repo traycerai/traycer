@@ -24,6 +24,7 @@ import type {
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   BackgroundItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -85,7 +86,6 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { isChatRunInProgress } from "@/stores/chats/chat-session-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
@@ -737,9 +737,6 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
       if (target.kind === "first-message") {
         return view.messages[0]?.id ?? null;
       }
-      if (target.kind === "last-message") {
-        return view.messages.at(-1)?.id ?? null;
-      }
       return messageIdForBlock(view.messages, target.blockId);
     };
     const messageId = resolveTargetMessageId();
@@ -873,13 +870,10 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
               tabHostId={view.tabHostId}
               workspaceRoots={view.linkResolutionRoots}
               messages={view.messages}
-              localProvenanceMessageIds={view.localProvenanceMessageIds}
-              consumeLocalProvenance={view.consumeLocalProvenance}
               backgroundItems={view.lower.backgroundItems}
               scrollRequest={backgroundScrollRequest}
               surfaceVisible={view.surfaceVisible}
               systemOverlayActive={systemOverlayActive}
-              isChatStreaming={view.isChatStreaming}
               getMessageActions={view.getMessageActions}
               nextStepActions={view.nextStepActions}
               planActions={view.planActions}
@@ -896,14 +890,20 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * Absolutely overlays the transcript (decision log #3) instead of
              * pushing its height via flex, so streamed replies flow visually
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset.
+             * transcript's bottom content inset. The full-width positioning
+             * layer must remain both pointer- and paint-transparent so it
+             * cannot cover the transcript scrollbar or its edge lanes.
+             * Centered lower surfaces opt back into pointer handling and own
+             * their opaque backplates (including the bottom seam seal), so
+             * transcript content cannot show through the actual chrome.
              */}
             {view.snapshotLoaded ? (
               <div
                 ref={setLowerSurfacesElement}
                 className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+                data-chat-lower-surfaces-overlay=""
               >
-                <div className="pointer-events-auto">
+                <div className="pointer-events-none">
                   <SurfaceActivityProvider active={view.surfaceFocused}>
                     <ChatLowerInteractionSurfaces
                       epicId={view.currentEpicId}
@@ -1097,7 +1097,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
       pendingUserMessages: s.pendingUserMessages,
-      localProvenanceMessageIds: s.localProvenanceMessageIds,
       currentComposerSettings: s.currentComposerSettings,
       liveAssistantMessage: s.liveAssistantMessage,
       worktreeBinding: s.worktreeBinding,
@@ -1273,9 +1272,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     renderedDisplayContext,
   );
+  // Only a prompt item can be loaded into the composer for editing, so narrow
+  // here rather than at each consumer: this feeds the composer's settings seed
+  // and its remount key, neither of which a content-free managed-command item
+  // could supply.
   const editingQueueItem =
     state.queue.items.find(
-      (item) => item.queueItemId === uiState.editingQueueItemId,
+      (item): item is ChatQueuedPromptItem =>
+        item.kind === "prompt" &&
+        item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
   const chatSettingsSeed = state.chat?.settings ?? null;
@@ -2108,13 +2113,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
-    localProvenanceMessageIds: state.localProvenanceMessageIds,
-    consumeLocalProvenance: handle.store.getState().consumeLocalProvenance,
     surfaceVisible,
     surfaceFocused,
-    // Ticket 15 (decision #29): the sanctioned host-owned streaming signal
-    // for the fresh-open policy - NOT the trailing-assistant heuristic.
-    isChatStreaming: isChatRunInProgress(state.runStatus),
     getMessageActions: messageActionsFor,
     nextStepActions,
     planActions,
@@ -2155,15 +2155,10 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
-  readonly localProvenanceMessageIds: ReadonlySet<string>;
-  readonly consumeLocalProvenance: (messageId: string) => void;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
-  /** Ticket 15 (decision #29): host-owned streaming signal for the fresh-open
-   *  policy - NOT the trailing-assistant heuristic. */
-  readonly isChatStreaming: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
@@ -2277,9 +2272,8 @@ function ChatSessionMessagesSurface(
               taskTitle={props.node.name}
               taskId={props.node.id}
               epicId={props.epicId}
+              hostId={props.tabHostId}
               messages={props.messages}
-              localProvenanceMessageIds={props.localProvenanceMessageIds}
-              consumeLocalProvenance={props.consumeLocalProvenance}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}
@@ -2287,7 +2281,6 @@ function ChatSessionMessagesSurface(
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
               systemOverlayActive={props.systemOverlayActive}
-              isChatStreaming={props.isChatStreaming}
               composerOverlayHeight={props.composerOverlayHeight}
             />
           </ChatMarkdownLinkProvider>

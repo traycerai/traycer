@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import {
   CancelledError,
   queryOptions,
@@ -23,6 +23,7 @@ import {
   richSlotOrderingKey,
 } from "@/lib/git/git-rich-slot-ordering";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { useGitSubscriptionOwnsRichSlot } from "./use-git-list-changed-files-subscription";
 
 export interface GitListChangedFilesWithSubmodulesResult {
   readonly data: GitListChangedFilesResponseV11 | null;
@@ -208,27 +209,28 @@ function useRichSlotOwnershipTransitions(opts: {
 }
 
 /**
- * Reactive read of whether the `git.subscribeStatus` stream owns the rich
- * slot: negotiated minor >= 1 on major 1. `null`/unknown/minor-0 all mean the
- * unary+timer pair owns it (today's behavior verbatim). Tracked through
- * `subscribeMethodSupport` so a handshake settling (or a host swap changing
- * the negotiated version) re-renders consumers.
+ * Reactive read of whether the `git.subscribeStatus` stream owns the rich slot
+ * FOR THIS REPO: negotiated minor >= 1 on major 1. `null`/unknown/minor-0 all
+ * mean the unary+timer pair owns it (today's behavior verbatim).
+ *
+ * Scoped to this hook's `(hostId, runningDir, ignoreWhitespace)`. It used to
+ * read the client-wide negotiated version with no arguments at all, which
+ * answered for whichever repo's stream reconciliation reached first: repo A at
+ * >= 1.1 disabled repo B's unary query, and a repo B session still at 1.0 never
+ * wrote the rich slot either, leaving that panel with no writer.
  */
-function useStreamOwnsRichSlot(): boolean {
+function useStreamOwnsRichSlot(args: {
+  readonly hostId: string | null;
+  readonly runningDir: string | null;
+  readonly ignoreWhitespace: boolean;
+}): boolean {
   const wsStreamClient = useWsStreamClient();
-  const subscribe = useCallback(
-    (onStoreChange: () => void) =>
-      wsStreamClient === null
-        ? () => undefined
-        : wsStreamClient.subscribeMethodSupport(onStoreChange),
-    [wsStreamClient],
-  );
-  const getSnapshot = useCallback(() => {
-    const version =
-      wsStreamClient?.getMethodSchemaVersion("git.subscribeStatus") ?? null;
-    return version !== null && version.major === 1 && version.minor >= 1;
-  }, [wsStreamClient]);
-  return useSyncExternalStore(subscribe, getSnapshot);
+  return useGitSubscriptionOwnsRichSlot({
+    wsStreamClient,
+    hostId: args.hostId,
+    runningDir: args.runningDir,
+    ignoreWhitespace: args.ignoreWhitespace,
+  });
 }
 
 /**
@@ -283,7 +285,11 @@ export function useGitListChangedFilesWithSubmodules(args: {
   const conditionPollCoordinator =
     getConditionPollEpisodeCoordinator(queryClient);
   const wsStreamClient = useWsStreamClient();
-  const streamOwnsRichSlot = useStreamOwnsRichSlot();
+  const streamOwnsRichSlot = useStreamOwnsRichSlot({
+    hostId: args.hostId,
+    runningDir: args.runningDir,
+    ignoreWhitespace: args.ignoreWhitespace,
+  });
 
   const hostId = args.hostId;
   const runningDir = args.runningDir;

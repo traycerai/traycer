@@ -51,6 +51,9 @@ function fakeSession(): FakeSession {
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
+    subscribeWithParamsProvider: vi.fn(() => {
+      throw new Error("not exercised by these tests");
+    }),
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,

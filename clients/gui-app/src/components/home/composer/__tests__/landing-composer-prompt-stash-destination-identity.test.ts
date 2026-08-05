@@ -138,6 +138,37 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     });
     expect(dest.current.captureIdentity()).toBeNull();
   });
+  it("accepts React Compiler handle-facade churn for the same editor incarnation", async () => {
+    const runtimeStore = createStore<DraftRuntimeState>(() => emptyRuntime());
+    const editor = makeEditorHandle({ content: emptyDoc() });
+    const { result } = renderLandingDestination({
+      stashIdentity: "draft-compiler-churn",
+      draftId: "draft-compiler-churn",
+      runtimeStore,
+      editorRef: editor.editorRef,
+    });
+    const captured = requireDefined(
+      result.current.captureIdentity(),
+      "capture",
+    );
+
+    const replacement = editor.replaceFacade();
+    expect(replacement).not.toBe(editor.handle);
+    expect(replacement.getEditorIncarnation()).toBe(captured.editorIncarnation);
+
+    const insertResult = await result.current.importAndInsert({
+      identity: captured,
+      content: textDoc("restored after facade churn"),
+    });
+
+    expect(insertResult).toEqual({ status: "accepted" });
+    expect(editor.setContents).toEqual([
+      {
+        content: textDoc("restored after facade churn"),
+        selection: null,
+      },
+    ]);
+  });
   it("returns stale on identity switch after materialize and releases reservation", async () => {
     const bytes = bytesOf([7, 7, 7]);
     const stashHash = await seedStashImage(bytes);
@@ -216,7 +247,9 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     });
     const dest = destResult.current;
     const captured = requireDefined(dest.captureIdentity(), "capture");
-    expect(captured.editorGeneration).toBe(editor.handle);
+    expect(captured.editorIncarnation).toBe(
+      editor.handle.getEditorIncarnation(),
+    );
     const materialize = requireDefined(dest.materialize, "materialize");
 
     const pendingMaterialize = materialize(
@@ -236,6 +269,9 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     await held.waitedUntilHeld();
     const remounted = editor.remount();
     expect(remounted).not.toBe(editor.handle);
+    expect(remounted.getEditorIncarnation()).not.toBe(
+      captured.editorIncarnation,
+    );
     held.release();
     const materialized = await pendingMaterialize;
     held.restore();

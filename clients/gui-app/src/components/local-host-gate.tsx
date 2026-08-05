@@ -12,6 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   ConvergeReadyOk,
+  HostControllerStatus,
   IRunnerHost,
   LocalHostSnapshot,
   MutationOutcome,
@@ -62,6 +63,7 @@ type HostSetupReason = "launch" | "recovery" | "reinstall" | "update";
 function hostSetupAnalyticsCallbacks(
   reason: HostSetupReason,
   onSuccess: (result: MutationOutcome<ConvergeReadyOk>) => void,
+  onFailure: () => void,
 ): {
   readonly onSuccess: (result: MutationOutcome<ConvergeReadyOk>) => void;
   readonly onError: (error: unknown) => void;
@@ -77,6 +79,7 @@ function hostSetupAnalyticsCallbacks(
       }
     },
     onError: (error) => {
+      onFailure();
       Analytics.getInstance().track(AnalyticsEvent.HostSetupFailed, {
         source: "direct_ui",
         blocker: analyticsBlockerFromError(error),
@@ -394,6 +397,12 @@ export interface HostProvisioning {
   readonly isProvisioning: boolean;
   readonly error: Error | null;
   readonly progress: MutationProgress | null;
+  // Last `progress` event observed during the current provisioning attempt,
+  // non-null ONLY once that attempt has failed (when live `progress` has
+  // already nulled out). Only report surfaces read it - a settled install
+  // failure must still say where it died (traycer#862) - live surfaces keep
+  // rendering `progress`, and an attempt that succeeds leaves nothing behind.
+  readonly lastProgress: MutationProgress | null;
   // True once `convergeReady` returned a `"busy"` outcome: the CLI kept a
   // running host that has work in progress, and the desktop surfaced it for
   // the renderer's compat probe.
@@ -451,6 +460,53 @@ function useHostProvisioning(args: {
     hostManagementRef.current = runnerHost.hostManagement;
   }, [runnerHost.hostManagement]);
 
+  // The failed attempt's last progress event, captured ONCE at failure
+  // settlement (see `captureFailedProgress`) - never per progress push, so
+  // the per-chunk progress stream drives no extra renders and no ref is read
+  // during render. Cleared on every new attempt (`run`) and on a successful
+  // settle (`markBusyKeep`), so a report filed later against an unrelated
+  // failure can never carry a stale stage from an attempt that succeeded.
+  const [failedProgress, setFailedProgress] = useState<MutationProgress | null>(
+    null,
+  );
+  // `startedAt` of whatever mutation lane was visible when the CURRENT
+  // attempt began: a lane still carrying that identity at failure time is
+  // leftover from a PREVIOUS attempt and must not be reported. Written and
+  // read only in event handlers/mutation callbacks, never during render.
+  const attemptBaselineRef = useRef<string | null>(null);
+
+  // Failure settlement: snapshot the freshest ensure-lane progress straight
+  // from the status query cache. An event-time cache read on purpose - the
+  // render-observed value can miss a progress push that coalesces into the
+  // same render as the settlement (the desktop broadcast collapses bursts to
+  // the latest status), and effect-ordering arguments are exactly what the
+  // hooks rules forbid relying on. The baseline guard drops a lane a
+  // previous attempt left behind, so a retry that fails before its first
+  // event reports nothing rather than the old stage.
+  //
+  // Known limit: the lane carries no requester identity, so this is
+  // best-effort attribution - if ANOTHER window's distinct ensure is already
+  // mid-flight on the shared FIFO lane when this attempt's failure settles,
+  // its stage can be snapshotted here (same ambiguity the live `progress`
+  // display accepts while pending). Positive binding needs the attempt's
+  // identity returned with the converge outcome itself - a
+  // MutationOutcome/IHostManagement contract change, out of scope for this
+  // renderer-only report enrichment. The line is a triage hint beside
+  // auto-attached logs, not a source of truth.
+  const captureFailedProgress = useCallback((): void => {
+    const management = hostManagementRef.current;
+    if (management === null) return;
+    const status = queryClient.getQueryData<HostControllerStatus>(
+      runnerQueryKeys.hostControllerStatus(management),
+    );
+    const lane = status?.mutation ?? null;
+    if (lane === null || lane.kind !== "ensure" || lane.progress === null) {
+      return;
+    }
+    if (lane.startedAt === attemptBaselineRef.current) return;
+    setFailedProgress(lane.progress);
+  }, [queryClient]);
+
   // Latch the busy-keep flow from the settled mutation RESULT (a mutation
   // event, not a render effect or a ref read), so it survives the surfaced
   // host flipping `isReady` true and survives Retry/forced update `reset()`
@@ -464,6 +520,9 @@ function useHostProvisioning(args: {
   const markBusyKeep = useCallback(
     (result: MutationOutcome<ConvergeReadyOk>): void => {
       setInBusyKeepFlow(result.kind === "busy");
+      // Any non-error settle means the attempt did not fail: nothing to
+      // report, and nothing to leak into a later unrelated failure's report.
+      setFailedProgress(null);
       // The desktop refused to reinstall a user-removed host; latch the
       // removed surface. Any other settled result (an `"ok"` outcome with
       // `running: true`, after a reinstall) clears it.
@@ -489,10 +548,28 @@ function useHostProvisioning(args: {
   // untouched (see markBusyKeep).
   const run = useCallback(
     (force: boolean, reason: HostSetupReason): void => {
+      // New attempt: drop the previous attempt's failure snapshot, and record
+      // which lane identity belongs to the past so this attempt's failure can
+      // only ever report progress the new attempt actually produced.
+      const management = hostManagementRef.current;
+      attemptBaselineRef.current =
+        management === null
+          ? null
+          : (queryClient.getQueryData<HostControllerStatus>(
+              runnerQueryKeys.hostControllerStatus(management),
+            )?.mutation?.startedAt ?? null);
+      setFailedProgress(null);
       reset();
-      mutate({ force }, hostSetupAnalyticsCallbacks(reason, markBusyKeep));
+      mutate(
+        { force },
+        hostSetupAnalyticsCallbacks(
+          reason,
+          markBusyKeep,
+          captureFailedProgress,
+        ),
+      );
     },
-    [markBusyKeep, mutate, reset],
+    [captureFailedProgress, markBusyKeep, mutate, queryClient, reset],
   );
 
   // Reinstall from the removed surface: clear the persisted removal sentinel
@@ -533,9 +610,13 @@ function useHostProvisioning(args: {
     attemptedRef.current = true;
     mutate(
       { force: false },
-      hostSetupAnalyticsCallbacks("launch", markBusyKeep),
+      hostSetupAnalyticsCallbacks(
+        "launch",
+        markBusyKeep,
+        captureFailedProgress,
+      ),
     );
-  }, [canProvision, args.isReady, mutate, markBusyKeep]);
+  }, [canProvision, args.isReady, mutate, markBusyKeep, captureFailedProgress]);
 
   // Direct removal-sentinel check, independent of the one-shot `convergeReady`
   // effect above. That effect never re-fires once `attemptedRef` is set -
@@ -577,6 +658,7 @@ function useHostProvisioning(args: {
       isProvisioning: hasManagement && convergeReady.isPending,
       error: hasManagement ? convergeReady.error : null,
       progress,
+      lastProgress: hasManagement ? failedProgress : null,
       hostBusy: hasManagement && inBusyKeepFlow,
       removed: hasManagement && isRemoved,
       canManageHost: hasManagement,
@@ -587,6 +669,7 @@ function useHostProvisioning(args: {
     [
       convergeReady.error,
       convergeReady.isPending,
+      failedProgress,
       force,
       hasManagement,
       inBusyKeepFlow,

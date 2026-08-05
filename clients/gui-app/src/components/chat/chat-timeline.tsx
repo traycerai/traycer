@@ -18,11 +18,6 @@ import {
 } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import {
-  CHAT_LIST_ANCHOR_OFFSET,
-  resolveChatListAnchoredEndSpace,
-  resolveChatTimelineIsAtEnd,
-} from "@/components/chat/chat-scroll-anchoring";
 import { chatTimelineGetItemType } from "@/components/chat/chat-messages-scroll-helpers";
 import { registerPanelResizeParticipant } from "@/lib/layout/panel-resizing-class";
 import {
@@ -34,6 +29,11 @@ import {
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
   type StableChatTimelineRowsState,
 } from "./chat-stable-rows";
+import {
+  useChatTimelineFollowLatch,
+  type ChatTimelineFollowLatch,
+  type ChatTimelineReaderGestureIntent,
+} from "./chat-timeline-follow-latch";
 
 /**
  * Ticket 24 (painted-chat lifecycle audit, finding 5): a row-local
@@ -171,79 +171,35 @@ export interface ChatTimelineProps {
   readonly onScroll?: () => void;
   readonly className?: string;
   readonly "data-testid"?: string;
-  /** Test-observability only: the controller's current three-mode policy
-   *  state (decision log #1). Not read by any production code - the anchor
-   *  engine and reveal-pass effect already own every real behavior; this
-   *  exists purely so black-box component tests can assert "anchored" vs.
-   *  "following-end" vs. "free-scrolling" directly instead of reverse-
-   *  engineering it from scroll position (the jsdom LegendList test shim's
-   *  `scrollHeight` is a large fixed constant, not real content height, so
-   *  position-based inference cannot reliably tell them apart). */
+  /** Test-observability only: echoes the controller's current follow-vs-free
+   *  scroll state. Not read by any production code. */
   readonly "data-scroll-mode"?: string;
   /** Top-fade chrome; the scroll-policy ticket decides when it's on. */
   /**
-   * Whether the initial mount parks at the tail. `true` (the default) for a
-   * fresh, never-scrolled-in chat (decision #15 - ticket 4 replaces this with
-   * the anchor-last-user-turn policy). The controller passes `false` when
-   * restoring a tab whose saved reading position was NOT following the tail,
-   * so the initial DOM position does not contradict the restored mode;
-   * `initialScrollIndex` below carries the exact row-level restore.
+   * Whether the initial mount parks at the tail: `true` for a fresh,
+   * never-scrolled-in chat with no saved reading position. The controller
+   * passes `false` when restoring a tab whose saved reading position was NOT
+   * the tail, so the initial DOM position does not contradict the restored
+   * position; `initialScrollIndex` below carries the exact row-level restore.
    */
   readonly initialScrollAtEnd?: boolean;
   /**
-   * Ticket 5: restored row bootstrap, passed straight through as LegendList's
-   * own `initialScrollIndex`. For free-scrolling this carries the saved pixel
-   * offset and self-corrects as variable-height rows are measured. For a
-   * restored new-turn session it makes a deep semantic query row measurable;
-   * the anchor engine then owns the exact offset and reply reserve. `null` for
-   * the ordinary fresh-open/no-restore case.
+   * Restored row bootstrap, passed straight through as LegendList's own
+   * `initialScrollIndex`: the saved pixel offset, self-correcting as
+   * variable-height rows are measured. `null` for the ordinary
+   * fresh-open/no-restore case.
    */
   readonly initialScrollIndex?: ChatTimelineInitialScrollAnchor | null;
-  /**
-   * Message id the anchor engine is actively tracking (a sent/steered/queued
-   * turn's user row), or `null` when no turn is anchored - the ordinary
-   * follow/free-scroll case. Reserves trailing space so the anchored row can
-   * sit `anchorOffset` px from the viewport top while its reply streams in.
-   */
-  readonly anchorMessageId?: string | null;
-  /** Pixel offset from the viewport top for the anchored row. The controller
-   *  keeps it at least as large as the measured fade/header so the query is
-   *  fully visible while its reply streams below. */
-  readonly anchorOffset?: number;
-  readonly onAnchorReady?: (messageId: string, anchorIndex: number) => void;
-  readonly onAnchorSizeChanged?: (messageId: string, size: number) => void;
   /** Composer + queued-surface overlay height, reserved as bottom content inset. */
   readonly contentInsetEndAdjustment?: number;
-  readonly onIsAtEndChange?: (isAtEnd: boolean) => void;
-  /**
-   * Whether the controller's mode is `following-end` right now. Gates
-   * LegendList's own `maintainScrollAtEnd` directly: that library behavior is
-   * otherwise driven purely by LegendList's OWN internal "was at end"
-   * heuristic, independent of the mode machine - a free-scrolling reader
-   * parked near the tail (e.g. a suffix removal's remaining-tail anchor,
-   * decision #14) would still get auto-followed by the library on the next
-   * append without this gate, violating "free-scrolling never moves"
-   * (decision #1). `true` by default so ticket-2-era callers are unaffected.
-   */
-  readonly followEnabled?: boolean;
-  /**
-   * Ticket 12: gates `maintainVisibleContentPosition.size` - whether
-   * LegendList compensates scrollTop when an already-rendered row's
-   * estimated height is replaced by its real measured height
-   * (`ScrollAdjustHandler`). `true` only in `free-scrolling` (decision:
-   * reading stability governs there - a reader scrolling through
-   * still-estimated rows must not see the abrupt jump `size:false` produces
-   * when a later measurement pass corrects an earlier row's position from
-   * under them). `false` in `following-end` (end-stick governs via
-   * `maintainScrollAtEnd`) and `anchoring-new-turn` (the anchor engine owns
-   * motion; its own drift re-assert - the reveal pass for a `messages`
-   * change, ticket 22's coalesced scheduler for a geometry-only change under
-   * the same `messages` - already handles above-anchor growth under
-   * `size:false`; enabling this too would double-correct the same shift).
-   * `false` by default so ticket-2/3-era callers keep today's `size:false`
-   * semantics unless they opt in.
-   */
-  readonly sizePreservationEnabled?: boolean;
+  readonly onFollowIntentChange?: (isFollowing: boolean) => void;
+  readonly onReaderGesture?: (intent: ChatTimelineReaderGestureIntent) => void;
+  /** Controller bridge for explicit reader/navigation ownership changes. */
+  readonly followLatchRef?: RefObject<ChatTimelineFollowLatch | null>;
+  /** Explicit bootstrap/restoration ownership gate for automatic correction. */
+  readonly isFollowCorrectionSuppressed?: () => boolean;
+  /** Releases that gate only for a controller-validated reader end landing. */
+  readonly resolveSuppressedEndLanding?: () => boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /** Notifies presentational consumers after LegendList remeasures any row. */
@@ -259,21 +215,16 @@ export interface ChatTimelineProps {
     readonly headerSize: number;
     readonly footerSize: number;
   }) => void;
-  /**
-   * Ticket 22: the scroll container's own layout (width/height) changing -
-   * a divider drag/pane resize. Unlike `onItemSizeChanged`, LegendList never
-   * routes this through a data/scroll/item-size callback; it is the ONLY
-   * signal for a viewport-length change that leaves every row's own
-   * measured size untouched.
-   */
-  readonly onLayout?: () => void;
 }
 
 /**
  * LegendList-owned chat transcript. Renders our existing `ChatMessage` rows
- * unchanged; carries no scroll policy of its own yet - `maintainScrollAtEnd`
- * is a placeholder the scroll-policy ticket replaces with anchored-turn
- * behavior (see decision log #1, #11-16).
+ * unchanged. Bottom-follow is a strict 1px edge, owned by
+ * `useChatTimelineFollowLatch` (see that module) rather than LegendList's
+ * own `maintainScrollAtEnd`, which this component never enables.
+ * `maintainVisibleContentPosition` stays on unconditionally - it keeps an
+ * already-detached reader's view pixel-stable against unrelated growth,
+ * which never pulls toward the tail. There is no app-owned scroll mode here.
  */
 export const ChatTimeline = memo(function ChatTimeline({
   messages,
@@ -286,21 +237,41 @@ export const ChatTimeline = memo(function ChatTimeline({
   className,
   initialScrollAtEnd = true,
   initialScrollIndex = null,
-  anchorMessageId = null,
-  anchorOffset = CHAT_LIST_ANCHOR_OFFSET,
-  onAnchorReady,
-  onAnchorSizeChanged,
   contentInsetEndAdjustment = 0,
-  onIsAtEndChange,
-  followEnabled = true,
-  sizePreservationEnabled,
+  onFollowIntentChange,
+  onReaderGesture,
+  followLatchRef,
+  isFollowCorrectionSuppressed,
+  resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
   onItemSizeChanged,
   onListMetricsChange,
-  onLayout,
   ...rest
 }: ChatTimelineProps) {
   const rows = useStableChatTimelineRows(listRef, messages);
+
+  // Fixup (fix-detached-streaming-yank/callback-synchronous-follow): see the
+  // hook's own doc comment. Bottom-follow is owned entirely here now -
+  // LegendList's own `maintainScrollAtEnd` is never passed at all below.
+  const followLatch = useChatTimelineFollowLatch(
+    listRef,
+    initialScrollAtEnd,
+    rows.length > 0,
+    {
+      onFollowIntentChange,
+      onReaderGesture,
+      isCorrectionSuppressed: isFollowCorrectionSuppressed,
+      resolveSuppressedEndLanding,
+    },
+  );
+
+  useLayoutEffect(() => {
+    if (!followLatchRef) return;
+    followLatchRef.current = followLatch;
+    return () => {
+      followLatchRef.current = null;
+    };
+  }, [followLatch, followLatchRef]);
 
   const navigationHighlightStore = useNavigationHighlightStore(
     navigationHighlightedMessageId,
@@ -332,51 +303,37 @@ export const ChatTimeline = memo(function ChatTimeline({
     [],
   );
 
-  const handleAnchorReady = useCallback(
-    (info: { anchorIndex: number | undefined }) => {
-      if (anchorMessageId !== null && info.anchorIndex !== undefined) {
-        onAnchorReady?.(anchorMessageId, info.anchorIndex);
-      }
-    },
-    [anchorMessageId, onAnchorReady],
-  );
-  const handleAnchorSizeChanged = useCallback(
-    (size: number) => {
-      if (anchorMessageId !== null) {
-        onAnchorSizeChanged?.(anchorMessageId, size);
-      }
-    },
-    [anchorMessageId, onAnchorSizeChanged],
-  );
-  const anchoredEndSpace = useMemo(() => {
-    const config = resolveChatListAnchoredEndSpace(
-      rows,
-      anchorMessageId,
-      (row) => row.id,
-      anchorOffset,
-    );
-    return config
-      ? {
-          ...config,
-          onReady: handleAnchorReady,
-          onSizeChanged: handleAnchorSizeChanged,
-        }
-      : undefined;
-  }, [
-    anchorMessageId,
-    anchorOffset,
-    handleAnchorReady,
-    handleAnchorSizeChanged,
-    rows,
-  ]);
   const handleScroll = useCallback(() => {
-    const state = listRef.current?.getState();
-    const isAtEnd = resolveChatTimelineIsAtEnd(state);
-    if (isAtEnd !== undefined) {
-      onIsAtEndChange?.(isAtEnd);
-    }
+    followLatch.observeLiveGeometry();
     onScroll?.();
-  }, [listRef, onIsAtEndChange, onScroll]);
+  }, [followLatch, onScroll]);
+
+  // Fixup (callback-synchronous-follow): item-layout and footer/header-
+  // layout are two of the real LegendList maintain triggers that never
+  // re-enter this component's render - consult the latch right here, at the
+  // actual callback boundary, not through a prop the library reads later.
+  const handleItemSizeChanged = useCallback(() => {
+    followLatch.followEndIfPermitted();
+    onItemSizeChanged?.();
+  }, [followLatch, onItemSizeChanged]);
+
+  const handleMetricsChange = useCallback(
+    (metrics: { readonly headerSize: number; readonly footerSize: number }) => {
+      followLatch.followEndIfPermitted();
+      onListMetricsChange?.(metrics);
+    },
+    [followLatch, onListMetricsChange],
+  );
+
+  // Fixup (callback-synchronous-follow): the data-change and content-inset
+  // maintain triggers DO go through a React commit (both are props), so a
+  // layout effect - synchronous, before paint - is the right boundary for
+  // them; the viewport-layout trigger has its own ResizeObserver inside the
+  // latch hook itself, since no prop change accompanies a pure container
+  // resize.
+  useLayoutEffect(() => {
+    followLatch.followEndIfPermitted();
+  }, [rows, contentInsetEndAdjustment, followLatch]);
 
   // Ticket 23 (D20 port): registers this mounted timeline as a panel-resize
   // participant so a divider drag's capture pass (see
@@ -408,17 +365,6 @@ export const ChatTimeline = memo(function ChatTimeline({
     return <ChatEmptyState />;
   }
 
-  // Round-2 finding 3: built ONCE into a local object and passed BY
-  // REFERENCE to both `maintainVisibleContentPosition` below and the
-  // `data-size-preservation-enabled` echo - a mutation of `.size` directly
-  // (e.g. hardcoding it in an inline object literal) is then structurally
-  // impossible to diverge from the attribute, since they read the exact
-  // same object's field instead of two independently-computed values.
-  const maintainVisibleContentPosition = {
-    data: true,
-    size: resolveChatTimelineSizePreservationEnabled(sizePreservationEnabled),
-  };
-
   return (
     <ChatTimelineRowCtx value={sharedState}>
       <LegendList<ChatMessageModel>
@@ -430,58 +376,40 @@ export const ChatTimeline = memo(function ChatTimeline({
         estimatedItemSize={90}
         // Keep LegendList's proximity threshold explicit for onEndReached and
         // presentation consumers. Follow ownership deliberately reads only
-        // strict `isAtEnd` via resolveChatTimelineIsAtEnd; this 10% band can
-        // never re-attach a detached reader.
+        // fresh DOM geometry inside the latch; this 10% band can never
+        // re-attach a detached reader.
         onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
         initialScrollAtEnd={initialScrollAtEnd}
-        {...(initialScrollIndex !== null ? { initialScrollIndex } : {})}
-        {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+        initialScrollIndex={initialScrollIndex ?? undefined}
         contentInsetEndAdjustment={contentInsetEndAdjustment}
-        maintainScrollAtEnd={
-          anchoredEndSpace || !followEnabled
-            ? false
-            : {
-                animated: false,
-                on: {
-                  dataChange: true,
-                  itemLayout: true,
-                  layout: true,
-                },
-              }
-        }
-        maintainVisibleContentPosition={maintainVisibleContentPosition}
-        onItemSizeChanged={onItemSizeChanged}
+        // Fixup (callback-synchronous-follow): the library's own
+        // `maintainScrollAtEnd` is never passed - every one of its internal
+        // call sites (data/item/footer/layout) no-ops when this prop is
+        // falsy, so leaving it unset makes them categorically unreachable.
+        // Bottom-follow is reimplemented in `chat-timeline-follow-latch.ts`
+        // and driven imperatively from the callbacks below instead - see
+        // that module's doc comment for why the library's own cached
+        // threshold could not be trusted, render-gated or not.
+        //
+        // The explicit zero still narrows `isWithinMaintainScrollAtEndThreshold`
+        // (used internally by the library's own content-inset compensation)
+        // to `distanceFromEnd <= 0` rather than its 10%-of-viewport default.
+        // The separate `isAtEnd` calculation owns the 1px edge tolerance.
+        maintainScrollAtEndThreshold={0}
+        maintainVisibleContentPosition
+        onItemSizeChanged={handleItemSizeChanged}
         onScroll={handleScroll}
-        onLayout={onLayout}
-        {...(onListMetricsChange !== undefined
-          ? { onMetricsChange: onListMetricsChange }
-          : {})}
+        onMetricsChange={handleMetricsChange}
         showsVerticalScrollIndicator
-        data-native-scrollbar="true"
         className={cn(
-          // The Legend List node is the sole scroll owner. Its native marker
-          // opts out of the app-wide scrollbar theme in index.css; explicit
-          // overflow keeps platform visibility and hit-testing in charge.
+          // The Legend List node is the sole scroll owner. It deliberately uses
+          // the app-wide thin, transparent-track scrollbar theme from index.css.
           "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
           className,
         )}
         ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
         ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
         {...rest}
-        // Round-2 finding 3, test-observability only: echoes the SAME
-        // `maintainVisibleContentPosition` object's own `.size` field passed
-        // to LegendList above (not a separately-computed value) - same "not
-        // read by any production code" contract as `data-scroll-mode`.
-        // Placed AFTER `{...rest}` is spread (not before) - a caller-
-        // supplied `rest` bag winning over an earlier explicit prop with the
-        // same key is how JSX prop precedence actually works (last write
-        // wins, regardless of what the type system would allow a real
-        // caller to pass through `rest`), so this ordering is what makes
-        // shadowing structurally impossible, not a claim about `rest`'s
-        // contents.
-        data-size-preservation-enabled={String(
-          maintainVisibleContentPosition.size,
-        )}
       />
     </ChatTimelineRowCtx>
   );
@@ -489,15 +417,6 @@ export const ChatTimeline = memo(function ChatTimeline({
 
 function chatTimelineKeyExtractor(item: ChatMessageModel): string {
   return item.id;
-}
-
-/** Resolves `sizePreservationEnabled`'s default out of the component body -
- *  a second defaulted destructure param (alongside `followEnabled`) pushed
- *  `ChatTimeline`'s own cyclomatic complexity over the lint limit. */
-function resolveChatTimelineSizePreservationEnabled(
-  sizePreservationEnabled: boolean | undefined,
-): boolean {
-  return sizePreservationEnabled ?? false;
 }
 
 /** Ticket 13 (bonus): the assistant estimate (14rem) is tuned for

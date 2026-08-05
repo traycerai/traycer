@@ -11,11 +11,13 @@ import type {
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
   ChatActiveTurn,
-  ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatQueueSteerMode,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import type { MessageSegment } from "@/stores/composer/chat-store";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -130,8 +132,9 @@ function steerRequestedQueueItem(
   queueItemId: string,
   messageId: string,
   mode: ChatQueueSteerMode,
-): ChatQueuedItem {
+): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId,
     message: {
@@ -155,7 +158,7 @@ function steerRequestedQueueItem(
   };
 }
 
-function fallbackQueueItem(item: ChatQueuedItem): ChatQueuedItem {
+function fallbackQueueItem(item: ChatQueuedPromptItem): ChatQueuedPromptItem {
   return {
     ...item,
     delivery: "next_turn",
@@ -251,6 +254,21 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+  };
+}
+
+function plainTextBlock(
+  blockId: string,
+  timestamp: number,
+  text: string,
+): Extract<Message, { role: "assistant" }>["blocks"][number] {
+  return {
+    type: "text",
+    blockId,
+    status: "completed",
+    timestamp,
+    text,
+    providerNotice: null,
   };
 }
 
@@ -1437,6 +1455,8 @@ describe("useRenderedMessages", () => {
           exitCode: null,
           status: "streaming",
           timestamp: 2002,
+          backgroundTask: null,
+          stopped: false,
         },
       ],
     };
@@ -1687,6 +1707,8 @@ describe("useRenderedMessages", () => {
           exitCode: 0,
           status: "completed",
           timestamp: 2003,
+          backgroundTask: null,
+          stopped: false,
         },
       ],
     };
@@ -1747,6 +1769,8 @@ describe("useRenderedMessages", () => {
               blockId: "tool-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -1819,6 +1843,8 @@ describe("useRenderedMessages", () => {
               blockId: "wake-tool",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -1888,6 +1914,8 @@ describe("useRenderedMessages", () => {
               blockId: "tool-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -1970,6 +1998,8 @@ describe("useRenderedMessages", () => {
               blockId: "agent-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -2360,6 +2390,8 @@ describe("useRenderedMessages", () => {
           exitCode: 0,
           status: "completed",
           timestamp: 2002,
+          backgroundTask: null,
+          stopped: false,
           parentBlockId: "agent-1",
         },
       ],
@@ -5057,12 +5089,14 @@ describe("useRenderedMessages turn.stopped", () => {
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("leaves the stopped marker null for a turn that completed naturally", () => {
@@ -5224,12 +5258,14 @@ describe("useRenderedMessages turn.stopped", () => {
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.segments.at(-1)?.kind).toBe("error");
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Working on it",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("Working on it");
   });
 
   it("renders an empty completed turn with the stopped marker (stopped before responding)", () => {
@@ -5266,12 +5302,14 @@ describe("useRenderedMessages turn.stopped", () => {
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.segments ?? []).toHaveLength(0);
     expect(row?.completedAt).toBe(11_000);
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 11_000,
       reason: "Stop requested by owner.",
       turnHadOutput: false,
-      turnReplyText: "",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("");
   });
 
   it("synthesizes a stopped boundary when no assistant record ever materialized", () => {
@@ -5311,7 +5349,7 @@ describe("useRenderedMessages turn.stopped", () => {
         stoppedAt: 11_000,
         reason: "Stop requested by owner.",
         turnHadOutput: false,
-        turnReplyText: "",
+        turnReplySegments: [],
       },
     });
   });
@@ -5513,7 +5551,7 @@ describe("useRenderedMessages turn.stopped", () => {
     // createdAt anchors to the turn's true startedAt (not an ordering-only
     // bumped timestamp), so completedAt - createdAt measures the whole turn.
     expect(trailingRow?.createdAt).toBe(10_000);
-    expect(trailingRow?.stopped).toEqual({
+    expect(trailingRow?.stopped).toMatchObject({
       stoppedAt: 13_000,
       reason: "Stop requested by owner.",
       // The turn DID produce output (the text chunk above the steer) even
@@ -5522,8 +5560,10 @@ describe("useRenderedMessages turn.stopped", () => {
       // The turn's copyable reply text, aggregated from the text chunk
       // above the steer even though this boundary row's own segments are
       // empty - the copy control needs somewhere to source it from.
-      turnReplyText: "Working on it",
     });
+    expect(
+      collectAssistantReplyText(trailingRow?.stopped?.turnReplySegments ?? []),
+    ).toBe("Working on it");
     // The trailing row sorts after the nested steer bubble, not before it.
     const steerIndex = rows.findIndex(
       (row) => row.id === "steer:queue:block-2",
@@ -5576,12 +5616,14 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(trailingRow.completedAt).toBe(10_500);
     // createdAt anchors to startedAt here too - there's no earlier chunk.
     expect(trailingRow.createdAt).toBe(10_000);
-    expect(trailingRow.stopped).toEqual({
+    expect(trailingRow.stopped).toMatchObject({
       stoppedAt: 10_500,
       reason: "Stop requested by owner.",
       turnHadOutput: false,
-      turnReplyText: "",
     });
+    expect(
+      collectAssistantReplyText(trailingRow.stopped?.turnReplySegments ?? []),
+    ).toBe("");
   });
 
   it("shows the stopped marker only once the turn.stopped event actually lands, across a rerender", () => {
@@ -5627,12 +5669,14 @@ describe("useRenderedMessages turn.stopped", () => {
     });
 
     const after = result.current.find((row) => row.role === "assistant");
-    expect(after?.stopped).toEqual({
+    expect(after?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(after?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("suppresses the stopped marker while the turn is still active, even once its event has landed, then shows it once the snapshot catches up", () => {
@@ -5717,12 +5761,14 @@ describe("useRenderedMessages turn.stopped", () => {
     });
     const settled = result.current.find((row) => row.role === "assistant");
     expect(settled?.completedAt).toBe(15_000);
-    expect(settled?.stopped).toEqual({
+    expect(settled?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(settled?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("keeps an unrelated turn's row reference stable when a sibling turn's turn.stopped event is appended", () => {
@@ -5785,5 +5831,101 @@ describe("useRenderedMessages turn.stopped", () => {
     );
     expect(untouchedAfter).toBe(untouchedBefore);
     expect(stoppedAfter?.stopped).not.toBeNull();
+  });
+  it("merges a multi-record turn without mutating the source record's blocks", () => {
+    // The accumulator now ALIASES the first record's block array and clones
+    // only on the first append. If that clone-on-write is ever lost, merging
+    // a sibling record would grow the persisted record's own array in place.
+    const first = {
+      ...assistantMessage("turn-merge", 2000),
+      messageId: "record-1",
+      blocks: [plainTextBlock("block-a", 2000, "first half")],
+    };
+    const second = {
+      ...assistantMessage("turn-merge", 2100),
+      messageId: "record-2",
+      blocks: [plainTextBlock("block-b", 2100, "second half")],
+    };
+    const firstBlocksRef = first.blocks;
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [first, second],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    // Source record untouched...
+    expect(first.blocks).toBe(firstBlocksRef);
+    expect(first.blocks).toHaveLength(1);
+    expect(second.blocks).toHaveLength(1);
+    // ...and the rendered turn still carries both records' content, in order.
+    // `length > 0` alone passed even if merging dropped `second half`.
+    expect(
+      collectAssistantReplyText(
+        result.current.flatMap((row) =>
+          row.role === "assistant" ? row.segments : [],
+        ),
+      ),
+    ).toBe("first half\n\nsecond half");
+  });
+});
+describe("assistant turn render cache invalidation", () => {
+  it("re-renders a single-record turn whose blocks are replaced at the same blocksVersion", () => {
+    // An authoritative snapshot can rebuild a record with the SAME messageId,
+    // timestamp and persisted counter (counters restart at 0 on a rebuild).
+    // Keying on the counter alone then serves the previous render forever and
+    // the transcript stays visibly frozen at the older content.
+    const first = assistantMessage("turn-1", 10_000);
+    const firstRecord = {
+      ...first,
+      blocksVersion: 0,
+      blocks: [plainTextBlock("b1", 10_000, "original answer")],
+    };
+
+    const { result, rerender } = renderHook(
+      (props: { readonly record: typeof firstRecord }) =>
+        useRenderedMessages(
+          {
+            messages: [userMessage("m1"), props.record],
+            events: [],
+            pendingUserMessages: [],
+            liveAssistantMessage: null,
+            activeTurn: null,
+            runStatus: "idle",
+            ...BINDING,
+          },
+          displayContext,
+        ),
+      { initialProps: { record: firstRecord } },
+    );
+
+    const textOf = (
+      row: { readonly segments: ReadonlyArray<MessageSegment> } | undefined,
+    ): string =>
+      (row?.segments ?? [])
+        .map((segment) => (segment.kind === "text" ? segment.markdown : ""))
+        .join("");
+
+    const before = result.current.find((row) => row.role === "assistant");
+    expect(textOf(before)).toContain("original answer");
+
+    // Same id, same timestamp, same counter - only the blocks array is new.
+    const replaced = {
+      ...firstRecord,
+      blocks: [plainTextBlock("b1", 10_000, "corrected answer")],
+    };
+    rerender({ record: replaced });
+
+    const after = result.current.find((row) => row.role === "assistant");
+    expect(textOf(after)).toContain("corrected answer");
   });
 });

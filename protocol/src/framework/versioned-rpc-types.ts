@@ -45,6 +45,9 @@ export const RPC_ERROR_CODES = [
   // FORBIDDEN whose "check Task access" guidance would mislead here.
   "E_ROLE_FORBIDDEN",
   "TERMINAL_ID_TAKEN",
+  // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
+  // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
+  "MESSAGE_TOO_LARGE",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

@@ -43,6 +43,7 @@ import { NoLongerChanged } from "@/components/epic-canvas/git-diff/placeholders/
 import { SubscriptionErrorState } from "@/components/epic-canvas/git-diff/empty-states/subscription-error-state";
 import { NoChangesInWorktree } from "@/components/epic-canvas/git-diff/empty-states/no-changes-in-worktree";
 import { GitErrorBlock } from "@/components/epic-canvas/git-diff/git-error-block";
+import { GitWatcherStatusNotice } from "@/components/epic-canvas/git-diff/git-watcher-status-notice";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -172,16 +173,28 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
       secondaryLine={header.secondaryLine}
       contextLabel={header.contextLabel}
       toolbar={
-        <GitDiffTileToolbar
-          node={props.node}
-          viewTabId={props.viewTabId}
-          onOpenFile={tileOpenFilePath(props.node.diff)}
-          bundleFilePaths={bundleFilePaths(
-            props.node,
-            subscription.data?.files ?? null,
-          )}
-          initialLoading={subscription.isPending}
-        />
+        <>
+          {/* Renders only while degraded, so the toolbar is unchanged in the
+              healthy case rather than carrying a permanent empty slot. */}
+          {/* Compact here, full-width in the panel header: a tile pane can be
+              dragged to 240px and `DiffTabShell` makes the toolbar `shrink-0`,
+              so a non-shrinking label would push the icon controls out. */}
+          <GitWatcherStatusNotice
+            status={subscription.watcherStatus}
+            className={undefined}
+            compact
+          />
+          <GitDiffTileToolbar
+            node={props.node}
+            viewTabId={props.viewTabId}
+            onOpenFile={tileOpenFilePath(props.node.diff)}
+            bundleFilePaths={bundleFilePaths(
+              props.node,
+              subscription.data?.files ?? null,
+            )}
+            initialLoading={subscription.isPending}
+          />
+        </>
       }
     >
       {isGitFileDiffTileRef(props.node) ? (

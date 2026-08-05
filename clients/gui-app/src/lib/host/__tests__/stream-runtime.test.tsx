@@ -185,6 +185,9 @@ function fakeRemoteSession(): FakeRemoteSession {
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),
+    subscribeWithParamsProvider: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
@@ -212,6 +215,7 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
   localHostState: "unknown",
   stage: "loading",
   progress: null,
+  lastProgress: null,
   provisioningError: null,
   provisioning: false,
   removed: false,
@@ -230,6 +234,7 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
     retry: () => undefined,
     degraded: false,
     unreachable: false,
+    hostStatus: null,
   },
 };
 

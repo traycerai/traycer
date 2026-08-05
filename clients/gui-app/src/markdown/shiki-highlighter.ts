@@ -1,4 +1,3 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
 import type { HighlighterCore, ThemeRegistrationRaw } from "shiki/core";
 import type { ThemePreset } from "@/lib/theme-presets";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -125,25 +124,9 @@ const SHIKI_BY_PRESET: Record<ThemePreset, ShikiPresetThemes> = {
   pink: DEFAULT_SHIKI,
 };
 
-function subscribeDocClass(callback: () => void): () => void {
-  if (typeof document === "undefined") return () => {};
-  const observer = new MutationObserver(callback);
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["class"],
-  });
-  return () => {
-    observer.disconnect();
-  };
-}
-
 function getDocIsDark(): boolean {
   if (typeof document === "undefined") return true;
   return document.documentElement.classList.contains("dark");
-}
-
-function getServerIsDark(): boolean {
-  return true;
 }
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;
@@ -203,63 +186,18 @@ function ensureThemePair(
   return load;
 }
 
-/**
- * Self-contained Shiki theme + highlighter hook.
- *
- * Reads the active preset from `useSettingsStore` and the resolved
- * light/dark from the `<html>` `.dark` class via `useSyncExternalStore`
- * (the global `ThemeProvider` toggles that class). Maps both to a
- * `ShikiThemeId` via `SHIKI_BY_PRESET`.
- *
- * `themesVersion` bumps when a lazily-loaded theme pair lands; consumers must
- * include it in their highlight memo deps so code re-highlights once the
- * newly-selected preset's themes are available (only the active pair is
- * loaded eagerly).
- */
-export function useShikiHighlighter(): {
-  highlighter: HighlighterCore | null;
-  theme: ShikiThemeId;
-  themesVersion: number;
-} {
-  const preset = useSettingsStore((s) => s.themePreset);
-  const isDark = useSyncExternalStore(
-    subscribeDocClass,
-    getDocIsDark,
-    getServerIsDark,
-  );
-  const shikiPair = SHIKI_BY_PRESET[preset];
-  const theme = isDark ? shikiPair.dark : shikiPair.light;
+/** Active Shiki theme for the current preset + document light/dark class. */
+export function resolveActiveShikiTheme(): ShikiThemeId {
+  const preset = useSettingsStore.getState().themePreset;
+  const pair = SHIKI_BY_PRESET[preset];
+  return getDocIsDark() ? pair.dark : pair.light;
+}
 
-  const [highlighter, setHighlighter] = useState<HighlighterCore | null>(null);
-  const [themesVersion, setThemesVersion] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    getOrCreateHighlighter()
-      .then((h) => {
-        if (!cancelled) setHighlighter(h);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (highlighter === null) return;
-    if (highlighter.getLoadedThemes().includes(theme)) return;
-    let cancelled = false;
-    ensureThemePair(highlighter, preset)
-      .then(() => {
-        if (!cancelled) setThemesVersion((version) => version + 1);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [highlighter, preset, theme]);
-
-  return { highlighter, theme, themesVersion };
+/** Ensure the active preset's light+dark pair is loaded on the core. */
+export function ensureActiveThemePair(
+  highlighter: HighlighterCore,
+): Promise<void> {
+  return ensureThemePair(highlighter, useSettingsStore.getState().themePreset);
 }
 
 /** Plaintext infos shiki's core handles natively without a grammar. */

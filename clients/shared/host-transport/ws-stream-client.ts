@@ -116,7 +116,7 @@ export interface WsStreamClientOptions<
  *        → enter the bidirectional frame loop
  *        → ping/pong heartbeat every `pingIntervalMs`
  *        → on drop: exponential-backoff reconnect, re-declare the same
- *          method + original params; never closed until `close()` is
+ *          method with its current params; never closed until `close()` is
  *          called or a fatal error frame arrives
  *
  * Frame pairing: a binary WS frame is the payload of the immediately
@@ -141,6 +141,9 @@ function createInertStreamSession(closedReason: string): IStreamSession {
   return {
     sendClientFrame: () => undefined,
     onServerFrame: () => undefined,
+    // Never handshook, so it has no negotiated version - consumers take the
+    // same conservative default they use before any session settles.
+    getNegotiatedSchemaVersion: () => null,
     onStatusChange: (handler) => {
       statusHandler = handler;
       if (emissionScheduled) {
@@ -238,6 +241,19 @@ export class WsStreamClient<
     method: Method,
     params: ParamsOf<Registry, Method>,
   ): IStreamSession {
+    return this.subscribeWithParamsProvider(method, () => params);
+  }
+
+  /**
+   * Opens a stream whose parameters are read immediately before every wire
+   * subscribe, including physical reconnects. The provider must be a pure,
+   * synchronous read: it may expose an applied resume cursor, but must not
+   * create transport or application state as a side effect.
+   */
+  subscribeWithParamsProvider<Method extends keyof Registry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<Registry, Method>,
+  ): IStreamSession {
     if (this.closed) {
       // Defense-in-depth (tech-plan D4): a subscribe on an already-closed
       // client is a stale call from a torn-down consumer. Degrading to an
@@ -260,7 +276,7 @@ export class WsStreamClient<
     let removeSession = (): void => undefined;
     const session = new StreamSession<Registry>({
       method,
-      params,
+      paramsProvider,
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
@@ -765,7 +781,7 @@ type ExtractOpenRequest<MethodRegistry> =
 
 interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly method: keyof Registry & string;
-  readonly params: unknown;
+  readonly paramsProvider: () => unknown;
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
@@ -842,8 +858,9 @@ class StreamSession<
    * Count of consecutive recoverable drops caused by a host slow-client
    * eviction (close reason prefixed `SLOW_CLIENT`). A genuinely slow renderer
    * would otherwise loop drop → reconnect → snapshot → stall → drop forever at
-   * the fixed initial backoff (a successful subscribe resets `reconnectAttempt`
-   * on every cycle), hammering the host with full snapshots. We fold this
+   * the fixed initial backoff (the delivered snapshot - or, on event-only
+   * streams, the sustained-subscription dwell - resets `reconnectAttempt`
+   * each cycle), hammering the host with full snapshots. We fold this
    * streak into the reconnect backoff so repeated evictions escalate toward
    * `maxBackoffMs`, and reset it on any non-slow-client drop. Other streams are
    * unaffected: their closes carry no SLOW_CLIENT marker, so the streak stays 0
@@ -886,6 +903,28 @@ class StreamSession<
   private openAckTimer: TimerHandle | null = null;
   private pingIntervalTimer: IntervalHandle | null = null;
   private backoffTimer: TimerHandle | null = null;
+  /**
+   * Armed when the subscribe completes; fires after
+   * `HEALTHY_SUBSCRIBED_DWELL_MS` of SUSTAINED subscription and performs the
+   * same loop-counter reset a delivered application frame does. Event-only
+   * streams (agent inbox, worktree.changed, a quiet file-list watch) may
+   * legitimately deliver nothing for hours - without this second reset
+   * signal their `reconnectAttempt` would be a lifetime drop counter, and a
+   * handful of cumulative ordinary drops would pin every later reconnect at
+   * the backoff cap. Cleared on every drop/teardown path via
+   * `resetForReconnect` / `teardownTimers` - which SETTLES it on elapsed
+   * time rather than discarding it, see `subscribedAt`.
+   */
+  private healthyDwellTimer: TimerHandle | null = null;
+  /**
+   * Wall-clock stamp of the subscribe that armed `healthyDwellTimer`, or
+   * null when nothing is subscribed. The timer alone cannot decide the
+   * dwell: a backgrounded renderer throttles `setTimeout` (Chromium clamps
+   * hidden pages to >=1/min), so a socket can be genuinely subscribed for
+   * minutes with the callback still queued. Settling the dwell on elapsed
+   * time at the drop keeps the reset the stream has already earned.
+   */
+  private subscribedAt: number | null = null;
   private lastPongAt: number;
 
   constructor(options: StreamSessionOptions<Registry>) {
@@ -1384,7 +1423,7 @@ class StreamSession<
       this.config.method,
       myManifest[this.config.method],
       theirManifest[this.config.method],
-      this.config.params,
+      this.config.paramsProvider(),
     );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
@@ -1404,10 +1443,20 @@ class StreamSession<
     // "open") is NOT recovery - nothing was stuck - so it stays silent.
     const recoveredFromUnavailable = this.status === "reconnecting";
     this.phase = "subscribed";
-    this.reconnectAttempt = 0;
-    this.noProgressUnauthorizedReconnects = 0;
+    // Deliberately NOT resetting `reconnectAttempt` /
+    // `noProgressUnauthorizedReconnects` here. The subscribe-ack only proves
+    // the transport handshake; resolver-side initialization failures land
+    // AFTER it as fatalError frames, and resetting the loop counters on every
+    // ack made both the reconnect backoff and the UNAUTHORIZED give-up bound
+    // unreachable for a host that acks then fails - an unbounded floor-delay
+    // loop that hammers authn each lap (int #4781, field: traycer#892). The
+    // counters reset on the first delivered APPLICATION frame instead - the
+    // proof the stream is actually usable (see `emitServerFrame`) - or after
+    // a sustained-subscription dwell for streams with nothing to say (see
+    // `armHealthyDwell`).
     this.lastPongAt = Date.now();
     this.startHeartbeat();
+    this.armHealthyDwell();
     this.transitionTo("open", null);
     if (recoveredFromUnavailable) {
       this.config.onAvailabilityRecovered();
@@ -1700,6 +1749,66 @@ class StreamSession<
   }
 
   /**
+   * Arms the sustained-subscription reset: staying subscribed past the dwell
+   * is health even when the stream has nothing to say, so the loop counters
+   * reset exactly as a delivered application frame would reset them. The
+   * ack-then-fail loop this file's counters bound fails in milliseconds and
+   * can never dwell this long. (Predicate precedent: the CLI monitor's
+   * HEALTHY_OPEN_MS - "sustained openness past the subscribe-accept window
+   * is health".)
+   */
+  private armHealthyDwell(): void {
+    this.clearHealthyDwell();
+    this.subscribedAt = Date.now();
+    this.healthyDwellTimer = setTimeout(() => {
+      this.healthyDwellTimer = null;
+      this.resetLoopCounters();
+    }, HEALTHY_SUBSCRIBED_DWELL_MS);
+  }
+
+  /**
+   * Disarms the dwell and SETTLES it on elapsed time: if the socket really
+   * did stay subscribed past `HEALTHY_SUBSCRIBED_DWELL_MS`, the reset is
+   * applied here even though the timer never got to run.
+   *
+   * A timer is not a clock. `setTimeout` is throttled in a backgrounded
+   * renderer, so on a quiet event-only stream - the exact case the dwell
+   * exists to serve, since it has no application frames to reset on - a
+   * drop can be processed while the callback is still queued. Clearing it
+   * silently would discard a reset the stream had already earned and leave
+   * `reconnectAttempt` a lifetime drop counter, restoring the pinned-at-cap
+   * behavior this change removes. Elapsed time is the honest predicate.
+   *
+   * Ordering note: `onTransportDrop` calls `resetForReconnect()` (→ here)
+   * BEFORE `scheduleReconnect()`, so a settled dwell zeroes the counter and
+   * the redial is then attempt 1 - a healthy stream restarts its backoff
+   * from the floor rather than resuming a lifetime ladder.
+   */
+  private clearHealthyDwell(): void {
+    if (this.healthyDwellTimer !== null) {
+      clearTimeout(this.healthyDwellTimer);
+      this.healthyDwellTimer = null;
+    }
+    const subscribedAt = this.subscribedAt;
+    this.subscribedAt = null;
+    if (
+      subscribedAt !== null &&
+      Date.now() - subscribedAt >= HEALTHY_SUBSCRIBED_DWELL_MS
+    ) {
+      this.resetLoopCounters();
+    }
+  }
+
+  /**
+   * The single reset applied by all three health signals - a delivered
+   * application frame, the dwell timer, and an elapsed-time dwell settle.
+   */
+  private resetLoopCounters(): void {
+    this.reconnectAttempt = 0;
+    this.noProgressUnauthorizedReconnects = 0;
+  }
+
+  /**
    * Clears the per-connect socket + timers and transitions to "reconnecting"
    * WITHOUT scheduling the redial. `onTransportDrop` follows it with
    * `scheduleReconnect`; the `UNAUTHORIZED` path follows it with a revalidation
@@ -1717,6 +1826,7 @@ class StreamSession<
       clearTimeout(this.dialTimer);
       this.dialTimer = null;
     }
+    this.clearHealthyDwell();
     this.activeSocket = null;
     this.openFrameToken = null;
     this.openFrameHostId = null;
@@ -1766,6 +1876,7 @@ class StreamSession<
       clearTimeout(this.backoffTimer);
       this.backoffTimer = null;
     }
+    this.clearHealthyDwell();
   }
 
   private teardownSocket(code: number, reason: string): void {
@@ -1835,6 +1946,15 @@ class StreamSession<
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
+    // A delivered APPLICATION frame - not the subscribe-ack, and not a pong
+    // (both intercepted upstream) - is the proof this connection's resolver
+    // initialized and the stream is usable. Here (and in the
+    // sustained-subscription dwell, for event-only streams that deliver
+    // nothing unprompted) the reconnect backoff and the no-progress
+    // UNAUTHORIZED give-up bound reset; a host that acks the subscribe and
+    // then fails initialization keeps escalating instead of looping at the
+    // floor delay (int #4781).
+    this.resetLoopCounters();
     const handler = this.serverFrameHandler;
     if (handler === null) {
       return;
@@ -1921,6 +2041,14 @@ type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";
  * edge whose recovery is a manual reload (the user is still signed in).
  */
 const MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS = 3;
+/**
+ * How long a connection must STAY subscribed before that alone resets the
+ * reconnect loop counters (see `armHealthyDwell`). Long enough that the
+ * subscribe-ack-then-fatal loop (which fails in milliseconds) can never
+ * reach it; short enough that one long-lived healthy connection between two
+ * ordinary drops always does. Mirrors the CLI monitor's HEALTHY_OPEN_MS.
+ */
+const HEALTHY_SUBSCRIBED_DWELL_MS = 10_000;
 
 /**
  * Upper bound on how long an `UNAUTHORIZED` revalidation may run before the

@@ -19,6 +19,11 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
+import {
+  createComposerEditorIncarnation,
+  type ComposerEditorIncarnation,
+} from "@/lib/composer/composer-editor-incarnation";
+import type { MentionAttachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
@@ -30,7 +35,10 @@ import type {
   PastedComposerImage,
   PastedComposerImageOutcome,
 } from "./editor/extensions/chat-paste-handler";
-import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
+import {
+  insertMentionAttachmentCommand,
+  mentionSuggestionPluginKey,
+} from "./editor/extensions/mention-extension";
 import {
   skillSuggestionPluginKey,
   slashSuggestionPluginKey,
@@ -43,6 +51,20 @@ import {
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
+const composerEditorIncarnations = new WeakMap<
+  Editor,
+  ComposerEditorIncarnation
+>();
+
+function incarnationForEditor(editor: Editor): ComposerEditorIncarnation {
+  const existing = composerEditorIncarnations.get(editor);
+  if (existing !== undefined) return existing;
+
+  const created = createComposerEditorIncarnation();
+  composerEditorIncarnations.set(editor, created);
+  return created;
+}
+
 export interface ComposerPromptEditorHandle {
   /**
    * Whether the async Tiptap editor behind this handle exists yet. The handle
@@ -53,6 +75,12 @@ export interface ComposerPromptEditorHandle {
    * as "ready".
    */
   readonly isReady: () => boolean;
+  /**
+   * Identity of the actual Tiptap editor behind this capability facade.
+   * Stable across facade replacement; changes only when the editor is
+   * genuinely recreated. Returns `null` while the editor is not ready.
+   */
+  readonly getEditorIncarnation: () => ComposerEditorIncarnation | null;
   readonly focus: () => void;
   readonly focusAtEnd: () => void;
   readonly hasFocus: () => boolean;
@@ -83,6 +111,8 @@ export interface ComposerPromptEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
+  /** Insert an existing @-mention attachment at the preserved caret. */
+  readonly insertMentionAttachment: (mention: MentionAttachment) => boolean;
   /**
    * Starts a path-insertion job anchored to the current caret. The returned
    * one-shot `commit` maps that position through intervening editor changes
@@ -519,6 +549,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor, stabilizeImageAttachmentCaret],
   );
 
+  const insertMentionAttachment = useCallback(
+    (mention: MentionAttachment): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return insertMentionAttachmentCommand(editor, mention);
+    },
+    [editor],
+  );
+
   const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
     if (editor === null || editor.isDestroyed) return null;
     let position = editor.state.selection.to;
@@ -609,10 +647,17 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     return true;
   }, [editor, pickerStore]);
 
+  const getEditorIncarnation = useCallback(
+    (): ComposerEditorIncarnation | null =>
+      editor === null ? null : incarnationForEditor(editor),
+    [editor],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
       isReady,
+      getEditorIncarnation,
       focus,
       focusAtEnd,
       hasFocus,
@@ -622,6 +667,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       setContent,
       syncContent,
       insertImageAttachments,
+      insertMentionAttachment,
       beginPathInsertion,
       removeImageAttachmentById,
       rewriteImageAttachmentHashById,
@@ -634,9 +680,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       dismissActiveSuggestion,
       focus,
       focusAtEnd,
+      getEditorIncarnation,
       hasFocus,
       getJSON,
       insertImageAttachments,
+      insertMentionAttachment,
       insertDictatedText,
       isEmpty,
       isReady,

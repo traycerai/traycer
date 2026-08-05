@@ -44,16 +44,15 @@ export function CommGraphTile(props: CommGraphTileProps) {
   // The detail panels jump to source exactly like the timeline rows do - same
   // resolver, same degrade for `origin: null`.
   const {
+    canOpenAgentForEvent,
     canJump,
     jump,
     canJumpToSender,
     jumpToSender,
     canJumpToCreated,
     jumpToCreated,
-    canJumpToNoticed,
-    jumpToNoticed,
     openAgent,
-  } = useCommGraphJump(node.epicId, agents);
+  } = useCommGraphJump(node.epicId, agents, projection.asOfEvents);
 
   const handleViewChange = useCallback(
     (view: CommGraphTileViewState) => {
@@ -85,14 +84,13 @@ export function CommGraphTile(props: CommGraphTileProps) {
           pulse={projection.pulse}
           view={node.view}
           onViewChange={handleViewChange}
+          canOpenAgentForEvent={canOpenAgentForEvent}
           canJump={canJump}
           onJump={jump}
           canJumpToSender={canJumpToSender}
           onJumpToSender={jumpToSender}
           canJumpToCreated={canJumpToCreated}
           onJumpToCreated={jumpToCreated}
-          canJumpToNoticed={canJumpToNoticed}
-          onJumpToNoticed={jumpToNoticed}
           onOpenAgent={openAgent}
         />
       </div>

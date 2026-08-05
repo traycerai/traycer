@@ -20,7 +20,10 @@ import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
+  advanceLegendListFrames,
+  installLegendListTestClock,
   installLegendListViewportMetrics,
+  restoreLegendListTestClock,
   settleLegendList,
 } from "./legend-list-test-environment";
 
@@ -63,6 +66,29 @@ vi.mock("@/components/chat/chat-message", async (importOriginal) => {
 });
 
 const VIEWPORT_HEIGHT_PX = 700;
+
+/** Captures the static LegendList scroll-policy props ChatTimeline must pin. */
+const legendListPolicyProps = vi.hoisted(() => ({
+  last: null as null | {
+    maintainScrollAtEnd: unknown;
+    maintainScrollAtEndThreshold: unknown;
+    maintainVisibleContentPosition: unknown;
+  },
+}));
+
+vi.mock("@legendapp/list/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@legendapp/list/react")>();
+  const CapturingLegendList: typeof actual.LegendList = (props) => {
+    legendListPolicyProps.last = {
+      maintainScrollAtEnd: props.maintainScrollAtEnd,
+      maintainScrollAtEndThreshold: props.maintainScrollAtEndThreshold,
+      maintainVisibleContentPosition: props.maintainVisibleContentPosition,
+    };
+    return <actual.LegendList {...props} />;
+  };
+  return { ...actual, LegendList: CapturingLegendList };
+});
+
 const VIEWPORT_WIDTH_PX = 800;
 
 function mountedMessageRows(container: HTMLElement): NodeListOf<Element> {
@@ -118,10 +144,7 @@ interface RenderTimelineOptions {
   readonly listRef?: RefObject<LegendListRef | null>;
   readonly className?: string;
   readonly "data-testid"?: string;
-  readonly followEnabled?: boolean;
   readonly onItemSizeChanged?: () => void;
-  /** Ticket 22: forwarded to LegendList for viewport-length changes. */
-  readonly onLayout?: () => void;
   readonly navigationHighlightedMessageId?: string | null;
 }
 
@@ -152,9 +175,7 @@ function renderTimeline(options: RenderTimelineOptions) {
         listRef={listRef}
         className={options.className ?? "h-full"}
         data-testid={options["data-testid"]}
-        followEnabled={options.followEnabled}
         onItemSizeChanged={options.onItemSizeChanged}
-        onLayout={options.onLayout}
         navigationHighlightedMessageId={navigationHighlightedMessageId}
       />
     </div>
@@ -195,21 +216,19 @@ function renderedSince(
 }
 
 async function flushFrame(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-  });
+  await advanceLegendListFrames(1);
 }
 
 describe("ChatTimeline", () => {
   beforeEach(() => {
     renderCounts.clear();
     installLegendListViewportMetrics();
+    installLegendListTestClock();
   });
 
   afterEach(() => {
     cleanup();
+    restoreLegendListTestClock();
     vi.restoreAllMocks();
   });
 
@@ -298,11 +317,7 @@ describe("ChatTimeline", () => {
 
     rerenderMessages(nextMessages, undefined);
 
-    await act(async () => {
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      });
-    });
+    await advanceLegendListFrames(1);
 
     const earlyRowAfter = container.querySelector(
       '[data-message-id="message-0"]',
@@ -455,27 +470,10 @@ describe("ChatTimeline", () => {
     expect(onItemSizeChanged).toHaveBeenCalled();
   });
 
-  // Ticket 22: ChatTimeline forwards `onLayout` to LegendList so a
-  // viewport-length change (divider/pane resize) can schedule geometry
-  // repair under the same messages array. Lower-level than the
-  // chat-messages integration pins - just the prop wiring + library
-  // callback. Initial mount layout is enough; no controllable
-  // ResizeObserver needed here.
-  it("onLayout fires when LegendList reports a layout change", async () => {
-    const messages: ChatMessageModel[] = [
-      makeMessage(0, "user"),
-      makeMessage(1, "assistant"),
-    ];
-    const onLayout = vi.fn();
-    renderTimeline({ messages, onLayout });
-
-    await settleLegendList();
-    await waitFor(() => {
-      expect(onLayout).toHaveBeenCalled();
-    });
-  });
-
-  it("uses the native Legend List scroll owner without custom hiding or gutter treatment", () => {
+  it("keeps Legend List as the sole scroll owner on the app-wide compact scrollbar theme", () => {
+    // Chat previously set data-native-scrollbar to opt out of index.css's
+    // 4px transparent-track theme. That left the OS gutter overlapping the
+    // absolute lower composer; the transcript now uses the global theme.
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
     const { getByTestId } = renderTimeline({
       messages,
@@ -483,10 +481,14 @@ describe("ChatTimeline", () => {
     });
 
     const listElement = getByTestId("chat-timeline");
-    expect(listElement.getAttribute("data-native-scrollbar")).toBe("true");
+    expect(listElement.hasAttribute("data-native-scrollbar")).toBe(false);
     expect(listElement.className).toContain("overflow-y-auto");
+    expect(listElement.className).toContain("overflow-x-hidden");
+    expect(listElement.className).toContain("overscroll-y-contain");
     expect(listElement.className).not.toContain("scrollbar-gutter");
     expect(listElement.className).not.toContain("scrollbar-native-thin");
+    // showsVerticalScrollIndicator stays on; LegendList only adds this class
+    // when the indicator is suppressed.
     expect(listElement.className).not.toContain(
       "legend-list-scrollbar-y-hidden",
     );
@@ -649,14 +651,15 @@ describe("ChatTimeline", () => {
     }
   }
 
-  /** One real macrotask tick - empirically the exact window where a
+  /** One virtual browser turn - the queued macrotask plus the following
+   *  animation frame. This is the exact window where a
    *  `useLayoutEffect`-published store settles (verified against a toy
    *  two-component external-store harness) but a `useEffect`-published one
-   *  has not yet, when act-environment is off. */
+   *  has not yet, when act-environment is off. Keep this outside `act`: the
+   *  finding deliberately exercises React's normal asynchronous scheduling. */
   async function tickOneMacrotask(): Promise<void> {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(16);
   }
 
   // Finding 1's "row mounting in the stale window" sub-case was investigated
@@ -1183,5 +1186,34 @@ describe("ChatTimeline", () => {
       expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe("true");
       stop();
     });
+  });
+});
+
+describe("ChatTimeline LegendList strict-edge policy config", () => {
+  beforeEach(() => {
+    legendListPolicyProps.last = null;
+    installLegendListViewportMetrics();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("pins maintainScrollAtEndThreshold=0, MVCP maintenance, and the library's own maintainScrollAtEnd permanently disabled", async () => {
+    // Fixup (callback-synchronous-follow): the library's own
+    // `maintainScrollAtEnd` is NEVER passed at all anymore - not even
+    // conditionally - since every one of its call sites (data/item/footer/
+    // layout) already no-ops when this prop is falsy. Bottom-follow is
+    // reimplemented in `chat-timeline-follow-latch.ts` and driven
+    // imperatively; see that module's own real-LegendList integration
+    // coverage for the actual follow/detach behavior this enables.
+    renderTimeline({ messages: makeMessages(6) });
+    await settleLegendList();
+    expect(legendListPolicyProps.last).not.toBeNull();
+    expect(legendListPolicyProps.last?.maintainScrollAtEndThreshold).toBe(0);
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toBe(
+      true,
+    );
+    expect(legendListPolicyProps.last?.maintainScrollAtEnd).toBeUndefined();
   });
 });

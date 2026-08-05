@@ -18,6 +18,7 @@ const ACTIVE_AGENT_SOURCE: EpicCanvasActiveAgentDragData = {
     type: "chat",
     name: "Bound agent",
     hostId: "host-bound-to-agent",
+    harnessId: null,
   },
 };
 
@@ -32,6 +33,7 @@ describe("active-agent canvas drag source", () => {
         agent: {
           ...ACTIVE_AGENT_SOURCE.agent,
           type: "terminal-agent",
+          harnessId: "claude",
         },
       }),
     ).toEqual({
@@ -39,6 +41,7 @@ describe("active-agent canvas drag source", () => {
       agent: {
         ...ACTIVE_AGENT_SOURCE.agent,
         type: "terminal-agent",
+        harnessId: "claude",
       },
     });
   });
@@ -54,6 +57,16 @@ describe("active-agent canvas drag source", () => {
       readEpicCanvasDragSourceData({
         ...ACTIVE_AGENT_SOURCE,
         agent: { ...ACTIVE_AGENT_SOURCE.agent, hostId: "" },
+      }),
+    ).toBeNull();
+    expect(
+      readEpicCanvasDragSourceData({
+        ...ACTIVE_AGENT_SOURCE,
+        agent: {
+          ...ACTIVE_AGENT_SOURCE.agent,
+          type: "terminal-agent",
+          harnessId: null,
+        },
       }),
     ).toBeNull();
   });

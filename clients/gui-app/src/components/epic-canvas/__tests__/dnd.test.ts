@@ -137,12 +137,14 @@ describe("epic canvas dnd-kit data guards", () => {
         kind: "sidebar-node",
         epicId: "epic-1",
         viewTabId: "view-1",
+        hostId: "host-1",
         nodeId: "node-1",
       }),
     ).toEqual({
       kind: "sidebar-node",
       epicId: "epic-1",
       viewTabId: "view-1",
+      hostId: "host-1",
       nodeId: "node-1",
     });
   });

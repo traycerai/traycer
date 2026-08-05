@@ -14,6 +14,7 @@ import type {
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -57,7 +58,6 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
-import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -354,7 +354,11 @@ function steeredMessageIdsFromEvents(
         if (queueItemHasActiveInterruptRestartSteer(item)) {
           continue;
         }
-        steeredMessageIds.delete(item.messageId);
+        // Only prompt items map back to a rendered user message; a
+        // managed-command item has no message to un-badge.
+        if (item.kind === "prompt") {
+          steeredMessageIds.delete(item.messageId);
+        }
         steerRequestMessageIdsByQueueItemId.delete(item.queueItemId);
       }
     }
@@ -367,6 +371,8 @@ function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
   const requestedItems = queueItemsFromEventMetadata(event.metadata);
   for (const item of requestedItems) {
     if (item.queueItemId !== event.queueItemId) continue;
+    // Managed-command items are never steered, so they never carry a request.
+    if (item.kind !== "prompt") return false;
     return item.steerRequest?.mode === "interrupt_restart";
   }
   return false;
@@ -375,6 +381,7 @@ function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
 function queueItemHasActiveInterruptRestartSteer(
   item: ChatQueuedItem,
 ): boolean {
+  if (item.kind !== "prompt") return false;
   return (
     (item.status === "steer_requested" || item.status === "steering") &&
     item.steerRequest !== null &&
@@ -1424,7 +1431,20 @@ interface AssistantTurnAccumulator {
    */
   timestamp: number;
   blocks: ContentBlock[];
-  blocksVersion: number | null;
+  /**
+   * False while `blocks` still ALIASES a contributing record's own array.
+   * Every mutation goes through `ownedTurnBlocks` first, so the common
+   * single-record turn never pays an array copy on a render pass - which it
+   * used to, once per turn, making each pass O(blocks in the transcript).
+   */
+  blocksOwned: boolean;
+  /**
+   * One signature fragment per contributing record (plus one for appended
+   * live blocks). Each fragment is derived per record and memoized on that
+   * record's object identity, so a settled turn costs nothing to re-sign and
+   * the pass is O(records in the turn) rather than O(blocks in the turn).
+   */
+  signatureParts: string[];
   /** Profile label captured on the user message that initiated this turn. */
   profileLabel: string | null;
   /**
@@ -1723,8 +1743,8 @@ function addAssistantMessageToAccumulator(
   const turnKey = assistantTurnKey(message);
   const existing = turnAccumulator.get(turnKey);
   if (existing !== undefined) {
-    existing.blocks.push(...message.blocks);
-    existing.blocksVersion = null;
+    ownedTurnBlocks(existing).push(...message.blocks);
+    existing.signatureParts.push(assistantRecordSignature(message));
     // A turn split across multiple AssistantMessage records (subagent flows,
     // legacy/migrated snapshots) must merge timestamps, not keep the FIRST
     // record's: completedAt = max(timestamp) so the elapsed reflects the real
@@ -1753,8 +1773,10 @@ function addAssistantMessageToAccumulator(
     sender: message.sender,
     startedAt: message.startedAt,
     timestamp: message.timestamp,
-    blocks: [...message.blocks],
-    blocksVersion: message.blocksVersion ?? null,
+    // Alias, not a copy - `ownedTurnBlocks` clones on the first mutation.
+    blocks: message.blocks,
+    blocksOwned: false,
+    signatureParts: [assistantRecordSignature(message)],
     profileLabel,
     reasoningEffort: message.reasoningEffort,
     serviceTier: message.serviceTier,
@@ -1775,12 +1797,91 @@ function appendLiveAssistantBlocks(
   if (liveAssistant === null) return;
   const acc = turnAccumulator.get(liveAssistant.turnId);
   if (acc === undefined) return;
-  acc.blocks.push(...liveAssistant.blocks);
-  acc.blocksVersion = null;
+  ownedTurnBlocks(acc).push(...liveAssistant.blocks);
+  // The live record carries a monotonic version, so the streaming turn
+  // re-signs in O(1) per delta instead of re-hashing its whole block list.
+  acc.signatureParts.push(`live:${liveAssistant.blocksVersion}`);
 }
 
+/**
+ * Clone-on-first-write for a turn's block list. Until something appends, the
+ * accumulator aliases the contributing record's own array; aliasing is safe
+ * only because every mutation site routes through here.
+ */
+function ownedTurnBlocks(acc: AssistantTurnAccumulator): ContentBlock[] {
+  if (acc.blocksOwned) return acc.blocks;
+  acc.blocks = [...acc.blocks];
+  acc.blocksOwned = true;
+  return acc.blocks;
+}
+
+/**
+ * Signature for one contributing record.
+ *
+ * `blocksVersion` is the host's own monotonic marker and is free when present.
+ * Otherwise the block list is hashed once and memoized against the record's
+ * OBJECT IDENTITY - which is the correct invalidation key here even though a
+ * settled turn is not strictly immutable: detached backgrounded-subagent
+ * events and snapshot replacement both write settled turns, and both mint a
+ * new message object rather than mutating in place. Keying on "the turn is
+ * complete" would have been wrong; keying on identity is not.
+ */
+const assistantRecordSignatureCache = new WeakMap<AssistantMessage, string>();
+
+/**
+ * Stable per-array identity token.
+ *
+ * `blocksVersion` alone is not sufficient even for a single record: an
+ * authoritative snapshot can replace a record's blocks while preserving its
+ * `messageId`, its timestamp AND its persisted counter (counters restart at 0
+ * on a rebuild), which produces an identical key for different content and
+ * serves the previous render indefinitely. Hashing the blocks instead would
+ * reintroduce the O(blocks-in-transcript) work per pass that keying on a
+ * counter exists to avoid.
+ *
+ * A replacement always mints a NEW array, so array identity separates the two
+ * cases at O(1): same array plus same counter really is the same content;
+ * a new array is a replacement regardless of what the counter says.
+ */
+let blocksIdentityCounter = 0;
+const blocksIdentity = new WeakMap<ReadonlyArray<ContentBlock>, number>();
+function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
+  const existing = blocksIdentity.get(blocks);
+  if (existing !== undefined) return existing;
+  blocksIdentityCounter += 1;
+  blocksIdentity.set(blocks, blocksIdentityCounter);
+  return blocksIdentityCounter;
+}
+
+function assistantRecordSignature(message: AssistantMessage): string {
+  const version = message.blocksVersion;
+  if (version !== undefined) {
+    return `v:${version}#${blocksIdentityToken(message.blocks)}`;
+  }
+  const cached = assistantRecordSignatureCache.get(message);
+  if (cached !== undefined) return cached;
+  const computed = `h:${turnSignature(message.blocks)}`;
+  assistantRecordSignatureCache.set(message, computed);
+  return computed;
+}
+
+/**
+ * Cache key for a turn's merged block list.
+ *
+ * A single-record turn keys on that record's signature, which pairs its
+ * `blocksVersion` with its blocks' array identity so a replacement is caught
+ * even when the counter is preserved (see `assistantRecordSignature`).
+ *
+ * A MULTI-record turn needs more than that. Records are minted at
+ * `blocksVersion: 0`, so joining per-record parts positionally is only as
+ * strong as the weakest part, and the merged list is what the render actually
+ * consumes: two different merges can be assembled from parts that each look
+ * unchanged. So the moment a second record joins, hash the merged list. That
+ * is what the pre-accumulator code did, and it is what makes this class of
+ * stale-cache miss impossible rather than merely unlikely.
+ */
 function turnBlocksSignature(acc: AssistantTurnAccumulator): string {
-  if (acc.blocksVersion !== null) return `v:${acc.blocksVersion}`;
+  if (acc.signatureParts.length === 1) return acc.signatureParts[0];
   return `h:${turnSignature(acc.blocks)}`;
 }
 
@@ -1925,10 +2026,8 @@ function withTurnCompletion(
           turnHadOutput: rows.some(
             (row) => row.role === "assistant" && row.segments.length > 0,
           ),
-          turnReplyText: collectAssistantReplyText(
-            rows.flatMap((row) =>
-              row.role === "assistant" ? row.segments : [],
-            ),
+          turnReplySegments: rows.flatMap((row) =>
+            row.role === "assistant" ? row.segments : [],
           ),
         };
   return rows.map((row, index) =>
@@ -2128,7 +2227,7 @@ function renderSteerBlockUserMessage(
 
 function renderSteeredUserMessage(input: {
   readonly id: string;
-  readonly content: ChatQueuedItem["message"]["content"];
+  readonly content: ChatQueuedPromptItem["message"]["content"];
   readonly timestamp: number;
   readonly persistentMessageId: string | null;
   readonly sender: UserMessageSender | null;
@@ -2286,8 +2385,11 @@ function renderLiveAssistant(
       sender: liveAssistant.sender,
       startedAt: liveAssistant.startedAt,
       timestamp: liveAssistant.timestamp,
+      // A standalone live row owns its list from the start: it is built fresh
+      // here each pass and never aliases a persisted record.
       blocks: [...liveAssistant.blocks],
-      blocksVersion: liveAssistant.blocksVersion,
+      blocksOwned: true,
+      signatureParts: [`live:${liveAssistant.blocksVersion}`],
       profileLabel:
         input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
       reasoningEffort: liveAssistant.reasoningEffort,
@@ -2428,7 +2530,7 @@ function renderStoppedTurnsWithoutAssistantRecords(
         stoppedAt: stopped.stoppedAt,
         reason: stopped.reason,
         turnHadOutput: false,
-        turnReplyText: "",
+        turnReplySegments: [],
       },
       pausedDurationMs: 0,
       pausedSinceMs: null,
@@ -3119,6 +3221,8 @@ const BLOCK_HANDLERS: {
     // No command-progress signal today; the field exists for footer symmetry.
     progress: null,
     startedAt: block.timestamp,
+    backgroundTask: block.backgroundTask,
+    stopped: block.stopped,
     parentId: block.parentBlockId ?? null,
   }),
   subagent: (block) =>

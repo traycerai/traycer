@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -35,7 +36,7 @@ function createStream(
   return new LogicalStream({
     streamId: 17,
     method: "terminal.subscribe",
-    params: {},
+    paramsProvider: () => ({}),
     schemaVersion: { major: 1, minor: 0 },
     qos: QosClass.INTERACTIVE,
     port,
@@ -85,5 +86,65 @@ describe("LogicalStream", () => {
     stream.close();
     stream.requestReconnect();
     expect(reconnectReasons).toHaveLength(1);
+  });
+  it("replays a terminal failure to a handler installed after subscription setup", () => {
+    const stream = createStream([], []);
+    const details: FatalErrorDetails = {
+      code: "INCOMPATIBLE_METHOD",
+      reason: "host does not advertise the method",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    stream.goFatal(details);
+
+    const statuses: Array<{
+      readonly status: StreamConnectionStatus;
+      readonly reason: StreamCloseReason | null;
+    }> = [];
+    stream.onStatusChange((status, reason) => {
+      statuses.push({ status, reason });
+    });
+
+    expect(statuses).toEqual([
+      {
+        status: "closed",
+        reason: { kind: "fatalError", details },
+      },
+    ]);
+  });
+
+  // The constructor is seeded with a PROVISIONAL client-canonical version
+  // (`RemoteSession.subscribe` opens the stream before the host manifest can be
+  // consulted). Reporting that as negotiated would tell consumers the host
+  // agreed to a version it has never seen - and they parse frames against it.
+  it("reports no negotiated version until the session has opened it", () => {
+    const stream = createStream([], []);
+    expect(stream.getNegotiatedSchemaVersion()).toBeNull();
+    // ...even though a provisional version is already in hand.
+    expect(stream.currentSchemaVersion()).toEqual({ major: 1, minor: 0 });
+
+    stream.updateSchemaVersion({ major: 1, minor: 4 });
+    expect(stream.getNegotiatedSchemaVersion()).toEqual({
+      major: 1,
+      minor: 4,
+    });
+  });
+
+  // A negotiated version belongs to the connection that negotiated it. Holding
+  // it across a drop would let a consumer parse the first post-resume frame at
+  // the OLD host incarnation's minor, before the resume has re-established one.
+  it("drops the negotiated version when the connection goes away", () => {
+    const stream = createStream([], []);
+    stream.updateSchemaVersion({ major: 1, minor: 4 });
+
+    stream.notifyStatus("reconnecting", null);
+    expect(stream.getNegotiatedSchemaVersion()).toBeNull();
+
+    // The resume re-establishes it; nothing else does.
+    stream.updateSchemaVersion({ major: 1, minor: 2 });
+    expect(stream.getNegotiatedSchemaVersion()).toEqual({
+      major: 1,
+      minor: 2,
+    });
   });
 });

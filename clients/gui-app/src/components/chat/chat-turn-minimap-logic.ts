@@ -22,6 +22,8 @@ export const CHAT_TURN_MINIMAP_MIN_ITEMS = 1;
 export const CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS =
   "max(1px, calc(100% - 1rem))";
+/** Matches `chat-timeline.tsx`'s rem-based `max-w-3xl`. */
+export const CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM = 48;
 
 export function resolveChatTurnMinimapHeightStyle(itemCount: number): string {
   const naturalTrackHeight = Math.max(
@@ -88,21 +90,43 @@ export function resolveChatTurnMinimapIndexFromPointer(input: {
   );
 }
 
-/** Always-on edge hit target, including narrow and tiled transcript panes. */
+/** Matches the rem-based `left-3` / `right-3` interaction-region inset. */
+export const CHAT_TURN_MINIMAP_EDGE_INSET_REM = 0.75;
 export const CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
-export const CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH =
-  "min(22rem, calc(100vw - 1rem))";
+/** Matches the widest painted marker (`w-6`) in `chat-turn-minimap.tsx`. */
+export const CHAT_TURN_MINIMAP_MAX_MARKER_WIDTH_REM = 1.5;
 
 /**
- * Once the preview is open, keep the full preview and the space leading to it
- * interactive. The collapsed rail keeps a compact fixed edge target so it
- * remains usable in narrow and tiled panes.
+ * The minimap overlays a viewport edge while the transcript column is
+ * centered. Cap the transparent hit target to the side gutter so it cannot
+ * cover message text; a zero-width result makes the control inert in narrow
+ * and tiled panes where the content column consumes the full viewport.
  */
-export function resolveChatTurnMinimapInteractiveWidth(
-  collapsedWidth: number,
-  expanded: boolean,
-): number | string {
-  return expanded ? CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH : collapsedWidth;
+export function resolveChatTurnMinimapHitStripWidth(input: {
+  readonly rootFontSize: number;
+  readonly viewportWidth: number;
+}): number {
+  if (
+    !Number.isFinite(input.viewportWidth) ||
+    input.viewportWidth <= 0 ||
+    !Number.isFinite(input.rootFontSize) ||
+    input.rootFontSize <= 0
+  ) {
+    return 0;
+  }
+
+  const contentMaxWidth =
+    CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM * input.rootFontSize;
+  const contentWidth = Math.min(input.viewportWidth, contentMaxWidth);
+  const sideGutter = Math.max(0, (input.viewportWidth - contentWidth) / 2);
+  const edgeInset = CHAT_TURN_MINIMAP_EDGE_INSET_REM * input.rootFontSize;
+  return Math.max(
+    0,
+    Math.min(
+      CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
+      Math.floor(sideGutter - edgeInset),
+    ),
+  );
 }
 
 export interface ChatTurnMinimapListState {
@@ -178,4 +202,99 @@ export function resolveChatTurnMinimapRowViewportDistance(
   if (rowTop < scrollBottom && rowBottom > scrollTop) return -1;
   if (rowBottom <= scrollTop) return scrollTop - rowBottom;
   return Math.max(0, rowTop - scrollBottom);
+}
+
+/** Every preview is clamped to three lines on screen (and one is also reused
+ * as a jump target's accessible name), so nothing past this is perceivable. */
+export const CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS = 200;
+
+/**
+ * Builds the rail's preview text for one message.
+ *
+ * The slice comes BEFORE the whitespace collapse on purpose. Normalizing
+ * first allocates a string as long as the whole turn, so the rail retained a
+ * second full-length copy of every user message and every final assistant
+ * message in the transcript - a heap snapshot of a long session found exactly
+ * that duplication. Reading a bounded head keeps the retained preview
+ * proportional to what can actually be shown.
+ */
+/**
+ * `String.prototype.slice` cuts on UTF-16 code units, so a cut landing
+ * between the halves of a surrogate pair leaves a lone surrogate that
+ * renders as a replacement glyph. This preview doubles as the jump
+ * target's accessible name, so a screen reader would announce the
+ * malformed character too - drop a trailing high surrogate instead.
+ */
+function sliceWholeCodePoints(text: string, maxUnits: number): string {
+  if (text.length <= maxUnits) return text;
+  const cut = text.slice(0, maxUnits);
+  const last = cut.charCodeAt(cut.length - 1);
+  const endsOnLeadingSurrogate = last >= 0xd800 && last <= 0xdbff;
+  return endsOnLeadingSurrogate ? cut.slice(0, -1) : cut;
+}
+
+/**
+ * Collapse whitespace while walking the source, stopping as soon as enough
+ * VISIBLE characters have been collected.
+ *
+ * A fixed-length prefix would be wrong twice over: scanning the whole string
+ * allocates a second full copy of every turn (the cost this preview exists to
+ * avoid), but slicing a fixed prefix first means a turn whose opening is
+ * mostly whitespace - pasted content after a long run of blank lines -
+ * normalizes to nothing and loses its preview and its accessible name
+ * entirely. Walking with an output budget bounds the work by what is shown
+ * rather than by the turn's length, and never runs out of input early.
+ */
+const WHITESPACE_RE = /\s/;
+
+/**
+ * Hard ceiling on how much source the preview scan will read.
+ *
+ * The output budget alone does not bound the loop: a whitespace-only turn, or
+ * one with a very long whitespace prefix, emits nothing and would walk the
+ * entire message. This runs for every user and assistant preview, so a single
+ * large message would cost renderer work proportional to its whole length.
+ *
+ * Generous enough that no realistic leading-whitespace run reaches it - which
+ * is the case the scan was widened for in the first place - while keeping the
+ * worst case constant.
+ */
+const PREVIEW_SOURCE_SCAN_LIMIT = 16_384;
+
+function collapseWhitespaceUpTo(text: string, maxOut: number): string {
+  let out = "";
+  let pendingSpace = false;
+  const scanLimit = Math.min(text.length, PREVIEW_SOURCE_SCAN_LIMIT);
+  for (let index = 0; index < scanLimit; index += 1) {
+    const ch = text[index];
+    if (WHITESPACE_RE.test(ch)) {
+      if (out.length > 0) pendingSpace = true;
+      continue;
+    }
+    if (pendingSpace) {
+      out += " ";
+      pendingSpace = false;
+    }
+    out += ch;
+    // One past the budget is enough to know truncation is needed, and keeps a
+    // trailing surrogate pair intact for the caller to trim whole.
+    if (out.length > maxOut + 1) break;
+  }
+  return out;
+}
+
+export function compactChatTurnMinimapPreview(
+  text: string | null | undefined,
+): string | null {
+  if (text === null || text === undefined) return null;
+  const compact = collapseWhitespaceUpTo(
+    text,
+    CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  );
+  if (compact.length === 0) return null;
+  if (compact.length <= CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS) return compact;
+  return `${sliceWholeCodePoints(
+    compact,
+    CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  ).trimEnd()}…`;
 }

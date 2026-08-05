@@ -11,6 +11,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { createComposerPickerStore } from "../picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   useChatComposerSubmit,
   type ChatComposerSubmitResult,
@@ -687,8 +688,10 @@ function mountSubmit(input: MountSubmitInput): {
 }
 
 function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
@@ -698,6 +701,7 @@ function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
     setContent: () => undefined,
     syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,

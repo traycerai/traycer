@@ -35,6 +35,7 @@ import {
 } from "@/lib/notifications/notification-category";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
+import { cn } from "@/lib/utils";
 import {
   temporalGroupForTimestamp,
   type NotificationTemporalGroup,
@@ -50,7 +51,10 @@ import {
   useNotificationCenterHostState,
   useRecentNotificationIds,
 } from "@/stores/notifications/merged-notifications";
-import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import {
+  type CloudNotificationsConnectionState,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -63,6 +67,12 @@ interface NotificationsPopoverProps {
    * that prop's doc for why the ancestor Popover's outside-dismissal guard
    * needs it. */
   readonly onFilterMenuOpenChange: (open: boolean) => void;
+}
+
+interface NotificationFeedStatusPresentation {
+  readonly title: string;
+  readonly detail: string;
+  readonly isPending: boolean;
 }
 
 const TEMPORAL_GROUP_LABEL: Readonly<
@@ -99,8 +109,7 @@ function isMarkAllReadDisabled(input: {
   readonly unreadCount: number;
   readonly loadedHostAttentionCount: number;
   readonly hasActiveHost: boolean;
-  readonly cloudConnectionState:
-    "connecting" | "connected" | "reconnecting" | "unavailable" | null;
+  readonly cloudConnectionState: CloudNotificationsConnectionState | null;
 }): boolean {
   if (input.cloudConnectionState !== null) {
     return (
@@ -169,10 +178,18 @@ export function NotificationsPopover(
   const cloudConnectionState = useCloudNotificationsStore(
     (state) => state.connectionState,
   );
+  const cloudHasSnapshot = useCloudNotificationsStore(
+    (state) => state.hasSnapshot,
+  );
   const cloudPresentationState = cloudStateForFeedMode(
     feedMode,
     cloudConnectionState,
   );
+  const feedStatus = notificationFeedStatus({
+    feedMode,
+    connectionState: cloudConnectionState,
+    hasSnapshot: cloudHasSnapshot,
+  });
   // Distinguishes a permanent condition (this host's stream mirror-compat
   // check has already confirmed it will never support the notifications
   // feed) from a merely transient one (still connecting) - both leave
@@ -423,6 +440,7 @@ export function NotificationsPopover(
           })}
           showClearAll={feedMode === "cloud"}
           isClearAllDisabled={
+            !cloudHasSnapshot ||
             cloudConnectionState !== "connected" ||
             fullOccurrenceOrder.length === 0
           }
@@ -436,6 +454,10 @@ export function NotificationsPopover(
         />
 
         <OriginUnavailableBanner />
+        <NotificationFeedStatusBanner
+          isEmpty={isEmpty}
+          presentation={feedStatus}
+        />
 
         <div
           ref={feedScrollRef}
@@ -453,25 +475,7 @@ export function NotificationsPopover(
               {newArrivalCount === 1 ? "" : "s"}
             </button>
           )}
-          {isEmpty ? (
-            <div
-              className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-muted-foreground"
-              data-testid="notifications-empty"
-            >
-              <BellOff
-                className="size-8 text-muted-foreground/45"
-                aria-hidden
-              />
-              <div className="space-y-1">
-                <p className="text-ui-sm text-muted-foreground/60">
-                  You&apos;re all caught up
-                </p>
-                <p className="text-ui-xs text-muted-foreground/50">
-                  New notifications will appear here.
-                </p>
-              </div>
-            </div>
-          ) : (
+          <NotificationsFeedContent isEmpty={isEmpty} presentation={feedStatus}>
             <>
               {isAttentionSectionVisible({
                 loadedAttentionCount: attentionIds.length,
@@ -521,7 +525,7 @@ export function NotificationsPopover(
                 />
               </section>
             </>
-          )}
+          </NotificationsFeedContent>
         </div>
 
         {canLoadOlder ? (
@@ -679,10 +683,136 @@ function NotificationsPopoverHeader({
 
 function cloudStateForFeedMode(
   feedMode: "local" | "cloud" | "upgrade-required",
-  connectionState: "connecting" | "connected" | "reconnecting" | "unavailable",
-): "connecting" | "connected" | "reconnecting" | "unavailable" | null {
+  connectionState: CloudNotificationsConnectionState,
+): CloudNotificationsConnectionState | null {
   if (feedMode === "upgrade-required") return "unavailable";
   return feedMode === "cloud" ? connectionState : null;
+}
+
+function notificationFeedStatus(input: {
+  readonly feedMode: NotificationFeedMode;
+  readonly connectionState: CloudNotificationsConnectionState;
+  readonly hasSnapshot: boolean;
+}): NotificationFeedStatusPresentation | null {
+  if (input.feedMode === "local") return null;
+  if (input.feedMode === "upgrade-required") {
+    return {
+      title: "Notifications unavailable",
+      detail: "Update Traycer to reconnect to your notification feed.",
+      isPending: false,
+    };
+  }
+  if (input.connectionState === "connected" && input.hasSnapshot) return null;
+  if (!input.hasSnapshot && input.connectionState === "connecting") {
+    return {
+      title: "Loading notifications",
+      detail: "Fetching your notification history.",
+      isPending: true,
+    };
+  }
+  if (input.hasSnapshot && input.connectionState !== "unavailable") {
+    return {
+      title: "Reconnecting to notifications",
+      detail: "Refreshing your notification history.",
+      isPending: true,
+    };
+  }
+  return {
+    title: "Notifications unavailable",
+    detail: "We’ll keep trying to reconnect.",
+    isPending: false,
+  };
+}
+
+function NotificationFeedStatus(props: {
+  readonly presentation: NotificationFeedStatusPresentation;
+  readonly compact: boolean;
+}): ReactNode {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        props.compact
+          ? "flex shrink-0 items-center gap-2 border-b border-border/60 bg-muted/30 px-4 py-2 text-muted-foreground"
+          : "flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-muted-foreground",
+      )}
+      data-testid="notifications-feed-status"
+    >
+      {props.presentation.isPending ? (
+        <AgentSpinningDots
+          className="text-muted-foreground/60"
+          testId="notifications-feed-status-spinner"
+          variant={undefined}
+        />
+      ) : (
+        <BellOff
+          className={cn(
+            props.compact
+              ? "size-3.5 shrink-0 text-muted-foreground/60"
+              : "size-8 text-muted-foreground/45",
+          )}
+          aria-hidden
+        />
+      )}
+      <div className={cn(props.compact ? "min-w-0" : "space-y-1")}>
+        <p
+          className={cn(
+            props.compact
+              ? "text-ui-xs text-muted-foreground"
+              : "text-ui-sm text-muted-foreground/60",
+          )}
+        >
+          {props.presentation.title}
+        </p>
+        {props.compact ? null : (
+          <p className="text-ui-xs text-muted-foreground/50">
+            {props.presentation.detail}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NotificationFeedStatusBanner(props: {
+  readonly isEmpty: boolean;
+  readonly presentation: NotificationFeedStatusPresentation | null;
+}): ReactNode {
+  if (props.isEmpty || props.presentation === null) return null;
+  return <NotificationFeedStatus presentation={props.presentation} compact />;
+}
+
+function NotificationsFeedContent(props: {
+  readonly isEmpty: boolean;
+  readonly presentation: NotificationFeedStatusPresentation | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (!props.isEmpty) return props.children;
+  if (props.presentation !== null) {
+    return (
+      <NotificationFeedStatus
+        presentation={props.presentation}
+        compact={false}
+      />
+    );
+  }
+  return (
+    <div
+      className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-muted-foreground"
+      data-testid="notifications-empty"
+    >
+      <BellOff className="size-8 text-muted-foreground/45" aria-hidden />
+      <div className="space-y-1">
+        <p className="text-ui-sm text-muted-foreground/60">
+          You&apos;re all caught up
+        </p>
+        <p className="text-ui-xs text-muted-foreground/50">
+          New notifications will appear here.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 /** One-open-cycle banner for a native click whose captured origin host no

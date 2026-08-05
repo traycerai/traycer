@@ -46,21 +46,20 @@ interface PanelHandles {
   readonly onJump: Mock<(event: CommGraphEvent) => void>;
   readonly onJumpToSender: Mock<(event: CommGraphEvent) => void>;
   readonly onJumpToCreated: Mock<(event: CommGraphEvent) => void>;
-  readonly onJumpToNoticed: Mock<(event: CommGraphEvent) => void>;
   readonly onOpenAgentId: Mock<(agentId: string) => void>;
 }
 
 /** Which per-kind jump capabilities the rendered panel advertises. */
 interface PanelCapabilities {
+  readonly plainOpen: boolean;
   readonly senderJump: boolean;
   readonly createdJump: boolean;
-  readonly noticedJump: boolean;
 }
 
 const NO_EXTRA_JUMPS: PanelCapabilities = {
+  plainOpen: true,
   senderJump: false,
   createdJump: false,
-  noticedJump: false,
 };
 
 function renderPanelWithHandles(
@@ -90,7 +89,6 @@ function renderPanelWithCapabilities(
   const onJump = vi.fn<(event: CommGraphEvent) => void>();
   const onJumpToSender = vi.fn<(event: CommGraphEvent) => void>();
   const onJumpToCreated = vi.fn<(event: CommGraphEvent) => void>();
-  const onJumpToNoticed = vi.fn<(event: CommGraphEvent) => void>();
   const onOpenAgentId = vi.fn<(agentId: string) => void>();
   const [edge] = aggregateCommGraphEdges(events, new Set(["a", "b"]));
   render(
@@ -99,6 +97,7 @@ function renderPanelWithCapabilities(
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        canOpenAgentForEvent={() => capabilities.plainOpen}
         canJump={() => canJump}
         onJump={onJump}
         canJumpToSender={(event) =>
@@ -109,10 +108,6 @@ function renderPanelWithCapabilities(
           capabilities.createdJump && event.kind === "agent_created"
         }
         onJumpToCreated={onJumpToCreated}
-        canJumpToNoticed={(event) =>
-          capabilities.noticedJump && event.kind === "a2a_notice"
-        }
-        onJumpToNoticed={onJumpToNoticed}
         onOpenAgentId={onOpenAgentId}
         onClose={onClose}
       />
@@ -123,7 +118,6 @@ function renderPanelWithCapabilities(
     onJump,
     onJumpToSender,
     onJumpToCreated,
-    onJumpToNoticed,
     onOpenAgentId,
   };
 }
@@ -140,14 +134,13 @@ function renderPanel(events: ReadonlyArray<CommGraphEvent>): () => void {
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        canOpenAgentForEvent={() => true}
         canJump={() => false}
         onJump={() => undefined}
         canJumpToSender={() => false}
         onJumpToSender={() => undefined}
         canJumpToCreated={() => false}
         onJumpToCreated={() => undefined}
-        canJumpToNoticed={() => false}
-        onJumpToNoticed={() => undefined}
         onOpenAgentId={() => undefined}
         onClose={onClose}
       />
@@ -185,6 +178,36 @@ describe("CommGraphThreadPanel", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("first");
     expect(rows[1].textContent).toContain("second");
+  });
+
+  it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
+    renderPanel([
+      event({
+        id: 1,
+        eventId: "cloud-before-repair",
+        timestamp: 100,
+        messageText: "first\n\nbody",
+      }),
+      event({
+        id: 1,
+        eventId: "cloud-after-repair",
+        timestamp: 200,
+        messageText: "second\n\nbody",
+      }),
+    ]);
+
+    const toggles = await screen.findAllByRole("button", {
+      name: "Expand message",
+    });
+    expect(toggles).toHaveLength(2);
+    const [firstToggle, secondToggle] = toggles;
+    expect(messageRows()).toHaveLength(2);
+    expect(firstToggle.getAttribute("aria-label")).toBe("Expand message");
+    expect(secondToggle.getAttribute("aria-label")).toBe("Expand message");
+
+    fireEvent.click(firstToggle);
+    expect(firstToggle.getAttribute("aria-label")).toBe("Collapse message");
+    expect(secondToggle.getAttribute("aria-label")).toBe("Expand message");
   });
 
   it("interleaves BOTH directions chronologically and labels every row", async () => {
@@ -493,6 +516,19 @@ describe("CommGraphThreadPanel heading links", () => {
     expect(handles.onJump).not.toHaveBeenCalled();
   });
 
+  it("does not render host-local endpoints when plain opening is unavailable", async () => {
+    const handles = renderPanelWithCapabilities(
+      [event({ id: 1, timestamp: 100 })],
+      false,
+      { ...NO_EXTRA_JUMPS, plainOpen: false },
+    );
+
+    await screen.findByTestId("comm-graph-detail-row-host-a-1");
+    expect(screen.queryByTestId(`${ROW}-sender`)).toBeNull();
+    expect(screen.queryByTestId(`${ROW}-receiver`)).toBeNull();
+    expect(handles.onOpenAgentId).not.toHaveBeenCalled();
+  });
+
   it("names both endpoints accessibly, and says which one scrolls", async () => {
     renderPanelWithHandles(
       [event({ id: 1, timestamp: 100, ...ANCHORED })],
@@ -555,7 +591,7 @@ describe("CommGraphThreadPanel heading links", () => {
         }),
       ],
       true,
-      { senderJump: false, createdJump: true, noticedJump: false },
+      { ...NO_EXTRA_JUMPS, createdJump: true },
     );
 
     // The created agent (arrow's receiver) lands at its transcript's start.
@@ -575,10 +611,12 @@ describe("CommGraphThreadPanel heading links", () => {
     expect(handles.onJump).not.toHaveBeenCalled();
   });
 
-  it("jumps a Notice row's idle agent to its transcript tail", async () => {
-    // The idle agent (arrow's sender after the notice reversal) is where the
-    // evidence lives - the blocking question, the error, the last output.
-    const handles = renderPanelWithCapabilities(
+  it("opens a Notice row's idle agent plainly - it anchors on nothing", async () => {
+    // The idle agent (arrow's sender after the notice reversal) never WROTE
+    // this notice: the broker observed it going quiet. Nothing in its
+    // transcript is the row, so the endpoint is the same generic open a
+    // Created row's creator gets - it must not claim a landing.
+    const handles = renderPanelWithHandles(
       [
         event({
           id: 1,
@@ -589,17 +627,14 @@ describe("CommGraphThreadPanel heading links", () => {
         }),
       ],
       false,
-      { senderJump: false, createdJump: false, noticedJump: true },
     );
 
     // Displayed sender = DB receiver "b" (Reviewer), the idle agent.
     const sender = await screen.findByTestId(`${ROW}-sender`);
-    expect(sender.getAttribute("aria-label")).toBe(
-      "Open Reviewer and scroll to the latest activity",
-    );
+    expect(sender.getAttribute("aria-label")).toBe("Open Reviewer");
     fireEvent.click(sender);
-    expect(handles.onJumpToNoticed).toHaveBeenCalledTimes(1);
-    expect(handles.onOpenAgentId).not.toHaveBeenCalled();
+    expect(handles.onOpenAgentId).toHaveBeenCalledWith("b");
+    expect(handles.onJump).not.toHaveBeenCalled();
   });
 
   it("claims no scroll on an anchor-less row - the tile opens, honestly", async () => {
