@@ -2350,6 +2350,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         <div
           ref={transcriptContainerRef}
           data-testid="chat-transcript-container"
+          // Ctrl/Cmd+A selects the transcript, not the whole window (#592).
+          // Marked here rather than on the chat tile's transcript wrapper: that
+          // wrapper also holds the absolutely-positioned lower-surfaces dock
+          // (composer, approvals, todo), which must stay out of the selection.
+          // The timeline is virtualized, so this covers the mounted rows.
+          data-selection-root=""
           onPointerDown={handleTranscriptPointerDown}
           className="relative flex-1 overflow-hidden"
         >
