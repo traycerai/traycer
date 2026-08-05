@@ -1,22 +1,22 @@
-import { createContext, type Context } from "react";
 import {
   createHostRuntime,
-  type HostRuntimeBinding,
+  createHostRuntimeState,
+  type HostRuntimeState,
 } from "@/providers/host-runtime-provider";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
-type HostRuntimeContext = Context<HostRuntimeBinding<HostRpcRegistry> | null>;
+type AppHostRuntimeState = HostRuntimeState<HostRpcRegistry>;
 
 interface HostRuntimeDevGlobals {
-  __TRAYCER_HOST_RUNTIME_CONTEXT__: HostRuntimeContext | undefined;
+  __TRAYCER_HOST_RUNTIME_STATE__: AppHostRuntimeState | undefined;
 }
 
 function isObject(value: unknown): value is object {
   return typeof value === "object" && value !== null;
 }
 
-function createStableHostRuntimeContext(): HostRuntimeContext {
+function createStableHostRuntimeState(): AppHostRuntimeState {
   // A normal page load evaluates this module once. During Vite HMR, however,
   // React can briefly retain a provider from one module generation while a
   // refreshed consumer reads hooks from the next. Keep only the context
@@ -25,20 +25,18 @@ function createStableHostRuntimeContext(): HostRuntimeContext {
   // so tests continue to receive an isolated context.
   const hotData: unknown = import.meta.hot?.data;
   if (!isObject(hotData)) {
-    return createContext<HostRuntimeBinding<HostRpcRegistry> | null>(null);
+    return createHostRuntimeState<HostRpcRegistry>();
   }
 
   const devGlobals = globalThis as typeof globalThis & HostRuntimeDevGlobals;
-  const existing = devGlobals.__TRAYCER_HOST_RUNTIME_CONTEXT__;
+  const existing = devGlobals.__TRAYCER_HOST_RUNTIME_STATE__;
   if (existing !== undefined) {
     return existing;
   }
 
-  const context = createContext<HostRuntimeBinding<HostRpcRegistry> | null>(
-    null,
-  );
-  devGlobals.__TRAYCER_HOST_RUNTIME_CONTEXT__ = context;
-  return context;
+  const state = createHostRuntimeState<HostRpcRegistry>();
+  devGlobals.__TRAYCER_HOST_RUNTIME_STATE__ = state;
+  return state;
 }
 
 /**
@@ -52,7 +50,7 @@ function createStableHostRuntimeContext(): HostRuntimeContext {
  */
 const runtime = createHostRuntime<HostRpcRegistry>(
   hostRpcSchedulingPolicy,
-  createStableHostRuntimeContext(),
+  createStableHostRuntimeState(),
 );
 
 export const HostRuntimeProvider = runtime.HostRuntimeProvider;
