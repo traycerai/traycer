@@ -9,6 +9,7 @@ import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
 import type {
   EpicChatMentionEntry,
   EpicTerminalAgentMentionEntry,
+  EpicTerminalMentionEntry,
 } from "@/lib/composer/types";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
@@ -23,8 +24,28 @@ function context(
     epicEntries: [],
     currentEpicId: null,
     agentEntries: [],
+    terminalEntries: [],
     epicAttachedRoots: new Set(),
     ...overrides,
+  };
+}
+
+function terminal(fields: {
+  terminalId: string;
+  label: string;
+  cwd: string;
+  updatedAt: number;
+}): EpicTerminalMentionEntry {
+  return {
+    kind: "epic-terminal",
+    id: `terminal:epic-1:${fields.terminalId}`,
+    token: `terminal:epic-1/${fields.terminalId}`,
+    epicId: "epic-1",
+    terminalId: fields.terminalId,
+    label: fields.label,
+    description: fields.cwd,
+    cwd: fields.cwd,
+    updatedAt: fields.updatedAt,
   };
 }
 
@@ -135,6 +156,7 @@ describe("mention provider registry", () => {
       "Git",
       "Task",
       "Agents",
+      "Terminals",
       "Artifacts",
     ]);
 
@@ -167,6 +189,90 @@ describe("mention provider registry", () => {
       epicId: "epic-1",
       terminalAgentId: "tui-1",
     });
+  });
+
+  it("lists Task terminals in their own category, separate from Agents", () => {
+    const terminalEntries = [
+      terminal({
+        terminalId: "term-1",
+        label: "repo · zsh",
+        cwd: "/repo",
+        updatedAt: 10,
+      }),
+      terminal({
+        terminalId: "term-2",
+        label: "web · vite",
+        cwd: "/repo/apps/web",
+        updatedAt: 20,
+      }),
+    ];
+    const agentEntries = [chatAgent("chat-1", "Kickoff chat", 30)];
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({ currentEpicId: "epic-1", agentEntries, terminalEntries }),
+    );
+    const terminalsStep = navigateEntry(entries[6]);
+
+    const rows = mentionProviderRegistry.entries(
+      terminalsStep,
+      context({ currentEpicId: "epic-1", agentEntries, terminalEntries }),
+    );
+
+    // Terminals never appear under Agents: a shell has no inbox, so listing it
+    // there would imply it can be messaged.
+    expect(labels(rows)).toEqual(["Back", "web · vite", "repo · zsh"]);
+    expect(rows.map((row) => row.detail)).toEqual([
+      "",
+      "/repo/apps/web",
+      "/repo",
+    ]);
+    expect(mentionProviderRegistry.menuCopy(terminalsStep)).toEqual({
+      header: "Terminals",
+      empty: "No terminals available",
+    });
+  });
+
+  it("completes a terminal row into a pointer-only terminal mention", () => {
+    const terminalEntries = [
+      terminal({
+        terminalId: "term-1",
+        label: "repo · zsh",
+        cwd: "/repo",
+        updatedAt: 10,
+      }),
+    ];
+    const rows = mentionProviderRegistry.entries(
+      {
+        kind: "provider",
+        providerId: "terminals",
+        stepId: "root",
+        workspacePath: null,
+      },
+      context({ currentEpicId: "epic-1", terminalEntries }),
+    );
+
+    expect(completeEntry(rows[1])).toMatchObject({
+      contextType: "terminal",
+      path: "terminal:epic-1/term-1",
+      epicId: "epic-1",
+      terminalId: "term-1",
+      label: "repo · zsh",
+      // A mention is a pointer: no terminal output rides along with it.
+      chatId: null,
+      terminalAgentId: null,
+      artifactId: null,
+    });
+  });
+
+  it("hides the Terminals category outside an open Task", () => {
+    expect(
+      labels(
+        mentionProviderRegistry.entries(
+          ROOT_MENTION_STEP,
+          context({ currentEpicId: null }),
+        ),
+      ),
+    ).not.toContain("Terminals");
   });
 
   it("labels each Agent row by interface, and marks unsupported delivery without hiding it", () => {

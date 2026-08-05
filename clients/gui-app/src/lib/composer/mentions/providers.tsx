@@ -4,8 +4,10 @@ import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
 import type {
   EpicAgentMentionEntry,
   EpicMentionEntry,
+  EpicTerminalMentionEntry,
   MentionAttachment,
   MentionPreview,
+  MentionSuggestionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { basenameOfPath } from "@/lib/path";
@@ -24,6 +26,7 @@ import {
   iconForSuggestion,
   MENU_ICON_CLASS,
   previewForSuggestion,
+  terminalCategoryIcon,
   worktreeIcon,
 } from "./mention-entry-display";
 import { rankRootSearchEntries } from "./root-search-ranking";
@@ -34,7 +37,14 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
-  "files" | "folders" | "worktree" | "git" | "epic" | "chat" | "artifacts";
+  | "files"
+  | "folders"
+  | "worktree"
+  | "git"
+  | "epic"
+  | "chat"
+  | "terminals"
+  | "artifacts";
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -163,6 +173,8 @@ export interface ComposerMentionProviderContext {
   readonly currentEpicId: string | null;
   /** Every referenceable Agent in the open Task, both interfaces. */
   readonly agentEntries: ReadonlyArray<EpicAgentMentionEntry>;
+  /** Every plain terminal the open Task's Terminals panel lists. */
+  readonly terminalEntries: ReadonlyArray<EpicTerminalMentionEntry>;
   /**
    * The subset of `roots` demonstrably attached to `currentEpicId` on this
    * host (a binding running dir or resolved workspace folder). File/folder
@@ -611,6 +623,51 @@ class AgentMentionProvider extends ComposerMentionProvider {
   }
 }
 
+/**
+ * Plain interactive terminals in the open Task - the shells themselves, not
+ * Agents reached through one. A separate category from **Agents** because the
+ * two are not interchangeable: an Agent can be messaged, a terminal can only be
+ * read, so collapsing them would imply an inbox that does not exist.
+ *
+ * Its rows mirror the Task's Terminals panel one-to-one (same host rows, same
+ * visibility rule), so a terminal is mentionable exactly while it is listed.
+ */
+class TerminalMentionProvider extends ComposerMentionProvider {
+  readonly id = "terminals" as const;
+  readonly rootOrder = 47;
+  protected readonly label = "Terminals";
+  protected readonly description = "Task terminals";
+
+  rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
+    if (context.currentEpicId === null) return null;
+    return providerEntry({
+      id: "provider:terminals",
+      label: this.label,
+      description: this.description,
+      icon: terminalCategoryIcon(),
+      step: this.providerStep("root", null),
+    });
+  }
+
+  rootSearchEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    if (context.currentEpicId === null) return EMPTY_MENU_ENTRIES;
+    return terminalSuggestionEntries(context);
+  }
+
+  stepEntries(
+    _step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return [backEntry("Mentions"), ...terminalSuggestionEntries(context)];
+  }
+
+  menuCopy(_step: MentionFlowStep): MentionMenuCopy {
+    return { header: "Terminals", empty: "No terminals available" };
+  }
+}
+
 const EPIC_ARTIFACT_MENTION_METHODS: Record<
   EpicArtifactKind,
   EpicArtifactMentionMethod
@@ -786,6 +843,7 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new GitMentionProvider(),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
+  new TerminalMentionProvider(),
   new ArtifactMentionProvider(),
 ]);
 
@@ -829,9 +887,7 @@ function backEntry(description: string): MentionMenuEntry {
   };
 }
 
-function suggestionEntry(
-  entry: WorkspaceEntry | EpicMentionEntry,
-): MentionMenuEntry[] {
+function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
   const mention = mentionAttachmentFromSuggestion(entry);
   if (mention === null) return [];
   return [
@@ -857,15 +913,55 @@ function agentSuggestionEntries(
   ).flatMap((entry) => suggestionEntry(entry));
 }
 
+function terminalSuggestionEntries(
+  context: ComposerMentionProviderContext,
+): ReadonlyArray<MentionMenuEntry> {
+  return rankByLabelAndId(
+    context.terminalEntries,
+    (entry) => entry.terminalId,
+    context.query,
+    context.limit,
+  ).flatMap((entry) => suggestionEntry(entry));
+}
+
 function rankAgentEntries(
   entries: ReadonlyArray<EpicAgentMentionEntry>,
   query: string,
   limit: number,
 ): ReadonlyArray<EpicAgentMentionEntry> {
+  return rankByLabelAndId(entries, agentEntryRecordId, query, limit);
+}
+
+/** The Agent's durable record id, whichever interface it uses. */
+function agentEntryRecordId(entry: EpicAgentMentionEntry): string {
+  return entry.kind === "epic-chat" ? entry.chatId : entry.terminalAgentId;
+}
+
+interface RankableMentionEntry {
+  readonly label: string;
+  readonly updatedAt: number;
+}
+
+/**
+ * Ranks the locally-sourced Task entries (Agents, terminals) the picker filters
+ * itself rather than re-querying per keystroke: best label match first, ties
+ * broken by recency. `recordId` supplies the durable id these rows can also be
+ * addressed by, so pasting a raw id finds its row.
+ */
+function rankByLabelAndId<Entry extends RankableMentionEntry>(
+  entries: ReadonlyArray<Entry>,
+  recordId: (entry: Entry) => string,
+  query: string,
+  limit: number,
+): ReadonlyArray<Entry> {
   const normalizedQuery = query.trim().toLowerCase();
   return entries
     .flatMap((entry) => {
-      const score = scoreAgentEntry(entry, normalizedQuery);
+      const score = scoreLabelAndId(
+        entry.label,
+        recordId(entry),
+        normalizedQuery,
+      );
       if (score === null) return [];
       return [{ entry, score }];
     })
@@ -878,18 +974,14 @@ function rankAgentEntries(
     .slice(0, limit);
 }
 
-/** The Agent's durable record id, whichever interface it uses. */
-function agentEntryRecordId(entry: EpicAgentMentionEntry): string {
-  return entry.kind === "epic-chat" ? entry.chatId : entry.terminalAgentId;
-}
-
-function scoreAgentEntry(
-  entry: EpicAgentMentionEntry,
+function scoreLabelAndId(
+  rawLabel: string,
+  rawId: string,
   normalizedQuery: string,
 ): number | null {
   if (normalizedQuery.length === 0) return 0;
-  const label = entry.label.toLowerCase();
-  const id = agentEntryRecordId(entry).toLowerCase();
+  const label = rawLabel.toLowerCase();
+  const id = rawId.toLowerCase();
   if (label === normalizedQuery || id === normalizedQuery) return 0;
   if (label.startsWith(normalizedQuery)) return 100;
   if (label.includes(normalizedQuery)) return 200;

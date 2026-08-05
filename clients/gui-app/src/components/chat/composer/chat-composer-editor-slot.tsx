@@ -26,7 +26,6 @@ const STEER_HINT_PLACEHOLDER = isMac()
   : "Enter to queue · Ctrl+Enter to steer this turn";
 const NARROW_STEER_HINT_PLACEHOLDER = `${modLabel()}+Enter to steer`;
 const NOOP = (): void => undefined;
-
 interface ChatComposerEditorSlotProps {
   readonly ref: Ref<ComposerPromptEditorHandle>;
   readonly pickerStore: ComposerPickerStore;
@@ -52,6 +51,8 @@ interface ChatComposerEditorSlotProps {
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
   readonly onEditorReady: (() => void) | null;
+  /** Fired when the user focuses this composer. */
+  readonly onFocus: () => void;
 }
 
 /**
@@ -77,6 +78,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     onDragOver,
     onDrop,
     onEditorReady,
+    onFocus,
   } = props;
   const isNarrow = useIsComposerNarrow();
   const basePlaceholder = isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER;
@@ -107,7 +109,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       onDragOver={onDragOver}
       onDrop={onDrop}
       onKeyDown={undefined}
-      onFocus={NOOP}
+      onFocus={onFocus}
       onBlur={NOOP}
       onEditorReady={onEditorReady}
     />

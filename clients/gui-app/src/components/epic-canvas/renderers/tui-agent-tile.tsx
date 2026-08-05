@@ -1363,6 +1363,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
           // the scrollback and the tab renders blank. Once the agent exits the
           // handle is evicted, so stop pinning the engine.
           keepAlive={status !== "exited"}
+          onTerminalReady={null}
         />
       </Suspense>
       {overlayState !== null ? (

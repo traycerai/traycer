@@ -63,6 +63,7 @@ function renderHost(): void {
       findTargetId={null}
       keepAlive={false}
       chrome="padded"
+      onTerminalReady={null}
     />,
   );
 }
