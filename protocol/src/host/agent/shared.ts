@@ -67,6 +67,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "pi",
   "hermes",
   "omp",
+  "huggingface",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -193,6 +194,38 @@ export const guiHarnessIdSchemaV50 = harnessIdSchema.extract([
 ]);
 export type GuiHarnessIdV50 = z.infer<typeof guiHarnessIdSchemaV50>;
 
+/**
+ * Frozen harness id set as shipped in protocol v6.0 (with omp, before
+ * Hugging Face).
+ *
+ * This line IS released - `cli-v1.1.9` (tagged 2026-07-29) shipped v6.0, so a
+ * client in the field strict-decodes exactly these 18 ids. `huggingface`
+ * therefore could not join v6.0 and opened v7.0 instead, with v7→v6 … v7→v1
+ * bridges that drop post-v6.0 ids. Do NOT add new harnesses here - extend the
+ * latest `guiHarnessIdSchema` and use the existing v7 bridge instead.
+ */
+export const guiHarnessIdSchemaV60 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+]);
+export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
+
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
   "codex",
@@ -278,6 +311,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "pi",
   "hermes",
   "omp",
+  "huggingface",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -772,6 +806,22 @@ export const listAgentsResponseSchemaV50 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV50),
 });
 export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
+
+// ── Frozen protocol-v6.0 agent.list response (with omp, pre-Hugging Face) ───
+// `agent.list` enumerates every agent in the epic - including Hugging Face GUI
+// harness chats a newer client created - so an already-shipped v6.0 client
+// would hit a strict enum on those rows. This line IS released (`cli-v1.1.9` /
+// `host-v1.1.9`, both tagged 2026-07-29), so it is frozen here as actually
+// shipped; the v7.0 line carries Hugging Face rows and v7→v6 … v7→v1 bridges
+// drop them for older callers. Do not add new harnesses here - use the
+// existing v7 bridge.
+export const agentSummarySchemaV60 = agentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV60.nullable(),
+});
+export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV60),
+});
+export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

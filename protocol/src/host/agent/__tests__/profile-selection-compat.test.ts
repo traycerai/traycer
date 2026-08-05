@@ -570,17 +570,18 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // v3.0 is the advertised latest: the v1.1.8 tags froze v2.0 with the
-    // pre-omp id sets, so omp opened a new major on all three methods.
+    // v4.0 is the advertised latest: the v1.1.9 tags froze v3.0 with the
+    // pre-Hugging-Face id sets, so `huggingface` opened a new major on all
+    // three methods (as omp did on v3.0 before it).
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 3,
+      major: 4,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 3, minor: 0 });
+    ).toEqual({ major: 4, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 3,
+      major: 4,
       minor: 0,
     });
   });

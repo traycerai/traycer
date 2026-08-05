@@ -7,6 +7,7 @@ import {
   providerIdSchema,
   providerIdSchemaV40,
   providerIdSchemaV50,
+  providerIdSchemaV60,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -478,6 +479,46 @@ export const providerRateLimitsSchemaV50 = z.union([
   unavailableProviderRateLimitsSchemaV50,
 ]);
 export type ProviderRateLimitsV50 = z.infer<typeof providerRateLimitsSchemaV50>;
+
+// Frozen pre-Hugging-Face unavailable arm: same v2 reason enum, but `provider`
+// is pinned to `providerIdSchemaV60` (the provider id set as shipped in
+// cli-v1.1.9 / host-v1.1.9, with omp and before Hugging Face) so an
+// already-shipped `agent.getProviderProfileRateLimits@3.0` caller's strict
+// decode never sees `"huggingface"` in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV60 = z.object({
+  provider: providerIdSchemaV60,
+  available: z.literal(false),
+  reason: rateLimitUnavailableReasonSchemaV2,
+});
+
+/**
+ * Frozen pre-Hugging-Face provider union - identical to the latest
+ * `providerRateLimitsSchema` except the `available: false` arm's `provider` is
+ * pinned to `providerIdSchemaV60`. Like the v5.0 union it KEEPS the grok
+ * available arm (grok rate limits long predate the v1.1.9 tags).
+ *
+ * Feeds only `agent.getProviderProfileRateLimits@3.0`'s frozen response (see
+ * `host/agent/profiles.ts`) so that released line never receives
+ * `huggingface`; the v4.0 line carries it via the live
+ * `providerRateLimitsSchema` above, with a v4->v3 downgrade bridge that fails
+ * closed for such a rate-limit read instead of silently mis-decoding it. Do
+ * NOT widen this schema - extend the latest schema and use that v4 bridge
+ * instead.
+ *
+ * Hugging Face itself is deliberately NOT a rate-limit-capable provider (it
+ * exposes no personal-account usage API), so it can only ever appear here
+ * through the unavailable arm - which is exactly why the arm's enum is what
+ * needs pinning.
+ */
+export const providerRateLimitsSchemaV60 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV60,
+]);
+export type ProviderRateLimitsV60 = z.infer<typeof providerRateLimitsSchemaV60>;
 
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see

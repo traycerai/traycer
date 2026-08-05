@@ -175,6 +175,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
+  huggingface:
+    "Hugging Face - OpenAI-compatible router authenticated with your Hugging Face token.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
   qwen: "Qwen Code CLI agent.",
   kiro: "Kiro agent - Kiro's coding CLI via login or KIRO_API_KEY.",

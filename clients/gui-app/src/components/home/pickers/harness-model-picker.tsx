@@ -374,7 +374,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       subscribed: activityEnabled,
     },
   );
-  // Traycer and OpenRouter fetch their model catalogs over remote HTTP, so
+  // Traycer, OpenRouter and Hugging Face fetch their model catalogs over
+  // remote HTTP, so
   // `selectedModelsQuery` never touches their managed OpenCode server - only
   // `listCommands` (or chat) does. The intent edges below therefore also
   // refetch this harness's commands purely to prewarm that server; the
@@ -429,7 +430,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // Each query is asked separately whether it is due, rather than sharing one
   // verdict: models are seeded by the app-load prefetch while the commands
   // prewarm is only ever fired from here, so a shared verdict keyed on models
-  // would leave a Traycer/OpenRouter server un-prewarmed for the whole first
+  // would leave a Traycer/OpenRouter/Hugging Face server un-prewarmed for the
+  // whole first
   // window (their models come from remote HTTP and never touch it - only
   // `listCommands` does).
   const runSelectedHarnessIntentRefetch = useCallback(() => {
