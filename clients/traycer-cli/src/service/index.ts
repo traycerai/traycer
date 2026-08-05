@@ -7,6 +7,7 @@ import type { ServiceLabel } from "./label";
 import { createLinuxController } from "./platforms/linux";
 import { createMacosController } from "./platforms/macos";
 import { createWindowsController } from "./platforms/windows";
+import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 
 export type { ServiceLabel } from "./label";
 export { serviceLabelFor, serviceManifestPath, windowsTaskName } from "./label";
@@ -193,6 +194,77 @@ export function formatServiceLifecycleWarning(
 // CLI binary with `host start`" model - there is no Electron
 // `SMAppService` path here. The dispatch is fixed at construction time
 // so callers don't re-resolve per call.
+/**
+ * Announce a deliberate stop before it happens, and withdraw the announcement
+ * once something has been started again.
+ *
+ * Wrapped HERE, at the single production factory, rather than inside each
+ * platform backend: every stop route in the CLI (`host stop`, `host restart`,
+ * the install swap's `beforeSwap`, `host uninstall`) resolves its controller
+ * through `createServiceController`, so one decorator covers all of them and no
+ * future stop path can be added that silently skips it.
+ *
+ * The supervisor relaunches a child that dies abnormally; without this it would
+ * undo every one of those stops. See `host/stop-intent.ts` for why the signal
+ * has to be an explicit file rather than an inference from the child's exit.
+ *
+ * Applied on every platform even though only Windows strictly needs it - there
+ * the supervisor survives `schtasks /End` as an orphan, while launchd and
+ * systemd kill it outright. Uniform is cheaper than conditional, and it keeps
+ * the mechanism exercisable on any developer's machine.
+ */
+function withStopIntent(controller: ServiceController): ServiceController {
+  return {
+    ...controller,
+    stop: async (label) => {
+      await writeStopIntent(label.environment, "stop");
+      return controller.stop(label);
+    },
+    stopForRestart: async (label) => {
+      await writeStopIntent(label.environment, "restart");
+      return controller.stopForRestart(label);
+    },
+    uninstall: async (options) => {
+      await writeStopIntent(options.label.environment, "uninstall");
+      return controller.uninstall(options);
+    },
+    // The starts CLEAR intent, and do so in `finally`: a start that failed is
+    // still not a stop in progress, and a leftover intent would suppress the
+    // NEXT crash's recovery. Biasing toward "recoverable" matches
+    // `findLiveIncumbentHost`'s own bias - the costly failure here is a machine
+    // left hostless, not one extra relaunch.
+    start: async (label) => {
+      try {
+        return await controller.start(label);
+      } finally {
+        await clearStopIntent(label.environment);
+      }
+    },
+    restart: async (label) => {
+      await writeStopIntent(label.environment, "restart");
+      try {
+        return await controller.restart(label);
+      } finally {
+        await clearStopIntent(label.environment);
+      }
+    },
+    relaunchAfterRestart: async (label, stop) => {
+      try {
+        return await controller.relaunchAfterRestart(label, stop);
+      } finally {
+        await clearStopIntent(label.environment);
+      }
+    },
+    install: async (options) => {
+      try {
+        return await controller.install(options);
+      } finally {
+        await clearStopIntent(options.label.environment);
+      }
+    },
+  };
+}
+
 export function createServiceController(): ServiceController {
   const platform = osPlatform();
   const logger = createCliLogger(config.environment);
@@ -204,19 +276,19 @@ export function createServiceController(): ServiceController {
     logger.debug("Service controller selected macOS backend", {
       environment: config.environment,
     });
-    return createMacosController(null);
+    return withStopIntent(createMacosController(null));
   }
   if (platform === "linux") {
     logger.debug("Service controller selected Linux backend", {
       environment: config.environment,
     });
-    return createLinuxController(null);
+    return withStopIntent(createLinuxController(null));
   }
   if (platform === "win32") {
     logger.debug("Service controller selected Windows backend", {
       environment: config.environment,
     });
-    return createWindowsController(null);
+    return withStopIntent(createWindowsController(null));
   }
   logger.error(
     "Service controller unsupported platform",
