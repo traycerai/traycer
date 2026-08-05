@@ -516,7 +516,7 @@ describe("CommGraphThreadPanel heading links", () => {
     expect(handles.onJump).not.toHaveBeenCalled();
   });
 
-  it("does not plain-open an endpoint when the event's cloud origin is offline", async () => {
+  it("does not render host-local endpoints when plain opening is unavailable", async () => {
     const handles = renderPanelWithCapabilities(
       [event({ id: 1, timestamp: 100 })],
       false,
