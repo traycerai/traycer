@@ -341,6 +341,7 @@ import {
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
   gitSubscribeStatusV12,
+  gitSubscribeStatusV13,
 } from "@traycer/protocol/host/git-contracts";
 import {
   prSubscribeListForEpicV10,
@@ -5619,7 +5620,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
- * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
+ * `terminal.subscribe@1.0`, `git.subscribeStatus@1.3`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
  * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
  * `pr.subscribeListForEpic@1.0`, `pr.subscribeDetail@1.0`, and
@@ -5781,7 +5782,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "git.subscribeStatus": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
@@ -5798,6 +5799,14 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // explicit in the host resolver because streams have no bridges.
         2: {
           contract: gitSubscribeStatusV12,
+        },
+        // Watcher health: `watcher: { state, detail }` on snapshot/updated
+        // frames, so a client can tell "watching" from "fell back to polling"
+        // - and a user-fixable capacity fallback from a terminal one. Additive;
+        // the open request is v1.2's verbatim. Projection for lower minors
+        // stays explicit in the host resolver (streams have no bridges).
+        3: {
+          contract: gitSubscribeStatusV13,
         },
       },
     },

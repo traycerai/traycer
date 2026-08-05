@@ -336,6 +336,7 @@ function buildHeaderEpicHandle(
     dispose: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
+    hotArtifactRoomIdsForTests: () => [],
   };
 }
 

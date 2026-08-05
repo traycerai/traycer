@@ -1,3 +1,4 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -278,6 +279,11 @@ class MockStreamSession implements IStreamSession {
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusChangeHandler = handler;
+  }
+
+  /** Never negotiates: this fake exercises no version-dependent path. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return null;
   }
 
   requestReconnect(): void {

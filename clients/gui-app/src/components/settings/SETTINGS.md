@@ -241,6 +241,88 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   (no auto-refetch on remount/focus) to avoid re-running `--version` probes; a
   header refresh icon (`RefreshIconButton` → `useRefreshProviders`)
   force-refreshes the list and harness availability on demand.
+  - **The detail pane is tabbed, and the tab RAIL is the only thing between the
+    provider header and its config.** Order is `general` · `account` · `usage` ·
+    `env` · `mcp` · `plugins` · `skills`, filtered per provider through
+    `supportedTabsFor` (`provider-settings-tabs.ts` - pure, so the rule is
+    tested without rendering the panel).
+    - **The provider header and the rail are PINNED rows; only the active tab's
+      body scrolls.** `ProvidersRailLayout`'s detail column used to carry
+      `overflow-y-auto p-5` around the whole of `ProviderDetail`, so the rail
+      scrolled away with its content and a seven-tab pane lost its navigation
+      as soon as you moved. Scroll ownership now sits on `TabsContent`
+      (`min-h-0 overflow-y-auto`), with `min-h-0 flex-1 flex-col` repeated down
+      every level between the panel body and it - a flex item defaults to
+      `min-height: auto` and refuses to shrink below its content, which pushes
+      the overflow straight back up to the column and un-pins the rows above.
+      - **Pinned as a SIBLING row, not `position: sticky`.** That is what makes
+        it work without a background: nothing ever passes under the rail, so it
+        needs no opaque fill - which the pane's translucent `bg-card/40` could
+        not have supplied without a visible band.
+      - Horizontal padding lives on the column so the rail's `border-b` keeps
+        exactly the width it had when the column owned the scroll; the body
+        cancels it with `-mx-5 px-5` so its scrollbar lands on the pane edge
+        rather than 5 units inside it.
+      - `Tabs` runs `gap-0` and the rail-to-body spacing is the body's own
+        `pt-4`. With the gap on `Tabs`, the scroll box started below the rail's
+        rule and content vanished in mid-air above itself; owned by the body,
+        the clip edge and the rule are the same line.
+      - Radix mounts only the ACTIVE `TabsContent`, so there is exactly one
+        scroll box and switching tabs starts it at the top.
+      - Guarded by `expectPinnedRailLayout` in
+        `providers-settings-panel.test.tsx` - structurally (the rail and the
+        enable switch must NOT be inside the tabpanel, and no ancestor of the
+        tabpanel may carry `overflow-y-auto`) plus the one class that carries
+        the mechanism, since jsdom has no layout engine and cannot be asked
+        whether something scrolls.
+    - **Ids are wire enum members; labels are display strings, and only labels
+      are ever renamed.** `supportedTabs` rides `nativeCapabilities`, which a
+      released client decodes through one
+      `.catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES)` over the WHOLE object - an
+      id an older client cannot parse fails the enum and drops that entire
+      object, silently taking MCP/Plugins/Skills with it. So `general` displays
+      as **"CLI & Args"** and `usage` as **"Profiles & Limits"** while both ids
+      stay put. The old "General" named nothing about its contents, which is
+      what the rename fixes.
+    - **`account` is CLIENT-ONLY and deliberately not in the wire enum.** It is
+      derived from `state.apiKey.supported` alone. The API key and the
+      profile/limits surfaces answer different questions ("how does this
+      provider authenticate?" vs "which account is running, and how much of it
+      is left?"), and a provider can have either without the other - amp takes
+      a key but advertises no `usage` tab at all, claude-code has profiles and
+      limits but no key field - so one shared tab always showed a hole for
+      whichever half a provider lacked. Nothing about "does this take a key?"
+      needs the host to say so, and adding an id to the enum would risk the
+      whole-object `.catch` above for zero gain.
+    - **The visible set is advertised MINUS known-empty, PLUS client-derived.**
+      `general` holds only the CLI candidate table and the terminal-agent args
+      field; both self-gate on the same providers (`hidesCliCandidates` -
+      cursor/amp - which are GUI-only and so never advertise the `tui` mode the
+      args field needs), so the tab is dropped for them instead of listing one
+      that renders nothing. `usage` is taken at the host's word: the contract
+      registry already gates it on being able to POPULATE it (managed profiles,
+      the Traycer subscription card, or rate limits - see
+      `providerCanPopulateUsageTab`), so re-deriving that here would just be a
+      second copy of the same rule.
+    - **`variant="line"` (underline), not the filled default.** Seven unrelated
+      panes is navigation; a filled track reads as a segmented control, which
+      is for re-presenting one dataset and tops out around four options. The
+      list keeps `w-full` for the `border-b` RAIL but the track itself is
+      transparent, so the old "filled slab with dead space after the last tab"
+      (`w-full` cancelling the primitive's `w-fit` while triggers stayed
+      content-width) cannot recur. The nested Tools/Instructions tabs inside
+      the MCP tab deliberately stay on the FILLED variant so the two nesting
+      levels read as different tiers.
+    - **No per-tab content dots.** The former `tabHasContent` dot could not
+      tell the truth: `general` lit for every CLI-backed provider including the
+      ones whose tab was empty, `usage` lit unconditionally for every
+      rate-limit-capable provider, and mcp/plugins/skills were hardcoded to
+      never light - so the three tabs that actually hold user-installed content
+      were the three that looked empty. It also used `bg-primary` ("needs
+      attention") for what was at most "is configured", reusing the same dot
+      the provider rail spends on "disabled". A future signal must split those
+      meanings: a muted count on the list tabs, a warning tone reserved for
+      real attention.
   - **Provider environment variables.** Each provider detail pane (last, below
     the CLI picker and terminal-agent args) has an _Environment variables_ card
     holding the per-provider env applied when the host spawns that harness
@@ -269,8 +351,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
-    than a CLI login, so its row renders an `ApiKeySection` (masked input +
-    Save/Clear) when `state.apiKey.supported`, plus a "Create an API key" link
+    than a CLI login, so it renders an `ApiKeySection` (masked input +
+    Save/Clear) when `state.apiKey.supported` — **as the whole body of the
+    client-derived `account` ("Account") tab**. It used to sit ABOVE the tab bar
+    as its own pre-tab region, which put a provider's only real setting outside
+    the tabs that were supposed to hold its settings (and hid the fact that
+    Cursor's General tab rendered nothing). Nothing renders between the provider
+    header and the tab rail now. Also a "Create an API key" link
     that opens the provider dashboard via `runnerHost.openExternalLink`
     (`API_KEY_DASHBOARD_URL`). The key is stored AES-256-GCM encrypted in
     `provider-overrides.json` and never returned over RPC - `state.apiKey` only
@@ -320,6 +407,231 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Traycer has no API key field. The enable toggle remains a real gate:
     disabling it hides the Traycer harness from the new-agent picker and blocks
     runs like any other provider.
+  - **MCP scope is ONE picker that always names its destination**
+    (`provider-mcp-scope-picker.tsx`, `McpScopePicker` - a Popover + cmdk list
+    reached from `McpScopeHeader`). It replaced a `[Global | Project]` chip
+    pair plus a separate folder `<Select>` that appeared only in Project.
+    - **Why the split was wrong.** Global named nothing, so "where does this
+      server go?" had no on-screen answer while a shadow project read ran
+      against a folder the user could not see. Project silently adopted the
+      single resolved folder (`hostPaths.length === 1`) and rendered it as
+      STATIC TEXT, so the most common case never looked like a choice. And both
+      labelled folders by basename only, which cannot distinguish two worktrees
+      of one repo.
+    - **Rows.** `Global` ("Every workspace on this host") sits above one row
+      per target. Targets come from `useMcpScope`: the resolved workspace
+      folders, PLUS every worktree the host reports for them
+      (`useWorktreeListByWorkspacePathsForClient`), deduped by path since a repo
+      open under two folders reports the same worktree set twice. Each row
+      carries name + a `worktree` badge + branch + the full path, because the
+      branch is what actually separates sibling worktrees. Selecting a row
+      picks the folder AND the scope - they were never two decisions.
+      `selectedByHostId` (`providers-workspace-selection-store.ts`) is validated
+      against every offered target, not just the open workspaces, so a stored
+      worktree selection survives a reload.
+    - **The trigger is ONE line at `h-7`, matching `Button size="sm"`.** It
+      shares a toolbar row with "Add MCP server", and a two-line control beside
+      a one-line button reads as a layout mistake rather than as emphasis. The
+      second line's content did not disappear: the subtitle (Global's promise,
+      or the selected worktree's branch) rides inline as muted text, and the
+      full absolute path - the part that disambiguates two worktrees - moved to
+      the trigger's tooltip while staying on every row of the open list.
+    - **An empty list is a state you can act on, not a dead end.** Targets are
+      derived from the folders THIS client has opened
+      (`useWorkspaceFoldersStore` → `useResolvedWorkspaceFolders`), which is
+      legitimately empty on a fresh install or a host whose work happens
+      elsewhere - and then the picker offered Global and nothing else, with no
+      way to reach a project config at all. The list now says
+      "No workspaces added on this host yet." and carries an **Add a workspace
+      folder…** row driving the same `pickAndPrepareFolders` the Home workspace
+      selector uses, bound to the SETTINGS-selected client so a folder picked
+      while viewing host B is prepared on B. The added folder becomes the
+      selection; a cancelled pick changes nothing.
+    - **The selection is keyed by the BOUND host, not the active one.**
+      `useMcpScope` reads `client.getActiveHostId()` and only subscribes to
+      `useReactiveActiveHostId()` for the re-render. Settings can target a
+      non-active host through the transient `HostRuntimeContext` override, and
+      keying by the active host filed a B-picked path under A - where it could
+      never validate against the list it was picked from.
+    - **The single-workspace default is kept but no longer invisible** - it
+      renders as a selected control that can be changed, rather than a
+      sentence. With more than one candidate there is still no auto-pick.
+    - A provider advertising only one `list` scope gets a plain "Applies to
+      every workspace on this host." line instead of a picker holding one dead
+      option; the wording matches the Global row so the two never disagree.
+      Plugins and Skills remain hardcoded global-scope and get no picker.
+    - The OAuth resume key is `{providerId, scope, workspaceRoot, hostId}`
+      (`useResumeOauthPolling`) - any change to how `workspaceRoot` is derived
+      has to keep that tuple stable across navigation.
+  - **A row shows the provider's OWN artwork or NOTHING**
+    (`ProviderEntryIcon`). There is no fallback glyph anywhere:
+    - Skill rows never had a source for one - a skill is a markdown directory
+      and no provider's format carries artwork for it. They are distinguished
+      by their source badge.
+    - Plugin rows without artwork show nothing either. An earlier version drew
+      a derived monogram (initials over a hashed tone); it asserted a visual
+      identity the plugin never declared, and beside real vendor logos it read
+      as a rendering fault rather than as "this one has no icon". Only Codex
+      ships plugin artwork, so that fallback was the COMMON case, not the rare
+      one. `provider-entry-monogram.ts` was deleted outright.
+
+    A hand-written id-to-icon table remains refused - it would be wrong the
+    first time anyone installs something unknown, the same reason this repo
+    refuses static model catalogs.
+
+    **Alignment is a list-level decision.** `reserveIconSpace` is true when ANY
+    row in the list has artwork, and every row then holds the same footprint -
+    empty where there is no icon - so the names keep one left edge. A provider
+    that ships no plugin icons at all gets no column at all rather than a
+    permanently blank one.
+
+  - **Codex plugin metadata comes from `<version>/.codex-plugin/plugin.json`.**
+    The host listing used to be synthesized from DIRECTORY NAMES alone (three
+    `readdir` calls, no file opened), so rows read `pdf` and
+    `pdf@openai-primary-runtime` where Codex's own UI reads "PDF" / "Read,
+    create, and verify PDF files". All of it was in that manifest's `interface`
+    block, unread. `listCodexPluginsFromHome` now reads it and fills
+    `displayName`, `description`, and `hasIcon`. Three traps live here:
+    - **The manifest is untrusted** - a plugin is an arbitrary user-installed
+      directory, so `interface.composerIcon` may legally be
+      `"../../../../etc/passwd.png"`. Asset paths are containment-checked with
+      `path.relative` (not a `startsWith` prefix test, which would accept a
+      sibling like `/plugins/foobar` under `/plugins/foo`) and restricted to an
+      image extension allow-list. No MIME sniffing: the value ends up in a
+      `data:` URI handed to `<img>`.
+    - **The cache is not an installed-set, and a SYMLINK is the tell.** An
+      installed plugin has a real versioned directory (`sites/0.1.33`); a
+      merely-staged one has a bare `latest` symlink into the marketplace tree,
+      which is what `openai-bundled/chrome/latest` is - and `codex plugin list`
+      calls chrome "not installed". Following the symlink looks like an
+      obvious improvement and is wrong: it surfaces a plugin the user does not
+      have, with a name and artwork read out of staging. Plugins with no real
+      version directory are skipped entirely (`isInstalledVersionDir`).
+      Cross-checked against the CLI: excluding them yields 12 rows, matching
+      the CLI's 9 installed plus the 3 remote-installed `openai-curated-remote`
+      plugins it does not account for.
+    - **Version choice is load-bearing now.** It used to be
+      `versionDirs[versionDirs.length - 1]` - readdir order, under which
+      `0.1.9` outranks `0.1.10`. That was cosmetic while only the version
+      string came off it; the chosen directory is now also where the manifest
+      and the artwork are read from.
+  - **Icons travel on their own RPC arm, never on the plugin list.**
+    `nativeListQuerySchema` gains a `pluginIcon` arm (modelled on
+    `mcpDiscover`, the existing per-item detail query) returning a `data:` URI.
+    Three constraints force that shape:
+    - **A path or `file://` URL cannot work.** Desktop CSP is
+      `img-src 'self' data: blob: https:` - no `file:` - the `app://` handler
+      is sealed to the renderer bundle, and a host-local path renders nothing
+      against a REMOTE host, which is a shipped paid mode. Bytes over the
+      existing websocket behave identically local and remote.
+    - **They cannot ride the list.** Icons are ~900 KB (~1.2 MB base64) for a
+      typical Codex install - one 1024x1024 PNG is 451 KB - and
+      `useProvidersPluginsList` runs `staleTime: 30_000`.
+    - **`poll: false` on the icon query is load-bearing.** `providers.list` is
+      condition-polled and condition queries join the table-owned poll BY
+      DEFAULT; `refetchInterval` also fires regardless of `staleTime`, so the
+      hook's `staleTime: Infinity` would not save it. Omitting `poll: false`
+      puts every icon on a refetch timer.
+
+    **Theme-aware artwork rides the same arm.** The request carries a `theme`,
+    and two rules keep it honest:
+    - **The pair must be coherent.** There is no `composerIconDark` in the
+      format - only `logoDark`, whose light counterpart is `logo`. So a plugin
+      declaring `logoDark` uses the `logo` / `logoDark` pair; everything else
+      uses `composerIcon` for both themes, exactly as Codex renders it.
+      Pairing `composerIcon` with `logoDark` would swap between two different
+      assets on a flip: github declares an 853 B `github-small.svg` against a
+      9.4 KB `github-dark.png`.
+    - **`hasDarkIcon` gates whether the request varies by theme at all.** Only
+      3 of 13 plugins ship a dark asset. The renderer pins the rest to
+      `light`, so their query key is theme-independent; without that, a theme
+      flip would miss the cache on every row and re-fetch the whole ~900 KB
+      set to receive byte-identical images. A `dark` request for a plugin with
+      no dark asset still answers with the light one rather than "no icon".
+
+    The list's `hasIcon` flag is what keeps rows without artwork from each
+    burning a round trip, so it is resolved host-side at LIST time (including
+    a `stat`, so a declared-but-absent file reports `false` rather than
+    promising an icon the fetch cannot deliver). The icon request addresses a
+    plugin BY ID and the host re-walks to resolve the file - the renderer never
+    hands the host a filesystem path, the same discipline as
+    `assertRemovableSkill`. `readPluginIcon` is optional on
+    `ProviderNativeBehavior`: only Codex's plugin format carries artwork, and a
+    required method would mean seventeen stubs asserting nothing. Absent, or
+    resolving to a null `dataUri`, both mean "render no tile".
+
+  - **`enabled` comes from `codex plugin list --json`, with a known gap.**
+    Enabled/disabled is Codex state, not a filesystem fact, so the directory
+    walk could only hardcode `true`. The CLI read is injected
+    (`CodexPluginEnabledLookup`) rather than called directly - the real binary
+    is installed on a typical dev machine, so an un-injected test would
+    exercise the live CLI locally and an empty result in CI, passing for two
+    different reasons. It is enrichment, never a gate: the call is
+    `.catch`-guarded at the CALL SITE (not merely inside the default lookup, or
+    the invariant would hold by accident), on a 5 s budget versus the 60 s
+    install budget, so a missing or slow CLI degrades to the default instead of
+    emptying the tab.
+
+    THE GAP: the id namespaces do not fully align. Ours is
+    `<name>@<cache-dir>`, the CLI's is `<name>@<marketplace>`. They coincide for
+    `openai-primary-runtime`, `openai-bundled` and `pr-completion`, but the
+    cache directory `openai-curated-remote` has no CLI counterpart - the CLI
+    lists those under `openai-curated` and calls them "not installed" even
+    though they are installed through the remote-install path. So github /
+    slack / openai-templates miss the map and keep `enabled: true`. They must
+    NOT be matched by name alone: `github@openai-curated` is a catalog entry
+    whose `enabled` says nothing about the installed copy.
+
+  - **A skill row opens its full `SKILL.md`**
+    (`ProviderSkillDetailDialog`). The row can only ever show frontmatter
+    (name + description) - the instructions the agent actually follows live in
+    the file body, which was unreadable from the app. The dialog mirrors the
+    plan card's expand (`plan-segment.tsx`): the same three-row shape and a
+    scrollable `TraycerMarkdown` body, so both "show me the whole document"
+    surfaces behave alike.
+    - Content is read on open via `workspace.readFile`, passing `skill.path`
+      as the containment root and `SKILL.md` as the file, rather than carried
+      on the list response: adding a body field would put every skill's full
+      text on every `providers.skills.list`, paid on each poll, for something
+      read only when opened.
+    - **HOST DEPENDENCY:** that resolver treats `workspacePath` as the
+      containment root and does NOT require it to be a bound workspace, which is
+      the only reason a skill directory under `~/.agents/skills` can be read at
+      all. Hardening it to accept known roots only would break this surface;
+      `SKILL.md` would then need its own read verb.
+    - `stripSkillFrontmatter` removes the leading `---` block before rendering
+      (the header already shows those two fields, and a renderer with no
+      frontmatter plugin prints them as a `<hr>`-delimited paragraph). It is
+      deliberately narrow - only a block at byte 0 with a closing fence - so a
+      body that legitimately opens with a horizontal rule keeps its first
+      section.
+    - The dialog is mounted only while a skill is open, so the Skills tab does
+      not hold a disabled host query (and its QueryClient dependency) on every
+      render.
+    - **Remove lives in the dialog footer, behind TWO conditions**
+      (`skillRemovability`). `actionScopes.remove` advertising a scope says the
+      provider supports the verb; `skill.source` says whether this skill's files
+      are ours to delete. The host's `assertRemovableSkill` accepts only
+      `shared` / `provider` sources (and re-checks realpath containment in a
+      writable root) and throws otherwise, so a `plugin` or `managed` skill
+      under a remove-capable provider satisfies the first and fails the second.
+      The client mirrors that rule ONLY to avoid offering a button guaranteed to
+      fail - the host stays the enforcement, and a divergence surfaces as its
+      error text rather than a silent deletion.
+      - Three outcomes, not two: `hidden` (no remove scope advertised - a
+        "can't remove" note on every row would be noise), `blocked` (supported,
+        but not for this skill - worth a line, since the missing button would
+        otherwise look broken beside removable siblings), `removable`.
+      - Confirmed through `ConfirmDestructiveDialog`, stacked over the open
+        skill dialog. The confirmation names the **path**: removal deletes a
+        directory, and which of the four skill roots it sits in is what the name
+        alone cannot say.
+      - Removal has its own handler rather than reusing `runMutation`, because
+        its outcomes land elsewhere: success closes BOTH dialogs (the open skill
+        no longer exists, and its `readFile` would point at a deleted path) and
+        must not touch the create/import draft fields; failure closes only the
+        confirmation and renders inside the skill dialog, since the tab's own
+        error banner sits behind it and would be invisible.
 - `Notifications` Two `SettingsGroup` cards. A design pass
   (`settings-related-panels-core-flows` artifact) replaced the old one-column
   severity×channel matrix with a compact policy card, and gave the hooks

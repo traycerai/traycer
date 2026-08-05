@@ -1,3 +1,4 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   IStreamSession,
@@ -84,6 +85,11 @@ class ControlledSession implements IStreamSession {
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusChangeHandler = handler;
+  }
+
+  /** Never negotiates: this fake exercises no version-dependent path. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return null;
   }
 
   requestReconnect(): void {}

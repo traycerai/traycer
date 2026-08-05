@@ -838,7 +838,9 @@ function ResizableSectionRun(props: {
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // The run wrapper carries the boundary border its inner sections cannot:
+    // each is an only child, so their own `last:border-b-0` always wins.
+    <div className="flex min-h-0 flex-1 flex-col border-b border-border/60 last:border-b-0">
       {panels.map((panel, panelIndex) => (
         <Fragment key={panel.id}>
           {panelIndex > 0 ? (

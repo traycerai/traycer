@@ -40,7 +40,10 @@ type PackageManagerSource =
  *     instructions so the UI can surface the right hint.
  *
  *   - If the installed manifest/PATH CLI is **newer** than (or equal to)
- *     the bundled CLI, trust it silently for the session.
+ *     the bundled CLI, trust it silently for the session. A PATH CLI is
+ *     only ever trusted after a successful `--version` probe: a PATH name
+ *     that cannot answer is not a Traycer CLI (oss #872: the name squatted
+ *     by a desktop-app launcher) and routes to bundled staging instead.
  *
  *   - If no installed CLI exists, leave staging to the first-launch
  *     setup flow (it already calls `installBundledCli`).
@@ -247,24 +250,47 @@ export async function reconcileCli(
           binaryPath: discovery.binaryPath,
         };
       }
-      await clearPackageManagerHint(deps);
-      // PATH binary present but no manifest. Trust it silently -
-      // package managers that don't run our `cli mark-source` post-
-      // install hook still surface here. We can't compare versions
-      // without probing, so the conservative call is "trust newer-
-      // or-equal" by default.
-      return {
-        kind: "trusted-newer",
-        source: "path",
-        installedVersion: null,
-        bundledVersion,
-        binaryPath: discovery.binaryPath,
-      };
+      // PATH binary present but no manifest. Package managers that don't
+      // run our `cli mark-source` post-install hook surface here, so a
+      // binary that can answer `--version` is trusted whatever its version
+      // - we can't name the owning package manager to print an upgrade
+      // hint, and overwriting a working install is not this branch's call.
+      // Production discovery has usually probed already
+      // (`vetPathCliCandidate`); probe here otherwise so trust is never
+      // extended on the strength of the file name alone.
+      const probedVersion =
+        discovery.version ?? (await deps.probeCliVersion(discovery.binaryPath));
+      if (probedVersion !== null) {
+        await clearPackageManagerHint(deps);
+        return {
+          kind:
+            compareSemver(probedVersion, bundledVersion) === 0
+              ? "trusted-equal"
+              : "trusted-newer",
+          source: "path",
+          installedVersion: probedVersion,
+          bundledVersion,
+          binaryPath: discovery.binaryPath,
+        };
+      }
+      // A `traycer` on PATH that cannot print its version is not a usable
+      // CLI. Trusting it anyway is what suppressed bundled staging and
+      // bricked first-launch service install when the name was squatted by
+      // a desktop-app launcher (oss #872) - fall through to the
+      // fresh-install staging below instead.
+      deps.logger.warn(
+        "[cli-reconcile] PATH `traycer` failed the version probe - treating it as not-a-CLI and staging the bundled CLI",
+        { binaryPath: discovery.binaryPath, bundledVersion },
+      );
     }
     await clearPackageManagerHint(deps);
-    if (discovery.kind === "bundled" && bundledPath !== null) {
-      // Fresh install: no manifest and no `traycer` on PATH, but the app ships
-      // a bundled CLI. Stage it into the Desktop-owned slot (a symlink on
+    if (
+      (discovery.kind === "bundled" || discovery.kind === "path") &&
+      bundledPath !== null
+    ) {
+      // Fresh install: no manifest, and either no `traycer` on PATH or only
+      // a probe-failed imposter under that name, but the app ships a bundled
+      // CLI. Stage it into the Desktop-owned slot (a symlink on
       // POSIX) so the bundle-blind host has a deterministic, space-free
       // `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for the monitor /
       // title hooks / terminal agents. Nothing else self-heals this slot.

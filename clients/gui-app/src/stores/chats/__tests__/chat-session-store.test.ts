@@ -158,6 +158,17 @@ class ProtocolMockStreamSession implements IStreamSession {
     // Protocol-chain tests only need status + schema version, not outbound frames.
   }
 
+  /**
+   * The version THIS session negotiated - what `ChatStreamClient` reads to gate
+   * steering. Set by the owning mock client; every chat tab is its own session,
+   * so the gate must not be answerable from a client-wide value.
+   */
+  negotiatedSchemaVersion: SchemaVersion | null = null;
+
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return this.negotiatedSchemaVersion;
+  }
+
   requestReconnect(): void {
     // No-op: reconnect is owned by the real StreamSession.
   }
@@ -202,6 +213,7 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       maxBackoffMs: 1_000,
     });
     this.negotiatedVersion = negotiatedVersion;
+    this.session.negotiatedSchemaVersion = negotiatedVersion;
   }
 
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(

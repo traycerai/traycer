@@ -139,12 +139,10 @@ export interface ChatStreamClientOptions {
 export class ChatStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: ChatStreamCallbacks;
-  private readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   private closed: boolean;
 
   constructor(options: ChatStreamClientOptions) {
     this.callbacks = options.callbacks;
-    this.wsStreamClient = options.wsStreamClient;
     this.closed = false;
     this.session = options.wsStreamClient.subscribe("chat.subscribe", {
       epicId: options.epicId,
@@ -173,8 +171,14 @@ export class ChatStreamClient {
    * `TerminalStreamClient`'s per-frame version read.
    */
   sameTurnSteeringProtocolSupported(): boolean {
-    const version =
-      this.wsStreamClient.getMethodSchemaVersion("chat.subscribe");
+    // THIS session's negotiated version, not the client-wide one. Every open
+    // chat tab is its own `chat.subscribe` session, and the client-wide
+    // accessor reports whichever of them reconciliation reached first - so a
+    // tab talking to a <=1.4 host could be told steering is supported because a
+    // sibling tab negotiated 1.5. That gates a SEND, not a parse: the message
+    // would be injected into a host that predates the ordering policy, which is
+    // the exact failure this guard exists to prevent.
+    const version = this.session.getNegotiatedSchemaVersion();
     return version !== null && version.major === 1 && version.minor >= 5;
   }
 

@@ -249,6 +249,13 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
             // registry's previous token is aborted as this new binding is made.
             this.authorityRegistry.capture(entry, entry);
           });
+          // The GUI's invalidator adapter skips the harness-catalog methods on
+          // this sweep entirely - it does not even mark them stale, since an
+          // invalidated entry re-probes at the next picker mount and that just
+          // moves the burst. They recover at the picker's own intent edges
+          // instead: a transport flap is exactly what a busy-host storm
+          // produces, and refetching catalogs here would fan provider probes
+          // back out mid-storm (traycer#912).
           this.invalidator.invalidateHostScope(entry.hostId, {
             refetchActive: true,
           });

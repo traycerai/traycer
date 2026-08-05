@@ -64,6 +64,13 @@ export const runnerMutationKeys = {
   supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
+  // On-demand V8 heap snapshot of this renderer (Diagnostics → Memory).
+  // The key identifies the mutation; it does NOT serialize it - TanStack
+  // Query only serializes on `scope`, which the caller sets, and which is
+  // what keeps a double-click from starting a second renderer-freezing
+  // heap walk.
+  captureHeapSnapshot: () =>
+    ["runner.diagnostics.captureHeapSnapshot"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
   // on-disk cache). Used by the Settings → Host Updates row's
   // "Check now" / "Retry" buttons so stale cached failures don't survive

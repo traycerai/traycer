@@ -16,7 +16,26 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface ReportIssueActionProps {
-  readonly context: ReportIssueContext | ReportIssueDraftContext;
+  /**
+   * Either the finished context, or a builder invoked at CLICK time.
+   *
+   * Prefer the builder whenever the draft's private diagnostics depend on
+   * support-registry state (`getSupportContextSnapshot`): that registry is
+   * written from effects (`SupportContextRegistryBridge`), so it trails the
+   * render that mounted this button - a durable transcript row would
+   * otherwise freeze the chat/harness that was active one or more commits
+   * BEFORE the bridge published the one the row belongs to, and the harness
+   * id is also the fingerprint's `causalProvider`, so a stale snapshot
+   * misclusters the report as well as mislabelling it.
+   *
+   * The eager forms stay right for surfaces that render in direct response to
+   * the failure they report (the error boundaries), where render time IS
+   * report time.
+   */
+  readonly context:
+    | ReportIssueContext
+    | ReportIssueDraftContext
+    | (() => ReportIssueDraftContext);
   readonly presentation: "text" | "icon" | "link";
   readonly className: string | undefined;
 }
@@ -37,10 +56,12 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
     Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
       source: "direct_ui",
     });
-    if (isReportIssueDraftContext(props.context)) {
-      openReportIssueDraft(props.context);
+    const context =
+      typeof props.context === "function" ? props.context() : props.context;
+    if (isReportIssueDraftContext(context)) {
+      openReportIssueDraft(context);
     } else {
-      openReportIssueWithContext(props.context);
+      openReportIssueWithContext(context);
     }
   };
 
