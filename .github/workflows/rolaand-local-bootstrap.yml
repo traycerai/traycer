@@ -42,6 +42,56 @@ jobs:
       - name: Apply, commit, validate, and package
         run: bash .github/rolaand-local/bootstrap-build.sh
 
+      - name: Record failed build on branch
+        if: failure()
+        run: |
+          set -euo pipefail
+          git fetch origin rolaand/accountless-optimized
+          git reset --hard origin/rolaand/accountless-optimized
+          {
+            echo '# Rolaand Traycer Local — Build Failed'
+            echo
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Revision: $GITHUB_SHA"
+            echo "- Recorded: $(date --utc --iso-8601=seconds)"
+            if [ -f diagnostics/FAILURE.txt ]; then
+              echo
+              echo '```text'
+              cat diagnostics/FAILURE.txt
+              echo '```'
+            fi
+          } > BUILD_STATUS.md
+          git config user.name 'Rolaand Traycer Build'
+          git config user.email 'Rolaand-Jayz@users.noreply.github.com'
+          git add BUILD_STATUS.md
+          if [ -d diagnostics ]; then git add -f diagnostics; fi
+          git commit -m 'ci: record failed accountless build'
+          git push origin HEAD:rolaand/accountless-optimized
+
+      - name: Record successful build on branch
+        if: success()
+        run: |
+          set -euo pipefail
+          git fetch origin rolaand/accountless-optimized
+          git reset --hard origin/rolaand/accountless-optimized
+          {
+            echo '# Rolaand Traycer Local — Build Passed'
+            echo
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Source revision: $(git rev-parse HEAD)"
+            echo "- Recorded: $(date --utc --iso-8601=seconds)"
+            echo '- Workspace compile: passed'
+            echo '- Focused regression tests: passed'
+            echo '- Authenticated local Host RPC: passed'
+            echo '- Host outbound-network trace: passed'
+            echo '- AppImage inspection: passed'
+          } > BUILD_STATUS.md
+          git config user.name 'Rolaand Traycer Build'
+          git config user.email 'Rolaand-Jayz@users.noreply.github.com'
+          git add BUILD_STATUS.md
+          git commit -m 'ci: record successful accountless build'
+          git push origin HEAD:rolaand/accountless-optimized
+
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
