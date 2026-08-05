@@ -13,11 +13,61 @@ import {
 const openRawFd = promisify(openCallback);
 
 // Bootstrap-log line format (contract shared with the host writer):
-//   [<iso-timestamp>] phase=<name> key=value key=value …
+//   [<iso-timestamp>] phase=<name> key=value key=value … writer=supervisor
 // Values containing whitespace or quotes are wrapped in double quotes with
 // inner quotes doubled. The renderer's failure card and `traycer host
 // status` both parse these markers; raw stdout/stderr lines from the shell
 // and host are also captured in the same file and pass through as-is.
+//
+// ## Why markers carry a writer field
+//
+// `host.log` is BOTH the marker destination and the child's stderr sink -
+// the supervisor spawns with `stdio: ["ignore", logFd, logFd]`, and the
+// host's own logger appends to the same path. So any line the host prints
+// that happens to start `[<iso>] phase=<name>` used to parse as a marker
+// indistinguishable from one the supervisor wrote. That is not theoretical
+// bookkeeping: consumers treat markers as authority (`spawn-evidence`,
+// `host-status`, Doctor's `RECENT_CRASH_MARKERS`, and gui-app's bootstrap
+// attempt summary), and a stray `phase=starting` line cancels a real crash
+// signal in Doctor's `lastCrashMarker` scan - a crashed host reporting
+// clean. Every marker therefore ends with `writer=supervisor`, emitted by
+// {@link formatMarkerLine} for every writer, never by a caller.
+//
+// **What this does and does not defend against.** The host can write to
+// this file, so it could copy any token we put in the line. This is not a
+// security boundary and no in-band field could make it one - the fix for
+// that is separate sinks (see `host-log-rotation.ts`, which already scopes
+// that out). What it does close is ACCIDENTAL collision, which is the real
+// exposure: one refactor that starts a host log message with `phase=` is
+// enough today.
+//
+// ## N-1 overlap: strictness is latched on the file's own evidence
+//
+// Markers written by an older CLI carry no `writer` field, and they persist
+// in `host.log` across restarts until rotation. Dropping unstamped lines
+// unconditionally would blind Doctor to a genuine crash recorded by the
+// previous version; trusting them unconditionally leaves the hole open. So
+// {@link retainAuthenticMarkers} splits the file at a POSITION - the first
+// stamped marker:
+//
+//   - before it -> the writer had not yet identified itself, so every
+//     marker-shaped line is kept (byte-identical behaviour to before);
+//   - from it onward -> the writer demonstrably stamps its markers, so an
+//     unstamped marker-shaped line is raw output.
+//
+// The boundary has to be positional rather than a property of the whole
+// file, because the ORDINARY upgrade puts both eras in one log: an old CLI
+// records a real `phase=crashed`, the user upgrades, and the next start
+// appends a stamped `phase=starting` to the same file. A whole-file rule
+// would let that stamped marker retroactively delete the older real crash
+// on every upgrade - destroying the history this compatibility path exists
+// to protect.
+//
+// Known limitation, accepted deliberately: if an OLDER CLI writes markers
+// AFTER a stamped one (a downgrade, or a stale binary earlier on PATH),
+// those land past the boundary and are read as raw output. That is far
+// rarer than the upgrade path, and it fails in the same direction as the
+// collision it closes - under-reporting - rather than inventing a crash.
 
 export type BootstrapPhase =
   "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
@@ -56,10 +106,29 @@ export interface BootstrapMarkerFields {
   readonly supervisorPid: number | undefined;
 }
 
+// The key/value that identify a line as supervisor-written. Deliberately
+// NOT a member of `BootstrapMarkerFields`: a caller that forgot to pass it
+// would silently mint an unverified marker, so `formatMarkerLine` appends
+// it for every writer instead.
+export const MARKER_WRITER_KEY = "writer";
+export const MARKER_WRITER_SUPERVISOR = "supervisor";
+
+/**
+ * Provenance of a parsed marker line.
+ *
+ * `"supervisor"` - carries {@link MARKER_WRITER_KEY}, so a marker writer
+ * produced it. `"unverified"` - marker-SHAPED, but with no writer field:
+ * either an older CLI wrote it, or it is host/shell output that happens to
+ * match the grammar. Which of those it is cannot be decided per line; see
+ * {@link retainAuthenticMarkers}, which decides it per file.
+ */
+export type BootstrapMarkerWriter = "supervisor" | "unverified";
+
 export interface BootstrapLogEntry {
   readonly timestamp: string;
   readonly phase: BootstrapPhase;
   readonly fields: Record<string, string>;
+  readonly writer: BootstrapMarkerWriter;
 }
 
 function escapeValue(value: string): string {
@@ -99,15 +168,33 @@ function formatFields(fields: BootstrapMarkerFields): string {
   return parts.join(" ");
 }
 
+// The single place a marker line is built. Both writers go through it so
+// the writer field cannot be emitted by one path and forgotten by the
+// other - the whole guarantee is "every marker carries it", and two
+// independent format strings are how that guarantee rots.
+//
+// The writer field goes LAST, with the other identity fields, for the
+// reason already recorded above `formatFields`: a human reading the line
+// sees the diagnostic payload first.
+function formatMarkerLine(
+  timestamp: string,
+  phase: BootstrapPhase,
+  fields: BootstrapMarkerFields,
+): string {
+  const fieldsStr = formatFields(fields);
+  const identity = `${MARKER_WRITER_KEY}=${MARKER_WRITER_SUPERVISOR}`;
+  const payload =
+    fieldsStr.length === 0 ? identity : `${fieldsStr} ${identity}`;
+  return `[${timestamp}] phase=${phase} ${payload}\n`;
+}
+
 export async function writeBootstrapMarker(
   environment: Environment,
   phase: BootstrapPhase,
   fields: BootstrapMarkerFields,
 ): Promise<void> {
   await ensureHostHomeDir(environment);
-  const ts = new Date().toISOString();
-  const fieldsStr = formatFields(fields);
-  const line = `[${ts}] phase=${phase}${fieldsStr.length === 0 ? "" : ` ${fieldsStr}`}\n`;
+  const line = formatMarkerLine(new Date().toISOString(), phase, fields);
   await appendFile(bootstrapLogPath(environment), line);
 }
 
@@ -122,9 +209,7 @@ export function writeBootstrapTerminalMarker(
   fields: BootstrapMarkerFields,
 ): void {
   mkdirSync(hostHomeDir(environment), { recursive: true });
-  const ts = new Date().toISOString();
-  const fieldsStr = formatFields(fields);
-  const line = `[${ts}] phase=${phase}${fieldsStr.length === 0 ? "" : ` ${fieldsStr}`}\n`;
+  const line = formatMarkerLine(new Date().toISOString(), phase, fields);
   appendFileSync(bootstrapLogPath(environment), line);
 }
 
@@ -157,8 +242,61 @@ const LINE_RE = /^\[([^\]]+)\] phase=(\w[\w-]*)(?:\s+(.*))?$/;
 // Exported so spawn-evidence and unit tests can parse a single log line
 // without re-implementing the key=value grammar. Unknown keys (including
 // the additive attempt/supervisorPid fields) land in `fields` as strings.
+//
+// A single line CANNOT decide whether an unverified marker is an older
+// CLI's or host output wearing the grammar, so this labels
+// (`entry.writer`) and never drops. Run the result through
+// {@link retainAuthenticMarkers} before treating markers as authority.
 export function parseBootstrapLogLine(line: string): BootstrapLogEntry | null {
   return parseLine(line);
+}
+
+/** True once any entry proves the writer emits {@link MARKER_WRITER_KEY}. */
+export function markersIdentifyWriter(
+  entries: readonly BootstrapLogEntry[],
+): boolean {
+  return entries.some((entry) => entry.writer === "supervisor");
+}
+
+/**
+ * Applies the N-1 latch described at the top of this file. The boundary is
+ * POSITIONAL, not a property of the whole region: entries before the first
+ * stamped marker are kept as-is, and only from that marker onward is an
+ * unstamped line treated as raw output.
+ *
+ * Position matters because the ordinary upgrade path puts both eras in one
+ * file. An old CLI records a genuine `phase=crashed`, the user upgrades,
+ * and the next start appends a stamped `phase=starting` to the same
+ * `host.log`. Filtering the region as a whole would let that first stamped
+ * marker retroactively delete the older real crash - destroying exactly the
+ * history the N-1 path exists to preserve, on every upgrade rather than in
+ * some rare corner.
+ *
+ * `writerIdentifiedBefore` says the writer had already stamped a marker
+ * STRICTLY BEFORE this region, which makes the whole region post-boundary.
+ * It is a parameter rather than something re-derived from `entries` because
+ * capability is monotonic while `entries` may be a truncated window: a
+ * caller that caps its buffer can evict the stamped marker and be left
+ * holding unstamped lines, and re-deriving there would reopen the hole.
+ *
+ * Pure and idempotent, so an accumulating caller can hold the labelled
+ * entries and re-derive the authoritative view on each read - which it
+ * must, since a stamped marker arriving in a later chunk retroactively
+ * demotes the unstamped lines that followed the boundary.
+ */
+export function retainAuthenticMarkers(
+  entries: readonly BootstrapLogEntry[],
+  writerIdentifiedBefore: boolean,
+): readonly BootstrapLogEntry[] {
+  if (writerIdentifiedBefore) {
+    return entries.filter((entry) => entry.writer === "supervisor");
+  }
+  const boundary = entries.findIndex((entry) => entry.writer === "supervisor");
+  if (boundary === -1) return entries;
+  return [
+    ...entries.slice(0, boundary),
+    ...entries.slice(boundary).filter((entry) => entry.writer === "supervisor"),
+  ];
 }
 
 function parseLine(line: string): BootstrapLogEntry | null {
@@ -204,7 +342,11 @@ function parseLine(line: string): BootstrapLogEntry | null {
     }
     fields[key] = value;
   }
-  return { timestamp, phase, fields };
+  const writer: BootstrapMarkerWriter =
+    fields[MARKER_WRITER_KEY] === MARKER_WRITER_SUPERVISOR
+      ? "supervisor"
+      : "unverified";
+  return { timestamp, phase, fields, writer };
 }
 
 export async function readBootstrapMarkers(
@@ -222,7 +364,12 @@ export async function readBootstrapMarkers(
     const parsed = parseLine(line);
     if (parsed !== null) entries.push(parsed);
   }
-  return entries.slice(-maxEntries);
+  // Locate the boundary in the WHOLE file, then take the tail. The other
+  // order would look for it only within the last `maxEntries` lines, so a
+  // log whose recent tail happens to hold nothing stamped would read as
+  // pre-boundary and trust it. Nothing precedes the start of a file, hence
+  // `false`.
+  return retainAuthenticMarkers(entries, false).slice(-maxEntries);
 }
 
 export async function readBootstrapLogTail(
