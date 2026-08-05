@@ -203,6 +203,20 @@ function ensureThemePair(
   return load;
 }
 
+/** Active Shiki theme for the current preset + document light/dark class. */
+export function resolveActiveShikiTheme(): ShikiThemeId {
+  const preset = useSettingsStore.getState().themePreset;
+  const pair = SHIKI_BY_PRESET[preset];
+  return getDocIsDark() ? pair.dark : pair.light;
+}
+
+/** Ensure the active preset's light+dark pair is loaded on the core. */
+export function ensureActiveThemePair(
+  highlighter: HighlighterCore,
+): Promise<void> {
+  return ensureThemePair(highlighter, useSettingsStore.getState().themePreset);
+}
+
 /**
  * Self-contained Shiki theme + highlighter hook.
  *

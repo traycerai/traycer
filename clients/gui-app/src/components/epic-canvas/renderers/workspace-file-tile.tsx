@@ -6,8 +6,8 @@ import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
-import { useShikiHighlighter } from "@/markdown/shiki-highlighter";
-import { useThrottledCodeHighlight } from "@/markdown/use-throttled-code-highlight";
+import { useThrottledHighlight } from "@tailmark/react";
+import { getTraycerStreamingHighlighter } from "@/markdown/traycer-streaming-highlighter";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import {
   createWorkspaceFileFindAdapter,
@@ -499,17 +499,14 @@ function CodeEditorPreview(props: {
   readonly revealNonce: number | null;
   readonly findTarget: WorkspaceFileSourceFindTargetWithNonce | null;
 }) {
-  const { highlighter, theme, themesVersion } = useShikiHighlighter();
-  // Shared MRU-cached highlight path. The `MAX_HIGHLIGHT_CHARS` guard lives
-  // inside the hook - a large file falls back to the plain `<pre>` below.
-  const highlightedNodes = useThrottledCodeHighlight({
-    highlighter,
-    theme,
-    themesVersion,
-    code: props.code,
-    language: props.language,
-    isStreaming: false,
-  });
+  // Shared StreamingHighlighter adapter + Tailmark throttle (settled path;
+  // workspace previews are never mid-stream). MAX_HIGHLIGHT_CHARS lives in
+  // the adapter - a large file falls back to the plain `<pre>` below.
+  const highlightedNodes = useThrottledHighlight(
+    props.code,
+    props.language,
+    getTraycerStreamingHighlighter(),
+  );
 
   const lines = useMemo(() => lineNumbers(props.code), [props.code]);
 

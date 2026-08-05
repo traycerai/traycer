@@ -31,6 +31,9 @@ import { rehypeTraycerEpic } from "./plugins/rehype-traycer-epic";
 import { rehypeTraycerSpec } from "./plugins/rehype-traycer-spec";
 import { rehypeTraycerTicket } from "./plugins/rehype-traycer-ticket";
 import { extendTraycerSanitizeSchema } from "./plugins/rehype-sanitize-schema";
+import { getTraycerStreamingHighlighter } from "./traycer-streaming-highlighter";
+
+const TRAYCER_STREAMING_HIGHLIGHTER = getTraycerStreamingHighlighter();
 
 // Product rehype plugins only. Tailmark already runs rehype-raw, sanitize, and
 // its marker policy; do not re-register GFM / disable-indented-code (built-in).
@@ -130,6 +133,7 @@ export function TraycerMarkdown({
     >
       <StreamingMarkdown
         isStreaming={isStreaming}
+        highlighter={TRAYCER_STREAMING_HIGHLIGHTER}
         sanitizeSchema={extendTraycerSanitizeSchema}
         urlTransform={markdownUrlTransform}
         remarkPlugins={effectiveRemarkPlugins}
