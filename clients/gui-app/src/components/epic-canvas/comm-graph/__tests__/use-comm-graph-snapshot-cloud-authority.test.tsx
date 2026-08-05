@@ -237,6 +237,72 @@ describe("useCommGraphSnapshot cloud authority", () => {
     ]);
   });
 
+  it("holds a local cursor until bounded cloud history reaches its initial head", async () => {
+    const localRequests: CommGraphSubscriptionRequest[] = [];
+    __setCommGraphSubscriptionOpenerForTests((request) => {
+      localRequests.push(request);
+      return { close: vi.fn() };
+    });
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+    await waitFor(() => expect(localRequests).toHaveLength(1));
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    const localEvent = {
+      id: 9,
+      hostId: "origin-a",
+      kind: "a2a_message" as const,
+      timestamp: 2_000,
+      senderAgentId: "agent-a",
+      receiverAgentId: "agent-b",
+      responseId: null,
+      inReplyTo: null,
+      expectReply: true,
+      messageText: "from local",
+      noticeReason: null,
+      originKind: null,
+      originChatId: null,
+      originRefId: null,
+    };
+    const localCursor = commGraphCursorForEvent(localEvent);
+    act(() => {
+      localRequests[0].handlers.onSnapshot([localEvent], 9);
+      useCommGraphTimelineStore
+        .getState()
+        .setCursor("epic-1", localCursor);
+      cloudRequests[0].handlers.onAvailability("available");
+      cloudRequests[0].handlers.onSnapshot(
+        [
+          {
+            ...cloudEvent(),
+            eventId: "cloud-before",
+            originSequence: 8,
+            ingestVersion: 10,
+            capturedAt: 1_000,
+          },
+        ],
+        20,
+        null,
+      );
+    });
+
+    expect(readCommGraphTimelineEpicState("epic-1").cursor).toEqual(
+      localCursor,
+    );
+
+    act(() => cloudRequests[0].handlers.onEvent(cloudEvent()));
+
+    await waitFor(() =>
+      expect(readCommGraphTimelineEpicState("epic-1").cursor?.eventId).toBe(
+        "cloud-event",
+      ),
+    );
+  });
+
   it("uses a signed-in non-origin host to relay the cloud feed", async () => {
     directoryEntries.current = [directoryEntry("relay-b", undefined)];
     __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));

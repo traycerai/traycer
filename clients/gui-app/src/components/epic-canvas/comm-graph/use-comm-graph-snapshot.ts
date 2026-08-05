@@ -218,9 +218,16 @@ export function useCommGraphSnapshot(
   useEffect(() => {
     if (cloudAvailability !== "available") return;
     // Availability and the initial snapshot are distinct wire frames. Preserve
-    // a held local cursor until the snapshot boundary proves cloud history has
-    // actually loaded; an empty snapshot still publishes a real boundary.
-    if (!cloudSnapshot.hosts.some((host) => host.snapshotBoundary !== null)) {
+    // a held local cursor until the feed cursor reaches the initial cloud head.
+    // The snapshot is bounded, so its remaining history can legally arrive in
+    // later event frames; an empty cloud log has head 0 and is already caught
+    // up even though its cursor is null.
+    if (
+      !cloudSnapshot.hosts.some((host) => {
+        const boundary = host.snapshotBoundary?.highestId;
+        return boundary !== undefined && (host.cursor ?? 0) >= (boundary ?? 0);
+      })
+    ) {
       return;
     }
     reconcileCommGraphCloudAuthorityCursor(epicId, cloudSnapshot.events);
