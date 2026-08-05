@@ -110,6 +110,47 @@ export function captureReportIssueError(
 }
 
 /**
+ * Capture for a dictation failure being reported from the error toast. Like
+ * {@link capturePersistedAgentError} and unlike {@link captureReportIssueError}
+ * this never calls Sentry: most dictation failures are environmental (mic
+ * blocked, host link down), so a `captureException` per attempt would mint an
+ * event stream of user-caused conditions rather than defects.
+ *
+ * `failureClass` is a fixed app-defined identifier and also travels in the
+ * PUBLIC prefill; the message may carry browser/host text, so it stays here.
+ */
+export function captureDictationFailure(input: {
+  readonly failureClass: string;
+  readonly message: string;
+}): ReportIssueErrorCapture {
+  const registry = getSupportContextSnapshot();
+  const causalProvider =
+    registry.harnessId.status === "unavailable"
+      ? null
+      : registry.harnessId.value;
+  const fingerprint = computeReportIssueFingerprintV1({
+    subtype: "DictationFailed",
+    errorCode: input.failureClass,
+    operation: "dictation",
+    causalProvider,
+  });
+  return {
+    cause: {
+      type: "DictationFailed",
+      message: input.message,
+      stack: null,
+      componentStack: null,
+      errorCode: input.failureClass,
+      sourceAction: "dictation",
+      timestamp: Date.now(),
+    },
+    correlationId: crypto.randomUUID(),
+    fingerprint,
+    stackFamily: null,
+  };
+}
+
+/**
  * Capture for a PERSISTED agent error row (a chat transcript `error` block)
  * being reported after the fact. Unlike {@link captureReportIssueError} this
  * never calls Sentry: the failure already happened host-side when the turn

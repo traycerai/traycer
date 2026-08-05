@@ -103,15 +103,13 @@ function threadKey(hostId: string, responseId: string): string {
 }
 
 /**
- * Thread key to the highest reply ROW ID seen on it.
+ * Thread key to the latest reply seen on it.
  *
- * Ordering here is by row id ALONE, deliberately not by timestamp. Every row on
- * a thread comes from one host (A2A is host-local, so both ends of an exchange
- * live on the same host) and that host appends on a serialized chain, so its
- * monotonic id IS the causal order. The wall clock is not: a request, its reply
- * and a re-opening request routinely land in the same millisecond, and a clock
- * that steps BACKWARDS makes a later request look earlier than the reply that
- * preceded it - either way a still-open thread would read as answered.
+ * Host-local rows use their monotonic row id as causal order. Cloud rows use
+ * their canonical `(ingestVersion, eventId)` cursor instead: a restored host
+ * can reuse an origin row id, while cloud ingestion remains append-only. The
+ * wall clock is never causal order: a request, its reply and a re-opening
+ * request routinely land in the same millisecond, and clocks can step backward.
  *
  * The merged array's DISPLAY sort is a separate concern and stays
  * `(timestamp, hostId, id)`: it orders unrelated events across hosts, where ids
@@ -121,16 +119,34 @@ function threadKey(hostId: string, responseId: string): string {
  * reopened, and answered again; tracking the LATEST reply rather than mere
  * existence is what keeps a re-opened thread showing as open.
  */
-function latestReplyRowIdByThread(
+function compareThreadCausalOrder(
+  left: CommGraphEvent,
+  right: CommGraphEvent,
+): number {
+  if (
+    left.ingestVersion !== undefined &&
+    left.eventId !== undefined &&
+    right.ingestVersion !== undefined &&
+    right.eventId !== undefined
+  ) {
+    if (left.ingestVersion !== right.ingestVersion) {
+      return left.ingestVersion - right.ingestVersion;
+    }
+    return left.eventId.localeCompare(right.eventId);
+  }
+  return left.id - right.id;
+}
+
+function latestReplyByThread(
   events: ReadonlyArray<CommGraphEvent>,
-): ReadonlyMap<string, number> {
-  const latest = new Map<string, number>();
+): ReadonlyMap<string, CommGraphEvent> {
+  const latest = new Map<string, CommGraphEvent>();
   for (const event of events) {
     if (event.inReplyTo === null) continue;
     const key = threadKey(event.hostId, event.inReplyTo);
     const current = latest.get(key);
-    if (current === undefined || current < event.id) {
-      latest.set(key, event.id);
+    if (current === undefined || compareThreadCausalOrder(current, event) < 0) {
+      latest.set(key, event);
     }
   }
   return latest;
@@ -138,16 +154,14 @@ function latestReplyRowIdByThread(
 
 function isOpenRequest(
   event: CommGraphEvent,
-  latestReplyRowId: ReadonlyMap<string, number>,
+  latestReply: ReadonlyMap<string, CommGraphEvent>,
 ): boolean {
   if (event.kind !== "a2a_message") return false;
   if (event.expectReply !== true) return false;
   if (event.responseId === null) return false;
-  const repliedRowId = latestReplyRowId.get(
-    threadKey(event.hostId, event.responseId),
-  );
-  if (repliedRowId === undefined) return true;
-  return repliedRowId < event.id;
+  const reply = latestReply.get(threadKey(event.hostId, event.responseId));
+  if (reply === undefined) return true;
+  return compareThreadCausalOrder(reply, event) < 0;
 }
 
 interface MutablePairEntry {
@@ -169,7 +183,7 @@ export function aggregateCommGraphEdges(
   events: ReadonlyArray<CommGraphEvent>,
   agentIds: ReadonlySet<string>,
 ): ReadonlyArray<CommGraphAggregatedEdge> {
-  const latestReplyRowId = latestReplyRowIdByThread(events);
+  const latestReply = latestReplyByThread(events);
   const byPair = new Map<string, MutablePairEntry>();
   for (const event of events) {
     const sender = event.senderAgentId;
@@ -190,7 +204,7 @@ export function aggregateCommGraphEdges(
     // The canvas dashes the pair when EITHER direction is waiting - the edge
     // says "this conversation has an unanswered ask", and which way it points is
     // the detail view's job (it labels every row).
-    if (isOpenRequest(event, latestReplyRowId)) entry.hasOpenThread = true;
+    if (isOpenRequest(event, latestReply)) entry.hasOpenThread = true;
     entry.events.push(event);
   }
   return Array.from(byPair.entries(), ([id, entry]) => ({

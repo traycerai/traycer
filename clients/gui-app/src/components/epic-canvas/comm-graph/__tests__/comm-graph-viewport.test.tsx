@@ -47,6 +47,7 @@ function renderCanvas(view: CommGraphTileViewState): void {
       pulse={null}
       view={view}
       onViewChange={vi.fn()}
+      canOpenAgentForEvent={() => true}
       canJump={() => false}
       onJump={vi.fn()}
       canJumpToSender={() => false}

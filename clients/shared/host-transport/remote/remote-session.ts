@@ -162,6 +162,10 @@ export interface IRemoteSession<
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
+  subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession;
   notifyBearerRotated(): void;
   /**
    * Subscribes to the session's terminal close - a caller `close()` (on the
@@ -420,13 +424,29 @@ export class RemoteSession<
   }
 
   /** Opens a logical subscribe stream (interactive class; see §3 QoS note). */
-  subscribe(method: string, params: unknown): IStreamSession {
+  subscribe<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProvider(method, () => params);
+  }
+
+  /**
+   * Opens a logical stream whose params are re-read for every full attach.
+   * The mux reconnect path re-opens every live LogicalStream, so keeping the
+   * provider on that stream makes resume cursors current at the exact wire
+   * subscribe boundary rather than frozen at session creation.
+   */
+  subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
     this.start();
     const streamId = this.allocateStreamId();
     const stream = new LogicalStream({
       streamId,
       method,
-      params,
+      paramsProvider,
       // Recomputed against the host manifest at (re)subscribe; a provisional
       // client-canonical version is fine until then.
       schemaVersion: this.clientStreamCanonical(method),
@@ -911,7 +931,7 @@ export class RemoteSession<
       stream.method,
       clientCanonical,
       hostCanonical,
-      stream.params,
+      stream.readParams(),
     );
     stream.updateSchemaVersion(prepared.onWireVersion);
     this.enqueueMessage(connection, {

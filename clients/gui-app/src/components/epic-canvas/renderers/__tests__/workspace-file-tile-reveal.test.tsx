@@ -48,14 +48,13 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => state.readFile,
 }));
 
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({
-    highlighter: null,
-    theme: "dark",
-    themesVersion: 0,
-  }),
-  highlightCode: () => null,
-}));
+vi.mock("@tailmark/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tailmark/react")>();
+  return {
+    ...actual,
+    useThrottledHighlight: () => null,
+  };
+});
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
 import { TabHostProvider } from "../../tab-host-provider";

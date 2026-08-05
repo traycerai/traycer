@@ -1757,11 +1757,16 @@ function registerAgentCommands(
       .option(
         "--agent-id <id>",
         "Agent whose inbox to read (defaults to $TRAYCER_AGENT_ID)",
+      )
+      .option(
+        "--after <createdAt:eventId>",
+        "Resume after the cursor from the prior inbox page",
       ),
     (opts) =>
       buildAgentInboxCommand({
         epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+        after: typeof opts.after === "string" ? opts.after : null,
       }),
   );
 

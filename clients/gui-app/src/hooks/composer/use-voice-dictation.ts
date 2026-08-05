@@ -5,9 +5,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
-import { appLogger, describeLogError } from "@/lib/logger";
+import { appLogger, describeLogError, type AppLogFields } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   Analytics,
@@ -17,6 +18,33 @@ import {
 
 export type VoiceDictationState =
   "idle" | "requesting" | "recording" | "transcribing" | "error";
+
+/**
+ * Which path aborted a dictation attempt. Passed to `fail()` as a required
+ * argument - not derived from the message - so the single log line it writes
+ * always names the class, and a new failure path cannot be added without
+ * declaring one. Two field reports (oss #945, #1003) were root-caused only by
+ * elimination because that line did not exist.
+ */
+export type DictationFailureClass =
+  // No `navigator` (non-browser environment).
+  | "capture_unavailable"
+  // The permission IPC itself rejected.
+  | "permission_request_failed"
+  // The OS says the app is denied (macOS TCC; win32 always reports granted).
+  | "permission_denied_os"
+  // `getUserMedia` rejected with NotAllowedError.
+  | "permission_denied_browser"
+  // `getUserMedia` rejected for any other reason (no device, in use, ...).
+  | "mic_open_failed"
+  | "audio_context_create_failed"
+  | "audio_context_not_running"
+  // No host stream client at start - the link was down before we asked.
+  | "not_connected"
+  // The host answered with an `error` frame.
+  | "host_error_frame"
+  // The stream dropped mid-session without us closing it.
+  | "connection_lost";
 
 export interface UseVoiceDictationArgs {
   readonly language: string;
@@ -28,6 +56,13 @@ export interface UseVoiceDictationArgs {
 export interface UseVoiceDictation {
   readonly state: VoiceDictationState;
   readonly errorMessage: string | null;
+  /**
+   * Which path produced {@link errorMessage}, or null when there is no error.
+   * A stable app-defined identifier (never user text), so it is safe to carry
+   * into a public support report - which is the point: the reporter's own
+   * issue then names the failure class instead of leaving triage to infer it.
+   */
+  readonly failureClass: DictationFailureClass | null;
   /** True when the last error was a denied OS microphone permission. */
   readonly permissionDenied: boolean;
   readonly start: () => void;
@@ -53,6 +88,33 @@ const PROCESSOR_BUFFER_SIZE = 2048;
 // "transcribing".
 const FINALIZE_FALLBACK_MS = 15000;
 
+/**
+ * Splits a rejected `getUserMedia` into the denial the user can act on and
+ * every other open failure (no device, device busy, hardware error). Extracted
+ * from the acquisition path so classifying the failure does not push that
+ * already-branchy async arrow over the complexity ceiling.
+ */
+function classifyMicOpenFailure(error: unknown): {
+  readonly denied: boolean;
+  readonly failureClass: DictationFailureClass;
+  readonly message: string;
+} {
+  if (error instanceof Error && error.name === "NotAllowedError") {
+    return {
+      denied: true,
+      failureClass: "permission_denied_browser",
+      message: "Microphone access is blocked for Traycer.",
+    };
+  }
+  return {
+    denied: false,
+    failureClass: "mic_open_failed",
+    message: `Could not access the microphone: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+  };
+}
+
 function dictationDurationBucket(
   startedAtMs: number | null,
 ): "under_10s" | "10_to_30s" | "over_30s" {
@@ -76,6 +138,8 @@ export function useVoiceDictation(
   const runnerHost = useRunnerHost();
   const [state, setState] = useState<VoiceDictationState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [failureClass, setFailureClass] =
+    useState<DictationFailureClass | null>(null);
   const [permissionDenied, setPermissionDenied] = useState(false);
 
   // Latest-value refs so the long-lived audio/stream callbacks never close over
@@ -113,6 +177,11 @@ export function useVoiceDictation(
   const startGenerationRef = useRef(0);
   // When the live recording actually began (onReady), for duration buckets.
   const recordingStartedAtRef = useRef<number | null>(null);
+  // Last status the live session reported, or null before any session opened.
+  // Read only by the failure log: it separates "the link was already down" from
+  // "the link dropped under us", which no other signal distinguishes after
+  // teardown has run.
+  const lastConnectionStatusRef = useRef<StreamConnectionStatus | null>(null);
 
   const markClosing = useCallback(() => {
     closingRef.current = true;
@@ -160,7 +229,36 @@ export function useVoiceDictation(
   }, [teardownAudio]);
 
   const fail = useCallback(
-    (message: string, error: unknown) => {
+    (
+      failureClass: DictationFailureClass,
+      // Extra per-path fields for the log line only. Required (not defaulted)
+      // so each call site states what it has; most pass `{}`. Deliberately
+      // separate from `error`, which feeds analytics blocker classification -
+      // enriching the log must not silently reclassify the funnel.
+      details: AppLogFields,
+      message: string,
+      error: unknown,
+    ) => {
+      // Logged BEFORE teardown: `teardownAll()` clears the readiness refs this
+      // line reports, so emitting afterwards would describe the torn-down
+      // session rather than the failing one.
+      appLogger.error(
+        "[voice-dictation] failed",
+        {
+          ...details,
+          failureClass,
+          state: stateRef.current,
+          connectionStatus: lastConnectionStatusRef.current ?? "none",
+          hasStreamClient: wsStreamClient !== null,
+          sessionReady: readyRef.current,
+          audioGraphReady: audioGraphReadyRef.current,
+          msSinceRecordingStart:
+            recordingStartedAtRef.current === null
+              ? null
+              : Date.now() - recordingStartedAtRef.current,
+        },
+        error,
+      );
       if (stateRef.current === "transcribing") {
         Analytics.getInstance().track(AnalyticsEvent.VoiceTranscriptionFailed, {
           blocker: analyticsBlockerFromError(error),
@@ -171,12 +269,21 @@ export function useVoiceDictation(
           blocker: analyticsBlockerFromError(error),
         });
       }
+      // Invalidate capture work still in flight, the way `stop()`/`cancel()`
+      // already do. `startAudioGraph` captures the AudioContext BEFORE awaiting
+      // the permission prompt, so without this bump a failure arriving during
+      // that await tears the context down and the task still resumes on it -
+      // finds it closed, and calls fail() a SECOND time with
+      // `audio_context_not_running`. That generic class would overwrite the
+      // real first cause and become the one the user reports.
+      startGenerationRef.current += 1;
       markClosing();
       teardownAll();
       setState("error");
       setErrorMessage(message);
+      setFailureClass(failureClass);
     },
-    [markClosing, teardownAll],
+    [markClosing, teardownAll, wsStreamClient],
   );
 
   // Normal end-of-session: the host has flushed all transcripts. Close the
@@ -224,6 +331,8 @@ export function useVoiceDictation(
           permission: "unavailable",
         });
         fail(
+          "capture_unavailable",
+          {},
           "Microphone capture is not available in this environment.",
           "Microphone capture is not available in this environment.",
         );
@@ -238,6 +347,8 @@ export function useVoiceDictation(
       } catch (error) {
         if (generation !== startGenerationRef.current) return null;
         fail(
+          "permission_request_failed",
+          {},
           `Could not request microphone access: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -252,6 +363,8 @@ export function useVoiceDictation(
         });
         setPermissionDenied(true);
         fail(
+          "permission_denied_os",
+          {},
           "Microphone access is blocked for Traycer.",
           "Microphone access is blocked for Traycer.",
         );
@@ -285,16 +398,10 @@ export function useVoiceDictation(
         // pending - a late rejection must not resurrect it into "error" or
         // emit analytics for an attempt the user already abandoned.
         if (generation !== startGenerationRef.current) return null;
-        const denied =
-          error instanceof Error && error.name === "NotAllowedError";
-        appLogger.warn(
-          "[voice-dictation] microphone stream acquisition failed",
-          {
-            denied,
-            error: describeLogError(error),
-          },
-        );
-        if (denied) {
+        // No log here: `fail()` writes the single line for this path, and the
+        // `denied` split it used to record is now carried by the failure class.
+        const failure = classifyMicOpenFailure(error);
+        if (failure.denied) {
           // The OS said yes but the browser-level prompt was refused - still a
           // user-visible permission denial for the funnel.
           Analytics.getInstance().track(
@@ -303,14 +410,7 @@ export function useVoiceDictation(
           );
           setPermissionDenied(true);
         }
-        fail(
-          denied
-            ? "Microphone access is blocked for Traycer."
-            : `Could not access the microphone: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-          error,
-        );
+        fail(failure.failureClass, {}, failure.message, error);
         return null;
       }
     },
@@ -341,6 +441,8 @@ export function useVoiceDictation(
       }
       if (ctx.state !== "running") {
         fail(
+          "audio_context_not_running",
+          {},
           "Could not start audio capture (the audio context did not start).",
           "Could not start audio capture (the audio context did not start).",
         );
@@ -389,8 +491,30 @@ export function useVoiceDictation(
 
   const start = useCallback(() => {
     if (state === "recording" || state === "requesting") return;
+    // Clear everything the PREVIOUS attempt left behind FIRST - before any
+    // failure path below can read it or outlive it.
+    //
+    // The refs are only meaningful for the attempt now beginning: a failure
+    // that reports the previous attempt's connection status or a still-growing
+    // time-since-recording is worse than no diagnostic, because it sends triage
+    // after the wrong session. `null` here honestly means "this attempt never
+    // got that far".
+    //
+    // The error state has to clear here too, not after the not-connected branch
+    // below. `permissionDenied` drives the "Open Settings" affordance, so a
+    // denied attempt followed by one with no host would pair a host-link
+    // failure with a microphone remedy - and since the failure class rides the
+    // Report Issue prefill, the filed report would read `not_connected` while
+    // telling the user to grant microphone access.
+    recordingStartedAtRef.current = null;
+    lastConnectionStatusRef.current = null;
+    setErrorMessage(null);
+    setFailureClass(null);
+    setPermissionDenied(false);
     if (wsStreamClient === null) {
       fail(
+        "not_connected",
+        {},
         "Not connected to the local host.",
         "Not connected to the local host.",
       );
@@ -402,14 +526,12 @@ export function useVoiceDictation(
       window.clearTimeout(finalizeTimerRef.current);
       finalizeTimerRef.current = null;
     }
-    setErrorMessage(null);
-    setPermissionDenied(false);
     setState("requesting");
     readyRef.current = false;
     audioGraphReadyRef.current = false;
-    // Cleared at start so a stop during "requesting" can't report a stopped
-    // event stamped with the PREVIOUS recording's start time.
-    recordingStartedAtRef.current = null;
+    // (`recordingStartedAtRef` is cleared above, before the not-connected
+    // branch, so a stop during "requesting" can't report a stopped event
+    // stamped with the PREVIOUS recording's start time either.)
     pendingChunksRef.current = [];
     closingRef.current = false;
     const generation = startGenerationRef.current + 1;
@@ -430,10 +552,10 @@ export function useVoiceDictation(
       try {
         ctx = new AudioContext();
       } catch (error) {
-        appLogger.warn("[voice-dictation] audio context creation failed", {
-          error: describeLogError(error),
-        });
+        // No log here either: `fail()` writes the single line for this path.
         fail(
+          "audio_context_create_failed",
+          {},
           `Could not start audio capture: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -491,10 +613,19 @@ export function useVoiceDictation(
         },
         onError: (frame) => {
           if (speechClientRef.current !== client) return;
-          fail(frame.message, frame);
+          // `frame` still goes in as the analytics error (unchanged
+          // classification); the host's own code rides the log fields, where
+          // it names ENGINE_UNAVAILABLE / MODEL_NOT_READY / DICTATION_FAILED.
+          fail(
+            "host_error_frame",
+            { hostErrorCode: frame.code },
+            frame.message,
+            frame,
+          );
         },
-        onConnectionStatus: (status) => {
+        onConnectionStatus: (status, reason) => {
           if (speechClientRef.current !== client) return;
+          lastConnectionStatusRef.current = status;
           if (status !== "closed") return;
           if (closingRef.current) {
             // Expected close (we flushed / tore down). Settle the UI if it's
@@ -506,6 +637,12 @@ export function useVoiceDictation(
           // otherwise the audio graph keeps buffering with nowhere to send.
           markClosing();
           fail(
+            "connection_lost",
+            // Optional chaining, not a null check: the declared type says
+            // `| null`, but this is a callback the transport invokes - a
+            // caller that omits the argument entirely must not turn a
+            // diagnostic into a crash inside the failure path itself.
+            { closeReason: reason?.kind ?? "none" },
             "Lost connection to the local host.",
             "Lost connection to the local host.",
           );
@@ -580,6 +717,7 @@ export function useVoiceDictation(
     teardownAll();
     setState("idle");
     setErrorMessage(null);
+    setFailureClass(null);
     setPermissionDenied(false);
   }, [markClosing, teardownAll]);
 
@@ -598,6 +736,7 @@ export function useVoiceDictation(
   return {
     state,
     errorMessage,
+    failureClass,
     permissionDenied,
     start,
     stop,

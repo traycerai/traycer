@@ -74,38 +74,33 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => state.readFile,
 }));
 
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({
-    highlighter: null,
-    theme: "dark",
-    themesVersion: 0,
-  }),
-  highlightCode: () => null,
-}));
-
-vi.mock("@/markdown/use-throttled-code-highlight", () => ({
-  useThrottledCodeHighlight: (input: { readonly code: string }) => {
-    if (!state.syntaxHighlight) return null;
-    const lines = input.code.split("\n");
-    let offset = 0;
-    return (
-      <>
-        {lines.map((line) => {
-          const key = `${offset}:${line}`;
-          offset += line.length;
-          const hasLineBreak = offset < input.code.length;
-          if (hasLineBreak) offset += 1;
-          return (
-            <span key={key}>
-              {line}
-              {hasLineBreak ? "\n" : null}
-            </span>
-          );
-        })}
-      </>
-    );
-  },
-}));
+vi.mock("@tailmark/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tailmark/react")>();
+  return {
+    ...actual,
+    useThrottledHighlight: (code: string) => {
+      if (!state.syntaxHighlight) return null;
+      const lines = code.split("\n");
+      let offset = 0;
+      return (
+        <>
+          {lines.map((line) => {
+            const key = `${offset}:${line}`;
+            offset += line.length;
+            const hasLineBreak = offset < code.length;
+            if (hasLineBreak) offset += 1;
+            return (
+              <span key={key}>
+                {line}
+                {hasLineBreak ? "\n" : null}
+              </span>
+            );
+          })}
+        </>
+      );
+    },
+  };
+});
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
 import { TabHostProvider } from "../../tab-host-provider";

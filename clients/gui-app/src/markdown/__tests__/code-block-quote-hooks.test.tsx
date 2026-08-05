@@ -7,17 +7,13 @@ const highlightState = vi.hoisted((): { nodes: ReactNode | null } => ({
   nodes: null,
 }));
 
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({
-    highlighter: null,
-    theme: "github-dark",
-    themesVersion: 0,
-  }),
-}));
-
-vi.mock("@/markdown/use-throttled-code-highlight", () => ({
-  useThrottledCodeHighlight: () => highlightState.nodes,
-}));
+vi.mock("@tailmark/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tailmark/react")>();
+  return {
+    ...actual,
+    useThrottledHighlight: () => highlightState.nodes,
+  };
+});
 
 describe("<CodeBlock /> quote hooks", () => {
   afterEach(() => {

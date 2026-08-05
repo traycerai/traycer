@@ -184,6 +184,38 @@ describe("TextSegment next steps rendering", () => {
     expect(screen.queryByText(/TRAYCER_NEXT_STEPS/)).toBeNull();
   });
 
+  it("spaces next-steps away from a preceding body that ends in a horizontal rule", () => {
+    // Body markdown and next-steps prose are separate `.md-prose` trees. The
+    // Tailmark first/last margin zeroing collapses both sides of that boundary,
+    // so without an explicit wrapper the next-steps prose sits flush on the
+    // trailing `---`.
+    render(
+      <TextSegment
+        findUnitId={null}
+        markdown={["Done with the work.", "", "---", "", COMPLETE_BLOCK].join(
+          "\n",
+        )}
+        isStreaming={false}
+        nextStepActions={{ canSend: true, onSend: () => true }}
+      />,
+    );
+
+    const nextSteps = screen.getByTestId("traycer-next-steps");
+    const section = nextSteps.parentElement;
+    expect(section).not.toBeNull();
+    expect(section?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["mt-4", "first:mt-0"]),
+    );
+    expect(
+      section?.contains(screen.getByText("Implementation is complete.")),
+    ).toBe(true);
+    // Body (with the rule) is a preceding sibling of the next-steps section,
+    // not nested inside it.
+    expect(section?.contains(screen.getByText("Done with the work."))).toBe(
+      false,
+    );
+  });
+
   it("disables action buttons while a next steps block is still streaming", () => {
     render(
       <TextSegment

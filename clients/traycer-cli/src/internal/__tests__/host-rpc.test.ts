@@ -351,4 +351,24 @@ describe("callHostRpc", () => {
       },
     });
   });
+
+  it("maps oversized agent messages to invalid argument", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "MESSAGE_TOO_LARGE",
+            message: "Message exceeds the maximum size.",
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: "traycer: Message exceeds the maximum size.",
+      details: null,
+    });
+  });
 });

@@ -28,6 +28,7 @@ export interface CommGraphAgentDetailPanelProps {
   readonly agentNames: ReadonlyMap<string, string>;
   /** Already filtered to this agent, in merged-array order. */
   readonly events: ReadonlyArray<CommGraphEvent>;
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -48,6 +49,7 @@ export function CommGraphAgentDetailPanel(
   const {
     agent,
     agentNames,
+    canOpenAgentForEvent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -108,6 +110,7 @@ export function CommGraphAgentDetailPanel(
       epicId={epicId}
       agentNames={agentNames}
       emptyLabel="No captured activity for this agent yet. The graph records messages between agents and broker notices."
+      canOpenAgentForEvent={canOpenAgentForEvent}
       canJump={canJump}
       onJump={onJump}
       canJumpToSender={canJumpToSender}
