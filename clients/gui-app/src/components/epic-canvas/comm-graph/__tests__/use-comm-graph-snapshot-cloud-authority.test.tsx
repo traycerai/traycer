@@ -12,6 +12,11 @@ import { __resetCommGraphRegistryForTests } from "@/lib/comm-graph/comm-graph-re
 import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
 import type { CommGraphSubscriptionRequest } from "@/lib/comm-graph/comm-graph-subscription";
 import type { CommGraphCloudSubscriptionRequest } from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import {
+  readCommGraphTimelineEpicState,
+  useCommGraphTimelineStore,
+} from "@/stores/epics/comm-graph-timeline-store";
+import { commGraphCursorForEvent } from "@/lib/comm-graph/comm-graph-timeline";
 
 const directoryEntries = vi.hoisted(() => ({
   current: [] as ReadonlyArray<HostDirectoryEntry>,
@@ -51,6 +56,7 @@ function cloudEvent(): HostCommunicationGraphCloudFeedEvent {
 describe("useCommGraphSnapshot cloud authority", () => {
   beforeEach(() => {
     directoryEntries.current = [];
+    useCommGraphTimelineStore.setState({ stateByEpicId: {} });
     __resetCommGraphCloudRegistryForTests();
     __resetCommGraphRegistryForTests();
   });
@@ -172,6 +178,61 @@ describe("useCommGraphSnapshot cloud authority", () => {
 
     await waitFor(() => expect(localClose).toHaveBeenCalledTimes(1));
     expect(result.current.events).toEqual([]);
+  });
+
+  it("rebases a held local cursor onto the equivalent canonical cloud row", async () => {
+    const localRequests: CommGraphSubscriptionRequest[] = [];
+    __setCommGraphSubscriptionOpenerForTests((request) => {
+      localRequests.push(request);
+      return { close: vi.fn() };
+    });
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    const { result } = renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["origin-a"]),
+    );
+    await waitFor(() => expect(localRequests).toHaveLength(1));
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    const localEvent = {
+      id: 9,
+      hostId: "origin-a",
+      kind: "a2a_message" as const,
+      timestamp: 2_000,
+      senderAgentId: "agent-a",
+      receiverAgentId: "agent-b",
+      responseId: null,
+      inReplyTo: null,
+      expectReply: true,
+      messageText: "from local",
+      noticeReason: null,
+      originKind: null,
+      originChatId: null,
+      originRefId: null,
+    };
+    act(() => {
+      localRequests[0].handlers.onSnapshot([localEvent], 9);
+      useCommGraphTimelineStore
+        .getState()
+        .setCursor("epic-1", commGraphCursorForEvent(localEvent));
+    });
+
+    act(() => {
+      cloudRequests[0].handlers.onAvailability("available");
+      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null);
+    });
+
+    await waitFor(() =>
+      expect(readCommGraphTimelineEpicState("epic-1").cursor?.eventId).toBe(
+        "cloud-event",
+      ),
+    );
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
   });
 
   it("uses a signed-in non-origin host to relay the cloud feed", async () => {

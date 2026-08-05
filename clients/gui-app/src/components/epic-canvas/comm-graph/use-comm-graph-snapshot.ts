@@ -57,6 +57,7 @@ import {
 } from "@/lib/host/transport-key";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { reconcileCommGraphCloudAuthorityCursor } from "@/stores/epics/comm-graph-timeline-store";
 
 const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
   let closed = false;
@@ -213,6 +214,11 @@ export function useCommGraphSnapshot(
     () => cloudManager.getAvailability(),
     () => "pending" as const,
   );
+
+  useEffect(() => {
+    if (cloudAvailability !== "available") return;
+    reconcileCommGraphCloudAuthorityCursor(epicId, cloudSnapshot.events);
+  }, [cloudAvailability, cloudSnapshot.events, epicId]);
 
   // The CLAIM is an effect, so its cleanup balances a StrictMode double-invoke.
   // The host set goes in WITH it so a retained manager's stale desired set is
