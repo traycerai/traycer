@@ -214,7 +214,11 @@ export function useCommGraphSnapshot(
     () => cloudManager.getAvailability(),
     () => "pending" as const,
   );
-  const cloudHistoryCaughtUp = cloudManager.isInitialHistoryCaughtUp();
+  const cloudHistoryCaughtUp = useSyncExternalStore(
+    (listener) => cloudManager.subscribe(listener),
+    () => cloudManager.isInitialHistoryCaughtUp(),
+    () => false,
+  );
 
   useEffect(() => {
     if (cloudAvailability !== "available") return;
