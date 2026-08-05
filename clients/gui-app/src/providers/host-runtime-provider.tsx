@@ -1,5 +1,4 @@
 import {
-  createContext,
   use,
   useEffect,
   useMemo,
@@ -115,9 +114,9 @@ export interface TypedHostRuntime<Registry extends VersionedRpcRegistry> {
  */
 export function createHostRuntime<Registry extends VersionedRpcRegistry>(
   schedulingPolicy: RpcSchedulingPolicy<Registry>,
+  runtimeContext: Context<HostRuntimeBinding<Registry> | null>,
 ): TypedHostRuntime<Registry> {
-  const context: Context<HostRuntimeBinding<Registry> | null> =
-    createContext<HostRuntimeBinding<Registry> | null>(null);
+  const context = runtimeContext;
   const latestBindingSnapshot: {
     value: HostRuntimeBinding<Registry> | null;
   } = { value: null };
