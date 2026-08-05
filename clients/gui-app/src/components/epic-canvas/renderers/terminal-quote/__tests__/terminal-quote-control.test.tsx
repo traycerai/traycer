@@ -19,7 +19,7 @@ function target(fields: {
   isOpen: boolean;
   isLastFocused: boolean;
 }): TerminalQuoteChatTarget {
-  return fields;
+  return { ...fields, isOnOtherHost: false };
 }
 
 // The menu is controlled by the overlay in production; own that state here
@@ -138,6 +138,73 @@ describe("TerminalQuoteControl", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "New chat" }));
 
     expect(onSendToNewChat).toHaveBeenCalledOnce();
+  });
+
+  it("offers a chat on another host as an unpickable row with the reason", async () => {
+    const { onSendToChat, onSendToNewChat } = renderControl([
+      {
+        ...target({
+          chatId: "chat-here",
+          title: "Kickoff",
+          isOpen: false,
+          isLastFocused: false,
+        }),
+      },
+      {
+        ...target({
+          chatId: "chat-elsewhere",
+          title: "Refactor",
+          isOpen: false,
+          isLastFocused: true,
+        }),
+        isOnOtherHost: true,
+      },
+    ]);
+
+    await openPanel();
+    const elsewhere = screen.getByRole("menuitem", { name: /Refactor/ });
+
+    // The reason replaces "Last used" - why it cannot be picked is what the
+    // row owes the user.
+    expect(elsewhere.textContent).toBe("RefactorOn a different host");
+    expect(elsewhere.getAttribute("data-disabled")).not.toBeNull();
+
+    await userEvent.click(elsewhere);
+    expect(onSendToChat).not.toHaveBeenCalled();
+
+    // The rest of the panel is untouched by one dead row.
+    await userEvent.click(screen.getByRole("menuitem", { name: "Kickoff" }));
+    expect(onSendToChat).toHaveBeenCalledWith("chat-here");
+    expect(onSendToNewChat).not.toHaveBeenCalled();
+  });
+
+  it("skips a different-host row when arrowing through the panel", async () => {
+    renderControl([
+      {
+        ...target({
+          chatId: "chat-elsewhere",
+          title: "Refactor",
+          isOpen: false,
+          isLastFocused: false,
+        }),
+        isOnOtherHost: true,
+      },
+      target({
+        chatId: "chat-here",
+        title: "Kickoff",
+        isOpen: false,
+        isLastFocused: false,
+      }),
+    ]);
+
+    await openPanel();
+    await userEvent.keyboard("{ArrowDown}");
+
+    // Radix's own `disabled` owns the skip, so the keyboard cannot reach what
+    // the pointer cannot either.
+    expect(screen.getByRole("menuitem", { name: "Kickoff" })).toBe(
+      document.activeElement,
+    );
   });
 
   it("pins New chat below the scrolling roster", async () => {

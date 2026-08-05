@@ -8,6 +8,13 @@ export interface TerminalQuoteChatTarget {
   readonly isOpen: boolean;
   /** The chat the user last focused a composer in. Marked, never reordered. */
   readonly isLastFocused: boolean;
+  /**
+   * Bound to a host other than the terminal's, so its agent could not resolve
+   * the terminal a chip would name. Marked, never reordered or dropped - the
+   * chat is real and the user knows it is there, so the roster owes them the
+   * row and the reason rather than a silent omission.
+   */
+  readonly isOnOtherHost: boolean;
 }
 
 export interface TerminalQuoteChatTargetsInput {
@@ -17,6 +24,8 @@ export interface TerminalQuoteChatTargetsInput {
   /** Content ids of the tiles open in the terminal's own view tab. */
   readonly openChatIds: ReadonlySet<string>;
   readonly lastFocusedChatId: string | null;
+  /** The host the terminal tile is bound to - the one its session lives on. */
+  readonly terminalHostId: string;
 }
 
 /**
@@ -34,6 +43,13 @@ export interface TerminalQuoteChatTargetsInput {
  *
  * Archived chats are excluded: they are hidden from the sidebar, so offering
  * one here would send a message somewhere the user cannot see it.
+ *
+ * A chat on ANOTHER host is kept, marked rather than removed. The terminal is
+ * local to the tile's host, so its agent has no way to resolve a chip naming
+ * it - but dropping the row would leave the user hunting for a chat they can
+ * see in the sidebar. A legacy chat with no recorded host is not on another
+ * one: opening it adopts the tab's host (`chat.hostId ?? tabHostId`), so it is
+ * offered exactly like a same-host chat.
  */
 export function resolveTerminalQuoteChatTargets(
   input: TerminalQuoteChatTargetsInput,
@@ -49,6 +65,8 @@ export function resolveTerminalQuoteChatTargets(
         title: displayTitle(chat.title, "agent"),
         isOpen: input.openChatIds.has(chat.id),
         isLastFocused: chat.id === input.lastFocusedChatId,
+        isOnOtherHost:
+          chat.hostId !== null && chat.hostId !== input.terminalHostId,
       },
     ];
   });

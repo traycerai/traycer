@@ -157,13 +157,36 @@ describe("buildTerminalListCommand", () => {
 
   it("falls back to the working directory's name when the tab was never renamed", async () => {
     rpcMock.mockResolvedValue({
-      sessions: [session({ title: null, cwd: "/work/api-server" })],
+      sessions: [
+        session({
+          title: null,
+          cwd: "/work/api-server",
+          currentCwd: "/work/api-server",
+        }),
+      ],
       homeCwd: "/home/dev",
     });
 
     const result = await buildTerminalListCommand({ epicId: null })(ctx);
 
     expect(result.human).toContain("api-server");
+  });
+
+  it("names an untitled terminal after the live directory, matching its own DIRECTORY column", async () => {
+    rpcMock.mockResolvedValue({
+      sessions: [
+        session({
+          title: null,
+          cwd: "/work/repo",
+          currentCwd: "/work/repo/packages/api",
+        }),
+      ],
+      homeCwd: "/home/dev",
+    });
+
+    const result = await buildTerminalListCommand({ epicId: null })(ctx);
+
+    expect(result.data).toMatchObject({ terminals: [{ title: "api" }] });
   });
 });
 

@@ -71,13 +71,16 @@ function summarizeTerminal(
 /**
  * A `null` title means the tab was never renamed, so the GUI derives a label
  * from the working directory; do the same here rather than printing the id
- * twice.
+ * twice. The shell's live directory wins over the one it launched in, so the
+ * TITLE names the same directory the row's DIRECTORY column shows.
  */
 function terminalTitle(
   session: CanonicalTerminalSessionInfoWithCurrentCwd,
 ): string {
   if (session.title !== null && session.title.length > 0) return session.title;
-  const directoryName = session.cwd.split(/[\\/]/u).filter(Boolean).pop();
+  const directory =
+    session.currentCwd.length > 0 ? session.currentCwd : session.cwd;
+  const directoryName = directory.split(/[\\/]/u).filter(Boolean).pop();
   return directoryName === undefined ? session.shellCommand : directoryName;
 }
 

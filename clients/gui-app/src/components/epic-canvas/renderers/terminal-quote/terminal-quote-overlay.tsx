@@ -23,6 +23,11 @@ interface TerminalQuoteOverlayProps {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly terminalId: string;
+  /**
+   * The host this tile is bound to. The terminal is local to it, so a chat
+   * bound elsewhere cannot be sent the selection.
+   */
+  readonly terminalHostId: string;
   readonly terminalTitle: string;
   /** The shell's launch directory; `null` until the host's row is available. */
   readonly terminalCwd: string | null;
@@ -81,6 +86,7 @@ function TerminalQuoteOverlayLive(props: TerminalQuoteOverlayProps) {
       actions={actions}
       epicId={props.epicId}
       viewTabId={props.viewTabId}
+      terminalHostId={props.terminalHostId}
       selectedText={selection.text}
       anchor={selection.anchor}
       menuOpen={menuOpen}
@@ -94,6 +100,7 @@ function TerminalQuoteAction(props: {
   readonly actions: TerminalQuoteActions;
   readonly epicId: string;
   readonly viewTabId: string;
+  readonly terminalHostId: string;
   readonly selectedText: string;
   readonly anchor: TerminalSelectionAnchor;
   readonly menuOpen: boolean;
@@ -109,7 +116,8 @@ function TerminalQuoteAction(props: {
   const lastFocusedChatId = useLastFocusedChatStore(
     (state) => state.chatIdByEpicId[props.epicId] ?? null,
   );
-  const { actions, onDone, onMenuOpenChange, selectedText } = props;
+  const { actions, onDone, onMenuOpenChange, selectedText, terminalHostId } =
+    props;
   const sendToChat = useCallback(
     (chatId: string) => {
       actions.quoteToChat(chatId, selectedText);
@@ -130,8 +138,9 @@ function TerminalQuoteAction(props: {
         chats,
         openChatIds,
         lastFocusedChatId,
+        terminalHostId,
       }),
-    [chats, lastFocusedChatId, openChatIds, orderedChatIds],
+    [chats, lastFocusedChatId, openChatIds, orderedChatIds, terminalHostId],
   );
 
   return (

@@ -49,7 +49,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import { TerminalQuoteOverlay } from "./terminal-quote/terminal-quote-overlay";
-import { useTerminalSessionRow } from "@/hooks/terminal/use-terminal-display-title";
+import { useTerminalFindSessionRow } from "@/hooks/terminal/use-terminal-display-title";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 
 export interface TerminalTileProps {
@@ -426,8 +426,9 @@ function TerminalLive(props: TerminalLiveProps) {
   // session store does not carry.
   const [term, setTerm] = useState<Terminal | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
+  const hostId = useTabHostId();
   const hostClient = useTabHostClient();
-  const sessionRow = useTerminalSessionRow({
+  const sessionRow = useTerminalFindSessionRow({
     client: hostClient,
     epicId: props.epicId,
     sessionId: handle.sessionId,
@@ -588,6 +589,7 @@ function TerminalLive(props: TerminalLiveProps) {
           epicId={props.epicId}
           viewTabId={props.viewTabId}
           terminalId={handle.sessionId}
+          terminalHostId={hostId}
           terminalTitle={liveTitle ?? props.fallbackTitle}
           terminalCwd={sessionRow?.cwd ?? null}
           term={term}

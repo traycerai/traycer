@@ -7,6 +7,10 @@ import type {
 
 import { resolveTerminalQuoteChatTargets } from "../terminal-quote-targets";
 
+/** The host the terminal tile under test is bound to. */
+const TERMINAL_HOST = "host-terminal";
+const OTHER_HOST = "host-elsewhere";
+
 function chat(fields: {
   id: string;
   title: string;
@@ -19,7 +23,7 @@ function chat(fields: {
     createdAt: 0,
     updatedAt: 0,
     userId: null,
-    hostId: null,
+    hostId: TERMINAL_HOST,
     isTitleEditedByUser: false,
     archivedAt: fields.archivedAt,
     settings: null,
@@ -50,6 +54,7 @@ describe("resolveTerminalQuoteChatTargets", () => {
       chats: CHATS,
       openChatIds: new Set(["chat-c", "chat-a"]),
       lastFocusedChatId: null,
+      terminalHostId: TERMINAL_HOST,
     });
 
     // "chat-c" is open but sits below "chat-a" in the sidebar, and stays below
@@ -74,6 +79,7 @@ describe("resolveTerminalQuoteChatTargets", () => {
       chats: CHATS,
       openChatIds: new Set(),
       lastFocusedChatId: null,
+      terminalHostId: TERMINAL_HOST,
     });
 
     expect(targets.map((target) => target.chatId)).toEqual(SIDEBAR_ORDER);
@@ -85,6 +91,7 @@ describe("resolveTerminalQuoteChatTargets", () => {
       chats: CHATS,
       openChatIds: new Set(),
       lastFocusedChatId: "chat-c",
+      terminalHostId: TERMINAL_HOST,
     });
 
     // Recency is a hint, not the ordering: "chat-c" is marked where the
@@ -103,6 +110,7 @@ describe("resolveTerminalQuoteChatTargets", () => {
       chats: CHATS,
       openChatIds: new Set(),
       lastFocusedChatId: "chat-deleted",
+      terminalHostId: TERMINAL_HOST,
     });
 
     expect(targets.some((target) => target.isLastFocused)).toBe(false);
@@ -121,6 +129,7 @@ describe("resolveTerminalQuoteChatTargets", () => {
       // can follow the message to.
       openChatIds: new Set(["chat-gone"]),
       lastFocusedChatId: "chat-gone",
+      terminalHostId: TERMINAL_HOST,
     });
 
     expect(targets.map((target) => target.chatId)).toEqual(["chat-live"]);
@@ -132,6 +141,7 @@ describe("resolveTerminalQuoteChatTargets", () => {
       chats: CHATS,
       openChatIds: new Set(),
       lastFocusedChatId: null,
+      terminalHostId: TERMINAL_HOST,
     });
 
     expect(targets.map((target) => target.chatId)).toEqual([
@@ -147,8 +157,79 @@ describe("resolveTerminalQuoteChatTargets", () => {
         chats: chatsSlice([]),
         openChatIds: new Set(),
         lastFocusedChatId: null,
+        terminalHostId: TERMINAL_HOST,
       }),
     ).toEqual([]);
+  });
+
+  it("marks a chat on another host without moving or dropping it", () => {
+    const mixed = chatsSlice([
+      chat({ id: "chat-a", title: "Kickoff", archivedAt: null }),
+      {
+        ...chat({ id: "chat-b", title: "Refactor", archivedAt: null }),
+        hostId: OTHER_HOST,
+      },
+      {
+        ...chat({ id: "chat-c", title: "Docs", archivedAt: null }),
+        hostId: OTHER_HOST,
+      },
+      chat({ id: "chat-d", title: "Spike", archivedAt: null }),
+    ]);
+
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: SIDEBAR_ORDER,
+      chats: mixed,
+      // The open band promotes an unreachable chat exactly as it would any
+      // other: the roster's ordering is the sidebar's, marking is separate.
+      openChatIds: new Set(["chat-c"]),
+      lastFocusedChatId: null,
+      terminalHostId: TERMINAL_HOST,
+    });
+
+    expect(targets.map((target) => target.chatId)).toEqual([
+      "chat-c",
+      "chat-a",
+      "chat-b",
+      "chat-d",
+    ]);
+    expect(targets.map((target) => target.isOnOtherHost)).toEqual([
+      true,
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it("marks nothing in a single-host Task", () => {
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: SIDEBAR_ORDER,
+      chats: CHATS,
+      openChatIds: new Set(["chat-a"]),
+      lastFocusedChatId: "chat-b",
+      terminalHostId: TERMINAL_HOST,
+    });
+
+    expect(targets.every((target) => !target.isOnOtherHost)).toBe(true);
+  });
+
+  it("offers a legacy chat with no recorded host, which adopts this tab's", () => {
+    const legacy = chatsSlice([
+      {
+        ...chat({ id: "chat-legacy", title: "Kickoff", archivedAt: null }),
+        hostId: null,
+      },
+    ]);
+
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: ["chat-legacy"],
+      chats: legacy,
+      openChatIds: new Set(),
+      lastFocusedChatId: null,
+      terminalHostId: TERMINAL_HOST,
+    });
+
+    // Opening it binds it to the tab's host, so it is not somewhere else.
+    expect(targets.map((target) => target.isOnOtherHost)).toEqual([false]);
   });
 
   it("names an untitled chat the way every other chat surface does", () => {
@@ -162,6 +243,7 @@ describe("resolveTerminalQuoteChatTargets", () => {
         chats: untitled,
         openChatIds: new Set(),
         lastFocusedChatId: null,
+        terminalHostId: TERMINAL_HOST,
       })[0]?.title,
     ).toBe("Untitled agent");
   });

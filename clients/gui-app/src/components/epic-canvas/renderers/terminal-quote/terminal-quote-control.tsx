@@ -131,18 +131,42 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
   );
 }
 
+/**
+ * One chat in the roster, with the one thing that can disqualify it.
+ *
+ * A chat on another host is shown disabled rather than hidden, because the
+ * user can see it in the sidebar and would otherwise be left wondering where
+ * it went. Radix's own `disabled` does the dimming, the pointer block AND the
+ * keyboard skip, so the row is unreachable by every route at once. The reason
+ * replaces "Last used" on such a row: why it cannot be picked is the only
+ * thing worth the space.
+ */
 function ChatTargetItem(props: {
   readonly target: TerminalQuoteChatTarget;
   readonly onSelect: (chatId: string) => void;
 }) {
+  const meta = chatTargetMeta(props.target);
   return (
-    <DropdownMenuItem onSelect={() => props.onSelect(props.target.chatId)}>
+    <DropdownMenuItem
+      disabled={props.target.isOnOtherHost}
+      onSelect={() => props.onSelect(props.target.chatId)}
+    >
       <span className="min-w-0 flex-1 truncate">{props.target.title}</span>
-      {props.target.isLastFocused ? (
+      {meta === null ? null : (
         <span className="shrink-0 text-ui-xs text-muted-foreground">
-          Last used
+          {meta}
         </span>
-      ) : null}
+      )}
     </DropdownMenuItem>
   );
+}
+
+/**
+ * The one line of trailing meta a row gets. Being unreachable outranks being
+ * recent: on a row the user cannot pick, why is the only useful thing to say.
+ */
+function chatTargetMeta(target: TerminalQuoteChatTarget): string | null {
+  if (target.isOnOtherHost) return "On a different host";
+  if (target.isLastFocused) return "Last used";
+  return null;
 }

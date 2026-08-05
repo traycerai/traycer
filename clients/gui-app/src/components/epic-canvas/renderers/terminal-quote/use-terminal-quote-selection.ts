@@ -132,7 +132,10 @@ export function useTerminalQuoteSelection(
     // The selection keeps its absolute buffer rows while output scrolls under
     // it, so the anchor - not the selection - is what has to be recomputed.
     const scrolled = term.onScroll(() => {
-      setSelection((current) => (current === null ? null : readSelection()));
+      // Read before the updater, as `publish` does: React may invoke an
+      // updater more than once, and `readSelection` measures live DOM.
+      const next = readSelection();
+      setSelection((current) => (current === null ? null : next));
     });
 
     // Only a drag that STARTED in this pane publishes: `readSelection` already

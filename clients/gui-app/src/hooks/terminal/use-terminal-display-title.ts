@@ -36,7 +36,7 @@ export interface TerminalSessionIdentity {
  * unreachable, list not yet hydrated). Callers rendering a non-terminal node
  * pass all-null identity; the hook is then inert (no query).
  */
-export function useTerminalSessionRow(
+export function useTerminalFindSessionRow(
   args: TerminalSessionIdentity,
 ): CanonicalTerminalSessionInfoWithCurrentCwd | null {
   const enabled =
@@ -63,7 +63,7 @@ export function useTerminalSessionRow(
 export function useTerminalDisplayTitle(
   args: TerminalSessionIdentity,
 ): string | null {
-  const session = useTerminalSessionRow(args);
+  const session = useTerminalFindSessionRow(args);
   if (session === null) return null;
   return terminalSessionTitle({
     title: session.title,
