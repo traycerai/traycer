@@ -11,6 +11,8 @@ import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import { captureDictationFailure } from "@/lib/report-issue-error-capture";
 
 interface UseComposerDictationArgs {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
@@ -45,6 +47,7 @@ export function useComposerDictation(
     },
   });
   const dictationError = dictation.errorMessage;
+  const dictationFailureClass = dictation.failureClass;
   const dictationPermissionDenied = dictation.permissionDenied;
   const runnerHost = useRunnerHost();
   useEffect(() => {
@@ -63,16 +66,32 @@ export function useComposerDictation(
             },
           }
         : undefined,
-      {
+      // `code` carries the failure class into the PUBLIC prefill: it is a fixed
+      // app-defined identifier, so a filed issue names the failing path itself
+      // (#945 and #1003 both arrived with nothing but the toast title). The
+      // real error text stays in the private capture.
+      createReportIssueDraftContext({
         title: "Dictation failed",
         message: dictationPermissionDenied
           ? "Microphone permission was unavailable."
           : null,
-        code: null,
+        code: dictationFailureClass,
         source: "Dictation",
-      },
+        capture:
+          dictationFailureClass === null
+            ? null
+            : captureDictationFailure({
+                failureClass: dictationFailureClass,
+                message: dictationError,
+              }),
+      }),
     );
-  }, [dictationError, dictationPermissionDenied, runnerHost]);
+  }, [
+    dictationError,
+    dictationFailureClass,
+    dictationPermissionDenied,
+    runnerHost,
+  ]);
 
   // Only offer dictation once the on-device model is installed - this also
   // self-heals a missing model and keeps the mic (and the OS permission prompt)

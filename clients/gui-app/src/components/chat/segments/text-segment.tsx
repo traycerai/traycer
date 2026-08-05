@@ -84,8 +84,13 @@ function TextSegmentPart(props: TextSegmentPartProps) {
       .map((option) => option.id),
   );
 
+  // Own the gap above next-steps. Body markdown and next-steps prose are
+  // separate `.md-prose` trees, and the Tailmark first/last margin zeroing in
+  // `index.css` collapses the trailing margin of the body (often a `---` rule)
+  // plus the leading margin of this prose - without this wrapper they stick.
+  // `first:mt-0` keeps a message that is only next-steps flush at the top.
   return (
-    <>
+    <div className="mt-4 first:mt-0">
       {part.prose.length === 0 ? null : (
         <AgentReferenceMarkdown
           isStreaming={props.isStreaming}
@@ -103,6 +108,6 @@ function TextSegmentPart(props: TextSegmentPartProps) {
         actionHandler={props.nextStepActions}
         onLockOption={props.onLockOption}
       />
-    </>
+    </div>
   );
 }

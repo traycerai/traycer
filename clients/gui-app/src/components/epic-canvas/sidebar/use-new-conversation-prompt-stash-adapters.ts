@@ -68,7 +68,7 @@ export function useNewConversationPromptStashSource(args: {
 
 /**
  * New-conversation modal prompt-stash destination: restore requires the
- * exact ready editor generation captured at restore start, and appends
+ * exact ready editor incarnation captured at restore start, and appends
  * against the modal draft's latest content at insertion time. Materialization
  * is owned by the restore hook's default inline-base64 path. Selection is
  * reset so the next edit starts after the inserted prompt.
@@ -84,20 +84,26 @@ export function useNewConversationPromptStashDestination(args: {
       captureIdentity: (): PromptStashDestinationIdentity | null => {
         const handle = editorRef.current;
         if (handle === null || !handle.isReady()) return null;
+        const editorIncarnation = handle.getEditorIncarnation();
+        if (editorIncarnation === null) return null;
         return {
           surface: "new-conversation",
           identity: epicId,
-          editorGeneration: handle,
+          editorIncarnation,
         };
       },
       importAndInsert: (importArgs) => {
         const handle = editorRef.current;
+        const editorIncarnation =
+          handle !== null && handle.isReady()
+            ? handle.getEditorIncarnation()
+            : null;
         if (
           importArgs.identity.surface !== "new-conversation" ||
           importArgs.identity.identity !== epicId ||
           handle === null ||
-          !handle.isReady() ||
-          importArgs.identity.editorGeneration !== handle
+          editorIncarnation === null ||
+          importArgs.identity.editorIncarnation !== editorIncarnation
         ) {
           return Promise.resolve({ status: "stale" });
         }

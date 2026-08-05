@@ -37,7 +37,11 @@ export interface QuoteSelectionState {
 
 const QUOTABLE_SELECTOR = "[data-quotable]";
 const CODE_BLOCK_SELECTOR = "[data-quote-code-block]";
-const EXCLUDED_SELECTOR = "[data-md-unstable],[data-quote-exclude]";
+// Tailmark marks the open streaming tail with `data-md-streaming`. Keep the
+// legacy `data-md-unstable` token so older fixtures / intermediate DOM still
+// exclude correctly during the migration window.
+const EXCLUDED_SELECTOR =
+  "[data-md-streaming],[data-md-unstable],[data-quote-exclude]";
 
 /**
  * Tracks text selections inside a chat transcript and, at `mouseup`, resolves +
@@ -194,7 +198,8 @@ function snapshotsEquivalent(
  *   element-node containers resolve to a child at/before the offset, then climb;
  *   a triple-click whose end lands at offset 0 outside the root is clamped back
  *   to the root's end instead of being rejected);
- * - the range does not intersect `[data-md-unstable]` or `[data-quote-exclude]`.
+ * - the range does not intersect `[data-md-streaming]` / `[data-md-unstable]`
+ *   or `[data-quote-exclude]`.
  *
  * Fence detection: when the whole (post-clamp) range sits inside a single
  * `[data-quote-code-block]`, its `data-language` is captured so the quote is

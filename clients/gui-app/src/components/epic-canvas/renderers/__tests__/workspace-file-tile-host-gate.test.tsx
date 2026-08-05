@@ -50,13 +50,17 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => state.readFile,
 }));
 
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({ highlighter: null, theme: "dark" }),
-  highlightCode: () => null,
-}));
+vi.mock("@tailmark/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tailmark/react")>();
+  return {
+    ...actual,
+    useThrottledHighlight: () => null,
+  };
+});
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
 import { TabHostProvider } from "../../tab-host-provider";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const NODE = {
   id: "workspace-file:host-A:/work/repo:src/index.ts",
@@ -174,6 +178,85 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
       message: "The workspace file preview could not be loaded.",
       code: null,
       source: "Workspace file",
+    });
+  });
+
+  it("reports a transport failure against the host, not as a file-read failure", () => {
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "fetch failed",
+        requestId: "req-1",
+        method: "workspace.readFile",
+        fatalDetails: null,
+      }),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    // The host never answered, so this must not be filed as a file-read
+    // failure: that is what sent one field report's triage looking for an fs
+    // error that never happened.
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Workspace file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      code: "UNAUTHORIZED",
+      source: "Host",
+    });
+  });
+
+  it("keeps host-supplied error text out of a transport report", () => {
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new HostRpcError({
+        code: "FORBIDDEN",
+        message: "denied reading /Users/me/private/api-key.txt",
+        requestId: "req-2",
+        method: "workspace.readFile",
+        fatalDetails: null,
+      }),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(JSON.stringify(context)).not.toContain("api-key.txt");
+    expect(JSON.stringify(context)).not.toContain(
+      "denied reading /Users/me/private/api-key.txt",
+    );
+    expect(context?.code).toBe("FORBIDDEN");
+  });
+
+  it("survives a non-HostRpcError in the query error channel", () => {
+    // TanStack's error generic is an unchecked cast, so a bare `Error` can
+    // occupy this channel - reading `.code` off it must not crash the view.
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("boom"),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Workspace file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      code: null,
+      source: "Host",
     });
   });
 

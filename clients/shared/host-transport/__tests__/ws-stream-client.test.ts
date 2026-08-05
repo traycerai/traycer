@@ -1162,6 +1162,62 @@ describe("WsStreamClient", () => {
     vi.useRealTimers();
   });
 
+  it("re-reads dynamic subscribe params after a physical reconnect", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      hostCredentialMint: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 60_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    let sinceCursor: {
+      readonly ingestVersion: number;
+      readonly eventId: string;
+    } | null = null;
+    const session = client.subscribeWithParamsProvider(
+      "host.communicationGraph.subscribe",
+      () => ({ epicId: "epic-42", sinceCursor }),
+    );
+
+    completeHandshake(sockets[0].socket);
+    expect(parseText(sockets[0].socket.textSent[1])).toMatchObject({
+      kind: "subscribe",
+      method: "host.communicationGraph.subscribe",
+      params: { epicId: "epic-42", sinceCursor: null },
+    });
+
+    // The consumer applies through C100 while this physical session remains
+    // live. A socket loss must ask it for the current cursor rather than reuse
+    // the null captured at the first subscribe.
+    sinceCursor = { ingestVersion: 100, eventId: "event-100" };
+    sockets[0].socket.fireClose(1006, "physical connection lost", false);
+    vi.advanceTimersByTime(10);
+    expect(sockets).toHaveLength(2);
+
+    completeHandshake(sockets[1].socket);
+    expect(parseText(sockets[1].socket.textSent[1])).toMatchObject({
+      kind: "subscribe",
+      method: "host.communicationGraph.subscribe",
+      params: {
+        epicId: "epic-42",
+        sinceCursor: { ingestVersion: 100, eventId: "event-100" },
+      },
+    });
+
+    session.close();
+    vi.useRealTimers();
+  });
+
   it("emits availability recovery when a session re-opens after a drop, not on the initial clean open", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 

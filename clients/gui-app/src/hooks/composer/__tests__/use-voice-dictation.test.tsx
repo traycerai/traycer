@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { appLogger } from "@/lib/logger";
 import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
 
 // ---------------------------------------------------------------------------
@@ -17,9 +18,15 @@ const speech = vi.hoisted(() => {
       readonly isFinal: boolean;
     }) => void;
     readonly onFlushed: () => void;
-    readonly onError: (frame: { readonly message: string }) => void;
+    readonly onError: (frame: {
+      readonly message: string;
+      readonly code: string;
+    }) => void;
     readonly onConnectionStatus: (
       status: "connecting" | "open" | "closed",
+      // Mirrors the real `StreamCloseReason | null`: a close can arrive with
+      // no reason attached, which the hook must survive.
+      reason: { readonly kind: string } | null,
     ) => void;
   }
   interface FakeSpeechOptions {
@@ -65,8 +72,12 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
+const streamRuntimeState = vi.hoisted(
+  (): { wsStreamClient: object | null } => ({ wsStreamClient: {} }),
+);
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => ({}),
+  useWsStreamClient: () => streamRuntimeState.wsStreamClient,
 }));
 
 // ---------------------------------------------------------------------------
@@ -171,6 +182,7 @@ function lastAudioContext(): FakeAudioContext {
 beforeEach(() => {
   speech.FakeSpeechStreamClient.instances = [];
   FakeAudioContext.instances = [];
+  streamRuntimeState.wsStreamClient = {};
   runnerHostState.requestMicrophoneAccess = () => Promise.resolve("granted");
   getUserMediaImpl = () => Promise.resolve(fakeMediaStream());
   originalAudioContext = globalWithAudio.AudioContext;
@@ -365,5 +377,347 @@ describe("useVoiceDictation lifecycle", () => {
       });
     });
     expect(secondClient.sent).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-class observability. Two field reports (oss #945, #1003) were
+// root-caused only by elimination because `fail()` wrote no log line at all.
+// These cover the classes a support bundle actually turns on - the transport
+// pair, the host error frame, the mic split, and the two paths that used to
+// emit their own warn - plus the two rules that make a class worth trusting:
+// a line describes THIS attempt (never the previous one), and an attempt
+// produces exactly one class (a late-resolving capture task must not overwrite
+// the cause that killed the session). They do not exhaust all ten classes;
+// `fail()` writing the line centrally is what makes the rest structural rather
+// than test-enforced.
+// ---------------------------------------------------------------------------
+
+describe("useVoiceDictation failure logging", () => {
+  // Returns an accessor rather than the spy itself: naming a vitest spy's type
+  // needs `ReturnType<typeof ...>`, which this repo bans (and which does not
+  // type-check for an overloaded `spyOn`). Inference keeps it honest.
+  function spyOnFailureLog() {
+    const spy = vi
+      .spyOn(appLogger, "error")
+      .mockImplementation(() => undefined);
+    return {
+      failures: () =>
+        spy.mock.calls.filter((call) => call[0] === "[voice-dictation] failed"),
+      restore: () => {
+        spy.mockRestore();
+      },
+    };
+  }
+
+  it("names not_connected when dictation starts with no host stream client", () => {
+    streamRuntimeState.wsStreamClient = null;
+    const log = spyOnFailureLog();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+
+    const logs = log.failures();
+    expect(logs).toHaveLength(1);
+    expect(logs[0][1]).toMatchObject({
+      failureClass: "not_connected",
+      hasStreamClient: false,
+      connectionStatus: "none",
+    });
+    expect(result.current.failureClass).toBe("not_connected");
+  });
+
+  it("names connection_lost, with the close reason, when the stream drops mid-recording", async () => {
+    const log = spyOnFailureLog();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+    expect(result.current.state).toBe("recording");
+
+    act(() => {
+      lastSpeechClient().callbacks.onConnectionStatus("closed", {
+        kind: "fatalError",
+      });
+    });
+
+    const logs = log.failures();
+    expect(logs).toHaveLength(1);
+    expect(logs[0][1]).toMatchObject({
+      failureClass: "connection_lost",
+      state: "recording",
+      connectionStatus: "closed",
+      closeReason: "fatalError",
+      sessionReady: true,
+    });
+    expect(result.current.failureClass).toBe("connection_lost");
+  });
+
+  it("does not throw when the close carries no reason", async () => {
+    const log = spyOnFailureLog();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+
+    act(() => {
+      // A reasonless close - the diagnostic must not crash the failure path
+      // it is meant to describe.
+      lastSpeechClient().callbacks.onConnectionStatus("closed", null);
+    });
+
+    expect(log.failures()[0][1]).toMatchObject({
+      failureClass: "connection_lost",
+      closeReason: "none",
+    });
+  });
+
+  it("names host_error_frame and carries the host's own error code", async () => {
+    const log = spyOnFailureLog();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+
+    act(() => {
+      lastSpeechClient().callbacks.onError({
+        message: "the on-device model is not installed",
+        code: "MODEL_NOT_READY",
+      });
+    });
+
+    const logs = log.failures();
+    expect(logs).toHaveLength(1);
+    expect(logs[0][1]).toMatchObject({
+      failureClass: "host_error_frame",
+      hostErrorCode: "MODEL_NOT_READY",
+    });
+    expect(result.current.failureClass).toBe("host_error_frame");
+  });
+
+  it("splits a denied getUserMedia from any other mic-open failure", async () => {
+    const denial = new Error("blocked");
+    denial.name = "NotAllowedError";
+    getUserMediaImpl = () => Promise.reject(denial);
+    const deniedLog = spyOnFailureLog();
+    const denied = renderDictation();
+
+    act(() => {
+      denied.result.current.start();
+    });
+    await flushAsync();
+
+    expect(deniedLog.failures()[0][1]).toMatchObject({
+      failureClass: "permission_denied_browser",
+    });
+    deniedLog.restore();
+
+    getUserMediaImpl = () => Promise.reject(new Error("device in use"));
+    const otherLog = spyOnFailureLog();
+    const other = renderDictation();
+
+    act(() => {
+      other.result.current.start();
+    });
+    await flushAsync();
+
+    expect(otherLog.failures()[0][1]).toMatchObject({
+      failureClass: "mic_open_failed",
+    });
+  });
+
+  it("logs exactly one line when getUserMedia fails, not the warn it used to emit", async () => {
+    const warnSpy = vi
+      .spyOn(appLogger, "warn")
+      .mockImplementation(() => undefined);
+    const log = spyOnFailureLog();
+    getUserMediaImpl = () => Promise.reject(new Error("device in use"));
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+
+    expect(log.failures()).toHaveLength(1);
+    expect(
+      warnSpy.mock.calls.filter((call) =>
+        call[0].startsWith("[voice-dictation] microphone stream"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("logs exactly one line when the audio context cannot be constructed", async () => {
+    // The other path that used to emit its own warn. Both constructor forms
+    // must throw: the hook retries without the sample-rate hint before giving
+    // up, and only the second failure reaches fail().
+    const warnSpy = vi
+      .spyOn(appLogger, "warn")
+      .mockImplementation(() => undefined);
+    const log = spyOnFailureLog();
+    globalWithAudio.AudioContext = function ThrowingAudioContext(): never {
+      throw new Error("no audio device");
+    };
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+
+    const failures = log.failures();
+    expect(failures).toHaveLength(1);
+    expect(failures[0][1]).toMatchObject({
+      failureClass: "audio_context_create_failed",
+    });
+    expect(
+      warnSpy.mock.calls.filter((call) =>
+        call[0].startsWith("[voice-dictation] audio context creation"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("describes THIS attempt, not the previous one, when a retry finds no host", async () => {
+    // A stale `connectionStatus`/`msSinceRecordingStart` would send triage
+    // after the wrong session - worse than no diagnostic at all.
+    const { result, rerender } = renderDictation();
+
+    // Attempt 1: record for real, then let the session close normally.
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+    expect(result.current.state).toBe("recording");
+    // Record a live status BEFORE tearing down: after cancel() the hook has
+    // dropped its client reference and ignores further status callbacks, so a
+    // status fired post-cancel would leave the ref null and this test would
+    // assert "none" vacuously - passing even without the reset.
+    act(() => {
+      lastSpeechClient().callbacks.onConnectionStatus("open", null);
+    });
+    act(() => {
+      result.current.cancel();
+    });
+
+    // Attempt 2: the host link is gone.
+    streamRuntimeState.wsStreamClient = null;
+    rerender();
+    const log = spyOnFailureLog();
+    act(() => {
+      result.current.start();
+    });
+
+    const failures = log.failures();
+    expect(failures).toHaveLength(1);
+    expect(failures[0][1]).toMatchObject({
+      failureClass: "not_connected",
+      connectionStatus: "none",
+      msSinceRecordingStart: null,
+    });
+  });
+
+  it("clears the failure class when a new attempt starts", async () => {
+    streamRuntimeState.wsStreamClient = null;
+    const { result, rerender } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    expect(result.current.failureClass).toBe("not_connected");
+
+    // The host link comes back. `rerender` is what feeds the hook the new
+    // client - mutating the module state alone leaves the previous render's
+    // closure holding the null one, which is exactly the stale-session bug
+    // the generation pin exists to prevent.
+    streamRuntimeState.wsStreamClient = {};
+    rerender();
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+
+    expect(result.current.failureClass).toBeNull();
+    expect(result.current.state).toBe("requesting");
+  });
+
+  it("does not carry a denied attempt's microphone remedy into a host-link failure", async () => {
+    // `permissionDenied` drives the composer's "Open Settings" action. Since
+    // the failure class now rides the PUBLIC Report Issue prefill, a stale flag
+    // produces one self-contradicting report: code `not_connected`, next to a
+    // button that opens microphone settings.
+    runnerHostState.requestMicrophoneAccess = () => Promise.resolve("denied");
+    const { result, rerender } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    expect(result.current.failureClass).toBe("permission_denied_os");
+    expect(result.current.permissionDenied).toBe(true);
+
+    // The host link is gone by the time the user retries.
+    streamRuntimeState.wsStreamClient = null;
+    rerender();
+    act(() => {
+      result.current.start();
+    });
+
+    expect(result.current.failureClass).toBe("not_connected");
+    expect(result.current.permissionDenied).toBe(false);
+  });
+
+  it("does not let a late microphone acquisition overwrite the failure that killed the session", async () => {
+    // The host can fail a session while the permission prompt is still up.
+    // `startAudioGraph` captured the AudioContext before that await, so the
+    // resumed task would find it closed and report `audio_context_not_running`
+    // over the real cause - burying the class this whole change exists to
+    // deliver.
+    let resolveStream: (stream: FakeMediaStream) => void = () => undefined;
+    getUserMediaImpl = () =>
+      new Promise<FakeMediaStream>((resolve) => {
+        resolveStream = resolve;
+      });
+    const log = spyOnFailureLog();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    // The prompt is genuinely still pending - otherwise the race under test
+    // never happens and this would pass vacuously.
+    expect(result.current.state).toBe("requesting");
+
+    act(() => {
+      lastSpeechClient().callbacks.onError({
+        message: "the on-device model is not installed",
+        code: "MODEL_NOT_READY",
+      });
+    });
+    expect(result.current.failureClass).toBe("host_error_frame");
+
+    // The prompt the user was still looking at now resolves.
+    resolveStream(fakeMediaStream());
+    await flushAsync();
+
+    expect(log.failures()).toHaveLength(1);
+    expect(result.current.failureClass).toBe("host_error_frame");
   });
 });

@@ -59,6 +59,23 @@
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
 
+/* A label-only tooltip must never win hit-testing from what it covers.
+   `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
+   renders the content inside a positioning wrapper of exactly the same size,
+   and that wrapper keeps `pointer-events: auto` (Popper only sets `none` on it
+   for `hideWhenDetached`). So the wrapper still swallowed every click that
+   landed on the tooltip's rect - measured in a real browser against the
+   workspace folder picker, where rows are 28px apart and a `side="top"`
+   tooltip lands squarely on the row above: the covered row's controls never
+   received the click, and the cursor read as a text caret over the tooltip's
+   text (traycerai/traycer#466, #446).
+
+   Scoped by the direct child so only tooltip wrappers opt out - popovers,
+   dropdowns and hover cards hold real controls and must stay hit-testable. */
+[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+  pointer-events: none;
+}
+
 /* Attachment previews stay on one compact, independently scrollable row. */
 [data-composer-attachment-strip] {
   scrollbar-width: none;
@@ -295,6 +312,27 @@
  * so keeping these rules unlayered guarantees the reset + pill win regardless
  * of plugin source order.
  */
+
+/*
+ * Tailmark nests each top-level block under:
+ *   .prose > [data-tailmark] > [display:contents host] > block
+ * Tailwind Typography only zeroes outer margins with `.prose > :first-child`
+ * / `:last-child`. With that wrapper the first/last *block roots* keep full
+ * paragraph margins, so chat surfaces grow awkward empty space at the start
+ * and end of every markdown body (and double gaps between segments such as
+ * thinking → answer). Re-apply the same zeroing through the Tailmark hosts.
+ * Unlayered so it outranks the plugin's components-layer prose rules.
+ *
+ * Cross-tree gaps (body markdown → next-steps prose, often after a trailing
+ * `---`) cannot use collapsed margins between separate `.md-prose` roots -
+ * `TextSegment` owns that spacing on the next-steps wrapper.
+ */
+.md-prose > [data-tailmark] > :first-child > :first-child {
+  margin-top: 0;
+}
+.md-prose > [data-tailmark] > :last-child > :last-child {
+  margin-bottom: 0;
+}
 
 /* Strip the backtick quotes Tailwind Typography adds via ::before / ::after. */
 .md-prose :where(code)::before,

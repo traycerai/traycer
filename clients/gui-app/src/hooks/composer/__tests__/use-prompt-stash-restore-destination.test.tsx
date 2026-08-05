@@ -136,10 +136,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "fixed-entry-id"),
-}));
-
 describe("usePromptStash restore/destination lifecycle", () => {
   beforeEach(() => {
     resetActivePromptStashForTests();
@@ -226,7 +222,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
     expect(call.identity).toEqual({
       surface: "test",
       identity: "dest-restore",
-      editorGeneration: destination.getEditorGeneration(),
+      editorIncarnation: destination.getEditorIncarnation(),
     });
     expect(call.content).toEqual(materializedContent);
     expect(storeMocks.remove).toHaveBeenCalledWith("entry-restore");

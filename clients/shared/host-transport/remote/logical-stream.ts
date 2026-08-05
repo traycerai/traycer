@@ -49,7 +49,7 @@ export interface LogicalStreamPort {
 export interface LogicalStreamInit {
   readonly streamId: number;
   readonly method: string;
-  readonly params: unknown;
+  readonly paramsProvider: () => unknown;
   /** On-wire negotiated subscribe version (recomputed at open against the host). */
   readonly schemaVersion: SchemaVersion;
   readonly qos: QosClassValue;
@@ -59,8 +59,8 @@ export interface LogicalStreamInit {
 export class LogicalStream implements IStreamSession {
   readonly streamId: number;
   readonly method: string;
-  readonly params: unknown;
   readonly qos: QosClassValue;
+  private readonly paramsProvider: () => unknown;
   private schemaVersion: SchemaVersion;
   /**
    * Whether `schemaVersion` has survived a real negotiation against the host
@@ -78,15 +78,21 @@ export class LogicalStream implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private status: StreamConnectionStatus = "connecting";
+  private statusReason: StreamCloseReason | null = null;
   private disposed = false;
 
   constructor(init: LogicalStreamInit) {
     this.streamId = init.streamId;
     this.method = init.method;
-    this.params = init.params;
+    this.paramsProvider = init.paramsProvider;
     this.schemaVersion = init.schemaVersion;
     this.qos = init.qos;
     this.port = init.port;
+  }
+
+  /** Reads the latest params at the wire subscribe boundary. */
+  readParams(): unknown {
+    return this.paramsProvider();
   }
 
   // ---- IStreamSession ---------------------------------------------------- //
@@ -107,6 +113,14 @@ export class LogicalStream implements IStreamSession {
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
+    // `RemoteSession` may synchronously reject a new optional stream while a
+    // ready session checks its manifest. The subscription returns only after
+    // that check, so consumers necessarily install their handler after the
+    // terminal transition. Replay it once so they can fail over instead of
+    // remaining permanently pending.
+    if (this.status === "closed") {
+      handler(this.status, this.statusReason);
+    }
   }
 
   /**
@@ -212,6 +226,7 @@ export class LogicalStream implements IStreamSession {
       return;
     }
     this.status = next;
+    this.statusReason = reason;
     const handler = this.statusHandler;
     if (handler !== null) {
       handler(next, reason);

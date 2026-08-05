@@ -1,6 +1,5 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-import { v4 as uuidv4 } from "uuid";
 import { base64ToBytes, bytesToBase64 } from "@/lib/composer/image-base64";
 import {
   canonicalPromptStashImageFileName,
@@ -205,7 +204,7 @@ export async function materializePromptStashEntry(
     }
     return Promise.resolve({
       ...attrs,
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       b64content: bytesToBase64(blob.bytes),
       hash: null,
     });

@@ -67,6 +67,7 @@ import {
   commGraphEventDirection,
   type CommGraphEvent,
 } from "@/lib/comm-graph/comm-graph-events";
+import { commGraphEventRowId } from "@/lib/comm-graph/comm-graph-timeline";
 import { commGraphJumpTarget } from "@/lib/comm-graph/comm-graph-jump";
 import { commGraphNoticeReasonLabel } from "@/lib/comm-graph/comm-graph-labels";
 
@@ -77,6 +78,7 @@ export interface CommGraphEventRowProps {
   readonly agentNames: ReadonlyMap<string, string>;
   /** Prefix for this surface's row test ids. */
   readonly testIdPrefix: string;
+  readonly canOpenAgent: boolean;
   readonly canJump: boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -178,6 +180,7 @@ export const CommGraphEventRow = memo(function CommGraphEventRow(
 ) {
   const {
     agentNames,
+    canOpenAgent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -195,8 +198,9 @@ export const CommGraphEventRow = memo(function CommGraphEventRow(
       agentNames={agentNames}
       epicId={epicId}
       kind={rowKind(event)}
-      rowId={`${event.hostId}-${event.id}`}
+      rowId={commGraphEventRowId(event)}
       testIdPrefix={testIdPrefix}
+      canOpenAgent={canOpenAgent}
       canJump={canJump}
       onJump={onJump}
       canJumpToSender={canJumpToSender}
@@ -219,6 +223,7 @@ function CommGraphRowHeader(props: {
   readonly testIdPrefix: string;
   readonly rowId: string;
   readonly trailing: ReactNode;
+  readonly canOpenAgent: boolean;
   readonly canJump: boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   readonly canJumpToSender: boolean;
@@ -229,6 +234,7 @@ function CommGraphRowHeader(props: {
 }) {
   const {
     agentNames,
+    canOpenAgent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -249,6 +255,7 @@ function CommGraphRowHeader(props: {
         <CommGraphSubject
           event={event}
           agentNames={agentNames}
+          canOpenAgent={canOpenAgent}
           canJump={canJump}
           onJump={onJump}
           canJumpToSender={canJumpToSender}
@@ -341,6 +348,7 @@ const SCROLL_CLAIMS: ReadonlyArray<CommGraphScrollClaim> = [
 function CommGraphSubject(props: {
   readonly event: CommGraphEvent;
   readonly agentNames: ReadonlyMap<string, string>;
+  readonly canOpenAgent: boolean;
   readonly canJump: boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   readonly canJumpToSender: boolean;
@@ -352,6 +360,7 @@ function CommGraphSubject(props: {
 }) {
   const {
     agentNames,
+    canOpenAgent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -392,7 +401,7 @@ function CommGraphSubject(props: {
     sender: { enabled: canJumpToSender, open: () => onJumpToSender(event) },
   };
   const endpointAction = (agentId: string | null): CommGraphEndpointAction => {
-    if (agentId === null || !agentNames.has(agentId)) {
+    if (!canOpenAgent || agentId === null || !agentNames.has(agentId)) {
       return { onOpen: null, scrollSuffix: null };
     }
     const claim = SCROLL_CLAIMS.find(
@@ -448,6 +457,7 @@ function CommGraphSectionedRow(props: {
   readonly kind: CommGraphRowKind;
   readonly rowId: string;
   readonly testIdPrefix: string;
+  readonly canOpenAgent: boolean;
   readonly canJump: boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   readonly canJumpToSender: boolean;
@@ -458,6 +468,7 @@ function CommGraphSectionedRow(props: {
 }) {
   const {
     agentNames,
+    canOpenAgent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -471,7 +482,7 @@ function CommGraphSectionedRow(props: {
     rowId,
     testIdPrefix,
   } = props;
-  const rowKey = commGraphRowKey(event.hostId, event.id);
+  const rowKey = commGraphRowKey(event);
   const open = useCommGraphRowOpen(epicId, rowKey);
   const setRowOpen = useSetCommGraphRowOpen();
   const handleOpenChange = useCallback(
@@ -507,6 +518,7 @@ function CommGraphSectionedRow(props: {
       testIdPrefix={testIdPrefix}
       rowId={rowId}
       trailing={trailing}
+      canOpenAgent={canOpenAgent}
       canJump={canJump}
       onJump={onJump}
       canJumpToSender={canJumpToSender}

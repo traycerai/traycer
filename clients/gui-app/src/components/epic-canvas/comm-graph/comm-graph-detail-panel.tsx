@@ -17,6 +17,7 @@ import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
+import { commGraphEventKey } from "@/lib/comm-graph/comm-graph-timeline";
 import { CommGraphEventRow } from "@/components/epic-canvas/comm-graph/comm-graph-event-row";
 import {
   pointerDragHandleAxisClassName,
@@ -41,6 +42,7 @@ export interface CommGraphDetailPanelProps {
   readonly epicId: string;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly emptyLabel: string;
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -59,6 +61,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
     actions,
     agentNames,
     ariaLabel,
+    canOpenAgentForEvent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -124,11 +127,12 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {events.map((event) => (
             <CommGraphEventRow
-              key={`${event.hostId}:${event.id}`}
+              key={commGraphEventKey(event)}
               event={event}
               epicId={epicId}
               agentNames={agentNames}
               testIdPrefix="comm-graph-detail"
+              canOpenAgent={canOpenAgentForEvent(event)}
               canJump={canJump(event)}
               onJump={onJump}
               canJumpToSender={canJumpToSender(event)}

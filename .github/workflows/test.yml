@@ -23,8 +23,10 @@ jobs:
     runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
     # The GUI suite deliberately runs isolated two-worker forks: disabling
     # isolation makes tests leak state. The organization caps every job at ten
-    # minutes, so run its deterministic Vitest shards as four parallel matrix
-    # jobs.
+    # minutes, so run its deterministic Vitest shards as parallel matrix jobs.
+    # The hash range that previously formed shard 1/4 is split into 1/8 and
+    # 2/8 because its canvas-heavy files can exhaust a runner when combined;
+    # the remaining three quarters retain their existing required-check names.
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.
@@ -39,7 +41,10 @@ jobs:
             test_args: ""
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app)"
-            test_args: "-- --shard=1/4"
+            test_args: "-- --shard=1/8"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 2 of 8)"
+            test_args: "-- --shard=2/8"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 2)"
             test_args: "-- --shard=2/4"
