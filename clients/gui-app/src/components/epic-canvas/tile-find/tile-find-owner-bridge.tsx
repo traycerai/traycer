@@ -12,9 +12,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useTileFindStore } from "@/stores/tile-find";
-import type { TileFindOwnerBlocker } from "@/stores/tile-find/types";
-
-const EPIC_CANVAS_ROUTE_PATTERN = /^\/epics\/[^/]+\/[^/]+\/?$/;
+import { resolveTileFindOwnerBlocker } from "@/components/epic-canvas/tile-find/tile-find-owner-blocker";
 
 export function TileFindOwnerBridge(): ReactNode {
   const pathname = useRouterState({
@@ -80,43 +78,6 @@ export function TileFindOwnerBridge(): ReactNode {
     [setOwnerBlocker],
   );
 
-  return null;
-}
-
-function resolveTileFindOwnerBlocker(args: {
-  readonly pathname: string;
-  readonly commandPaletteOpen: boolean;
-  readonly systemOverlayActive: boolean;
-  readonly appDialogActive: boolean;
-  readonly desktopDialogActive: boolean;
-  readonly migrationDialogActive: boolean;
-  readonly notificationPopoverOpen: boolean;
-  readonly domDialogActive: boolean;
-}): TileFindOwnerBlocker | null {
-  if (!EPIC_CANVAS_ROUTE_PATTERN.test(args.pathname)) {
-    return { reason: "non-canvas-route", ownerId: args.pathname };
-  }
-  if (args.commandPaletteOpen) {
-    return { reason: "command-palette", ownerId: "command-palette" };
-  }
-  if (args.systemOverlayActive) {
-    return { reason: "system-overlay", ownerId: "system-overlay" };
-  }
-  if (args.appDialogActive) {
-    return { reason: "app-dialog", ownerId: "app-dialog" };
-  }
-  if (args.desktopDialogActive) {
-    return { reason: "desktop-dialog", ownerId: "desktop-dialog" };
-  }
-  if (args.migrationDialogActive) {
-    return { reason: "migration-dialog", ownerId: "migration-dialog" };
-  }
-  if (args.notificationPopoverOpen) {
-    return { reason: "notification-popover", ownerId: "notifications" };
-  }
-  if (args.domDialogActive) {
-    return { reason: "dom-dialog", ownerId: "dom-dialog" };
-  }
   return null;
 }
 
