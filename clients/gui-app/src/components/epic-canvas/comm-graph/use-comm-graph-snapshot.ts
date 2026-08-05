@@ -217,8 +217,14 @@ export function useCommGraphSnapshot(
 
   useEffect(() => {
     if (cloudAvailability !== "available") return;
+    // Availability and the initial snapshot are distinct wire frames. Preserve
+    // a held local cursor until the snapshot boundary proves cloud history has
+    // actually loaded; an empty snapshot still publishes a real boundary.
+    if (!cloudSnapshot.hosts.some((host) => host.snapshotBoundary !== null)) {
+      return;
+    }
     reconcileCommGraphCloudAuthorityCursor(epicId, cloudSnapshot.events);
-  }, [cloudAvailability, cloudSnapshot.events, epicId]);
+  }, [cloudAvailability, cloudSnapshot.events, cloudSnapshot.hosts, epicId]);
 
   // The CLAIM is an effect, so its cleanup balances a StrictMode double-invoke.
   // The host set goes in WITH it so a retained manager's stale desired set is

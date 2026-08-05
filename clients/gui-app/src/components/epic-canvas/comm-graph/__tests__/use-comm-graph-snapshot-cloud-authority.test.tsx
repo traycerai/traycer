@@ -220,10 +220,12 @@ describe("useCommGraphSnapshot cloud authority", () => {
         .setCursor("epic-1", commGraphCursorForEvent(localEvent));
     });
 
-    act(() => {
-      cloudRequests[0].handlers.onAvailability("available");
-      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null);
-    });
+    act(() => cloudRequests[0].handlers.onAvailability("available"));
+    expect(readCommGraphTimelineEpicState("epic-1").cursor).toEqual(
+      commGraphCursorForEvent(localEvent),
+    );
+
+    act(() => cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null));
 
     await waitFor(() =>
       expect(readCommGraphTimelineEpicState("epic-1").cursor?.eventId).toBe(
