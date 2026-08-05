@@ -23,6 +23,7 @@ import type {
   IHostManagement,
   LocalHostSnapshot,
   MutationOutcome,
+  MutationProgress,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -34,9 +35,11 @@ import {
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   GATE_BYPASS_PATH_PREFIX,
+  HostProvisioningController,
   LOCAL_HOST_SLOW_START_THRESHOLD_MS,
   LocalHostGate,
   LocalHostUnavailable,
+  type HostProvisioningLifecycle,
 } from "@/components/local-host-gate";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -69,6 +72,7 @@ import {
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 
 const validSnapshot: LocalHostSnapshot = {
   hostId: "desktop-pid-1",
@@ -1370,6 +1374,426 @@ describe("LocalHostGate + system tab modal guard integration", () => {
     expect(controller.getIndex()).toBe(1);
     expect(controller.canGoBack()).toBe(true);
     expect(controller.canGoForward()).toBe(true);
+  });
+});
+
+// Producer-level coverage for `useHostProvisioning`'s retained progress
+// (traycer#862 / #4747). Live progress is sourced from the shared
+// HostControllerStatus mutation lane (pushed the same way production's
+// HostControllerStatusListener does). lastProgress is retained only for the
+// current attempt and exposed only after that attempt FAILS.
+const EXTRACT_PROGRESS: MutationProgress = {
+  stage: "extract",
+  percent: 80,
+  bytes: null,
+  totalBytes: null,
+  message: null,
+};
+
+interface DeferredConverge {
+  readonly promise: Promise<MutationOutcome<ConvergeReadyOk>>;
+  readonly resolve: (value: MutationOutcome<ConvergeReadyOk>) => void;
+}
+
+function createDeferredConverge(): DeferredConverge {
+  let resolveDeferred: (
+    value: MutationOutcome<ConvergeReadyOk>,
+  ) => void = () => {
+    throw new Error("deferred converge resolver was not initialized");
+  };
+  const promise = new Promise<MutationOutcome<ConvergeReadyOk>>((resolve) => {
+    resolveDeferred = resolve;
+  });
+  return { promise, resolve: resolveDeferred };
+}
+
+function pushEnsureProgress(
+  queryClient: QueryClient,
+  management: IHostManagement,
+  progress: MutationProgress | null,
+  startedAt: string,
+): void {
+  act(() => {
+    queryClient.setQueryData<HostControllerStatus>(
+      runnerQueryKeys.hostControllerStatus(management),
+      {
+        ...IDLE_CONTROLLER_STATUS,
+        mutation: {
+          kind: "ensure",
+          progress,
+          startedAt,
+        },
+      },
+    );
+  });
+}
+
+function mountProvisioningLifecycle(host: MockRunnerHost): {
+  readonly queryClient: QueryClient;
+  readonly readLifecycle: () => HostProvisioningLifecycle | null;
+} {
+  const queryClient = buildQueryClient();
+  let latest: HostProvisioningLifecycle | null = null;
+  function Probe(props: {
+    readonly lifecycle: HostProvisioningLifecycle;
+  }): ReactNode {
+    const { lifecycle } = props;
+    // Published from the commit phase, not during render (react-hooks/globals):
+    // every assertion runs after an `act`/`waitFor`, by which point effects
+    // have flushed, so `readLifecycle` still sees the latest committed value.
+    useEffect(() => {
+      latest = lifecycle;
+    });
+    const provisioning = lifecycle.provisioning;
+    return (
+      <div
+        data-testid="provisioning-lifecycle-probe"
+        data-is-provisioning={String(provisioning.isProvisioning)}
+        data-has-error={String(provisioning.error !== null)}
+        data-progress-stage={provisioning.progress?.stage ?? ""}
+        data-last-progress-stage={provisioning.lastProgress?.stage ?? ""}
+      />
+    );
+  }
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={host}>
+        <HostProvisioningController enabled isReady={false}>
+          {(lifecycle) => <Probe lifecycle={lifecycle} />}
+        </HostProvisioningController>
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+  return {
+    queryClient,
+    readLifecycle: () => latest,
+  };
+}
+
+describe("useHostProvisioning lastProgress producer", () => {
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    vi.restoreAllMocks();
+  });
+
+  it("retains the last observed progress after an ensure attempt fails", async () => {
+    const deferred = createDeferredConverge();
+    const convergeReady = vi.fn(
+      (): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        return deferred.promise;
+      },
+    );
+    const management = makeHostManagement(convergeReady);
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: management,
+    });
+    const { queryClient, readLifecycle } = mountProvisioningLifecycle(host);
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(1);
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(true);
+    });
+
+    pushEnsureProgress(
+      queryClient,
+      management,
+      EXTRACT_PROGRESS,
+      "2026-05-15T00:00:01Z",
+    );
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.progress).toEqual(EXTRACT_PROGRESS);
+    });
+    // While pending, lastProgress must stay hidden (report surfaces only).
+    expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
+
+    await act(async () => {
+      deferred.resolve({ kind: "failed", message: "ensure failed" });
+      await deferred.promise.catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(false);
+      expect(readLifecycle()?.provisioning.error).not.toBeNull();
+    });
+    const provisioning = readLifecycle()?.provisioning;
+    expect(provisioning?.progress).toBeNull();
+    expect(provisioning?.lastProgress).toEqual(EXTRACT_PROGRESS);
+  });
+
+  it("exposes no lastProgress when the ensure attempt succeeds", async () => {
+    const deferred = createDeferredConverge();
+    const convergeReady = vi.fn(
+      (): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        return deferred.promise;
+      },
+    );
+    const management = makeHostManagement(convergeReady);
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: management,
+    });
+    const { queryClient, readLifecycle } = mountProvisioningLifecycle(host);
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(1);
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(true);
+    });
+
+    pushEnsureProgress(
+      queryClient,
+      management,
+      EXTRACT_PROGRESS,
+      "2026-05-15T00:00:01Z",
+    );
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.progress).toEqual(EXTRACT_PROGRESS);
+    });
+
+    await act(async () => {
+      deferred.resolve({
+        kind: "ok",
+        value: { running: true, version: "1.2.3" },
+      });
+      await deferred.promise;
+    });
+
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(false);
+    });
+    const provisioning = readLifecycle()?.provisioning;
+    expect(provisioning?.error).toBeNull();
+    expect(provisioning?.progress).toBeNull();
+    // Success must leave nothing behind - exposure is gated on error.
+    expect(provisioning?.lastProgress).toBeNull();
+  });
+
+  it("clears retained lastProgress when retry starts a new attempt", async () => {
+    const settles: DeferredConverge[] = [];
+    const convergeReady = vi.fn(
+      (): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        const deferred = createDeferredConverge();
+        settles.push(deferred);
+        return deferred.promise;
+      },
+    );
+    const management = makeHostManagement(convergeReady);
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: management,
+    });
+    const { queryClient, readLifecycle } = mountProvisioningLifecycle(host);
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(1);
+      expect(settles).toHaveLength(1);
+    });
+
+    pushEnsureProgress(
+      queryClient,
+      management,
+      EXTRACT_PROGRESS,
+      "2026-05-15T00:00:01Z",
+    );
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.progress).toEqual(EXTRACT_PROGRESS);
+    });
+
+    await act(async () => {
+      settles[0].resolve({ kind: "failed", message: "ensure failed" });
+      await settles[0].promise.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.lastProgress).toEqual(
+        EXTRACT_PROGRESS,
+      );
+    });
+
+    // Drop the prior attempt's status push BEFORE retry so the new attempt
+    // does not re-absorb the old ensure progress the moment isPending flips
+    // true (progress is only live while pending; clearing now is a no-op for
+    // live progress and only prevents a stale re-feed).
+    act(() => {
+      queryClient.setQueryData<HostControllerStatus>(
+        runnerQueryKeys.hostControllerStatus(management),
+        IDLE_CONTROLLER_STATUS,
+      );
+    });
+
+    act(() => {
+      readLifecycle()?.provisioning.retry();
+    });
+
+    // New attempt: cleared immediately, before any progress event arrives.
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(2);
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(true);
+    });
+    expect(readLifecycle()?.provisioning.progress).toBeNull();
+    expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
+    expect(readLifecycle()?.provisioning.error).toBeNull();
+
+    // Second attempt fails with no progress events: must not revive the old
+    // stage (proves run() cleared the retained snapshot).
+    await act(async () => {
+      settles[1].resolve({ kind: "failed", message: "ensure failed again" });
+      await settles[1].promise.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.error).not.toBeNull();
+    });
+    expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
+  });
+
+  // The desktop status push can land in the same React commit as the
+  // mutation settlement: progress never becomes a render-observed value
+  // while isPending (it arrives as isPending flips false). Capture must
+  // read the status query cache at onError, not a prior render/effect.
+  it("captures progress that arrives in the same commit as the failure", async () => {
+    const deferred = createDeferredConverge();
+    const convergeReady = vi.fn(
+      (): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        return deferred.promise;
+      },
+    );
+    const management = makeHostManagement(convergeReady);
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: management,
+    });
+    const { queryClient, readLifecycle } = mountProvisioningLifecycle(host);
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(1);
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(true);
+    });
+    // No progress yet - and no waitFor after the coalesced push below.
+    expect(readLifecycle()?.provisioning.progress).toBeNull();
+
+    await act(async () => {
+      queryClient.setQueryData<HostControllerStatus>(
+        runnerQueryKeys.hostControllerStatus(management),
+        {
+          ...IDLE_CONTROLLER_STATUS,
+          mutation: {
+            kind: "ensure",
+            progress: EXTRACT_PROGRESS,
+            startedAt: "2026-05-15T00:00:02Z",
+          },
+        },
+      );
+      deferred.resolve({ kind: "failed", message: "ensure failed" });
+      await deferred.promise.catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.error).not.toBeNull();
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(false);
+    });
+    expect(readLifecycle()?.provisioning.progress).toBeNull();
+    expect(readLifecycle()?.provisioning.lastProgress).toEqual(
+      EXTRACT_PROGRESS,
+    );
+  });
+
+  // Uncleared leftover ensure lane: run() records that lane's startedAt as
+  // the attempt baseline, so a retry that fails before its own progress
+  // event must report nothing - not the previous attempt's stage.
+  it("ignores a leftover lane from a previous attempt on retry", async () => {
+    const settles: DeferredConverge[] = [];
+    const convergeReady = vi.fn(
+      (): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        const deferred = createDeferredConverge();
+        settles.push(deferred);
+        return deferred.promise;
+      },
+    );
+    const management = makeHostManagement(convergeReady);
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: management,
+    });
+    const { queryClient, readLifecycle } = mountProvisioningLifecycle(host);
+    const firstLaneStartedAt = "2026-05-15T00:00:10Z";
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(1);
+      expect(settles).toHaveLength(1);
+    });
+
+    pushEnsureProgress(
+      queryClient,
+      management,
+      EXTRACT_PROGRESS,
+      firstLaneStartedAt,
+    );
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.progress).toEqual(EXTRACT_PROGRESS);
+    });
+
+    await act(async () => {
+      settles[0].resolve({ kind: "failed", message: "ensure failed" });
+      await settles[0].promise.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.lastProgress).toEqual(
+        EXTRACT_PROGRESS,
+      );
+    });
+
+    // Deliberately leave the ensure lane CACHED with firstLaneStartedAt.
+    // run() must record that identity as the baseline and refuse to re-report it.
+    act(() => {
+      readLifecycle()?.provisioning.retry();
+    });
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(2);
+      expect(readLifecycle()?.provisioning.isProvisioning).toBe(true);
+    });
+    expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
+
+    // Second attempt fails with no new progress push - only the leftover lane.
+    await act(async () => {
+      settles[1].resolve({ kind: "failed", message: "ensure failed again" });
+      await settles[1].promise.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.error).not.toBeNull();
+    });
+    // startedAt baseline guard: leftover lane matches attemptBaseline and is dropped.
+    expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
   });
 });
 

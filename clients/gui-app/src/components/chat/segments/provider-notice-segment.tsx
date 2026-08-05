@@ -1,10 +1,9 @@
 import { ChevronDown, ChevronRight, Info, TriangleAlert } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type {
   ProviderNoticeDetail,
   ProviderNoticeTone,
 } from "@traycer/protocol/persistence/epic/content-blocks";
-import { useChatMeasuredBooleanToggle } from "@/components/chat/chat-measured-item-change-context";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
 
@@ -31,8 +30,7 @@ export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   const { status, tone, title, message, details, findUnitId } = props;
   const isStreaming = status === "streaming";
   const [expanded, setExpanded] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded, triggerRef);
+  const toggleExpanded = (): void => setExpanded((current) => !current);
 
   const hasDetails = details.length > 0;
   const Icon = TONE_ICON[tone];
@@ -71,7 +69,6 @@ export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
         <span aria-hidden className="h-px flex-1 bg-border/60" />
         {hasDetails ? (
           <button
-            ref={triggerRef}
             type="button"
             onClick={toggleExpanded}
             aria-expanded={expanded}

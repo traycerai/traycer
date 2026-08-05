@@ -1,11 +1,11 @@
 import { ChevronRight } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useCallback, type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
+import { useLiveActivityPromote } from "./live-activity-promote-context";
 import { cn } from "@/lib/utils";
 
 interface SegmentRowProps {
@@ -17,10 +17,10 @@ interface SegmentRowProps {
   stickyHeader: boolean;
   headerFindUnitId: string | null;
   bodyFindUnitId: string | null;
-  // When false the row is a static header with no toggle/chevron and no body
-  // (a chevron-width spacer keeps it aligned with sibling expandable rows). The
-  // footer still renders. For nested tool activity whose header already says
-  // everything.
+  // When false the row is a static header with no toggle, no caret and no body;
+  // the footer still renders. It needs no spacer to line up with its expandable
+  // siblings, because their caret trails rather than leads. For nested tool
+  // activity whose header already says everything.
   expandable: boolean;
   className: string | undefined;
   // Always-visible content rendered beneath the row, regardless of open state
@@ -37,26 +37,131 @@ interface SegmentRowProps {
 export function SegmentRow(props: SegmentRowProps) {
   const { header, tone, className, headerFindUnitId } = props;
   const { expandable, footer } = props;
+  const promote = useLiveActivityPromote();
+  if (expandable && promote !== null) {
+    return <PromotingSegmentRow {...props} promote={promote} />;
+  }
   if (!expandable) {
     return (
       <div className={cn("group/work-row", className)}>
         <div
+          data-row-header=""
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(
             "flex w-full items-center gap-2 rounded-sm px-1 py-1 text-ui-sm",
             tone === "destructive" && "text-destructive",
           )}
         >
-          <span aria-hidden className="size-3 shrink-0" />
+          {/* No leading spacer: with the caret moved to the trailing edge,
+              nothing occupies that column on an expandable sibling either, so
+              every row's icon starts flush at `px-1`. */}
           <span className="relative flex min-w-0 flex-1 items-center gap-2">
             {header}
           </span>
         </div>
-        {footer !== null ? <div className="ml-5 pb-1">{footer}</div> : null}
+        {footer !== null ? (
+          <div data-testid="segment-row-footer" className="ml-5 pb-1">
+            {footer}
+          </div>
+        ) : null}
       </div>
     );
   }
   return <ExpandableSegmentRow {...props} />;
+}
+
+/**
+ * `data-row-header` marks the header LINE on all three branches above - the
+ * plain div, the promoting button and the collapsible trigger. Placement tests
+ * ("the elapsed counter rides the header row, the progress line does not") need
+ * one anchor that means the same thing whichever branch rendered, and neither
+ * `parentElement` nor `closest("button")` is that: the first depends on wrapper
+ * depth inside each header, and the second silently returns null for the
+ * non-expandable row, which is the branch a streaming tool actually takes.
+ */
+
+/**
+ * The disclosure caret every activity row shares: trailing, and invisible until
+ * the row is hovered, focused or open.
+ *
+ * It used to lead the row, which put a permanently-lit chevron in front of the
+ * tool icon on every line of a run - two glyphs before the first word, and a
+ * different shape from the thinking rows beside them, which carry their caret
+ * on the right. Now nothing occupies the leading column on any row, so the
+ * icons line up down the whole group.
+ *
+ * `rotateWhenOpen` is false for the promoting row: that click leaves the window
+ * rather than unfolding anything, so a caret turning down would describe a
+ * disclosure that never happens.
+ */
+function RowTrailingCaret(props: { readonly rotateWhenOpen: boolean }) {
+  return (
+    <ChevronRight
+      aria-hidden
+      // Named so the alignment tests can find it without walking
+      // `lastElementChild`, which any new wrapper or sibling silently breaks.
+      data-row-caret=""
+      className={cn(
+        "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
+        "group-hover/row-trigger:translate-x-0 group-hover/row-trigger:text-foreground group-hover/row-trigger:opacity-100",
+        "group-focus-visible/row-trigger:translate-x-0 group-focus-visible/row-trigger:text-foreground group-focus-visible/row-trigger:opacity-100",
+        props.rotateWhenOpen &&
+          "group-data-[state=open]/row-trigger:translate-x-0 group-data-[state=open]/row-trigger:rotate-90 group-data-[state=open]/row-trigger:text-foreground group-data-[state=open]/row-trigger:opacity-100",
+      )}
+    />
+  );
+}
+
+/**
+ * The same row, inside the bounded live activity window: it never opens a body
+ * where it stands. Clicking marks the row open and promotes, which opens the
+ * activity group - so the row reappears in the full-height body already
+ * unfolded, instead of unfolding into a four-line box that clips it to one line.
+ *
+ * `onOpenChange(true)` only carries across the remount for rows whose open state
+ * is store-backed by segment id (tool, subagent). The rest are seeded by the
+ * group through `revealed`; see `LiveActivityPromoteContext`.
+ *
+ * Deliberately NOT a `Collapsible`: there is no body here to disclose, so a
+ * trigger advertising `aria-expanded` would be lying about what the click does.
+ */
+function PromotingSegmentRow(
+  props: SegmentRowProps & { readonly promote: () => void },
+) {
+  const { header, tone, className, headerFindUnitId, footer } = props;
+  const { onOpenChange, promote } = props;
+  const handleClick = useCallback((): void => {
+    onOpenChange(true);
+    promote();
+  }, [onOpenChange, promote]);
+  return (
+    <div className={cn("group/work-row", className)}>
+      <button
+        type="button"
+        onClick={handleClick}
+        data-row-header=""
+        data-activity-row-trigger=""
+        data-find-include="true"
+        data-chat-find-unit={headerFindUnitId ?? undefined}
+        data-testid="activity-row-promote"
+        className={cn(
+          "group/row-trigger flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors hover:bg-muted/40",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          tone === "destructive" && "text-destructive",
+        )}
+      >
+        <span className="relative flex min-w-0 flex-1 items-center gap-2">
+          {header}
+        </span>
+        <RowTrailingCaret rotateWhenOpen={false} />
+      </button>
+      {footer !== null ? (
+        <div data-testid="segment-row-footer" className="ml-5 pb-1">
+          {footer}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ExpandableSegmentRow(props: SegmentRowProps) {
@@ -72,23 +177,19 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
     className,
   } = props;
   const { footer } = props;
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const measuredOpenChange = useChatMeasuredOpenChange(
-    onOpenChange,
-    triggerRef,
-  );
   return (
     <Collapsible
       open={open}
-      onOpenChange={measuredOpenChange}
+      onOpenChange={onOpenChange}
       className={cn("group/work-row", className)}
     >
       <CollapsibleTrigger
-        ref={triggerRef}
+        data-row-header=""
+        data-activity-row-trigger=""
         data-find-include="true"
         data-chat-find-unit={headerFindUnitId ?? undefined}
         className={cn(
-          "flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors",
+          "group/row-trigger flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors",
           // The sticky header floats over scrolled content, so its hover tint
           // must stay opaque - a translucent bg lets the content bleed through.
           stickyHeader && open
@@ -97,16 +198,10 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
           tone === "destructive" && "text-destructive",
         )}
       >
-        <ChevronRight
-          aria-hidden
-          className={cn(
-            "size-3 shrink-0 text-muted-foreground/50 transition-transform",
-            "group-data-[state=open]/work-row:rotate-90",
-          )}
-        />
         <span className="relative flex min-w-0 flex-1 items-center gap-2">
           {header}
         </span>
+        <RowTrailingCaret rotateWhenOpen />
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div
@@ -116,7 +211,11 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
           {body}
         </div>
       </CollapsibleContent>
-      {footer !== null ? <div className="ml-5 pb-1">{footer}</div> : null}
+      {footer !== null ? (
+        <div data-testid="segment-row-footer" className="ml-5 pb-1">
+          {footer}
+        </div>
+      ) : null}
     </Collapsible>
   );
 }

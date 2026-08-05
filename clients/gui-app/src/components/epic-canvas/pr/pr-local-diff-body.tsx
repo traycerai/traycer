@@ -13,6 +13,7 @@ import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-gi
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
+import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 
 type PrLocalDiffSuccess = Extract<PrGetLocalDiffResponse, { kind: "diff" }>;
 
@@ -106,6 +107,10 @@ function PrLocalDiffFiles(props: {
   readonly preferences: DiffViewerPreferences;
 }): ReactNode {
   const { diff } = props;
+  const { scrollContainerRef, onScroll } = useNativeDivScrollRestoration(
+    props.node.instanceId,
+    true,
+  );
   const shownPatches = diff.files.filter(
     (file) => file.patch !== null && file.patch.length > 0,
   ).length;
@@ -122,7 +127,11 @@ function PrLocalDiffFiles(props: {
   }
 
   return (
-    <div className="h-full min-h-0 overflow-auto">
+    <div
+      ref={scrollContainerRef}
+      onScroll={onScroll}
+      className="h-full min-h-0 overflow-auto"
+    >
       {diff.isStale ? (
         <p
           className="flex min-w-0 items-start gap-2 border-b border-warning/40 bg-warning/10 px-3 py-2 text-ui-xs text-foreground"

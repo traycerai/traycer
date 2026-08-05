@@ -41,6 +41,11 @@ import {
   tombstoneChatKey,
   tombstoneEpicPrefixes,
 } from "@/stores/chats/chat-tab-persistence-tombstone";
+import { readingPositionIdentityForChat } from "@/lib/reading-position/chat-identity";
+import {
+  tombstoneReadingPositionContent,
+  tombstoneReadingPositionEpics,
+} from "@/lib/reading-position/service";
 
 type ChatIdentity = Pick<ChatTabPersistenceIdentity, "epicId" | "chatId">;
 
@@ -59,6 +64,12 @@ type ChatIdentity = Pick<ChatTabPersistenceIdentity, "epicId" | "chatId">;
  */
 export function evictChatTabPersistenceForChat(identity: ChatIdentity): void {
   tombstoneChatKey(chatTabPersistenceChatKey(identity));
+  tombstoneReadingPositionContent(
+    readingPositionIdentityForChat({
+      ...identity,
+      tileInstanceId: `deleted-chat:${identity.chatId}`,
+    }),
+  );
   evictChatTabStateForChat(identity);
   evictA2AOpenStoreForChat(identity);
   evictActivityGroupOpenStoreForChat(identity);
@@ -90,6 +101,7 @@ export function evictChatTabPersistenceForEpics(
   epicIds: ReadonlyArray<string>,
 ): void {
   tombstoneEpicPrefixes(epicIds.map((epicId) => `${epicId}:`));
+  tombstoneReadingPositionEpics(epicIds);
   for (const epicId of epicIds) {
     evictChatTabStateForEpic(epicId);
     evictA2AOpenStoresForEpic(epicId);

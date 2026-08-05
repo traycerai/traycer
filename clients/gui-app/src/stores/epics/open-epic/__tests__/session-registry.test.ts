@@ -76,6 +76,7 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     requestFreshSnapshot: () => base.requestFreshSnapshot(),
     dispose: testDispose,
     isClean: () => isCleanOverride,
+    hotArtifactRoomIdsForTests: () => [],
   };
 
   const testHandle: TestHandle = {

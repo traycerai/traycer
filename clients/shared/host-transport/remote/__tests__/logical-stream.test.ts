@@ -86,4 +86,39 @@ describe("LogicalStream", () => {
     stream.requestReconnect();
     expect(reconnectReasons).toHaveLength(1);
   });
+
+  // The constructor is seeded with a PROVISIONAL client-canonical version
+  // (`RemoteSession.subscribe` opens the stream before the host manifest can be
+  // consulted). Reporting that as negotiated would tell consumers the host
+  // agreed to a version it has never seen - and they parse frames against it.
+  it("reports no negotiated version until the session has opened it", () => {
+    const stream = createStream([], []);
+    expect(stream.getNegotiatedSchemaVersion()).toBeNull();
+    // ...even though a provisional version is already in hand.
+    expect(stream.currentSchemaVersion()).toEqual({ major: 1, minor: 0 });
+
+    stream.updateSchemaVersion({ major: 1, minor: 4 });
+    expect(stream.getNegotiatedSchemaVersion()).toEqual({
+      major: 1,
+      minor: 4,
+    });
+  });
+
+  // A negotiated version belongs to the connection that negotiated it. Holding
+  // it across a drop would let a consumer parse the first post-resume frame at
+  // the OLD host incarnation's minor, before the resume has re-established one.
+  it("drops the negotiated version when the connection goes away", () => {
+    const stream = createStream([], []);
+    stream.updateSchemaVersion({ major: 1, minor: 4 });
+
+    stream.notifyStatus("reconnecting", null);
+    expect(stream.getNegotiatedSchemaVersion()).toBeNull();
+
+    // The resume re-establishes it; nothing else does.
+    stream.updateSchemaVersion({ major: 1, minor: 2 });
+    expect(stream.getNegotiatedSchemaVersion()).toEqual({
+      major: 1,
+      minor: 2,
+    });
+  });
 });

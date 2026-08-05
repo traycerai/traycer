@@ -14,6 +14,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
+import { getDesktopHeapSnapshotBridge } from "@/lib/resources/desktop-app-resource-usage";
 import { useRunnerLogLevelsQuery } from "@/hooks/runner/use-runner-log-levels-query";
 import { useRunnerLogLevelsSet } from "@/hooks/runner/use-runner-log-levels-set-mutation";
 import {
@@ -56,6 +57,7 @@ export function DiagnosticsSettingsPanel() {
         )}
       >
         <LogDetailGroup />
+        <MemoryDiagnosticsGroup />
         <RecentLogsSection />
       </div>
     </SettingsPanelShell>
@@ -187,6 +189,112 @@ function LogDetailGroup(): ReactNode {
           />
         ) : null}
       </div>
+    </SettingsGroup>
+  );
+}
+
+/**
+ * On-demand heap capture for memory reports. The renderer freezes while V8
+ * walks the heap and the file runs to gigabytes on exactly the long-lived
+ * sessions worth capturing, so this is a deliberate button rather than
+ * anything automatic - and the warning is stated up front, not after the fact.
+ * The resulting path is shown for copying rather than revealed in the file
+ * manager: no reveal capability is exposed for arbitrary paths.
+ */
+/** Serialization scope for the heap capture - see the `scope` note below. */
+const HEAP_SNAPSHOT_MUTATION_SCOPE = "runner-heap-snapshot";
+
+function MemoryDiagnosticsGroup(): ReactNode {
+  const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
+  const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
+
+  const captureMutation = useMutation({
+    mutationKey: runnerMutationKeys.captureHeapSnapshot(),
+    // `scope` is what actually serializes mutations in TanStack Query -
+    // `mutationKey` alone does not. Without it the only thing standing
+    // between a double-click and two concurrent multi-gigabyte heap walks
+    // is the `disabled` prop, which cannot help a second mounted panel.
+    scope: { id: HEAP_SNAPSHOT_MUTATION_SCOPE },
+    mutationFn: (): Promise<string | null> =>
+      bridge === null ? Promise.resolve(null) : bridge.takeHeapSnapshot(),
+    onSuccess: (path) => {
+      setSnapshotPath(path);
+      if (path === null) {
+        toast.error("Couldn't capture a heap snapshot");
+      }
+    },
+    onError: (error) => {
+      // Clear the previous run's path. Leaving it rendered under a failure
+      // toast offers a Copy button for a file this capture never wrote -
+      // the user pastes it into a report as the snapshot they just took.
+      setSnapshotPath(null);
+      toastFromRunnerError(error, "Couldn't capture a heap snapshot");
+    },
+  });
+
+  if (bridge === null) {
+    return (
+      <SettingsGroup
+        title="Memory"
+        tone="default"
+        dataTestId={undefined}
+        fill={false}
+      >
+        <LogInfoLine>
+          Memory snapshots are only available on the desktop app.
+        </LogInfoLine>
+      </SettingsGroup>
+    );
+  }
+
+  return (
+    <SettingsGroup
+      title="Memory"
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+        <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+          Captures a heap snapshot of this window for a memory report. The app
+          stops responding while the snapshot is written, and the file can be
+          several gigabytes.
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={captureMutation.isPending}
+          onClick={() => captureMutation.mutate()}
+          data-testid="diagnostics-capture-heap-snapshot"
+        >
+          {captureMutation.isPending ? (
+            <AgentSpinningDots
+              className="text-current"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Capture heap snapshot
+        </Button>
+      </div>
+      {snapshotPath === null ? null : (
+        <div className="flex items-start gap-2 px-4 pb-3">
+          <pre
+            className="min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
+            data-testid="diagnostics-heap-snapshot-path"
+          >
+            {snapshotPath}
+          </pre>
+          <CopyTextButton
+            value={snapshotPath}
+            label="Copy"
+            ariaLabel="Copy heap snapshot path"
+            disabled={false}
+          />
+        </div>
+      )}
     </SettingsGroup>
   );
 }

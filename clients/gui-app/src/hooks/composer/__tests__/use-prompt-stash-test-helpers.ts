@@ -6,6 +6,10 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { RefObject } from "react";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import {
+  createComposerEditorIncarnation,
+  type ComposerEditorIncarnation,
+} from "@/lib/composer/composer-editor-incarnation";
 import { appendPromptStashContent } from "@/lib/composer/prompt-stash-content";
 import type {
   PromptStashDestinationAdapter,
@@ -37,6 +41,10 @@ export function emptyDoc(): JsonContent {
     type: "doc",
     content: [{ type: "paragraph" }],
   };
+}
+
+export function makeEditorIncarnation(): ComposerEditorIncarnation {
+  return createComposerEditorIncarnation();
 }
 
 export function imageDoc(attrs: Record<string, unknown>): JsonContent {
@@ -143,11 +151,11 @@ export interface MutableDestination extends PromptStashDestinationAdapter {
   setIdentity: (identity: string | null) => void;
   setSurface: (surface: string) => void;
   /**
-   * Replaces the ready editor generation token (simulates remount under the
-   * same owner id). Import against a previously captured generation is stale.
+   * Replaces the ready editor incarnation token (simulates remount under the
+   * same owner id). Import against a previously captured incarnation is stale.
    */
-  setEditorGeneration: (generation: object) => void;
-  getEditorGeneration: () => object;
+  setEditorIncarnation: (incarnation: ComposerEditorIncarnation) => void;
+  getEditorIncarnation: () => ComposerEditorIncarnation;
   setLatestContent: (content: JsonContent) => void;
   getLatestContent: () => JsonContent;
   getInserts: () => readonly InsertedPayload[];
@@ -155,7 +163,7 @@ export interface MutableDestination extends PromptStashDestinationAdapter {
 
 /**
  * Controllable destination for Ticket 2/3. Default path mirrors production
- * chat/modal adapters: surface + identity + same editorGeneration, append
+ * chat/modal adapters: surface + identity + same editor incarnation, append
  * against latest content, and place the caret at the end. Materialization
  * defaults to the hook's `materializePromptStashEntry` unless `materialize`
  * is passed.
@@ -165,7 +173,7 @@ export function makeDestination(
     | {
         surface?: string;
         identity?: string | null;
-        editorGeneration?: object;
+        editorIncarnation?: ComposerEditorIncarnation;
         latestContent?: JsonContent;
         importResult?: PromptStashDestinationResult;
         importAndInsert?: PromptStashDestinationAdapter["importAndInsert"];
@@ -176,8 +184,8 @@ export function makeDestination(
   let surface = options?.surface ?? "test";
   let identity: string | null =
     options?.identity === undefined ? "dest-1" : options.identity;
-  let editorGeneration: object =
-    options?.editorGeneration ?? Object.freeze({ generation: "default" });
+  let editorIncarnation: ComposerEditorIncarnation =
+    options?.editorIncarnation ?? makeEditorIncarnation();
   let latestContent = options?.latestContent ?? emptyDoc();
   const inserts: InsertedPayload[] = [];
 
@@ -185,7 +193,7 @@ export function makeDestination(
     PromptStashDestinationAdapter["captureIdentity"]
   > = vi.fn((): PromptStashDestinationIdentity | null => {
     if (identity === null) return null;
-    return { surface, identity, editorGeneration };
+    return { surface, identity, editorIncarnation };
   });
 
   const defaultImport: PromptStashDestinationAdapter["importAndInsert"] = (
@@ -209,7 +217,7 @@ export function makeDestination(
       identity === null ||
       args.identity.surface !== surface ||
       args.identity.identity !== identity ||
-      args.identity.editorGeneration !== editorGeneration
+      args.identity.editorIncarnation !== editorIncarnation
     ) {
       return Promise.resolve({ status: "stale" });
     }
@@ -239,10 +247,10 @@ export function makeDestination(
     setSurface: (next) => {
       surface = next;
     },
-    setEditorGeneration: (next) => {
-      editorGeneration = next;
+    setEditorIncarnation: (next) => {
+      editorIncarnation = next;
     },
-    getEditorGeneration: () => editorGeneration,
+    getEditorIncarnation: () => editorIncarnation,
     setLatestContent: (next) => {
       latestContent = next;
     },
@@ -265,9 +273,11 @@ export function makeEditor(initial: {
   const ready = initial.ready ?? true;
   const clears: number[] = [];
   const focuses: number[] = [];
+  const editorIncarnation = makeEditorIncarnation();
 
   const handle: ComposerPromptEditorHandle = {
     isReady: () => ready,
+    getEditorIncarnation: () => (ready ? editorIncarnation : null),
     hasFocus: () => false,
     focus: () => {
       focuses.push(1);

@@ -126,7 +126,7 @@ export function useLandingPromptStashSource(args: {
  * (never through the fire-and-forget base64 reingest sweep) and returns a
  * still-held budget reservation the restore hook releases exactly once,
  * right after `importAndInsert` resolves. `importAndInsert` requires the
- * exact ready editor generation captured at restore start and appends
+ * exact ready editor incarnation captured at restore start and appends
  * against the runtime's latest content, resetting selection so the caret
  * lands after the inserted prompt.
  */
@@ -142,10 +142,12 @@ export function useLandingPromptStashDestination(args: {
       captureIdentity: (): PromptStashDestinationIdentity | null => {
         const handle = editorRef.current;
         if (handle === null || !handle.isReady()) return null;
+        const editorIncarnation = handle.getEditorIncarnation();
+        if (editorIncarnation === null) return null;
         return {
           surface: "landing",
           identity: stashIdentity,
-          editorGeneration: handle,
+          editorIncarnation,
         };
       },
       materialize: async (
@@ -163,12 +165,16 @@ export function useLandingPromptStashDestination(args: {
       },
       importAndInsert: (importArgs) => {
         const handle = editorRef.current;
+        const editorIncarnation =
+          handle !== null && handle.isReady()
+            ? handle.getEditorIncarnation()
+            : null;
         if (
           importArgs.identity.surface !== "landing" ||
           importArgs.identity.identity !== stashIdentity ||
           handle === null ||
-          !handle.isReady() ||
-          importArgs.identity.editorGeneration !== handle
+          editorIncarnation === null ||
+          importArgs.identity.editorIncarnation !== editorIncarnation
         ) {
           return Promise.resolve({ status: "stale" });
         }

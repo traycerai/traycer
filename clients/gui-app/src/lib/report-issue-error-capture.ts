@@ -108,3 +108,93 @@ export function captureReportIssueError(
     stackFamily,
   };
 }
+
+/**
+ * Capture for a dictation failure being reported from the error toast. Like
+ * {@link capturePersistedAgentError} and unlike {@link captureReportIssueError}
+ * this never calls Sentry: most dictation failures are environmental (mic
+ * blocked, host link down), so a `captureException` per attempt would mint an
+ * event stream of user-caused conditions rather than defects.
+ *
+ * `failureClass` is a fixed app-defined identifier and also travels in the
+ * PUBLIC prefill; the message may carry browser/host text, so it stays here.
+ */
+export function captureDictationFailure(input: {
+  readonly failureClass: string;
+  readonly message: string;
+}): ReportIssueErrorCapture {
+  const registry = getSupportContextSnapshot();
+  const causalProvider =
+    registry.harnessId.status === "unavailable"
+      ? null
+      : registry.harnessId.value;
+  const fingerprint = computeReportIssueFingerprintV1({
+    subtype: "DictationFailed",
+    errorCode: input.failureClass,
+    operation: "dictation",
+    causalProvider,
+  });
+  return {
+    cause: {
+      type: "DictationFailed",
+      message: input.message,
+      stack: null,
+      componentStack: null,
+      errorCode: input.failureClass,
+      sourceAction: "dictation",
+      timestamp: Date.now(),
+    },
+    correlationId: crypto.randomUUID(),
+    fingerprint,
+    stackFamily: null,
+  };
+}
+
+/**
+ * Capture for a PERSISTED agent error row (a chat transcript `error` block)
+ * being reported after the fact. Unlike {@link captureReportIssueError} this
+ * never calls Sentry: the failure already happened host-side when the turn
+ * ran, so a fresh renderer `captureException` per row mount would mint an
+ * unrelated event stream untied to the original failure. It still mints the
+ * correlation id and fingerprint so the private report clusters with its
+ * siblings.
+ *
+ * Both `message` and `code` are host/harness-supplied free text; they belong
+ * ONLY in this private cause, never in the public prefill (see the hostile
+ * transcript-code test on `<ErrorSegment />`). `recoverable` rides in the
+ * `type` discriminant rather than a new field: `PrivateErrorCause` is the
+ * fixed shape desktop main forwards (`SupportPrivateDiagnostics`), so this
+ * surface does not widen it.
+ */
+export function capturePersistedAgentError(input: {
+  readonly message: string;
+  readonly code: string | null;
+  readonly recoverable: boolean;
+}): ReportIssueErrorCapture {
+  const type = input.recoverable ? "AgentErrorRecoverable" : "AgentError";
+  const registry = getSupportContextSnapshot();
+  const causalProvider =
+    registry.harnessId.status === "unavailable"
+      ? null
+      : registry.harnessId.value;
+  const fingerprint = computeReportIssueFingerprintV1({
+    subtype: type,
+    errorCode: input.code,
+    operation: "agent-turn",
+    causalProvider,
+  });
+  return {
+    cause: {
+      type,
+      message: input.message,
+      stack: null,
+      componentStack: null,
+      errorCode: input.code,
+      sourceAction: "agent-turn",
+      timestamp: Date.now(),
+    },
+    correlationId: crypto.randomUUID(),
+    fingerprint,
+    stackFamily: null,
+  };
+}

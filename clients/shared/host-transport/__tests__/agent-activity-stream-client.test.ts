@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -12,6 +13,8 @@ import { WsStreamClient } from "../ws-stream-client";
 class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
   private statusChangeHandler: StatusChangeHandler = () => undefined;
+  /** Settable so a test can model this session's own negotiated minor. */
+  negotiatedSchemaVersion: SchemaVersion | null = null;
 
   readonly close = vi.fn();
 
@@ -23,6 +26,10 @@ class StubSession implements IStreamSession {
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusChangeHandler = handler;
+  }
+
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return this.negotiatedSchemaVersion;
   }
 
   requestReconnect(): void {}

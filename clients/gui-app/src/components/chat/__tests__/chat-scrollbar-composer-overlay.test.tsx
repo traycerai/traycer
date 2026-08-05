@@ -1,8 +1,8 @@
 /**
  * Regression coverage for the chat scrollbar / lower-composer overlay fix:
  *
- * 1. Full-width absolute lower chrome stays pointer-transparent so the
- *    transcript scrollbar edge lanes stay reachable.
+ * 1. Full-width absolute lower chrome stays pointer- and paint-transparent so
+ *    the transcript scrollbar edge lanes stay visible and reachable.
  * 2. Outer px-4 wrappers carry no bg-canvas and no vertical pt/pb; centered
  *    max-w-3xl children own bg-canvas + vertical spacing + pointer restore.
  * 3. Main ChatComposer (always) and ComposerSlotShell (when bottomSpacing is
@@ -349,17 +349,29 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
     // chat-tile.test.tsx. Isolating the pointer-events split does not need
     // that stack; the production JSX is the contract under test.
 
-    it("cannot capture pointer input on the full-width absolute lower layer", () => {
+    it("cannot capture input or paint over the full-width absolute lower layer", () => {
       const source = sourceOf("components/epic-canvas/renderers/chat-tile.tsx");
 
-      // Outer absolute positioning layer is pointer-transparent across the
-      // full pane width (including the scrollbar edge lanes).
-      expect(source).toMatch(
-        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10[^"]*"/,
+      const overlayMatch = source.match(
+        /className="([^"]*)"\s*\n\s*data-chat-lower-surfaces-overlay=""/,
       );
-      expect(source).not.toMatch(
-        /className="pointer-events-none absolute inset-x-0 bottom-0 z-10[^"]*\bpointer-events-auto\b[^"]*"/,
+      expect(overlayMatch).not.toBeNull();
+      const overlayClasses = overlayMatch?.[1] ?? "";
+      const overlayTokens = classTokens(overlayClasses);
+
+      // Outer absolute positioning layer is pointer- and paint-transparent
+      // across the full pane width (including the scrollbar edge lanes).
+      expect(overlayTokens).toEqual(
+        new Set([
+          "pointer-events-none",
+          "absolute",
+          "inset-x-0",
+          "bottom-0",
+          "z-10",
+        ]),
       );
+      expect(overlayClasses).not.toMatch(/(?:^|\s)(?:after:)?bg-/);
+      expect(overlayClasses).not.toContain("after:");
       // Immediate child that used to re-enable hit testing across the full
       // width must also stay transparent; only nested max-w-3xl chrome
       // (dock/composer/shell) restores pointer-events-auto.

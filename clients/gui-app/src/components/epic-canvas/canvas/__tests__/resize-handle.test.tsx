@@ -124,6 +124,9 @@ describe("<SplitResizeHandle />", () => {
     expect(className).toContain("h-1");
     expect(className).toContain("before:h-px");
     expect(className).toContain("before:top-1/2");
+    // Without `absolute` the pseudo-element is an inline box: h-px/inset-x-0
+    // do not apply and the separator paints nothing at all.
+    expect(className).toContain("before:absolute");
     expect(className).toContain("before:bg-border");
     expect(className).not.toContain("after:");
   });
