@@ -908,6 +908,26 @@ export function NewConversationModalBody(props: {
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
+      // Same host-first gate as `handleSubmit`: with no resolved client (a
+      // pinned host still connecting, or no active device) the create below
+      // can only reject - and the draft would already be gone, because
+      // `cleanupAfterSubmit` runs before the async create. Keep the modal
+      // open and the draft intact instead.
+      if ((hostClient?.getActiveHostId() ?? null) === null) {
+        reportableErrorToast(
+          "Couldn't start the agent.",
+          {
+            description: "No active device. Reconnect and try again.",
+          },
+          {
+            title: "Could not start agent",
+            message: "No active device was available.",
+            code: null,
+            source: "Chat",
+          },
+        );
+        return;
+      }
       const worktreeIntent = worktreeIntentForSubmit();
       const workspaceMode = deriveWorkspaceMode(
         draftWorkspaceFolderCount,
@@ -943,6 +963,7 @@ export function NewConversationModalBody(props: {
       cleanupAfterSubmit,
       draftWorkspaceFolderCount,
       epicId,
+      hostClient,
       parentId,
       placement,
       rememberEpicIntent,
