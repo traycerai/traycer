@@ -87,7 +87,8 @@ function makeEditorHandle(
   const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => options?.ready ?? true,
-    getEditorIncarnation: () => editorIncarnation,
+    getEditorIncarnation: () =>
+      (options?.ready ?? true) ? editorIncarnation : null,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
