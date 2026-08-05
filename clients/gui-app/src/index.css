@@ -313,6 +313,27 @@
  * of plugin source order.
  */
 
+/*
+ * Tailmark nests each top-level block under:
+ *   .prose > [data-tailmark] > [display:contents host] > block
+ * Tailwind Typography only zeroes outer margins with `.prose > :first-child`
+ * / `:last-child`. With that wrapper the first/last *block roots* keep full
+ * paragraph margins, so chat surfaces grow awkward empty space at the start
+ * and end of every markdown body (and double gaps between segments such as
+ * thinking → answer). Re-apply the same zeroing through the Tailmark hosts.
+ * Unlayered so it outranks the plugin's components-layer prose rules.
+ *
+ * Cross-tree gaps (body markdown → next-steps prose, often after a trailing
+ * `---`) cannot use collapsed margins between separate `.md-prose` roots -
+ * `TextSegment` owns that spacing on the next-steps wrapper.
+ */
+.md-prose > [data-tailmark] > :first-child > :first-child {
+  margin-top: 0;
+}
+.md-prose > [data-tailmark] > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
 /* Strip the backtick quotes Tailwind Typography adds via ::before / ::after. */
 .md-prose :where(code)::before,
 .md-prose :where(code)::after {
