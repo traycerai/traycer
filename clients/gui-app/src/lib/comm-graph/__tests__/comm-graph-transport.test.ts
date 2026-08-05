@@ -107,6 +107,30 @@ describe("commGraphTransportMarkers", () => {
       "host-b:1",
     ]);
   });
+
+  it("keys reused cloud origin sequences by canonical event id", () => {
+    const range = { startMs: 1_000, endMs: 2_000 };
+    const markers = commGraphTransportMarkers(
+      [
+        event({
+          id: 1,
+          eventId: "cloud-before-repair",
+          timestamp: 1_000,
+        }),
+        event({
+          id: 1,
+          eventId: "cloud-after-repair",
+          timestamp: 2_000,
+        }),
+      ],
+      range,
+    );
+
+    expect(markers.map((marker) => marker.key)).toEqual([
+      "cloud-before-repair",
+      "cloud-after-repair",
+    ]);
+  });
 });
 
 describe("commGraphPlayheadFraction", () => {

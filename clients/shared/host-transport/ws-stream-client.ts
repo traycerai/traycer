@@ -116,7 +116,7 @@ export interface WsStreamClientOptions<
  *        → enter the bidirectional frame loop
  *        → ping/pong heartbeat every `pingIntervalMs`
  *        → on drop: exponential-backoff reconnect, re-declare the same
- *          method + original params; never closed until `close()` is
+ *          method with its current params; never closed until `close()` is
  *          called or a fatal error frame arrives
  *
  * Frame pairing: a binary WS frame is the payload of the immediately
@@ -241,6 +241,19 @@ export class WsStreamClient<
     method: Method,
     params: ParamsOf<Registry, Method>,
   ): IStreamSession {
+    return this.subscribeWithParamsProvider(method, () => params);
+  }
+
+  /**
+   * Opens a stream whose parameters are read immediately before every wire
+   * subscribe, including physical reconnects. The provider must be a pure,
+   * synchronous read: it may expose an applied resume cursor, but must not
+   * create transport or application state as a side effect.
+   */
+  subscribeWithParamsProvider<Method extends keyof Registry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<Registry, Method>,
+  ): IStreamSession {
     if (this.closed) {
       // Defense-in-depth (tech-plan D4): a subscribe on an already-closed
       // client is a stale call from a torn-down consumer. Degrading to an
@@ -263,7 +276,7 @@ export class WsStreamClient<
     let removeSession = (): void => undefined;
     const session = new StreamSession<Registry>({
       method,
-      params,
+      paramsProvider,
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
@@ -768,7 +781,7 @@ type ExtractOpenRequest<MethodRegistry> =
 
 interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly method: keyof Registry & string;
-  readonly params: unknown;
+  readonly paramsProvider: () => unknown;
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
@@ -1410,7 +1423,7 @@ class StreamSession<
       this.config.method,
       myManifest[this.config.method],
       theirManifest[this.config.method],
-      this.config.params,
+      this.config.paramsProvider(),
     );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",

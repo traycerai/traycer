@@ -36,7 +36,14 @@ export class RemoteStreamClient<
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
-    return this.session.subscribe(method, params);
+    return this.subscribeWithParamsProvider(method, () => params);
+  }
+
+  subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
+    return this.session.subscribeWithParamsProvider(method, paramsProvider);
   }
 
   /** Pushes a rotated bearer in place (no reconnect) if the host supports it. */

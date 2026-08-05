@@ -21,7 +21,8 @@ export function mentionAttachmentFromSuggestion(
     entry.kind === "epic" ||
     entry.kind === "epic-artifact" ||
     entry.kind === "epic-chat" ||
-    entry.kind === "epic-terminal-agent"
+    entry.kind === "epic-terminal-agent" ||
+    entry.kind === "epic-terminal"
   ) {
     return entityMentionAttachmentFromSuggestion(entry);
   }
@@ -41,7 +42,14 @@ export function mentionAttachmentFromSuggestion(
 function entityMentionAttachmentFromSuggestion(
   entry: Extract<
     MentionSuggestionEntry,
-    { kind: "epic" | "epic-artifact" | "epic-chat" | "epic-terminal-agent" }
+    {
+      kind:
+        | "epic"
+        | "epic-artifact"
+        | "epic-chat"
+        | "epic-terminal-agent"
+        | "epic-terminal";
+    }
   >,
 ): EntityMentionAttachment {
   if (entry.kind === "epic") {
@@ -60,6 +68,7 @@ function entityMentionAttachmentFromSuggestion(
       artifactType: null,
       chatId: null,
       terminalAgentId: null,
+      terminalId: null,
       status: entry.status,
     };
   }
@@ -80,6 +89,7 @@ function entityMentionAttachmentFromSuggestion(
       artifactType: null,
       chatId: entry.chatId,
       terminalAgentId: null,
+      terminalId: null,
       status: null,
     };
   }
@@ -100,6 +110,28 @@ function entityMentionAttachmentFromSuggestion(
       artifactType: null,
       chatId: null,
       terminalAgentId: entry.terminalAgentId,
+      terminalId: null,
+      status: null,
+    };
+  }
+
+  if (entry.kind === "epic-terminal") {
+    return {
+      kind: "mention",
+      contextType: "terminal",
+      path: entry.token,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: entry.label,
+      description: entry.description,
+      epicId: entry.epicId,
+      artifactId: null,
+      artifactType: null,
+      chatId: null,
+      terminalAgentId: null,
+      terminalId: entry.terminalId,
       status: null,
     };
   }
@@ -119,6 +151,7 @@ function entityMentionAttachmentFromSuggestion(
     artifactType: entry.artifactType,
     chatId: null,
     terminalAgentId: null,
+    terminalId: null,
     status: entry.status,
   };
 }

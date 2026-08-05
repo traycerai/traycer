@@ -198,6 +198,17 @@ export interface TerminalXtermHostProps {
    * around a rectangle of terminal background.
    */
   readonly chrome: "padded" | "flush";
+  /**
+   * Hands the pane's live `Terminal` to the owner (and `null` on unmount), for
+   * surfaces that must read the engine's own state rather than the session
+   * store's - today the quote control, which needs xterm's selection and buffer
+   * coordinates. `null` opts out; only the epic terminal tile passes one.
+   *
+   * Deliberately narrower than it looks: the engine is shared and cached, so an
+   * owner may READ it and subscribe to its events, but writing to it here would
+   * race the resize/appearance/find hooks below that already own those knobs.
+   */
+  readonly onTerminalReady: ((term: Terminal | null) => void) | null;
 }
 
 export function TerminalXtermHost(props: TerminalXtermHostProps) {
@@ -319,12 +330,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const onUserInputRef = useRef(props.onUserInput);
   const onContainerResizeRef = useRef(props.onContainerResize);
   const onWriterReadyRef = useRef(props.onWriterReady);
+  const onTerminalReadyRef = useRef(props.onTerminalReady);
   const runnerHostRef = useRef(runnerHost);
   const keepAliveRef = useRef(props.keepAlive);
   useEffect(() => {
     onUserInputRef.current = props.onUserInput;
     onContainerResizeRef.current = props.onContainerResize;
     onWriterReadyRef.current = props.onWriterReady;
+    onTerminalReadyRef.current = props.onTerminalReady;
     runnerHostRef.current = runnerHost;
     findTargetIdRef.current = activeFindTargetId;
     keepAliveRef.current = props.keepAlive;
@@ -332,6 +345,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     props.onUserInput,
     props.onContainerResize,
     props.onWriterReady,
+    props.onTerminalReady,
     props.keepAlive,
     activeFindTargetId,
     runnerHost,
@@ -391,12 +405,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     // reattach (same proxy, already-drained queue); on a fresh plain-terminal
     // open it triggers the buffered-snapshot flush.
     onWriterReadyRef.current(entry.writerProxy);
+    onTerminalReadyRef.current?.(entry.term);
     markTerminalLoad(sessionId, "writer-ready");
 
     return () => {
       if (entry.containerEl.parentElement === mount) {
         mount.removeChild(entry.containerEl);
       }
+      onTerminalReadyRef.current?.(null);
       termRef.current = null;
       searchAddonRef.current = null;
       tileFindAdapterRef.current.setSearchAddon(null);

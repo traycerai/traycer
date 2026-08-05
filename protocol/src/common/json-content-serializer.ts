@@ -26,6 +26,15 @@ export enum ContextType {
    * referring to an Agent means the same thing either way (Core Flows, Flow 3).
    */
   TerminalAgent = "terminal-agent",
+  /**
+   * A plain interactive terminal - a shell a person or an agent is working
+   * in, not an Agent. Distinct from `TerminalAgent` for exactly that reason:
+   * `TerminalAgent` names an Agent reached through the terminal interface and
+   * projects as `@agent:`, while this names the terminal itself, which a
+   * coding agent can only READ (`traycer_read_terminal` / `traycer terminal
+   * output`) and never talk to.
+   */
+  Terminal = "terminal",
   Execution = "execution",
   User = "user",
 }
@@ -242,6 +251,7 @@ export interface MentionAttrs {
   fileName?: string;
   phaseId?: string;
   reviewCommentId?: string;
+  terminalId?: string;
   commandName?: string;
   workflowId?: string;
   b64content?: string;
@@ -308,6 +318,10 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
     case ContextType.TerminalAgent: {
       const title = attrs.label || attrs.id || "";
       return `agent:${title}`;
+    }
+    case ContextType.Terminal: {
+      const title = attrs.label || attrs.terminalId || attrs.id || "";
+      return `terminal:${title}`;
     }
     case ContextType.Execution: {
       const title = attrs.label || attrs.id || "";
@@ -430,6 +444,17 @@ function formatMentionForLLMQuery(
       return agentId.length === 0
         ? `@agent:${title} [agentId is unavailable]`
         : `@agent:${title} [agentId=${agentId}]`;
+    }
+    // Mirrors the agent arm above: a human-readable title so the reference
+    // reads as the user wrote it, plus the durable id the read tools address
+    // (`traycer_read_terminal`, `traycer terminal output`). Without the id the
+    // runtime is handed a bare title it cannot resolve.
+    case ContextType.Terminal: {
+      const terminalId = attrs.terminalId || attrs.id || "";
+      const title = attrs.label || "untitled";
+      return terminalId.length === 0
+        ? `@terminal:${title} [terminalId is unavailable]`
+        : `@terminal:${title} [terminalId=${terminalId}]`;
     }
     case ContextType.Execution: {
       const epicPart = attrs.epicId ? `${attrs.epicId}/` : "";

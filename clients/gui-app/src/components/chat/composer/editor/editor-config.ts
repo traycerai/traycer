@@ -15,6 +15,7 @@ import {
   createSlashSuggestionExtension,
 } from "./extensions/slash-command-extension";
 import { AttachmentGroupNode } from "./extensions/attachment-group-extension";
+import { ComposerSourcedQuote } from "./extensions/sourced-quote-extension";
 import { ImageAttachmentNode } from "./extensions/image-attachment-extension";
 import { ChatListKeymap } from "./extensions/chat-list-keymap";
 import {
@@ -73,6 +74,7 @@ export function buildComposerExtensions(
       gapcursor: false,
     }),
     ComposerBlockquote,
+    ComposerSourcedQuote,
     Markdown,
     Link.configure({
       openOnClick: false,

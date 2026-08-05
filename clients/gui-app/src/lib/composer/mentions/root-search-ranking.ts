@@ -23,6 +23,7 @@ const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
   git: 1,
   epic: 0.9,
   chat: 0.9,
+  terminals: 0.9,
   artifacts: 0.9,
 };
 

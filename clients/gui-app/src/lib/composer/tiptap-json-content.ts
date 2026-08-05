@@ -183,6 +183,7 @@ export function mentionAttrsFromAttachment(
       artifactType: mention.artifactType,
       chatId: mention.chatId,
       terminalAgentId: mention.terminalAgentId,
+      terminalId: mention.terminalId,
       status: mention.status,
     };
   }
@@ -208,7 +209,8 @@ export function mentionAttachmentFromAttrs(
   if (
     contextType === "epic" ||
     contextType === "chat" ||
-    contextType === "terminal-agent"
+    contextType === "terminal-agent" ||
+    contextType === "terminal"
   ) {
     return entityMentionAttachmentFromAttrs(attrs, contextType);
   }
@@ -528,6 +530,9 @@ function entityMentionId(
   if (mention.contextType === "terminal-agent") {
     return mention.terminalAgentId ?? mention.path;
   }
+  if (mention.contextType === "terminal") {
+    return mention.terminalId ?? mention.path;
+  }
   return mention.artifactId ?? mention.path;
 }
 
@@ -549,7 +554,11 @@ function plainTextFromNode(node: JsonContent): string {
   }
   if (node.type === "imageAttachment") return "";
   if (node.type === "attachmentGroup") return "";
-  if (node.type === "blockquote") return blockquotePlainText(node);
+  // A sourced quote projects to text exactly like a blockquote - the source it
+  // remembers travels in its attrs, not in the prose.
+  if (node.type === "blockquote" || node.type === "sourcedQuote") {
+    return blockquotePlainText(node);
+  }
   return (node.content ?? []).map((child) => plainTextFromNode(child)).join("");
 }
 
@@ -733,18 +742,17 @@ function entityMentionAttachmentFromAttrs(
     label: stringValue(attrs.label) ?? path,
     description: stringValue(attrs.description) ?? path,
     epicId,
-    artifactId:
-      contextType === "epic" ||
-      contextType === "chat" ||
-      contextType === "terminal-agent"
-        ? null
-        : (stringValue(attrs.artifactId) ?? id),
+    artifactId: isArtifactContextType(contextType)
+      ? (stringValue(attrs.artifactId) ?? id)
+      : null,
     artifactType,
     chatId: contextType === "chat" ? (stringValue(attrs.chatId) ?? id) : null,
     terminalAgentId:
       contextType === "terminal-agent"
         ? (stringValue(attrs.terminalAgentId) ?? id)
         : null,
+    terminalId:
+      contextType === "terminal" ? (stringValue(attrs.terminalId) ?? id) : null,
     status: statusValue(attrs.status),
   };
 }
