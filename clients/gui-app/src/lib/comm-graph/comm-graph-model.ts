@@ -159,9 +159,7 @@ function isOpenRequest(
   if (event.kind !== "a2a_message") return false;
   if (event.expectReply !== true) return false;
   if (event.responseId === null) return false;
-  const reply = latestReply.get(
-    threadKey(event.hostId, event.responseId),
-  );
+  const reply = latestReply.get(threadKey(event.hostId, event.responseId));
   if (reply === undefined) return true;
   return compareThreadCausalOrder(reply, event) < 0;
 }
