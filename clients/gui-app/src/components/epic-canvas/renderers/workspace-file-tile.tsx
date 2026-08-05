@@ -3,7 +3,11 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
-import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  createReportIssueContext,
+  type ReportIssueContext,
+} from "@/lib/report-issue-context";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
 import { useShikiHighlighter } from "@/markdown/shiki-highlighter";
@@ -143,6 +147,11 @@ function WorkspaceFileTileLive(props: {
     [rawContent],
   );
   const displayError = readFileDisplayError(
+    readFilePayloadError(query.data),
+    query.isError,
+    query.error,
+  );
+  const reportContext = readFileReportContext(
     readFilePayloadError(query.data),
     query.isError,
     query.error,
@@ -290,6 +299,7 @@ function WorkspaceFileTileLive(props: {
           <WorkspaceFilePreviewContent
             content={content}
             displayError={displayError}
+            reportContext={reportContext}
             fileName={node.name}
             isLoading={query.isLoading}
             language={language}
@@ -335,9 +345,47 @@ function readFileDisplayError(
   return transportErrorMessage(error);
 }
 
+/**
+ * The preview fails in two unrelated ways, and the filed report has to say
+ * which: a payload error means the host answered and named a file-level
+ * problem, while a transport error means the request never reached a verdict
+ * at all (host unreachable, session rejected, method unsupported). Reporting
+ * the second as "could not be read" sent one field report's triage hunting an
+ * `ENOENT` that never existed - the failure was an auth-plane outage.
+ *
+ * Neither arm may carry error text: `createReportIssueContext` deliberately
+ * does not redact, the payload string can embed the user's absolute path, and
+ * `HostRpcError.message` can carry host-supplied detail. Only fixed copy and
+ * the stable wire code cross into a public issue.
+ */
+function readFileReportContext(
+  payloadError: string | null,
+  isTransportError: boolean,
+  error: unknown,
+): ReportIssueContext {
+  if (payloadError === null && isTransportError) {
+    return createReportIssueContext({
+      title: "Workspace file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      // Narrowed, never asserted: TanStack's error generic is an unchecked
+      // cast, so a bare `Error` can occupy this channel.
+      code: error instanceof HostRpcError ? error.code : null,
+      source: "Host",
+    });
+  }
+  return createReportIssueContext({
+    title: "Workspace file could not be read",
+    message: "The workspace file preview could not be loaded.",
+    code: null,
+    source: "Workspace file",
+  });
+}
+
 function WorkspaceFilePreviewContent(props: {
   readonly content: string | null;
   readonly displayError: string | null;
+  readonly reportContext: ReportIssueContext;
   readonly fileName: string;
   readonly isLoading: boolean;
   readonly language: string;
@@ -366,12 +414,7 @@ function WorkspaceFilePreviewContent(props: {
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground">
         <p>{props.displayError}</p>
         <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Workspace file could not be read",
-            message: "The workspace file preview could not be loaded.",
-            code: null,
-            source: "Workspace file",
-          })}
+          context={props.reportContext}
           presentation="text"
           className={undefined}
         />
