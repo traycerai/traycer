@@ -44,7 +44,7 @@ jobs:
           sudo apt-get install -y libfuse2 xvfb xauth zip unzip zstd strace
 
       - name: Apply, commit, validate, and package
-        run: bash .github/rolaand-local/bootstrap-build.sh
+        run: bash .github/rolaand-local/bootstrap-build-wrapper.sh
 
       - name: Record failed build on branch
         if: failure()
