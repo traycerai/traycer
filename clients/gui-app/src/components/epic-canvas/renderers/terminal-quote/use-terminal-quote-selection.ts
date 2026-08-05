@@ -171,8 +171,11 @@ export function useTerminalQuoteSelection(
       if (menuOpenRef.current) return;
       setSelection(null);
     };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    // Capture phase: focus usually sits inside the xterm right after a
+    // selection, and xterm's own key handling can swallow the event before it
+    // bubbles back to the document.
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [selection]);
 
   // Clicking away dismisses. A click INSIDE the terminal already clears xterm's
