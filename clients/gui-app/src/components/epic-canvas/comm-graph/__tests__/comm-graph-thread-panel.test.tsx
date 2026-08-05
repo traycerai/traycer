@@ -201,9 +201,6 @@ describe("CommGraphThreadPanel", () => {
     });
     expect(toggles).toHaveLength(2);
     const [firstToggle, secondToggle] = toggles;
-    if (firstToggle === undefined || secondToggle === undefined) {
-      throw new Error("expected two message toggles");
-    }
     expect(messageRows()).toHaveLength(2);
     expect(firstToggle.getAttribute("aria-label")).toBe("Expand message");
     expect(secondToggle.getAttribute("aria-label")).toBe("Expand message");
