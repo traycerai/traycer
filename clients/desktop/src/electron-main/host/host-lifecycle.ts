@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
@@ -231,13 +231,44 @@ export class HostLifecycle extends EventEmitter {
    * - `status(...)` against the legacy SMAppService-backed controller can
    * falsely report `not-installed` against a CLI-owned LaunchAgent
    * registration. Install / upgrade / register-service actions are all
-   * CLI-owned (Tech Plan Decision 1).
+   * CLI-owned (Tech Plan Decision 1). `hostInstalled` is therefore handed
+   * IN by the caller rather than read here - the boot seam already holds a
+   * controller and resolves it there.
+   *
+   * @param options.hostInstalled Whether this machine has a host install
+   * record at all. `false` means nothing was ever installed, which is a
+   * different state from "installed but not up yet" and must not be waited
+   * out - see the readiness short-circuit below.
    */
-  async bootstrap(): Promise<void> {
+  async bootstrap(options: { readonly hostInstalled: boolean }): Promise<void> {
+    // Ahead of BOTH watcher installs below - the success path and the catch.
+    await this.ensureWatchableRootDir();
     try {
       await this.reloadSnapshot();
       if (!this.isCompatible(this.currentSnapshot)) {
-        await this.waitForReady();
+        // Nothing is installed on this machine, so nothing is coming. The
+        // launch converge deliberately refuses to provision a
+        // never-installed host before sign-in
+        // (`host-launch-converge.ts`'s `isUnavailableInstalledHost`), which
+        // means no provisioning lane exists to extend the quiet budget
+        // below - it would run the full timeout every time and then report
+        // that a host "did not start" when nothing ever asked it to.
+        //
+        // That line is not free: it lands at ERROR in the desktop.log
+        // attached to every support report from a fresh install, where it
+        // has already misdirected three field investigations
+        // (traycer#961, #996, #1001), and holding `bootstrap` open delays
+        // the deferred work gated on it - the host health monitor (which
+        // owns Windows auto-respawn) and the macOS login-item revision
+        // monitor. The watcher installed below is what picks the host up
+        // once the user signs in and provisioning actually runs.
+        if (options.hostInstalled) {
+          await this.waitForReady();
+        } else {
+          log.info(
+            "[host] no host installed on this machine yet - skipping the readiness wait",
+          );
+        }
       }
       this.installWatcher();
     } catch (cause) {
@@ -523,6 +554,38 @@ export class HostLifecycle extends EventEmitter {
       this.watcher = watcher;
     } catch (err) {
       log.warn("[host] unable to install pid metadata watcher", err);
+    }
+  }
+
+  /**
+   * `fs.watch` needs the directory to already exist, and on a machine where
+   * no host has ever been provisioned the CLI has not created the host root
+   * yet - so `installWatcher` fails ENOENT and this lifecycle is left with NO
+   * watcher for the rest of the session. Every fresh-install field report
+   * carries that line (traycer#961, #996, #1001).
+   *
+   * It used to be partly self-correcting by accident: the readiness wait gave
+   * a provisioning install time to create the root before the watcher was
+   * installed at the end of it. Skipping that wait for a never-installed host
+   * removes the accident, so the directory is created explicitly instead.
+   * `HostController.publishReachableHostSnapshot` only re-arms the watcher on
+   * converge paths that reach a live host - a converge that fails after
+   * creating the root, or a host installed outside this controller, leaves
+   * nothing to re-arm it.
+   *
+   * Creating it is safe: an empty root means nothing to the CLI (which
+   * creates it recursively during install anyway), nothing infers install
+   * state from its existence, and the desktop already does exactly this for
+   * host name settings (`writeHostNameSettings`).
+   *
+   * Best-effort by design - a failure here must not become a startup error,
+   * since `installWatcher` already degrades gracefully.
+   */
+  private async ensureWatchableRootDir(): Promise<void> {
+    try {
+      await mkdir(this.options.layout.rootDir, { recursive: true });
+    } catch (err) {
+      log.warn("[host] unable to create the host root directory to watch", err);
     }
   }
 
