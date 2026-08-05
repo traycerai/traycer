@@ -1,4 +1,5 @@
 import {
+  appendFile,
   mkdtemp,
   open,
   rename,
@@ -372,6 +373,162 @@ describe("spawn-evidence substrate", () => {
       expect(findPostBaselineTerminalMarker(markers)?.phase).toBe(
         "failed-to-spawn",
       );
+    });
+  });
+
+  // Literal `writer=supervisor` throughout rather than the exported
+  // constant: these fixtures stand in for bytes already on disk, and a test
+  // written against the constant would follow a rename that silently broke
+  // every log written before it.
+  describe("writer identity across incremental reads", () => {
+    it("rejects a marker-shaped burst without losing the stamped marker", async () => {
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=crashed code=134 writer=supervisor\n",
+      );
+      expect(await reader.read()).toHaveLength(1);
+
+      // A burst of marker-shaped host output, larger than the reader's
+      // window. None of it may be trusted, and it must not displace the
+      // real marker either - filtering happens before the cap, so the
+      // burst never occupies the window in the first place.
+      const burst = Array.from(
+        { length: 70 },
+        (_unused, i) =>
+          `[2026-01-01T00:01:${String(i % 60).padStart(2, "0")}.000Z] phase=starting`,
+      ).join("\n");
+      await appendFile(mocks.logPath, `${burst}\n`);
+
+      const markers = await reader.read();
+      expect(markers).toHaveLength(1);
+      expect(markers[0]?.phase).toBe("crashed");
+    });
+
+    it("reads the era from the whole file, not just the post-baseline slice", async () => {
+      // The verified marker sits BEFORE the baseline - a service-managed
+      // start writes no CLI marker for this attempt. Deciding the era from
+      // the slice alone would call this log legacy and promote the host's
+      // stderr line to `starting-marker` evidence.
+      await writeFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:05.000Z] phase=starting\n",
+      );
+
+      expect(await readPostBaselineMarkers(baseline)).toHaveLength(0);
+      const evidence = await collectSpawnEvidence(
+        {
+          log: baseline,
+          pidMetadata: await capturePidMetadataBaseline(
+            mocks.pidPath,
+            "production",
+          ),
+        },
+        "production",
+      );
+      expect(evidence?.kind).not.toBe("starting-marker");
+    });
+
+    it("seeds the incremental reader's era from the pre-baseline region", async () => {
+      await writeFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:05.000Z] phase=starting\n",
+      );
+
+      // Reading only forward would never see the verified marker.
+      expect(await reader.read()).toHaveLength(0);
+    });
+
+    it("does not let raw output evict an authentic marker from the window", async () => {
+      // `runTaskAndVerifyStart` polls this reader and gives up if no marker
+      // appears. Capping before filtering would let a burst of marker-shaped
+      // host output push the real terminal marker out of the window, so a
+      // spawn that DID leave evidence reports none and the verifier times out.
+      await writeFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:01:00.000Z] phase=crashed code=134 writer=supervisor\n",
+      );
+      expect(await reader.read()).toHaveLength(1);
+
+      const burst = Array.from(
+        { length: 200 },
+        (_unused, i) =>
+          `[2026-01-01T00:02:${String(i % 60).padStart(2, "0")}.000Z] phase=starting`,
+      ).join("\n");
+      await appendFile(mocks.logPath, `${burst}\n`);
+
+      const markers = await reader.read();
+      expect(markers).toHaveLength(1);
+      expect(markers[0]?.phase).toBe("crashed");
+      expect(findPostBaselineTerminalMarker(markers)?.phase).toBe("crashed");
+    });
+
+    it("scans a pre-baseline region larger than one chunk without buffering it whole", async () => {
+      // The prefix is streamed in 64KiB chunks, so a stamped marker beyond
+      // the first chunk must still be found - and a marker split across a
+      // chunk boundary must not be missed.
+      const filler = `${"x".repeat(120)}\n`.repeat(2000); // ~240KB, > 3 chunks
+      await writeFile(
+        mocks.logPath,
+        `${filler}[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n${filler}`,
+        "utf8",
+      );
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:05.000Z] phase=starting\n",
+      );
+
+      expect(await readPostBaselineMarkers(baseline)).toHaveLength(0);
+    });
+
+    it("keeps pre-boundary lines but rejects what follows the first stamped marker", async () => {
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=starting\n",
+      );
+      // Nothing has stamped yet, so this may be the previous CLI's marker.
+      expect(await reader.read()).toHaveLength(1);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:01.000Z] phase=crashed code=9 writer=supervisor\n" +
+          "[2026-01-01T00:00:02.000Z] phase=starting\n",
+      );
+
+      // The first line stays - it precedes the boundary, so demoting it
+      // would delete a genuine older marker on every upgrade. The third
+      // does not: it arrives after the writer proved it stamps.
+      const markers = await reader.read();
+      expect(markers.map((m) => m.phase)).toEqual(["starting", "crashed"]);
+      expect(markers[0]?.writer).toBe("unverified");
+      expect(markers[1]?.writer).toBe("supervisor");
     });
   });
 
