@@ -278,6 +278,10 @@ function WorkspaceFileTileLive(props: {
         <div
           ref={scrollContainerRef}
           onScroll={onScroll}
+          // Ctrl/Cmd+A selects the file body, not the whole window (#592). The
+          // line-number gutter inside is `select-none`, so copying the result
+          // still yields the file text without line numbers.
+          data-selection-root=""
           className={cn(
             "relative min-h-0 flex-1 overflow-auto",
             props.isActive && "selection:bg-primary/25",
