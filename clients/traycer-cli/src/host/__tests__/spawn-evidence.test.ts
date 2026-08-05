@@ -557,6 +557,39 @@ describe("spawn-evidence substrate", () => {
       expect(markers[0]?.writer).toBe("unverified");
       expect(markers[1]?.writer).toBe("supervisor");
     });
+
+    it("keeps the pre-boundary line on later polls of the same file", async () => {
+      // The boundary is positional WITHIN a file. A stamped marker in the
+      // window proves the writer stamps from here on - it does not
+      // retroactively convict the lines before it, which is the whole point
+      // of the N-1 overlap. Re-deriving the era from that marker on the next
+      // poll would delete the previous CLI's evidence one read late, so the
+      // marker would be reported once and then vanish.
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=crashed code=9\n" +
+          "[2026-01-01T00:00:01.000Z] phase=starting writer=supervisor\n",
+      );
+      expect((await reader.read()).map((m) => m.phase)).toEqual([
+        "crashed",
+        "starting",
+      ]);
+
+      // Poll with no new bytes, then a poll with an unrelated append. Neither
+      // may demote the legacy marker.
+      expect((await reader.read()).map((m) => m.phase)).toEqual([
+        "crashed",
+        "starting",
+      ]);
+      await appendFile(mocks.logPath, "some raw host output\n");
+      expect((await reader.read()).map((m) => m.phase)).toEqual([
+        "crashed",
+        "starting",
+      ]);
+    });
   });
 
   describe("collectSpawnEvidence preference order", () => {

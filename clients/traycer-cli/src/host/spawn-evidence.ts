@@ -319,12 +319,22 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   let pending = "";
   // Labelled and unfiltered; the authoritative view is derived per read.
   let observed: readonly BootstrapLogEntry[] = [];
-  // Sticky: a writer that has identified itself once cannot stop being
-  // capable, and `observed` is capped below - so re-deriving this from the
-  // retained window would let a burst of marker-shaped host output evict
-  // the verified marker and reopen the hole.
-  let writerIdentified = false;
-  // The era also has to account for what came BEFORE the baseline, which
+  // TWO bits, deliberately. They answer different questions and conflating
+  // them breaks one of the two cases this reader has to serve.
+  //
+  // `boundaryIdentified` is about THIS file: had the writer already stamped
+  // before the window we are accumulating began? Only that justifies
+  // filtering the window wholesale. It is per-file and never set from a
+  // marker inside the window - within one file the boundary is POSITIONAL,
+  // which is what keeps an N-1 legacy marker that precedes the first stamped
+  // one (the ordinary upgrade, both eras in one file).
+  let boundaryIdentified = false;
+  // `sawSupervisorMarker` is about the WRITER, and outlives any single file.
+  // Sticky because `observed` is capped below, so re-deriving it from the
+  // retained window would let a burst of marker-shaped host output evict the
+  // verified marker and reopen the hole.
+  let sawSupervisorMarker = false;
+  // The boundary also has to account for what came BEFORE the baseline, which
   // this reader never otherwise looks at: the verified marker can sit in
   // the pre-baseline region (a service-managed start writes no CLI marker
   // for this attempt), and reading only forward would call that log legacy.
@@ -354,26 +364,33 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         if (!sameOpenFile) {
           pending = "";
           observed = [];
-          // `writerIdentified` deliberately survives a replaced file:
+          // A replacement INHERITS the boundary answer we already proved:
           // capability belongs to the WRITER, and rotation hands the same
-          // supervisor a fresh file it will keep identifying itself in.
-          // The seed is per-file, so a replacement re-seeds from its own
-          // pre-baseline region.
+          // supervisor a fresh file it will keep identifying itself in. That
+          // file has no pre-baseline region to re-seed from, so without this
+          // the boundary is forgotten and a marker-shaped host line in the
+          // replacement reads as legacy evidence - the collision this reader
+          // exists to reject.
+          boundaryIdentified = sawSupervisorMarker;
           seeded = false;
         }
         if (!seeded) {
           seeded = true;
           // Streamed, not buffered whole: this runs in a 250ms poll loop
           // against a log that may have outgrown its start-time cap.
-          writerIdentified =
-            writerIdentified ||
-            (await prefixIdentifiesWriter(handle, readOffset));
+          if (
+            !boundaryIdentified &&
+            (await prefixIdentifiesWriter(handle, readOffset))
+          ) {
+            boundaryIdentified = true;
+            sawSupervisorMarker = true;
+          }
         }
         dev = info.dev;
         ino = info.ino;
         offset = info.size;
         if (info.size <= readOffset) {
-          return retainAuthenticMarkers(observed, writerIdentified);
+          return retainAuthenticMarkers(observed, boundaryIdentified);
         }
         const length = info.size - readOffset;
         const buffer = Buffer.alloc(length);
@@ -389,20 +406,20 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         // evicted, the reader would report no marker, and
         // `runTaskAndVerifyStart` would time out on a spawn that had in
         // fact left evidence.
-        const retained = retainAuthenticMarkers(combined, writerIdentified);
-        // Latch on a stamped marker seen in the STREAM, not just in the
-        // pre-baseline seed. Capability belongs to the writer, but `observed`
-        // does not outlive the file: a rotation clears it, and the
-        // replacement has no stamped prefix to re-seed from, so without this
-        // the boundary is forgotten and an unstamped marker-shaped line in
-        // the new file reads as pre-boundary evidence - the collision this
-        // reader exists to reject.
+        const retained = retainAuthenticMarkers(combined, boundaryIdentified);
+        // Record the capability from a marker seen in the STREAM, not just
+        // from the pre-baseline seed - post-baseline is where the supervisor
+        // ordinarily stamps, so the seed usually never sees one. This feeds
+        // ONLY the next file (see the rotation branch); promoting it into
+        // `boundaryIdentified` here would re-filter this same window on the
+        // next poll and delete the pre-boundary legacy marker that
+        // `retainAuthenticMarkers` was given a positional boundary to keep.
         //
-        // The CAP cannot lose the boundary that way (everything kept past it
-        // is stamped, and the cap keeps the most recent entries), which is
-        // why no promotion is needed there. Rotation is a different loss and
-        // needs this.
-        writerIdentified = writerIdentified || markersIdentifyWriter(retained);
+        // The CAP needs no equivalent: everything kept past the boundary is
+        // stamped and the cap keeps the most recent entries, so it cannot
+        // lose the boundary. Rotation is a different loss and needs this.
+        sawSupervisorMarker =
+          sawSupervisorMarker || markersIdentifyWriter(retained);
         observed = retained.slice(-MAX_RETAINED_MARKERS);
         return observed;
       } finally {
