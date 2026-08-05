@@ -93,6 +93,12 @@ afterEach(() => {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
   rmSync(workHome, { recursive: true, force: true });
+  // The runner now signals failure by SETTING `process.exitCode` rather than
+  // calling `process.exit`, so a test that drives a failing command leaves it
+  // set on this very process. Left behind, vitest exits non-zero with every
+  // test green - a red suite with nothing to point at. Clear it here so no
+  // individual test has to remember.
+  process.exitCode = undefined;
   stdoutSpy.mockRestore();
   stderrSpy.mockRestore();
   exitSpy.mockRestore();
@@ -113,16 +119,27 @@ function joined(chunks: readonly string[]): string {
 async function runAndCapture(
   fn: () => Promise<void>,
 ): Promise<ParsedRunnerOutput> {
+  // The runner records its code on `process.exitCode` and lets the loop drain
+  // instead of calling `process.exit` (see runner/exit.ts). Snapshot and
+  // RESTORE it around the run: a leaked non-zero value would otherwise make
+  // the vitest process itself exit non-zero with every test green.
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
   let exitCode = 0;
   try {
     await fn();
+    exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
   } catch (err) {
+    // Still honoured: the drain watchdog force-exits, and any path reaching
+    // `process.exit` directly must keep reporting its code here.
     if (err instanceof Error && err.message.startsWith("__test_exit_")) {
       exitCode = Number.parseInt(err.message.replace("__test_exit_", ""), 10);
     } else {
+      process.exitCode = priorExitCode;
       throw err;
     }
   }
+  process.exitCode = priorExitCode;
   const stdout = joined(stdoutChunks);
   const stdoutLines = stdout.split("\n").filter((l) => l.length > 0);
   const envelopes: Record<string, unknown>[] = [];
@@ -391,8 +408,11 @@ describe("buildConfigShellSetCommand conflict-detection", () => {
         { from: "user" },
       );
     } catch (err) {
+      // Tolerated, not required: the runner now records the failure on
+      // `process.exitCode` and returns normally, so this usually does not
+      // throw at all. Only a force-exit path still would.
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        // expected - the runner reached process.exit(1)
+        // expected - a force-exit path was reached
       } else {
         throw err;
       }

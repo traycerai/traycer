@@ -87,13 +87,14 @@ import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
+import { finishAndExit } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
-import { flushStdio, writeStderr, writeStdout } from "./runner/std-write";
+import { writeStderr, writeStdout } from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
-// process.exit, so anything composed via `withRunner` participates in
+// process termination, so anything composed via `withRunner` participates in
 // the shared NDJSON envelope (--json) and global flag handling
 // (--quiet, --no-progress, --no-bootstrap).
 //
@@ -1127,8 +1128,8 @@ function registerConfigCommands(program: Command): void {
   // commander passes as a single array as the first action argument.
   // `withRunner`'s positional extractor coerces non-string entries to
   // `undefined`, so we wire this command directly through
-  // `addRunnerFlags` + `runCommand`. The runner still owns process.exit
-  // and the NDJSON envelope.
+  // `addRunnerFlags` + `runCommand`. The runner still owns process
+  // termination and the NDJSON envelope.
   addRunnerFlags(
     shell
       .command("set")
@@ -1916,8 +1917,7 @@ function registerMonitorCommand(program: Command): void {
           err instanceof Error ? err.message : String(err)
         }\n`,
       );
-      await flushStdio();
-      process.exit(1);
+      await finishAndExit(1);
     }
   });
 }
@@ -1963,8 +1963,8 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         }
         // `--help` under `--json` wraps the whole help text in one line;
         // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
-        await flushStdio();
-        process.exit(0);
+        await finishAndExit(0);
+        return;
       }
       // Parse failure. In --json mode emit the runner's NDJSON error
       // envelope so downstream consumers see a coded `result/error`;
@@ -1991,8 +1991,8 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         };
         writeStdout(`${JSON.stringify(event)}\n`);
       }
-      await flushStdio();
-      process.exit(err.exitCode || 1);
+      await finishAndExit(err.exitCode || 1);
+      return;
     }
     const error = errorFromUnknown(err);
     entryLogger.error(
@@ -2018,8 +2018,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
       );
     }
-    await flushStdio();
-    process.exit(1);
+    await finishAndExit(1);
   });
 }
 
@@ -2053,15 +2052,10 @@ function exitAfterUnhandledFailure(
   writeStderr(
     `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
   );
-  void Sentry.flush(2000)
-    .catch((flushErr) => {
-      logger.warn("Sentry flush failed after process-level failure", {
-        errorName: errorFromUnknown(flushErr).name,
-        errorMessage: errorFromUnknown(flushErr).message,
-      });
-    })
-    .then(() => flushStdio())
-    .finally(() => {
-      process.exit(1);
-    });
+  // Routed through the same terminator as every other exit. This is the one
+  // path where an abrupt teardown could be argued for - the process is already
+  // in an unknown state - but that is exactly the state the win32 abort fires
+  // in, and `finishAndExit`'s watchdog bounds how long a wedged handle can
+  // hold it. See exit.ts.
+  void finishAndExit(1);
 }

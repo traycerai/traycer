@@ -47,7 +47,9 @@ function resolveIterations() {
   if (typeof raw !== "string" || raw.length === 0) return DEFAULT_ITERATIONS;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isInteger(parsed) || parsed < 1) {
-    fail(`TRAYCER_CLI_EXIT_ITERATIONS must be a positive integer, got '${raw}'`);
+    fail(
+      `TRAYCER_CLI_EXIT_ITERATIONS must be a positive integer, got '${raw}'`,
+    );
   }
   return parsed;
 }
