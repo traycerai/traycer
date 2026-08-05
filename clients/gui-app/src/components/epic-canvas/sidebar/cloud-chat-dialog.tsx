@@ -12,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useHostClient } from "@/lib/host/runtime";
 import { cn } from "@/lib/utils";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
@@ -136,7 +135,10 @@ function CloudChatDialogBody(props: {
       {state.fidelityNotice !== null && (
         <p className="text-xs text-muted-foreground">{state.fidelityNotice}</p>
       )}
-      <ScrollArea className="max-h-[60vh] w-full">
+      {/* Native overflow scroll, per #958: the app-wide scrollbar theme in
+          index.css owns the look; the Radix ScrollArea it replaced was
+          deleted on main with it. */}
+      <div className="max-h-[60vh] w-full overflow-y-auto">
         <div className="flex w-full flex-col gap-4 pr-3">
           {state.transcript.messages.map((message) => (
             <MessageRow
@@ -173,7 +175,7 @@ function CloudChatDialogBody(props: {
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
