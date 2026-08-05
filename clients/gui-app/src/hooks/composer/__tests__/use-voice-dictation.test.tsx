@@ -385,9 +385,12 @@ describe("useVoiceDictation lifecycle", () => {
 // root-caused only by elimination because `fail()` wrote no log line at all.
 // These cover the classes a support bundle actually turns on - the transport
 // pair, the host error frame, the mic split, and the two paths that used to
-// emit their own warn - plus the rule that a line describes THIS attempt.
-// They do not exhaust all ten classes; `fail()` writing the line centrally is
-// what makes the rest structural rather than test-enforced.
+// emit their own warn - plus the two rules that make a class worth trusting:
+// a line describes THIS attempt (never the previous one), and an attempt
+// produces exactly one class (a late-resolving capture task must not overwrite
+// the cause that killed the session). They do not exhaust all ten classes;
+// `fail()` writing the line centrally is what makes the rest structural rather
+// than test-enforced.
 // ---------------------------------------------------------------------------
 
 describe("useVoiceDictation failure logging", () => {
@@ -652,5 +655,69 @@ describe("useVoiceDictation failure logging", () => {
 
     expect(result.current.failureClass).toBeNull();
     expect(result.current.state).toBe("requesting");
+  });
+
+  it("does not carry a denied attempt's microphone remedy into a host-link failure", async () => {
+    // `permissionDenied` drives the composer's "Open Settings" action. Since
+    // the failure class now rides the PUBLIC Report Issue prefill, a stale flag
+    // produces one self-contradicting report: code `not_connected`, next to a
+    // button that opens microphone settings.
+    runnerHostState.requestMicrophoneAccess = () => Promise.resolve("denied");
+    const { result, rerender } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    expect(result.current.failureClass).toBe("permission_denied_os");
+    expect(result.current.permissionDenied).toBe(true);
+
+    // The host link is gone by the time the user retries.
+    streamRuntimeState.wsStreamClient = null;
+    rerender();
+    act(() => {
+      result.current.start();
+    });
+
+    expect(result.current.failureClass).toBe("not_connected");
+    expect(result.current.permissionDenied).toBe(false);
+  });
+
+  it("does not let a late microphone acquisition overwrite the failure that killed the session", async () => {
+    // The host can fail a session while the permission prompt is still up.
+    // `startAudioGraph` captured the AudioContext before that await, so the
+    // resumed task would find it closed and report `audio_context_not_running`
+    // over the real cause - burying the class this whole change exists to
+    // deliver.
+    let resolveStream: (stream: FakeMediaStream) => void = () => undefined;
+    getUserMediaImpl = () =>
+      new Promise<FakeMediaStream>((resolve) => {
+        resolveStream = resolve;
+      });
+    const log = spyOnFailureLog();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    // The prompt is genuinely still pending - otherwise the race under test
+    // never happens and this would pass vacuously.
+    expect(result.current.state).toBe("requesting");
+
+    act(() => {
+      lastSpeechClient().callbacks.onError({
+        message: "the on-device model is not installed",
+        code: "MODEL_NOT_READY",
+      });
+    });
+    expect(result.current.failureClass).toBe("host_error_frame");
+
+    // The prompt the user was still looking at now resolves.
+    resolveStream(fakeMediaStream());
+    await flushAsync();
+
+    expect(log.failures()).toHaveLength(1);
+    expect(result.current.failureClass).toBe("host_error_frame");
   });
 });

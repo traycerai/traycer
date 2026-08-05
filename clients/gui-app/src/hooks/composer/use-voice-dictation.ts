@@ -269,6 +269,14 @@ export function useVoiceDictation(
           blocker: analyticsBlockerFromError(error),
         });
       }
+      // Invalidate capture work still in flight, the way `stop()`/`cancel()`
+      // already do. `startAudioGraph` captures the AudioContext BEFORE awaiting
+      // the permission prompt, so without this bump a failure arriving during
+      // that await tears the context down and the task still resumes on it -
+      // finds it closed, and calls fail() a SECOND time with
+      // `audio_context_not_running`. That generic class would overwrite the
+      // real first cause and become the one the user reports.
+      startGenerationRef.current += 1;
       markClosing();
       teardownAll();
       setState("error");
@@ -483,14 +491,26 @@ export function useVoiceDictation(
 
   const start = useCallback(() => {
     if (state === "recording" || state === "requesting") return;
-    // Reset the per-attempt diagnostic refs FIRST - before any failure path can
-    // read them. They are only meaningful for the attempt now beginning, and a
-    // failure that reports the PREVIOUS attempt's connection status or a
-    // still-growing time-since-recording is worse than no diagnostic: it sends
-    // triage after the wrong session. `null` here honestly means "this attempt
-    // never got that far".
+    // Clear everything the PREVIOUS attempt left behind FIRST - before any
+    // failure path below can read it or outlive it.
+    //
+    // The refs are only meaningful for the attempt now beginning: a failure
+    // that reports the previous attempt's connection status or a still-growing
+    // time-since-recording is worse than no diagnostic, because it sends triage
+    // after the wrong session. `null` here honestly means "this attempt never
+    // got that far".
+    //
+    // The error state has to clear here too, not after the not-connected branch
+    // below. `permissionDenied` drives the "Open Settings" affordance, so a
+    // denied attempt followed by one with no host would pair a host-link
+    // failure with a microphone remedy - and since the failure class rides the
+    // Report Issue prefill, the filed report would read `not_connected` while
+    // telling the user to grant microphone access.
     recordingStartedAtRef.current = null;
     lastConnectionStatusRef.current = null;
+    setErrorMessage(null);
+    setFailureClass(null);
+    setPermissionDenied(false);
     if (wsStreamClient === null) {
       fail(
         "not_connected",
@@ -506,9 +526,6 @@ export function useVoiceDictation(
       window.clearTimeout(finalizeTimerRef.current);
       finalizeTimerRef.current = null;
     }
-    setErrorMessage(null);
-    setFailureClass(null);
-    setPermissionDenied(false);
     setState("requesting");
     readyRef.current = false;
     audioGraphReadyRef.current = false;
