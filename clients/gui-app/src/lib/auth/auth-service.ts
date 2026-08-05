@@ -49,6 +49,10 @@ import {
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import {
+  browserChatPartCacheStorage,
+  clearChatPartCache,
+} from "@/lib/chats/cloud-chat-part-cache";
+import {
   Analytics,
   AnalyticsEvent,
   type AnalyticsBlocker,
@@ -914,6 +918,25 @@ export class AuthService {
     }
     this.setLastError(null);
     this.applySignedOut();
+    // Published chat bytes do not survive leaving the account.
+    //
+    // The part store is shared across every viewer on the installation, which
+    // is sound while they are signed in - a part is named by the sha256 of its
+    // own bytes, so the only way to learn an address is to resolve a head the
+    // server authorized you for. It is not sound as a residue: "leave the
+    // account" reasonably means "leave the content", and the cost of honoring
+    // that is one cold read next time.
+    //
+    // HERE and not in `applySignedOut`, which also runs for the UI-only
+    // signed-out projection a dead credential produces (the file is kept, and
+    // the same user is one refresh from being back). This is the deliberate
+    // path, and it runs only after the delete actually landed.
+    //
+    // Not awaited into the sign-out's critical path and unable to fail it: the
+    // clear swallows its own errors by contract, and a sign-out that stalled on
+    // a storage quirk would be a worse outcome than a cache that outlives it by
+    // a moment.
+    void clearChatPartCache(browserChatPartCacheStorage());
     // Drop any in-flight reconcile that raced the delete chain (a superseded
     // finalization's signIn may have re-written the file and notified before
     // delete landed; its adopt must not resurrect signed-in after we cleared).

@@ -698,6 +698,34 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
+  // The cloud-chat READ surface. All five are reads, so `latest` - and the two
+  // properties that follow from the coordinator keying on PARAMS are exactly
+  // what this fan-out wants: a read of part A never supersedes a concurrent
+  // read of part B (different params, different queue), while two readers
+  // asking for the SAME digest at the same time coalesce onto one request.
+  // `fifo` would serialize a p99 chat's ~165 parts behind each other for no
+  // property gained, since none of these writes anything.
+  //
+  // No polling. A published head changes only when its owning host publishes
+  // again, and this reader has no signal for that; an interval would spend
+  // requests on an answer that is almost always identical. A newer head is
+  // picked up by reopening.
+  "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
+  "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
+  "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // Polled: no host-pushed invalidation channel exists for this event today
+  // (see the implementation report), so without a cadence a fork detected
+  // after this query first cached would never surface. 45s sits between the
+  // publisher's own ~30s detection sweep and "expensive enough to matter" -
+  // the point of a fork prompt is time-to-resolution, not zero-latency, and
+  // this is a single small unary call.
+  "host.chatFork.get": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 45_000 },
+  },
+  "host.chatFork.resolve": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {

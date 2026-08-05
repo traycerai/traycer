@@ -18,6 +18,7 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 
 interface TestTreeNode {
   readonly id: string;
@@ -41,6 +42,7 @@ interface TestRecord {
 
 interface TestIndicatorState {
   readonly unreadFailure: boolean;
+  readonly pendingFork: boolean;
   readonly pendingApproval: boolean;
   readonly pendingInterview: boolean;
   readonly unreadDone: boolean;
@@ -458,6 +460,26 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   }),
 }));
 
+/**
+ * The cloud-chat section's LIST, stubbed to "nothing to add".
+ *
+ * The chat panel mounts that section, and its list is an ordinary host query -
+ * so leaving it real would need this suite to supply a `QueryClientProvider`
+ * and a host-client stub complete enough for `useReactiveHostReadiness`, for a
+ * section that renders nothing here either way. The component itself stays
+ * real, so its hidden path is still exercised; its rules are asserted in
+ * `cloud-chat-section-state.test.ts`.
+ */
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatList: () => ({
+    data: undefined,
+    isError: false,
+    isPending: true,
+    isFetching: false,
+  }),
+  useCloudChatPayload: () => ({ data: undefined, isError: false }),
+}));
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
 }));
@@ -616,6 +638,10 @@ vi.mock("@/lib/epic-selectors", () => ({
   },
   useEpicArchivedNodeIds: () => testState.archivedIds,
   useEpicArtifactRecords: () => testState.records,
+  // Dedup input for the cloud-chat section. Empty: this suite is about the
+  // LOCAL tree, and the section hides itself when the cloud list has nothing
+  // to add - which, with no host client bound here, it never does.
+  useEpicChatIds: () => [],
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicChatHarnessId: (nodeId: string) =>
@@ -826,6 +852,7 @@ describe("epic sidebar selection mode", () => {
     testState.sessionHandleByChatId = {};
     useNewConversationModalStore.getState().resetForTests();
     useNewConversationModalOpenStore.getState().close();
+    useAppDialogStore.getState().closeDialog();
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
@@ -2008,12 +2035,27 @@ describe("chat descendant status rollup", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
       ...overrides,
     };
   }
+
+  it("opens fork resolution from the affected chat's indicator without selecting the row", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-root": indicator({ pendingFork: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByTestId("chat-sidebar-spinner-fork-chat-root"));
+
+    expect(useAppDialogStore.getState().activeDialog).toBe("chat-fork");
+    expect(testState.activeArtifactId).toBeNull();
+  });
 
   it("bubbles a hidden grandchild's needs-attention status onto the collapsed root", () => {
     seedNestedChatTree();
@@ -2341,6 +2383,7 @@ describe("chat row leading status icon", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
@@ -2483,6 +2526,7 @@ describe("chat row read-only arm", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
@@ -2569,6 +2613,7 @@ describe("status survives selection mode and rename", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
@@ -3189,6 +3234,7 @@ describe("chat row archive", () => {
   ): TestIndicatorState {
     return {
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,

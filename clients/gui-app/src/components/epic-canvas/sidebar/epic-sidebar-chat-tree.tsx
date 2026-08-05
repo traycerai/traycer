@@ -46,6 +46,7 @@ import {
   attentionTone,
   DONE_TONE,
   FAILURE_TONE,
+  FORK_TONE,
   INTERVIEW_TONE,
   type IndicatorTone,
 } from "@/components/notifications/notification-indicator-tones";
@@ -55,6 +56,7 @@ import {
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
@@ -111,6 +113,7 @@ import {
   type AgentActivityTier,
   useEpicArchivedNodeIds,
   useEpicArtifactRecords,
+  useEpicChatIds,
   useEpicConnectionStatus,
   useEpicNodeArchived,
   useEpicNodeUpdatedAt,
@@ -121,6 +124,7 @@ import {
   useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
+import { EpicSidebarCloudChats } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chats";
 import { AgentRoleBadges } from "./agent-role-badges";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -239,7 +243,13 @@ const noopToggleSelection = (_id: string): void => undefined;
 const noopRowAction = (): void => undefined;
 
 type ChatDescendantStatusKind =
-  "failure" | "interview" | "approval" | "running" | "background" | "done";
+  | "failure"
+  | "fork"
+  | "interview"
+  | "approval"
+  | "running"
+  | "background"
+  | "done";
 
 /**
  * One shared urgency ladder for a collapsed parent's icon slot: the parent's
@@ -255,7 +265,8 @@ type ChatDescendantStatusKind =
  * beats a finished-but-unread one.
  */
 const CHAT_STATUS_RANKS: Record<ChatDescendantStatusKind, number> = {
-  failure: 6,
+  failure: 7,
+  fork: 6,
   interview: 5,
   approval: 4,
   running: 3,
@@ -266,6 +277,7 @@ const CHAT_STATUS_RANKS: Record<ChatDescendantStatusKind, number> = {
 /** {@link CHAT_STATUS_RANKS} most-urgent first, for picking a rollup's kind. */
 const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
   "failure",
+  "fork",
   "interview",
   "approval",
   "running",
@@ -289,6 +301,7 @@ function chatDescendantKind(
 ): ChatDescendantStatusKind | null {
   const tone = attentionTone(indicatorState);
   if (tone === FAILURE_TONE) return "failure";
+  if (tone === FORK_TONE) return "fork";
   if (tone === INTERVIEW_TONE) return "interview";
   if (tone === APPROVAL_TONE) return "approval";
   if (tier !== undefined) return activityTierKind(tier);
@@ -305,6 +318,7 @@ function chatDescendantKind(
 interface ChatDescendantStatusRollup {
   readonly kind: ChatDescendantStatusKind;
   readonly failureCount: number;
+  readonly forkCount: number;
   readonly interviewCount: number;
   readonly approvalCount: number;
   readonly runningCount: number;
@@ -386,6 +400,7 @@ function useChatDescendantStatus(args: {
       if (descendants === EMPTY_CHAT_DESCENDANT_IDS) return null;
       const counts: Record<ChatDescendantStatusKind, number> = {
         failure: 0,
+        fork: 0,
         interview: 0,
         approval: 0,
         running: 0,
@@ -410,6 +425,7 @@ function useChatDescendantStatus(args: {
       return {
         kind,
         failureCount: counts.failure,
+        forkCount: counts.fork,
         interviewCount: counts.interview,
         approvalCount: counts.approval,
         runningCount: counts.running,
@@ -604,6 +620,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => combineVisibleIds(originVisibleIds, archiveHiddenIds, tree),
     [originVisibleIds, archiveHiddenIds, tree],
   );
+  // Resolved once here and threaded down, matching how this body already
+  // handles every other epic-level fact: the section is a pure function of its
+  // props, so it stays testable without an open-epic store.
+  const localChatIds = useEpicChatIds();
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -816,6 +836,18 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                 <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
                   <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
                     {panelContent}
+                    {/* Below the local tree, and OUTSIDE the empty-state
+                        branches on purpose: "no agents yet" is a statement
+                        about this device, and the case where it is true while
+                        another device has published chats is exactly the one
+                        this section exists for. It renders nothing at all when
+                        there is nothing to add - an older host, no viewer, or
+                        no cloud-only chats - so the ordinary sidebar is
+                        unchanged. */}
+                    <EpicSidebarCloudChats
+                      taskId={epicId}
+                      localChatIds={localChatIds}
+                    />
                   </SidebarGroupContent>
                 </SidebarGroup>
               </SidebarContent>
@@ -2022,6 +2054,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     reserveArchiveSlot,
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
+  const openDialog = useAppDialogStore((state) => state.openDialog);
   const roleClaims = useEpicAgentRoleClaims(nodeId);
   const ownerHostId = useEpicNodeHostId(nodeId);
   const activeHostId = useReactiveActiveHostId();
@@ -2055,6 +2088,24 @@ function ChatRowButton(props: ChatRowButtonProps) {
       onToggle(event);
     },
     [onToggle],
+  );
+  const handleRowClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(
+          '[data-notification-indicator-action="chat-fork"]',
+        ) !== null
+      ) {
+        // The row is already the one native button. Delegating from it keeps
+        // the fork glyph clickable without nesting another interactive
+        // control inside a button (invalid HTML and broken keyboard semantics).
+        openDialog("chat-fork");
+        return;
+      }
+      onClick(event);
+    },
+    [onClick, openDialog],
   );
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
@@ -2161,7 +2212,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
       }}
-      onClick={onClick}
+      onClick={handleRowClick}
       onDoubleClick={onDoubleClick}
     >
       <NodeChevron
@@ -2273,6 +2324,7 @@ const CHAT_DESCENDANT_STATUS_TONES: Record<
   IndicatorTone
 > = {
   failure: FAILURE_TONE,
+  fork: FORK_TONE,
   interview: INTERVIEW_TONE,
   approval: APPROVAL_TONE,
   done: DONE_TONE,
@@ -2291,6 +2343,7 @@ function chatSelfStatusRank(
 ): number {
   const tone = attentionTone(state);
   if (tone === FAILURE_TONE) return CHAT_STATUS_RANKS.failure;
+  if (tone === FORK_TONE) return CHAT_STATUS_RANKS.fork;
   if (tone === INTERVIEW_TONE) return CHAT_STATUS_RANKS.interview;
   if (tone === APPROVAL_TONE) return CHAT_STATUS_RANKS.approval;
   if (selfTier === "turn") return CHAT_STATUS_RANKS.running;
@@ -2306,6 +2359,9 @@ function nestedChatStatusSummary(rollup: ChatDescendantStatusRollup): string {
     parts.push(
       `${rollup.failureCount} ${rollup.failureCount === 1 ? "needs" : "need"} attention`,
     );
+  }
+  if (rollup.forkCount > 0) {
+    parts.push(`${rollup.forkCount} waiting for fork resolution`);
   }
   if (rollup.interviewCount > 0) {
     parts.push(`${rollup.interviewCount} waiting for interview`);
@@ -2342,6 +2398,9 @@ function NestedChatStatusIcon(props: {
       <span
         role="status"
         aria-label={title}
+        data-notification-indicator-action={
+          props.rollup.kind === "fork" ? "chat-fork" : undefined
+        }
         data-testid={`chat-descendant-status-${props.rollup.kind}-${props.nodeId}`}
         className="inline-flex size-3.5 shrink-0 items-center justify-center opacity-60"
       >
@@ -2377,6 +2436,7 @@ function NestedChatStatusGlyph(props: {
  */
 type ChatOwnStatusKind =
   | "failure"
+  | "fork"
   | "interview"
   | "approval"
   | "working"
@@ -2406,6 +2466,7 @@ function chatOwnStatusKind(
 ): ChatOwnStatusKind {
   const tone = attentionTone(state);
   if (tone === FAILURE_TONE) return "failure";
+  if (tone === FORK_TONE) return "fork";
   if (tone === INTERVIEW_TONE) return "interview";
   if (tone === APPROVAL_TONE) return "approval";
   if (running === "turn") return "working";

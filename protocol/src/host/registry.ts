@@ -178,6 +178,10 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
+  chatForkGetV10,
+  chatForkResolveV10,
+} from "@traycer/protocol/host/chat-fork/contracts";
+import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
   hostGetRateLimitUsageV12,
@@ -210,8 +214,13 @@ import {
   epicEditCommentV10,
   epicGetTaskContextsV10,
   epicGrantAccessV10,
+  epicListCloudChatPayloadsV10,
+  epicListCloudChatsV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
+  epicReadCloudChatPartV10,
+  epicReadCloudChatPayloadV10,
+  epicResolveCloudChatHeadV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -291,6 +300,8 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
+  hostNotificationsIndicatorStateUpgradeV10ToV11,
+  hostNotificationsIndicatorStateV10,
   hostNotificationsListDowngradeV21ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
@@ -3208,11 +3219,16 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   "host.notifications.indicatorState": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: hostNotificationsIndicatorState,
+          contract: hostNotificationsIndicatorStateV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsIndicatorState,
+          upgradeFromPreviousVersion:
+            hostNotificationsIndicatorStateUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -4531,6 +4547,106 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) cloud-chat READ surface: the host is a byte pipe and
+  // the client does every interpretation. See `epic/cloud-chat.ts` for the whole
+  // argument; the short version is that the head is opaque to the server AND to
+  // the host, so gating, digest verification, assembly and caching all belong to
+  // the only party that parses it.
+  //
+  // All five degrade `unsupported` together, and the client hides the cloud-chat
+  // surface rather than rendering a failure - a host that predates the surface
+  // has nothing a user can do about except update it.
+  "epic.listCloudChats": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicListCloudChatsV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.resolveCloudChatHead": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicResolveCloudChatHeadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.readCloudChatPart": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadCloudChatPartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.listCloudChatPayloads": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListCloudChatPayloadsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.readCloudChatPayload": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadCloudChatPayloadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: ticket 07's host-level fork event and its
+  // owner-arbitrated resolution (ticket 09). Host-global rather than
+  // `epic.*` - a fork episode can span chats across tasks - which is why it
+  // sits beside `host.notifications.*` instead. `get` and `resolve` degrade
+  // together (a host predating one predates both, and a dialog that can
+  // observe a fork but not resolve it is worse than no dialog): a client that
+  // gets `E_HOST_UNSUPPORTED` hides the fork surface entirely rather than
+  // rendering a broken prompt - the chat halts exactly as it always did,
+  // silently to the renderer, safely to the data. See `chat-fork/schemas.ts`.
+  "host.chatFork.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatForkGetV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.chatFork.resolve": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatForkResolveV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "editor.openPaths": {
     1: {

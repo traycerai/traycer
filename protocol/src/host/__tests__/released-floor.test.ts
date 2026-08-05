@@ -36,7 +36,7 @@ describe("released floor production module", () => {
       "host.notifications.clearAll": { major: 1, minor: 0 },
       "host.notifications.getConfig": { major: 1, minor: 0 },
       "host.notifications.setConfig": { major: 1, minor: 0 },
-      "host.notifications.indicatorState": { major: 1, minor: 0 },
+      "host.notifications.indicatorState": { major: 1, minor: 1 },
     });
     expect(
       hostRpcRegistry["host.notifications.list"][1].versions[0],

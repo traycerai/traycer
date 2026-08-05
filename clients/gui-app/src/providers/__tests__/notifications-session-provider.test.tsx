@@ -2033,6 +2033,7 @@ describe("<NotificationsSessionProvider />", () => {
           chats: {
             "chat-a": {
               unreadFailure: false,
+              pendingFork: false,
               pendingApproval: false,
               pendingInterview: false,
               unreadDone: false,
@@ -2042,6 +2043,7 @@ describe("<NotificationsSessionProvider />", () => {
       ),
     ).toEqual({
       unreadFailure: false,
+      pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,

@@ -555,6 +555,33 @@ export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
 }
 
 /**
+ * Every chat id this epic's projection holds, nested ones included.
+ *
+ * The dedup set for the cloud-chat section: a chat the LOCAL tree already
+ * renders must not also appear under "on your other devices", or one chat reads
+ * as two. Deliberately the projection rather than the host's chat registry -
+ * the question is "what does this sidebar already show", and a chat the
+ * registry knows but the projection has not materialized would be hidden from
+ * both surfaces if the registry were the authority.
+ *
+ * Returned SORTED rather than as a `Set`, for the reason
+ * {@link useEpicArchivedNodeIds} gives: chat projections churn constantly
+ * (titles, `updatedAt`, streaming settings) while the id SET moves only on
+ * create/delete, and a freshly-allocated `Set` would defeat `useShallow` and
+ * re-render on every one of those.
+ */
+export function useEpicChatIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<string> => {
+      if (s.chats.allIds.length === 0) return EMPTY_TREE_ID_ARRAY;
+      return [...s.chats.allIds].sort();
+    }),
+  );
+}
+
+/**
  * Ids of every chat + terminal agent this epic's projection currently holds.
  *
  * PRESENCE, not liveness or visibility: an archived or idle node is still here;
