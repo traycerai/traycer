@@ -89,6 +89,21 @@ export const agentInboxMessageSchema = z.object({
 export type AgentInboxMessage = z.infer<typeof agentInboxMessageSchema>;
 
 /**
+ * `@1.2` message shape: adds `eventId`, the durable inbox row's key, so the
+ * monitor can acknowledge it via `agent.inbox.ack` once it has been safely
+ * surfaced to the agent. A NEW schema object (not a mutation of
+ * `agentInboxMessageSchema`) per the frozen-per-minor-tree rule: `@1.0`/`@1.1`
+ * connections keep parsing the old shape and silently ignore the extra field
+ * a `@1.2`-built server frame carries (zod objects are non-strict), so this
+ * is safe to send unconditionally regardless of negotiated minor.
+ */
+export const agentInboxMessageSchemaV12 = agentInboxMessageSchema.extend({
+  /** Durable inbox row key - see `agent.inbox.ack`. */
+  eventId: z.string(),
+});
+export type AgentInboxMessageV12 = z.infer<typeof agentInboxMessageSchemaV12>;
+
+/**
  * Out-of-band notice the broker emits when a receiver the calling agent
  * had outstanding requests to has gone idle without replying. Surfaced to
  * the monitor as a distinct frame kind so the agent sees a clearly-marked
@@ -232,9 +247,47 @@ export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
   ],
 );
 
+// ─── agent.inbox.subscribe@1.2 - additive: durable inbox eventId ──────────
+//
+// The "message" item gains `eventId` (see `agentInboxMessageSchemaV12`) so a
+// durable-inbox-aware monitor can acknowledge delivery via `agent.inbox.ack`.
+// A `@1.0`/`@1.1` monitor negotiates one of the older, frozen frame trees
+// above - which have no `eventId` field at all - and can never call
+// `agent.inbox.ack`. Rather than leave the durable row queued forever for an
+// ack that structurally cannot arrive, the resolver applies a SERVER-SIDE
+// compatibility ack: immediately after successfully sending a "message"
+// frame to a connection negotiated below `@1.2`, it retires that row itself.
+// This mirrors the pre-durable-inbox at-most-once behavior those older
+// monitors were always built against - no regression for them - while a
+// `@1.2`+ monitor keeps the stronger at-least-once guarantee via its own ack.
+export const agentInboxSubscribeServerFrameSchemaV12 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("message"),
+      ...textFrameFields,
+      item: agentInboxMessageSchemaV12,
+    }),
+    z.object({
+      kind: z.literal("notice"),
+      ...textFrameFields,
+      notice: agentInboxNoticeSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("role-awareness"),
+      ...textFrameFields,
+      event: roleAwarenessEventSchema,
+    }),
+  ],
+);
+
 /** The latest installed shape. Host code builds frames against this. */
 export const agentInboxSubscribeServerFrameSchema =
-  agentInboxSubscribeServerFrameSchemaV11;
+  agentInboxSubscribeServerFrameSchemaV12;
 export type AgentInboxSubscribeServerFrame = z.infer<
   typeof agentInboxSubscribeServerFrameSchema
 >;
@@ -265,6 +318,14 @@ export const agentInboxSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: agentInboxSubscribeOpenRequestSchema,
   serverFrameSchema: agentInboxSubscribeServerFrameSchemaV11,
+  clientFrameSchema: agentInboxSubscribeClientFrameSchema,
+});
+
+export const agentInboxSubscribeV12 = defineStreamRpcContract({
+  method: "agent.inbox.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: agentInboxSubscribeOpenRequestSchema,
+  serverFrameSchema: agentInboxSubscribeServerFrameSchemaV12,
   clientFrameSchema: agentInboxSubscribeClientFrameSchema,
 });
 
@@ -299,4 +360,32 @@ export const agentInboxReadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentInboxReadRequestSchema,
   responseSchema: agentInboxReadResponseSchema,
+});
+
+// ─── `agent.inbox.ack@1.0` - unary durable-inbox acknowledgement ──────────
+//
+// Retires the given durable inbox rows (by `eventId`, from `@1.2`'s
+// `agentInboxMessageSchemaV12.eventId`) for the calling agent. The durable
+// inbox is the source of truth for `agent.inbox.subscribe`: an unacknowledged
+// row survives a host restart or monitor reconnect and is replayed exactly
+// once more, so a monitor should ack promptly after it has safely surfaced a
+// message to the agent (e.g. after printing it).
+
+export const agentInboxAckRequestSchema = z.object({
+  epicId: z.string(),
+  /** The calling agent acknowledging its own inbox. */
+  agentId: z.string(),
+  /** Durable inbox row keys to retire. Empty is a no-op. */
+  eventIds: z.array(z.string()),
+});
+export type AgentInboxAckRequest = z.infer<typeof agentInboxAckRequestSchema>;
+
+export const agentInboxAckResponseSchema = z.object({});
+export type AgentInboxAckResponse = z.infer<typeof agentInboxAckResponseSchema>;
+
+export const agentInboxAckV10 = defineRpcContract({
+  method: "agent.inbox.ack",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentInboxAckRequestSchema,
+  responseSchema: agentInboxAckResponseSchema,
 });

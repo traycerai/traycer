@@ -17,6 +17,7 @@ import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
+import { commGraphEventKey } from "@/lib/comm-graph/comm-graph-timeline";
 import { CommGraphEventRow } from "@/components/epic-canvas/comm-graph/comm-graph-event-row";
 import {
   pointerDragHandleAxisClassName,
@@ -124,7 +125,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {events.map((event) => (
             <CommGraphEventRow
-              key={`${event.hostId}:${event.id}`}
+              key={commGraphEventKey(event)}
               event={event}
               epicId={epicId}
               agentNames={agentNames}

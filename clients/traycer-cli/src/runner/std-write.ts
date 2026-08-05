@@ -63,6 +63,27 @@ function tracked(
   return tail.then(() => written);
 }
 
+/**
+ * Like `tracked`, but additionally reports whether THIS specific write's own
+ * completion callback fired with no error - `outcome` resolves `false` on a
+ * write error (e.g. EPIPE), never rejects. Kept separate from `tracked`
+ * (used by the plain fire-and-forget writers below) because most callers
+ * never need a per-write result and `flushStdio`'s bounded, always-resolving
+ * shape is deliberately unsuitable for anyone who does - see
+ * `writeStdoutForAck`'s doc comment.
+ */
+function trackedWithOutcome(
+  stream: NodeJS.WriteStream,
+  chunk: string | Buffer,
+  tail: Promise<void>,
+): { readonly settled: Promise<void>; readonly outcome: Promise<boolean> } {
+  const outcome = new Promise<boolean>((resolve) => {
+    stream.write(chunk, (error) => resolve(error === undefined || error === null));
+  });
+  const settled = tail.then(() => outcome.then(() => undefined));
+  return { settled, outcome };
+}
+
 export function writeStdout(text: string): void {
   stdoutTail = tracked(process.stdout, text, stdoutTail);
 }
@@ -76,6 +97,42 @@ export function writeStdoutBytes(chunk: Buffer): void {
 
 export function writeStderr(text: string): void {
   stderrTail = tracked(process.stderr, text, stderrTail);
+}
+
+/**
+ * Writes to stdout and resolves to whether THIS write's own completion
+ * callback confirmed success - `false` on a write error, or on hitting the
+ * same bounded fallback `flushStdio` uses (a callback that never arrives
+ * must never be read as success). Still chains into the shared `stdoutTail`
+ * so `flushStdio`'s process-teardown ordering is unaffected.
+ *
+ * For callers that must know a SPECIFIC write actually reached the OS
+ * before doing something durable in response - e.g. the inbox monitor
+ * acknowledging a message only once its text has genuinely been printed.
+ * `flushStdio()` alone cannot answer that: it is deliberately non-rejecting
+ * and resolves after its own bounded timeout REGARDLESS of whether the
+ * write ever completed, so "awaited flushStdio" is not the same claim as
+ * "this write succeeded" - conflating the two is exactly how an ack could
+ * previously fire for text that was never written.
+ */
+export async function writeStdoutForAck(text: string): Promise<boolean> {
+  const { settled, outcome } = trackedWithOutcome(
+    process.stdout,
+    text,
+    stdoutTail,
+  );
+  stdoutTail = settled;
+  return boundedOutcome(outcome);
+}
+
+function boundedOutcome(outcome: Promise<boolean>): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), FLUSH_TIMEOUT_MS);
+    void outcome.then((ok) => {
+      clearTimeout(timer);
+      resolve(ok);
+    });
+  });
 }
 
 /**

@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   defineVersionedRpcRegistry,
   type FatalErrorDetails,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
+  defineStreamRpcContract,
   defineVersionedStreamRpcRegistry,
   type VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import {
   createResponderHandshake,
   generateStaticKeyPair,
@@ -69,6 +72,30 @@ const TEST_BUDGET_MS = 15_000;
 const emptyRpcRegistry: VersionedRpcRegistry = defineVersionedRpcRegistry({});
 const emptyStreamRegistry: VersionedStreamRpcRegistry =
   defineVersionedStreamRpcRegistry({});
+const cursorStreamRegistry = defineVersionedStreamRpcRegistry({
+  "cursor.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: defineStreamRpcContract({
+            method: "cursor.subscribe",
+            schemaVersion: { major: 1, minor: 0 },
+            openRequestSchema: z.object({ cursor: z.number().nullable() }),
+            serverFrameSchema: z.object({
+              kind: z.literal("snapshot"),
+              hasBinaryPayload: z.literal(false),
+            }),
+            clientFrameSchema: z.object({
+              kind: z.literal("noop"),
+              hasBinaryPayload: z.literal(false),
+            }),
+          }),
+        },
+      },
+    },
+  },
+});
 
 type OpenDecision =
   | { readonly kind: "ack" }
@@ -131,6 +158,9 @@ class FakeRelayHost {
   private readonly connections: FakeConnection[] = [];
   /** Every bearer presented across all `open` frames, in arrival order. */
   readonly openBearers: string[] = [];
+  /** Params carried by every logical subscribe, including reconnect replay. */
+  readonly subscribeParams: unknown[] = [];
+  streamManifest = buildStreamManifest(emptyStreamRegistry);
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -240,6 +270,10 @@ class FakeRelayHost {
     connection: FakeConnection,
     message: ReassembledMessage,
   ): Promise<void> {
+    if (message.type === MuxFrameType.SUBSCRIBE) {
+      this.subscribeParams.push(message.json?.params);
+      return;
+    }
     if (
       message.streamId !== SESSION_CONTROL_STREAM_ID ||
       message.type !== MuxFrameType.OPEN
@@ -258,7 +292,10 @@ class FakeRelayHost {
         type: MuxFrameType.OPEN_ACK,
         streamId: SESSION_CONTROL_STREAM_ID,
         qos: QosClass.INTERACTIVE,
-        json: { manifest: { rpc: {}, stream: {} }, capabilities: [] },
+        json: {
+          manifest: { rpc: {}, stream: this.streamManifest },
+          capabilities: [],
+        },
         binary: null,
       });
       return;
@@ -658,6 +695,50 @@ describe("RemoteSession availability-recovered evidence", () => {
         expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
         expect(relay.errors).toEqual([]);
       } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteStreamClient dynamic subscribe params", () => {
+  it(
+    "re-reads the current params before a reconnect re-subscribes",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamClient = new RemoteStreamClient(session);
+      let cursor: number | null = null;
+      const stream = streamClient.subscribeWithParamsProvider(
+        "cursor.subscribe",
+        () => ({ cursor }),
+      );
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        expect(relay.subscribeParams[0]).toEqual({ cursor: null });
+
+        // Advance application state while the first physical connection is
+        // live. Freezing the provider at stream creation makes this assertion
+        // fail with the original null cursor (the required ablation).
+        cursor = 42;
+        relay.dropCurrentConnection();
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(2),
+          WAIT,
+        );
+        expect(relay.subscribeParams[1]).toEqual({ cursor: 42 });
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
         session.close();
       }
     },
