@@ -249,8 +249,17 @@ export function useGitSubscriptionRefreshState(
   args: GitSubscriptionRefreshStateArgs,
 ): boolean {
   const key = entryKeyFor(args);
+  // Memoized on `key`: `useSyncExternalStore` compares the subscriber by
+  // reference, so a fresh closure each render tears the listener down and
+  // re-adds it every time - and because the unsubscribe drops the key once its
+  // set empties, the `Set` is rebuilt too. Matches
+  // `useGitSubscriptionOwnsRichSlot` below.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => subscribeToEntry(key)(onStoreChange),
+    [key],
+  );
   return useSyncExternalStore(
-    subscribeToEntry(key),
+    subscribe,
     () =>
       key === null ? false : (subscriptions.get(key)?.isRefreshing ?? false),
     () => false,
@@ -620,6 +629,29 @@ function frameTierOf(
   return "frozen";
 }
 
+/**
+ * Records this session's negotiated version on the entry and wakes the readers
+ * that have no session of their own.
+ *
+ * Called at BOTH the handshake and every delivery, and the handshake is the one
+ * that is easy to miss. The client-wide change signal cannot stand in for it:
+ * `reconcileMethodSchemaVersion` answers with whichever session it reaches
+ * first, so a sibling repo already holding the value means this session
+ * negotiating something different moves nothing and notifies nobody. The
+ * snapshot would be right the moment anything asked - and nothing would ask
+ * until this stream's first frame, which on a slow initial scan is a long time
+ * to render from a sibling's minor.
+ */
+function publishNegotiatedVersion(
+  shared: SharedSubscription,
+  negotiated: SchemaVersion | null,
+  key: string,
+): void {
+  if (sameSchemaVersion(shared.negotiatedVersion, negotiated)) return;
+  shared.negotiatedVersion = negotiated;
+  notifyEntryChanged(key);
+}
+
 function sameSchemaVersion(
   left: SchemaVersion | null,
   right: SchemaVersion | null,
@@ -666,6 +698,7 @@ function entrySchemaVersion(
 
 function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   const { shared, wsStreamClient, queryClient, args, freshNonce } = opts;
+  const entryKey = subscriptionKeyFor(wsStreamClient, args);
   // Retire the old generation BEFORE close. A synchronous close callback is
   // then ignored and cannot publish a terminal error over the preserved cache.
   shared.sessionGeneration += 1;
@@ -736,8 +769,8 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     shared.session = null;
     shared.negotiatedVersion = null;
     shared.terminated = true;
-    settleSharedRefresh(shared, subscriptionKeyFor(wsStreamClient, args));
-    notifyEntryChanged(subscriptionKeyFor(wsStreamClient, args));
+    settleSharedRefresh(shared, entryKey);
+    notifyEntryChanged(entryKey);
     notifyConsumers(shared);
   };
 
@@ -750,15 +783,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     // React render. It is read off the DELIVERING SESSION, so a sibling repo's
     // stream sitting at another minor cannot decide how this frame is parsed.
     const negotiated = session.getNegotiatedSchemaVersion();
-    // Delivery is also where the value gets STAMPED for the readers that have
-    // no session in scope - the fresh-nonce refresh entry point, the replay a
-    // joining consumer triggers, and the rich-slot ownership the submodule hook
-    // renders from. Notifying on change is what makes that last one reactive;
-    // it rides the per-key channel the refresh indicator already listens on.
-    if (!sameSchemaVersion(shared.negotiatedVersion, negotiated)) {
-      shared.negotiatedVersion = negotiated;
-      notifyEntryChanged(subscriptionKeyFor(wsStreamClient, args));
-    }
+    publishNegotiatedVersion(shared, negotiated, entryKey);
     const tier = frameTierOf(negotiated);
     const v13Frames = tier === "v13";
     const v12Frames = tier === "v13" || tier === "v12";
@@ -786,7 +811,25 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
       const parsed = v13Frames
         ? gitSubscribeStatusEventSchemaV13.safeParse(envelope.value)
         : gitSubscribeStatusEventSchemaV12.safeParse(envelope.value);
-      if (!parsed.success) return;
+      if (!parsed.success) {
+        // Newly reachable now that the tolerant fallback is gone: this used to
+        // degrade to the v1.2 schema and apply the frame anyway. A silent drop
+        // freezes the panel on its last fingerprint until another frame
+        // arrives, so say something - matching `TerminalStreamClient`, which
+        // handles the same failure class the same way.
+        //
+        // Issue PATHS only. Never `parsed.error` or `envelope.value`: git
+        // frames carry file paths and repository content.
+        const issuePaths = parsed.error.issues
+          .map((issue) =>
+            issue.path.length > 0 ? issue.path.join(".") : "(root)",
+          )
+          .join(", ");
+        console.warn(
+          `[stream] git.subscribeStatus frame failed schema validation (tier=${tier}, issues=[${issuePaths}]); dropping frame`,
+        );
+        return;
+      }
       handleNonceCorrelatedFrame({
         event: parsed.data,
         shared,
@@ -851,6 +894,16 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   // a pending state forever (the stuck git-diff skeleton incident).
   session.onStatusChange((status, reason) => {
     if (sessionClosed || generation !== shared.sessionGeneration) return;
+    if (status === "open") {
+      // The handshake has settled, so this session finally knows its own minor.
+      // Publishing here is what makes ownership correct BEFORE the first frame.
+      publishNegotiatedVersion(
+        shared,
+        session.getNegotiatedSchemaVersion(),
+        entryKey,
+      );
+      return;
+    }
     if (status === "reconnecting") {
       // A recoverable drop never reaches `"closed"` - `resetForReconnect()`
       // parks the logical session here - so `markTerminal` is not on this

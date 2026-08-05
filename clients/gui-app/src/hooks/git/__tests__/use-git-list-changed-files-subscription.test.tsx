@@ -2239,5 +2239,42 @@ describe("useGitListChangedFilesSubscription", () => {
         mockWsStreamClient.getMethodSchemaVersion("git.subscribeStatus"),
       ).toEqual({ major: 1, minor: 1 });
     });
+
+    it("publishes this session's version at OPEN, before any frame", async () => {
+      // The snapshot was already correct on read - `entrySchemaVersion` asks the
+      // live session first - but nothing asked it. The entry channel only fires
+      // on delivery, and `subscribeMethodSupport` fires only when the
+      // CLIENT-WIDE value changes: with repo A already holding it at 1.1,
+      // reconciliation keeps answering with A, so repo B negotiating 1.0 moves
+      // nothing. B's hook kept its stale pre-handshake `true` until B's first
+      // frame - and during a slow initial git scan that is a long time to sit
+      // with the unary query disabled and a v1.0 stream that will never write
+      // the rich slot.
+      mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
+      const repoA = await renderRepo("/repo-a");
+      repoA.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+      const repoB = await renderRepo("/repo-b");
+
+      const ownership = renderHook(
+        () =>
+          useGitSubscriptionOwnsRichSlot({
+            wsStreamClient: mockWsStreamClient,
+            hostId: "host1",
+            runningDir: "/repo-b",
+            ignoreWhitespace: false,
+          }),
+        { wrapper: createWrapper() },
+      );
+      // Pre-handshake, B defers to the client-wide value - which is A's.
+      await waitFor(() => expect(ownership.result.current).toBe(true));
+
+      // B's handshake settles at 1.0. The client-wide value does NOT move.
+      repoB.session.negotiatedSchemaVersion = { major: 1, minor: 0 };
+      repoB.session.emitStatus("open", null);
+
+      // No frame has been delivered on B at any point in this test.
+      await waitFor(() => expect(ownership.result.current).toBe(false));
+      expect(repoB.result.current.data).toBeNull();
+    });
   });
 });
