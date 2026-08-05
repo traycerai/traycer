@@ -1,5 +1,9 @@
 name: Bootstrap Rolaand Traycer Local
 
+concurrency:
+  group: rolaand-traycer-local-bootstrap
+  cancel-in-progress: true
+
 on:
   push:
     branches:
