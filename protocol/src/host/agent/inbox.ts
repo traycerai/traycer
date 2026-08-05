@@ -436,10 +436,22 @@ export const agentInboxReadDowngradeV20ToV10 = defineDowngradePath<
       value: { epicId: request.epicId, agentId: request.agentId },
     };
   },
-  downgradeResponse: (response) => ({
-    ok: true,
-    value: { messages: response.messages },
-  }),
+  downgradeResponse: (response) => {
+    if (response.nextCursor !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "This inbox has more messages than an older Traycer client can read safely. Upgrade the client to continue.",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: { messages: response.messages },
+    };
+  },
 });
 
 // ─── `agent.inbox.ack@1.0` - unary durable-inbox acknowledgement ──────────

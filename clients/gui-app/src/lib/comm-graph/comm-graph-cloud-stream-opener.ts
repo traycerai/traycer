@@ -1,5 +1,7 @@
 import { hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/communication-graph";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { appLogger } from "@/lib/logger";
 import type {
   CommGraphCloudSubscriptionHandle,
@@ -72,9 +74,10 @@ function openCommGraphCloudSubscription(
       else if (status === "reconnecting") handlers.onStatus("reconnecting");
       else if (reason !== null && reason.kind !== "caller") {
         handlers.onStatus(
-          client.getMethodSupport(COMM_GRAPH_CLOUD_METHOD) === "unsupported"
-            ? "unsupported"
-            : "unreachable",
+          classifyCloudStreamClose(
+            client.getMethodSupport(COMM_GRAPH_CLOUD_METHOD),
+            reason,
+          ),
         );
       }
     });
@@ -93,4 +96,16 @@ function openCommGraphCloudSubscription(
     transport.close();
     throw cause;
   }
+}
+
+export function classifyCloudStreamClose(
+  methodSupport: StreamMethodSupport,
+  reason: StreamCloseReason,
+): "unsupported" | "unreachable" {
+  if (methodSupport === "unsupported") return "unsupported";
+  // Remote mux transports cannot cache per-method support, but they preserve
+  // the logical stream's terminal compatibility result in the close reason.
+  return reason.kind === "fatalError" && reason.details.code === "INCOMPATIBLE"
+    ? "unsupported"
+    : "unreachable";
 }

@@ -64,4 +64,25 @@ describe("agent.inbox.read v2.0 compatibility", () => {
       value: { epicId: "epic-1", agentId: "agent-1" },
     });
   });
+
+  it("refuses to truncate a paginated v2.0 response for a v1.0 client", () => {
+    expect(
+      agentInboxReadDowngradeV20ToV10.downgradeResponse({
+        messages: [],
+        nextCursor: { createdAt: 1_000, eventId: "event-1" },
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
+  });
+
+  it("projects a complete v2.0 response onto a v1.0 client", () => {
+    expect(
+      agentInboxReadDowngradeV20ToV10.downgradeResponse({
+        messages: [],
+        nextCursor: null,
+      }),
+    ).toEqual({ ok: true, value: { messages: [] } });
+  });
 });
