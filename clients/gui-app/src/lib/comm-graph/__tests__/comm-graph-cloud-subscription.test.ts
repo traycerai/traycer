@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
 import {
   CommGraphCloudSubscriptionManager,
@@ -60,6 +60,11 @@ function recordedOpener(): {
     },
   };
 }
+
+beforeEach(() => {
+  useCommGraphRowOpenStore.setState({ openRowKeysByEpicId: {} });
+  useCommGraphTimelineStore.setState({ stateByEpicId: {} });
+});
 
 describe("CommGraphCloudSubscriptionManager", () => {
   it("normalizes cloud identity and uses one cursor-aware path for snapshots and events", () => {
@@ -363,6 +368,22 @@ describe("CommGraphCloudSubscriptionManager", () => {
     expect(recorded.requests[1].hostId).toBe("relay-a");
   });
 
+  it("revokes established cloud authority when every relay is incompatible", () => {
+    const recorded = recordedOpener();
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      recorded.opener,
+      () => undefined,
+    );
+    manager.setRelayHostIds(["relay-a"]);
+    manager.attach();
+    recorded.requests[0].handlers.onAvailability("available");
+
+    recorded.requests[0].handlers.onStatus("unsupported");
+
+    expect(manager.getAvailability()).toBe("unsupported");
+  });
+
   it("fails over a replacement relay without losing established cloud authority", () => {
     const recorded = recordedOpener();
     const manager = new CommGraphCloudSubscriptionManager(
@@ -488,8 +509,6 @@ describe("CommGraphCloudSubscriptionManager", () => {
   });
 
   it("applies an advancing frontier without reconnecting and returns a pruned playback cursor to live", () => {
-    useCommGraphRowOpenStore.setState({ openRowKeysByEpicId: {} });
-    useCommGraphTimelineStore.setState({ stateByEpicId: {} });
     const recorded = recordedOpener();
     const manager = new CommGraphCloudSubscriptionManager(
       "epic-1",

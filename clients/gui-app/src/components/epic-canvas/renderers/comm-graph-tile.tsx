@@ -52,7 +52,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     canJumpToCreated,
     jumpToCreated,
     openAgent,
-  } = useCommGraphJump(node.epicId, agents);
+  } = useCommGraphJump(node.epicId, agents, projection.asOfEvents);
 
   const handleViewChange = useCallback(
     (view: CommGraphTileViewState) => {

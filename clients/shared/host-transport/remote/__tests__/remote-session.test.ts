@@ -713,7 +713,10 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         ...buildSessionOptions(relay, lease, null),
         streamRegistry: cursorStreamRegistry,
       });
-      const streamClient = new RemoteStreamClient(session);
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof cursorStreamRegistry
+      >(session);
       let cursor: number | null = null;
       const stream = streamClient.subscribeWithParamsProvider(
         "cursor.subscribe",

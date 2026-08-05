@@ -39,7 +39,12 @@ describe("isCommGraphOriginAvailable", () => {
         EVENT,
       ),
     ).toBe(false);
-    expect(EVENT.messageText).toBe("still readable");
+  });
+
+  it("reports an origin absent from the directory as unavailable", () => {
+    expect(isCommGraphOriginAvailable({ findById: () => null }, EVENT)).toBe(
+      false,
+    );
   });
 
   it("allows the source jump when the origin is dialable", () => {

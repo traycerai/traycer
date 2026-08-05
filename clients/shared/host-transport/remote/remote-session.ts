@@ -424,7 +424,10 @@ export class RemoteSession<
   }
 
   /** Opens a logical subscribe stream (interactive class; see §3 QoS note). */
-  subscribe(method: string, params: unknown): IStreamSession {
+  subscribe<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
     return this.subscribeWithParamsProvider(method, () => params);
   }
 
@@ -434,9 +437,9 @@ export class RemoteSession<
    * provider on that stream makes resume cursors current at the exact wire
    * subscribe boundary rather than frozen at session creation.
    */
-  subscribeWithParamsProvider(
-    method: string,
-    paramsProvider: () => unknown,
+  subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
     this.start();
     const streamId = this.allocateStreamId();

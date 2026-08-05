@@ -235,12 +235,14 @@ export function canParticipateInA2A(target: {
 /** Shared UTF-8 byte ceiling for a single A2A message body. */
 export const A2A_MESSAGE_MAX_UTF8_BYTES = 16 * 1024 * 1024;
 
+const UTF8_ENCODER = new TextEncoder();
+
 /**
  * UTF-8 byte length of `value`. Uses `TextEncoder` (not `Buffer`) so this
  * stays callable from browser-hosted surfaces, not just Node.
  */
 export function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
+  return UTF8_ENCODER.encode(value).length;
 }
 
 // ─── Agent-to-agent unary surface (`agent.create` / `agent.list` /

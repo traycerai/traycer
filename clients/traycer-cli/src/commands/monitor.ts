@@ -481,11 +481,13 @@ function runInboxSubscription(
  */
 class InboxAcknowledgementQueue {
   private static readonly MAX_EVENT_IDS_PER_ACK = 500;
-  private static readonly RETRY_DELAY_MS = 1_000;
+  private static readonly INITIAL_RETRY_DELAY_MS = 1_000;
+  private static readonly MAX_RETRY_DELAY_MS = 60_000;
   private readonly pendingEventIds = new Set<string>();
   private flushing = false;
   private flushScheduled = false;
   private retryTimer: NodeJS.Timeout | null = null;
+  private retryDelayMs = InboxAcknowledgementQueue.INITIAL_RETRY_DELAY_MS;
   private disposed = false;
 
   constructor(
@@ -540,6 +542,7 @@ class InboxAcknowledgementQueue {
             agentId: this.target.agentId,
             eventIds,
           });
+          this.retryDelayMs = InboxAcknowledgementQueue.INITIAL_RETRY_DELAY_MS;
           for (const eventId of eventIds) this.pendingEventIds.delete(eventId);
         } catch (error) {
           this.logger.warn("Monitor failed to acknowledge inbox messages", {
@@ -561,10 +564,15 @@ class InboxAcknowledgementQueue {
 
   private scheduleRetry(): void {
     if (this.retryTimer !== null || this.disposed) return;
+    const delayMs = this.retryDelayMs;
+    this.retryDelayMs = Math.min(
+      delayMs * 2,
+      InboxAcknowledgementQueue.MAX_RETRY_DELAY_MS,
+    );
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       this.scheduleFlush();
-    }, InboxAcknowledgementQueue.RETRY_DELAY_MS);
+    }, delayMs);
   }
 }
 
@@ -666,7 +674,7 @@ async function handleServerFrame(
       agentId: target.agentId,
       epicId: target.epicId,
       fromAgentId: frame.item.fromAgentId,
-      hasReply: frame.item.reply !== null,
+      hasReply: frame.item.reply.expectsReply,
     });
     const printed = printInboxMessage(frame.item);
     if (frame.eventId === null) {

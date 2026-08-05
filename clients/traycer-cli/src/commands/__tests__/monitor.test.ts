@@ -510,6 +510,7 @@ describe("mixed-version inbox message frames", () => {
       });
     callHostRpcMock
       .mockRejectedValueOnce(new Error("temporary host outage"))
+      .mockRejectedValueOnce(new Error("temporary host outage"))
       .mockResolvedValueOnce({});
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await flush(0);
@@ -539,9 +540,14 @@ describe("mixed-version inbox message frames", () => {
     });
 
     await flush(1_000);
-    await flush(0);
-
     expect(callHostRpcMock).toHaveBeenCalledTimes(2);
+
+    await flush(1_999);
+    expect(callHostRpcMock).toHaveBeenCalledTimes(2);
+
+    await flush(1);
+    await flush(0);
+    expect(callHostRpcMock).toHaveBeenCalledTimes(3);
     expect(callHostRpcMock).toHaveBeenLastCalledWith("agent.inbox.ack", {
       epicId: "e1",
       agentId: "a1",
@@ -638,9 +644,11 @@ describe("mixed-version inbox message frames", () => {
     const stdoutSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation((...args: unknown[]) => {
-        const writeCallback = args.find((arg) => typeof arg === "function") as
-          ((error: Error | undefined) => void) | null;
-        if (writeCallback !== null) writeCallbacks.push(writeCallback);
+        const writeCallback = args.find(
+          (arg): arg is (error: Error | undefined) => void =>
+            typeof arg === "function",
+        );
+        if (writeCallback !== undefined) writeCallbacks.push(writeCallback);
         return true;
       });
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);

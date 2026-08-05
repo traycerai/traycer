@@ -41,6 +41,7 @@ function openCommGraphCloudSubscription(
         appLogger.warn("[comm-graph] unparsable cloud server frame", {
           hostId,
         });
+        handlers.onStatus("unsupported");
         return;
       }
       const frame = parsed.data;

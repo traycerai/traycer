@@ -318,6 +318,31 @@ describe("useCommGraphSnapshot cloud authority", () => {
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     expect(cloudRequests[0].hostId).toBe("relay-a");
   });
+
+  it("keeps a healthy relay attached when an unrelated host entry changes", async () => {
+    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    const cloudClose = vi.fn();
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: cloudClose };
+    });
+
+    directoryEntries.current = [directoryEntry("relay-a", undefined)];
+    const { rerender } = renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["relay-a"]),
+    );
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+
+    directoryEntries.current = [
+      directoryEntry("relay-a", undefined),
+      directoryEntry("relay-z", { publicKey: "public-key-z" }),
+    ];
+    rerender();
+
+    expect(cloudClose).not.toHaveBeenCalled();
+    expect(cloudRequests).toHaveLength(1);
+  });
 });
 
 function directoryEntry(

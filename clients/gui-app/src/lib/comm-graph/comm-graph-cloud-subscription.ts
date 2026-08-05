@@ -248,7 +248,6 @@ export class CommGraphCloudSubscriptionManager {
     );
     if (hostId === undefined) {
       if (
-        this.availability === "pending" &&
         this.relayHostIds.length > 0 &&
         this.relayHostIds.every((candidate) =>
           this.unsupportedRelayHostIds.has(candidate),

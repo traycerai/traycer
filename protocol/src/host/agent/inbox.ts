@@ -378,18 +378,20 @@ export const agentInboxReadCursorSchema = z.object({
 });
 export type AgentInboxReadCursor = z.infer<typeof agentInboxReadCursorSchema>;
 
-export const agentInboxReadRequestSchemaV11 = agentInboxReadRequestSchema.extend({
-  /** Resume after this oldest-first durable inbox row, or start at the head. */
-  after: agentInboxReadCursorSchema.nullable(),
-});
+export const agentInboxReadRequestSchemaV11 =
+  agentInboxReadRequestSchema.extend({
+    /** Resume after this oldest-first durable inbox row, or start at the head. */
+    after: agentInboxReadCursorSchema.nullable(),
+  });
 export type AgentInboxReadRequestV11 = z.infer<
   typeof agentInboxReadRequestSchemaV11
 >;
 
-export const agentInboxReadResponseSchemaV11 = agentInboxReadResponseSchema.extend({
-  /** Cursor for the following page, or null when this page reached the end. */
-  nextCursor: agentInboxReadCursorSchema.nullable(),
-});
+export const agentInboxReadResponseSchemaV11 =
+  agentInboxReadResponseSchema.extend({
+    /** Cursor for the following page, or null when this page reached the end. */
+    nextCursor: agentInboxReadCursorSchema.nullable(),
+  });
 export type AgentInboxReadResponseV11 = z.infer<
   typeof agentInboxReadResponseSchemaV11
 >;
@@ -425,7 +427,7 @@ export const agentInboxAckRequestSchema = z.object({
   /** The calling agent acknowledging its own inbox. */
   agentId: z.string(),
   /** Durable inbox row keys to retire. Empty is a no-op. */
-  eventIds: z.array(z.string()),
+  eventIds: z.array(z.string()).max(500),
 });
 export type AgentInboxAckRequest = z.infer<typeof agentInboxAckRequestSchema>;
 

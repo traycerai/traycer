@@ -94,6 +94,7 @@ function openableRefForAgent(agent: CommGraphAgentNode): EpicArtifactRef {
 export function useCommGraphJump(
   epicId: string,
   agents: ReadonlyArray<CommGraphAgentNode>,
+  events: ReadonlyArray<CommGraphEvent>,
 ): CommGraphJump {
   const tileNavigation = useEpicTileNavigation();
   const directory = useHostDirectory();
@@ -110,19 +111,19 @@ export function useCommGraphJump(
     },
     [directory],
   );
-  const getDirectorySnapshot = useCallback(
-    () =>
-      agents
-        .map((agent) => {
-          if (agent.hostId === null) return `${agent.id}:missing`;
-          const endpoint = dialableHostEndpoint(
-            directory.findById(agent.hostId),
-          );
-          return `${agent.id}:${endpoint?.websocketUrl ?? "offline"}`;
-        })
-        .join("|"),
-    [agents, directory],
-  );
+  const getDirectorySnapshot = useCallback(() => {
+    const hostIds = new Set(events.map((event) => event.hostId));
+    for (const agent of agents) {
+      if (agent.hostId !== null) hostIds.add(agent.hostId);
+    }
+    return Array.from(hostIds)
+      .sort()
+      .map((hostId) => {
+        const endpoint = dialableHostEndpoint(directory.findById(hostId));
+        return `${hostId}:${endpoint?.websocketUrl ?? "offline"}`;
+      })
+      .join("|");
+  }, [agents, directory, events]);
   const directorySnapshot = useSyncExternalStore(
     subscribeToDirectory,
     getDirectorySnapshot,

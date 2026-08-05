@@ -64,4 +64,23 @@ describe("comm-graph cloud subscription registry", () => {
     expect(retained.isDisposed()).toBe(false);
     expect(getCommGraphCloudSubscriptionManager("epic-1")).toBe(retained);
   });
+
+  it("evicts an over-limit detached manager without an intervening acquire", async () => {
+    const opener: CommGraphCloudSubscriptionOpener = () => ({
+      close: vi.fn(),
+    });
+    const claims = Array.from({ length: 4 }, () => ({}));
+    const evicted = getCommGraphCloudSubscriptionManager("epic-1");
+
+    for (const [index, claim] of claims.entries()) {
+      const epicId = `epic-${index + 1}`;
+      getCommGraphCloudSubscriptionManager(epicId);
+      acquireCommGraphCloudSubscription(epicId, claim, opener, ["relay-a"]);
+      releaseCommGraphCloudSubscription(epicId, claim);
+    }
+    await Promise.resolve();
+
+    expect(evicted.isDisposed()).toBe(true);
+    expect(getCommGraphCloudSubscriptionManager("epic-1")).not.toBe(evicted);
+  });
 });
