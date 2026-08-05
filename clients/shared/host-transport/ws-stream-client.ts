@@ -141,6 +141,9 @@ function createInertStreamSession(closedReason: string): IStreamSession {
   return {
     sendClientFrame: () => undefined,
     onServerFrame: () => undefined,
+    // Never handshook, so it has no negotiated version - consumers take the
+    // same conservative default they use before any session settles.
+    getNegotiatedSchemaVersion: () => null,
     onStatusChange: (handler) => {
       statusHandler = handler;
       if (emissionScheduled) {

@@ -1,3 +1,4 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 
 /**
@@ -102,6 +103,28 @@ export interface IStreamSession {
    * the session has already been closed.
    */
   requestReconnect(): void;
+
+  /**
+   * The schema version THIS session negotiated for its method, or `null` before
+   * the handshake has settled (and again after a disconnect drops it).
+   *
+   * Takes no method argument: a session is bound to one streaming method for
+   * life, so the method is already implied.
+   *
+   * Prefer this over `IHostStreamClient.getMethodSchemaVersion(method)`
+   * ANYWHERE a specific session's frames are being parsed, gated, or sent. That
+   * accessor is client-wide per method: `reconcileMethodSchemaVersion` reports
+   * whichever live session for the method it reaches first, so with two streams
+   * open on one client - two repos, two chat tabs - it can describe the OTHER
+   * one. The skew is not exotic; a reconnect may reach a new host incarnation
+   * and renegotiate one session while its sibling keeps the version it had.
+   *
+   * `null` must be treated as "not yet known", never as a floor or a ceiling:
+   * fall back to the same conservative default the caller would use before any
+   * handshake, and never to the client-wide value - that reintroduces exactly
+   * the skew this exists to remove.
+   */
+  getNegotiatedSchemaVersion(): SchemaVersion | null;
 
   /**
    * Tears down the session: cancels any pending reconnect backoff, closes
