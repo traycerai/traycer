@@ -47,6 +47,7 @@ import {
 } from "./host-launch-converge";
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 import { respawnIfDown } from "./host-health-respawn";
+import { bootstrapHostWithInstallState } from "./host-install-state";
 import {
   checkForUpdatesAfterResume,
   checkForUpdatesNow,
@@ -703,7 +704,10 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     services.host.on("error", (err: HostStartupError) => {
       log.error("[desktop] host startup error", err);
     });
-    return services.host.bootstrap();
+    return bootstrapHostWithInstallState(
+      services.host,
+      services.hostController,
+    );
   });
 
   // All-platform watchdog for a host that dies without rewriting pid.json
@@ -718,7 +722,10 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // edge is missed - the monitor's reload-first convergence covers exactly
   // that, and only falls back to `HostController.recoverIfDown()` when the
   // disk still names an unreachable host. Started after bootstrap so the
-  // initial 60s readiness wait can't register as an outage.
+  // initial 60s readiness wait can't register as an outage. On a machine with
+  // no host installed that wait is skipped, so this starts promptly instead -
+  // harmless, because `tick` returns immediately while the snapshot is null
+  // and no recovery is pending, and so never reaches `recoverIfDown`.
   void hostReady.then(() => {
     // One authority for automatic restarts, holding both the liveness gate and
     // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
