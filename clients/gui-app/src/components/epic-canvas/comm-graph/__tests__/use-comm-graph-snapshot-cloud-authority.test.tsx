@@ -271,9 +271,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     const localCursor = commGraphCursorForEvent(localEvent);
     act(() => {
       localRequests[0].handlers.onSnapshot([localEvent], 9);
-      useCommGraphTimelineStore
-        .getState()
-        .setCursor("epic-1", localCursor);
+      useCommGraphTimelineStore.getState().setCursor("epic-1", localCursor);
       cloudRequests[0].handlers.onAvailability("available");
       cloudRequests[0].handlers.onSnapshot(
         [
