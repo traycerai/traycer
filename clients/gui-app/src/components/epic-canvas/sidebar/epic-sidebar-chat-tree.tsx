@@ -12,10 +12,7 @@ import {
   useEpicDeleteChat,
   useEpicRenameChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import {
-  useChatArchiveSupported,
-  useChatArchiveSupportState,
-} from "@/hooks/epic/use-chat-archive-support";
+import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
 import {
   useEpicDeleteTuiAgent,
   useEpicRenameTuiAgent,
@@ -78,7 +75,6 @@ import {
   isChatFilterActive,
   useAcknowledgedRootCreatePending,
   useChatFilter,
-  useChatShowArchived,
   useChatSort,
   useLocalRootCreatePending,
   type RootCreatePanelId,
@@ -86,7 +82,6 @@ import {
 import {
   isDefaultSort,
   makeNodeComparator,
-  sortNodeIds,
   type NodeComparator,
 } from "@/lib/epic-sort";
 import {
@@ -109,7 +104,6 @@ import {
   useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
-  useEpicArchivedNodeIds,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
   useEpicNodeArchived,
@@ -169,8 +163,12 @@ import {
   useSidebarVisibleIds,
 } from "./epic-sidebar-filter";
 import {
+  CHATS_TREE_FILTER,
   collectVisibleSidebarTreeIds,
+  combineSidebarVisibleIds,
+  sidebarTreeRootIds,
   useMaybeSidebarBulkSelection,
+  useSidebarArchiveHiddenIds,
 } from "./epic-sidebar-selection";
 import {
   getSidebarNodeDragId,
@@ -206,9 +204,6 @@ interface ChatTreePanelBodyProps {
 }
 
 type TreeFilterFn = (type: string | null | undefined) => boolean;
-
-const CHATS_TREE_FILTER: TreeFilterFn = (type) =>
-  type === "chat" || type === "terminal-agent";
 
 /**
  * Epic-level viewer (read-only) role for the chat panel. Resolved once in
@@ -435,117 +430,22 @@ function usePanelRootIds(
     if (panelId === "artifacts") {
       return [];
     }
-    // Roots = chats/terminal-agents that have no parent in the rendered
-    // tree. We read the projector's `rootIds`, already in the default
-    // (most-recent-activity) order from `compareNodes`, then re-sort below
-    // for a non-default mode. Either way chats and terminal-agents
-    // interleave by the chosen key instead of grouping by type - consistent
-    // with how nested children render off `childrenByParent`. Iterating the
-    // record list instead would surface the projector's slice order (all
-    // chats, then all terminal-agents) and drop the sort. Child agents
-    // (spawned via `agent.create`, which sets the new agent's `parentId` to
-    // its sender) are nested through `useChildIds` off `childrenByParent`
-    // and are absent from `rootIds`, so they correctly never appear here.
-    const roots = tree.rootIds.filter((id) => {
-      const node = tree.nodeById[id];
-      return node.type === "chat" || node.type === "terminal-agent";
+    // Roots = chats/terminal-agents that have no parent in the rendered tree,
+    // read off the projector's `rootIds` so chats and terminal-agents
+    // interleave by the chosen sort key instead of grouping by type -
+    // consistent with how nested children render off `childrenByParent`.
+    // Iterating the record list instead would surface the projector's slice
+    // order (all chats, then all terminal-agents) and drop the sort. Child
+    // agents (spawned via `agent.create`, which sets the new agent's
+    // `parentId` to its sender) are nested through `useChildIds` off
+    // `childrenByParent` and are absent from `rootIds`, so they correctly
+    // never appear here.
+    return sidebarTreeRootIds({
+      tree,
+      treeFilter: CHATS_TREE_FILTER,
+      comparator,
     });
-    // `tree.rootIds` is in projector (default) order; re-sort only for a
-    // non-default mode (`comparator !== null`).
-    return sortNodeIds(roots, tree.nodeById, comparator);
   }, [panelId, tree, comparator]);
-}
-
-const EMPTY_ARCHIVE_HIDDEN_IDS: ReadonlySet<string> = new Set<string>();
-
-/**
- * Every node hidden by archiving: the archived nodes themselves plus their
- * whole subtrees, i.e. exactly "some ancestor-or-self carries `archivedAt`".
- *
- * Descends from the archive roots through `childrenByParent` rather than
- * walking each node's parent chain upward - the archived set is normally tiny
- * and the walk then costs O(hidden subtree) instead of O(nodes x depth).
- *
- * This is what makes the SINGLE-FLAG model work without cascade writes:
- * archiving stamps only the target, and unarchiving clears only the target, so
- * the subtree reappears in one step - except for descendants that were archived
- * in their own right, which stay in `archivedIds` and keep hiding their own
- * subtrees. `hidden` doubles as the cycle guard.
- */
-function collectArchiveHiddenIds(
-  archivedIds: ReadonlyArray<string>,
-  tree: TreeSlice,
-): ReadonlySet<string> {
-  if (archivedIds.length === 0) return EMPTY_ARCHIVE_HIDDEN_IDS;
-  const hidden = new Set<string>();
-  const stack = [...archivedIds];
-  while (stack.length > 0) {
-    const id = stack.pop();
-    if (id === undefined || hidden.has(id)) continue;
-    hidden.add(id);
-    if (Object.hasOwn(tree.childrenByParent, id)) {
-      for (const childId of tree.childrenByParent[id]) stack.push(childId);
-    }
-  }
-  return hidden;
-}
-
-/**
- * The archive-hidden set for this epic, or empty when nothing should be hidden.
- *
- * Nothing is hidden in two cases, and the second is load-bearing:
- *
- * 1. "Show archived" is on - archived rows render dimmed instead.
- * 2. The host is KNOWN to lack `epic.setChatArchived`. Every way back to an
- *    archived row is capability-gated (the "Show archived" toggle, the
- *    Unarchive entry, the empty-state hint), so continuing to hide on such a
- *    host would leave rows invisible with nothing left to recover them - a real
- *    path, since a host can be rolled back under a live session or the default
- *    host can simply be an older machine. Archived records must never become
- *    unreachable, so a known-absent host stops hiding entirely.
- *
- * The support state is deliberately the TRI-STATE, not the fail-closed boolean:
- * `null` (no handshake yet) keeps hiding, because revealing on unknown would
- * flash archived rows on every cold start and hide them again a moment later.
- * Only a positive `false` reveals.
- */
-function useArchiveHiddenIds(epicId: string): ReadonlySet<string> {
-  const showArchived = useChatShowArchived(epicId);
-  const archiveSupport = useChatArchiveSupportState();
-  const archivedIds = useEpicArchivedNodeIds();
-  const tree = useEpicTreeIndex();
-  return useMemo(() => {
-    if (showArchived || archiveSupport === false) {
-      return EMPTY_ARCHIVE_HIDDEN_IDS;
-    }
-    return collectArchiveHiddenIds(archivedIds, tree);
-  }, [showArchived, archiveSupport, archivedIds, tree]);
-}
-
-/**
- * Intersects the origin filter's visible-id set with archive hiding, for the
- * consumers that walk tree DATA rather than the rendered tree (the collapsed
- * parent's status rollup, the bulk-selection id sweep). Those must not surface
- * a row the user cannot reach by expanding.
- *
- * Deliberately NOT fed to `mergeForcedExpanded`: that force-expands every id in
- * a non-null set, so publishing an archive-derived set there would expand the
- * entire tree the moment anything was archived. Forced expansion stays keyed
- * off the origin filter alone.
- */
-function combineVisibleIds(
-  originVisibleIds: ReadonlySet<string> | null,
-  archiveHiddenIds: ReadonlySet<string>,
-  tree: TreeSlice,
-): ReadonlySet<string> | null {
-  if (archiveHiddenIds.size === 0) return originVisibleIds;
-  const source =
-    originVisibleIds === null ? Object.keys(tree.nodeById) : originVisibleIds;
-  const combined = new Set<string>();
-  for (const id of source) {
-    if (!archiveHiddenIds.has(id)) combined.add(id);
-  }
-  return combined;
 }
 
 /**
@@ -581,7 +481,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const allRootIds = usePanelRootIds(panelId, comparator);
   const originVisibleIds = useChatVisibleIds(epicId);
   const tree = useEpicTreeIndex();
-  const archiveHiddenIds = useArchiveHiddenIds(epicId);
+  const archiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
   // Two independent narrowings, kept separate on purpose. `originRootIds` is
   // the origin filter's result and feeds the "no matches" empty state and
@@ -601,7 +501,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [originRootIds, archiveHiddenIds],
   );
   const visibleIds = useMemo(
-    () => combineVisibleIds(originVisibleIds, archiveHiddenIds, tree),
+    () => combineSidebarVisibleIds(originVisibleIds, archiveHiddenIds, tree),
     [originVisibleIds, archiveHiddenIds, tree],
   );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
@@ -633,7 +533,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  // Origin-only: see `combineVisibleIds`. Archive hiding must never reach here.
+  // Origin-only: see `combineSidebarVisibleIds`. Archive hiding must never
+  // reach here.
   const forcedExpandedIds = useMemo(
     () => mergeForcedExpanded(ancestorIdsOfActive, originVisibleIds),
     [ancestorIdsOfActive, originVisibleIds],
@@ -672,6 +573,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         expandedIds,
         tree,
         treeFilter: CHATS_TREE_FILTER,
+        emitFilter: CHATS_TREE_FILTER,
         visibleIds,
         comparator,
       }),
@@ -1356,6 +1258,9 @@ function ChatNodeShellBody(
       tabId,
       placement: ACTIVE_TILE_PLACEMENT,
       parentId: nodeId,
+      // Sidebar row: app-wide surface, so the child lands on the active host
+      // exactly like the panel's own `+`.
+      hostId: null,
     });
   }, [canMutate, epicId, nodeId, openNewConversationModal, tabId]);
   const { decision } = props;

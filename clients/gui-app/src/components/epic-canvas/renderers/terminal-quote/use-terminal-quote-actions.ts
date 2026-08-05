@@ -1,21 +1,20 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 
-import { appendTerminalQuoteToDraft } from "@/components/chat/quote/append-terminal-quote-to-draft";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicCreateChatForHost } from "@/hooks/epic/use-epic-chat-mutations";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
-  openCreatedChatWhenProjectedWithNavigation,
-  openNewChatInActiveTile,
-  type CancelFn,
-} from "@/lib/commands/actions/new-chat";
+  appendTerminalQuoteToDraft,
+  appendTerminalQuoteToNewConversationDraft,
+} from "@/components/chat/quote/append-terminal-quote-to-draft";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { displayTitle } from "@/lib/display-title";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 interface UseTerminalQuoteActionsArgs {
   readonly epicId: string;
@@ -29,7 +28,10 @@ interface UseTerminalQuoteActionsArgs {
 export interface TerminalQuoteActions {
   /** Quotes into an existing chat, then brings that chat forward. */
   readonly quoteToChat: (chatId: string, text: string) => void;
-  /** Creates a chat, pre-fills its draft with the quote, and opens it. */
+  /**
+   * Opens the New Conversation modal with the quote already in its composer.
+   * Nothing is created until the user sends.
+   */
   readonly quoteToNewChat: (text: string) => void;
 }
 
@@ -45,30 +47,14 @@ export function useTerminalQuoteActions(
   const handle = useOpenEpicHandle();
   const tabHostId = useTabHostId();
   const navigateNested = useEpicNestedFocusNavigation();
-  // Tab-scoped, not app-wide: this tile is bound to `tabHostId` for life, and
-  // the open intent below waits for the new chat to land in THAT host's epic
-  // projection. `useEpicCreateChat` stamps the app-wide active host instead, so
-  // whenever the two diverge the chat is created on one host while the watcher
-  // listens on the other - the wait then just expires after 30s and the tile
-  // never opens. Same reasoning as `chat-fork-dialog.tsx`.
-  const createChat = useEpicCreateChatForHost();
+  const openNewConversationModal = useNewConversationModalOpenStore(
+    (state) => state.open,
+  );
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (state) => state.prepareOpenTileInTabFocusTarget,
   );
   const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
     (state) => state.prepareSetActiveTileTabFocusTarget,
-  );
-
-  // A new chat's tile opens only once the host's create round-trips and the
-  // chat lands in the projection. Unmounting mid-wait must tear that watch
-  // down, or it opens a tab in a tile that is gone.
-  const pendingNewChat = useRef<CancelFn | null>(null);
-  useEffect(
-    () => () => {
-      pendingNewChat.current?.();
-      pendingNewChat.current = null;
-    },
-    [],
   );
 
   const revealChat = useCallback(
@@ -127,38 +113,29 @@ export function useTerminalQuoteActions(
 
   const quoteToNewChat = useCallback(
     (text: string) => {
-      pendingNewChat.current?.();
-      pendingNewChat.current = openNewChatInActiveTile({
+      // Draft first, then open: the modal's composer seeds itself from the
+      // draft store as it mounts, so the quote has to be there already.
+      appendTerminalQuoteToNewConversationDraft({
+        epicId,
+        terminalId,
+        terminalTitle,
+        terminalCwd,
+        text,
+      });
+      openNewConversationModal({
         epicId,
         tabId: viewTabId,
+        placement: ACTIVE_TILE_PLACEMENT,
+        parentId: null,
+        // This tile is bound to `tabHostId` for life and the quote points at a
+        // terminal that only exists on that host, so the chat has to be created
+        // there - not on whichever host happens to be active app-wide.
         hostId: tabHostId,
-        // No worktree seed and no pinned settings: this is the same bare chat
-        // the palette's "New chat" creates, and the chat tile resolves its
-        // binding at send time.
-        worktreeIntent: null,
-        settings: null,
-        source: "direct_ui",
-        createChat: (request, callbacks) =>
-          createChat.mutate(request, { onSuccess: callbacks.onSuccess }),
-        openWhenProjected: (intent) => {
-          appendTerminalQuoteToDraft(intent.chatId, {
-            epicId,
-            terminalId,
-            terminalTitle,
-            terminalCwd,
-            text,
-          });
-          return openCreatedChatWhenProjectedWithNavigation({
-            intent,
-            navigateNestedFocus: navigateNested,
-          });
-        },
       });
     },
     [
-      createChat,
       epicId,
-      navigateNested,
+      openNewConversationModal,
       tabHostId,
       terminalCwd,
       terminalId,

@@ -6,6 +6,10 @@ import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import {
+  createEmptyNewConversationContent,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 
 import { appendBlocks } from "./append-quote-to-draft";
 
@@ -83,6 +87,32 @@ export function appendTerminalQuoteToDraft(
   const draft = readComposerDraftSnapshot(chatId);
   const next = appendBlocks(draft.content, buildTerminalQuoteBlocks(quote));
   useComposerDraftStore.getState().replaceDraft(chatId, next, null);
+}
+
+/**
+ * The same two blocks, appended to the new-conversation modal's per-epic draft
+ * instead of an existing chat's - the quote path for a chat that does not exist
+ * yet. The modal seeds its composer from this store when its body mounts, so
+ * this must be written BEFORE the open request or the composer opens empty.
+ *
+ * The caret is dropped rather than moved: the blocks land at the end of the
+ * draft, and the composer's `autofocus: "end"` then puts the user straight
+ * after the chip's trailing space - the same place the chat-draft path leaves
+ * them. Keeping a remembered caret would drop them back wherever they last
+ * were in an older draft, above the quote they just took.
+ */
+export function appendTerminalQuoteToNewConversationDraft(
+  quote: TerminalQuote,
+): void {
+  const store = useNewConversationModalStore.getState();
+  const current =
+    store.draftPatchesByEpicId[quote.epicId]?.content ??
+    createEmptyNewConversationContent();
+  store.setContent(
+    quote.epicId,
+    appendBlocks(current, buildTerminalQuoteBlocks(quote)),
+  );
+  store.clearSelection(quote.epicId);
 }
 
 /**

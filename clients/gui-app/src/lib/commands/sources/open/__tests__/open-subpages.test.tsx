@@ -448,6 +448,7 @@ describe("Agents opener sub-page", () => {
       tabId: "tab-1",
       placement: { kind: "target-group", groupId: "group-1" },
       parentId: null,
+      hostId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -504,6 +505,7 @@ describe("Agents opener sub-page", () => {
       tabId: "tab-1",
       placement: { kind: "target-group", groupId: "group-1" },
       parentId: null,
+      hostId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]

@@ -32,11 +32,12 @@ function createSource(): TerminalSelectionSource & {
   return {
     element,
     rows: 24,
+    cols: 80,
     buffer: { active: { viewportY: 0 } },
     hasSelection: () => text.length > 0,
     getSelection: () => text,
     getSelectionPosition: () =>
-      text.length === 0 ? undefined : { start: { y: 3 } },
+      text.length === 0 ? undefined : { start: { x: 5, y: 3 } },
     onSelectionChange: (listener) => {
       selectionListeners.push(listener);
       return { dispose: () => undefined };

@@ -49,10 +49,17 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
     <div
       data-slot={QUOTE_CONTROL_SLOT}
       className={cn(
-        "absolute left-2 z-20 max-w-[calc(100%-1rem)]",
+        "absolute z-20",
         props.anchor.placement === "above" && "-translate-y-full",
       )}
-      style={{ top: props.anchor.top }}
+      // Both offsets and the width cap come from the anchor: it is the one
+      // place that knows where the selection starts and how much pane is left
+      // beside it (see `terminalSelectionAnchor`).
+      style={{
+        top: props.anchor.top,
+        left: props.anchor.left,
+        maxWidth: props.anchor.maxWidth,
+      }}
     >
       {/*
         Non-modal: a modal Radix menu writes overflow/padding onto <body>

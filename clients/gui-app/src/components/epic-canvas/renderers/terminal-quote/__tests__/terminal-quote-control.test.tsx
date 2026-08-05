@@ -7,7 +7,12 @@ import userEvent from "@testing-library/user-event";
 import { TerminalQuoteControl } from "../terminal-quote-control";
 import type { TerminalQuoteChatTarget } from "../terminal-quote-targets";
 
-const ANCHOR = { top: 120, placement: "above" } as const;
+const ANCHOR = {
+  top: 120,
+  left: 240,
+  maxWidth: 400,
+  placement: "above",
+} as const;
 
 afterEach(() => {
   cleanup();

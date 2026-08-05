@@ -28,11 +28,12 @@ export interface TerminalQuoteSelection {
 export interface TerminalSelectionSource {
   readonly element: HTMLElement | undefined;
   readonly rows: number;
+  readonly cols: number;
   readonly buffer: { readonly active: { readonly viewportY: number } };
   hasSelection(): boolean;
   getSelection(): string;
   getSelectionPosition():
-    { readonly start: { readonly y: number } } | undefined;
+    { readonly start: { readonly x: number; readonly y: number } } | undefined;
   onSelectionChange(listener: () => void): IDisposable;
   onScroll(listener: (yDisp: number) => void): IDisposable;
 }
@@ -108,10 +109,15 @@ export function useTerminalQuoteSelection(
         text,
         anchor: terminalSelectionAnchor({
           selectionStartRow: range.start.y,
+          selectionStartColumn: range.start.x,
           viewportY: term.buffer.active.viewportY,
           rows: term.rows,
+          cols: term.cols,
           screenTop: screenRect.top - paneRect.top,
           screenHeight: screenRect.height,
+          screenLeft: screenRect.left - paneRect.left,
+          screenWidth: screenRect.width,
+          paneWidth: paneRect.width,
         }),
       };
     };
@@ -210,6 +216,8 @@ function sameSelection(
   return (
     left.text === right.text &&
     left.anchor.top === right.anchor.top &&
+    left.anchor.left === right.anchor.left &&
+    left.anchor.maxWidth === right.anchor.maxWidth &&
     left.anchor.placement === right.anchor.placement
   );
 }
