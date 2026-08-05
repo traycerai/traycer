@@ -734,6 +734,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // Killing a terminal terminates a host PTY session.
   "terminal.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "terminal.list": { ...LATEST_SCHEDULING, poll: null },
+  // A read that materializes the terminal's output to a file on the host.
+  // Latest-wins with no poll: it is issued on demand, and a superseded read
+  // has nothing worth waiting for - the next one rewrites the same file.
+  "terminal.readOutput": { ...LATEST_SCHEDULING, poll: null },
   // Renaming a terminal persists its display name.
   "terminal.rename": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "worktree.listByWorkspacePaths": { ...LATEST_SCHEDULING, poll: null },

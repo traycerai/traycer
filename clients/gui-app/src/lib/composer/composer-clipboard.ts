@@ -214,6 +214,11 @@ function composerClipboardPlainTextFromNode(
 ): string {
   const inlineText = composerClipboardInlinePlainText(node, ctx);
   if (inlineText !== null) return inlineText;
+  // A sourced quote copies out exactly like a blockquote - the source it
+  // remembers travels in its attrs, not in the prose.
+  if (node.type === "sourcedQuote") {
+    return blockquotePlainText(node.content ?? [], ctx);
+  }
   const blockText = composerClipboardBlockPlainText(node, ctx);
   if (blockText !== null) return blockText;
   return composerClipboardPlainTextFromNodes(node.content ?? [], ctx, "");

@@ -133,6 +133,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
           artifactType: "spec",
           chatId: null,
           terminalAgentId: null,
+          terminalId: null,
           status: null,
         }) ?? false;
     });

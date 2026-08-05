@@ -55,6 +55,7 @@ function renderEditorSlot(): void {
       ingestPastedComposerImages={null}
       isActive
       onDocumentChange={() => undefined}
+      onFocus={() => undefined}
 
       onSelectionChange={() => undefined}
       onSubmit={() => undefined}

@@ -42,8 +42,13 @@ import type {
   EpicChatMentionEntry,
   EpicMentionEntry,
   EpicTerminalAgentMentionEntry,
+  EpicTerminalMentionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
+import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
+import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 import type {
   ComposerPickerItem,
@@ -138,6 +143,30 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     // open, which re-snapshots on the next open.
   }, [active, handle, currentEpicId]);
 
+  // Plain terminals are the one Task entity that never reaches the Y.Doc - the
+  // host's `terminal.list` is their source of truth - so unlike the Agent and
+  // artifact lists above this one cannot be read off the open-epic store. It
+  // goes through the SAME query the Terminals panel uses, which means the two
+  // surfaces share one cache entry and can never disagree about what exists.
+  // A null client is `useTerminalListFor`'s disable switch, so a closed picker
+  // (or a composer with no open Task) holds no terminal subscription at all.
+  const terminalListQuery = useTerminalListFor(
+    active && currentEpicId !== null ? hostClient : null,
+    { kind: "epic", epicId: currentEpicId ?? "" },
+  );
+  const terminalSessions = terminalListQuery.data?.sessions;
+  const epicTerminalEntries = useMemo<
+    ReadonlyArray<EpicTerminalMentionEntry>
+  >(() => {
+    if (terminalSessions === undefined || currentEpicId === null) {
+      return EMPTY_TERMINAL_ENTRIES;
+    }
+    return epicTerminalMentionEntriesFromSessions(
+      terminalSessions,
+      currentEpicId,
+    );
+  }, [terminalSessions, currentEpicId]);
+
   // The current epic's COMPLETE local artifact set, read the same churn-free way
   // (via `getState`) as the chats above. Cloud `epic.mention*` returns at most
   // 25 artifacts per kind across all epics, so on a large epic some of the
@@ -192,6 +221,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
+      terminalEntries: EMPTY_TERMINAL_ENTRIES,
       epicAttachedRoots,
     }),
     [currentEpicId, epicAttachedRoots, mentionRoots, query],
@@ -206,6 +236,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
+      terminalEntries: EMPTY_TERMINAL_ENTRIES,
       epicAttachedRoots,
     }),
     [currentEpicId, debouncedQuery, epicAttachedRoots, mentionRoots],
@@ -302,11 +333,13 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: epicRequests.length > 0 ? epicEntries : EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: epicAgentEntries,
+      terminalEntries: epicTerminalEntries,
       epicAttachedRoots,
     }),
     [
       currentEpicId,
       epicAgentEntries,
+      epicTerminalEntries,
       epicAttachedRoots,
       epicEntries,
       epicRequests.length,
@@ -369,6 +402,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
 }
 
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
+const EMPTY_TERMINAL_ENTRIES: ReadonlyArray<EpicTerminalMentionEntry> = [];
 const EMPTY_ATTACHED_ROOTS: ReadonlySet<string> = new Set();
 const EMPTY_ARTIFACT_ENTRIES: ReadonlyArray<EpicMentionArtifactSuggestion> = [];
 const EMPTY_TITLE_MAP: ReadonlyMap<string, string> = new Map();
@@ -469,6 +503,47 @@ export function epicAgentMentionEntriesFromEpic(
     ...terminalEntries,
   ];
   return entries.length === 0 ? EMPTY_AGENT_ENTRIES : entries;
+}
+
+/**
+ * Pure projection of the host's `terminal.list` rows into @-mention terminal
+ * suggestions for one Task.
+ *
+ * Filtered by `isVisibleEpicTerminalSession` - the same predicate the Terminals
+ * panel applies - so the picker lists a terminal exactly while that panel does.
+ * That is the whole visibility rule: it also keeps the host's `terminal-agent`
+ * backing PTYs out (they are Agents, listed under Agents) and drops sessions
+ * belonging to another Task or to the host's landing scope.
+ */
+export function epicTerminalMentionEntriesFromSessions(
+  sessions: ReadonlyArray<CanonicalTerminalSessionInfo>,
+  epicId: string,
+): ReadonlyArray<EpicTerminalMentionEntry> {
+  const entries = sessions.flatMap((session) => {
+    if (!isVisibleEpicTerminalSession(session, epicId)) return [];
+    return [buildTerminalMentionEntry(session, epicId)];
+  });
+  return entries.length === 0 ? EMPTY_TERMINAL_ENTRIES : entries;
+}
+
+function buildTerminalMentionEntry(
+  session: CanonicalTerminalSessionInfo,
+  epicId: string,
+): EpicTerminalMentionEntry {
+  return {
+    kind: "epic-terminal",
+    id: `terminal:${epicId}:${session.sessionId}`,
+    token: `terminal:${epicId}/${session.sessionId}`,
+    epicId,
+    terminalId: session.sessionId,
+    label: terminalSessionLabel(session),
+    // The chip's tooltip and the row's secondary line: where this shell is.
+    description: session.cwd,
+    cwd: session.cwd,
+    // Terminals carry no "updated" clock, so recency ranking falls back to
+    // start time - newest shell first, which is the one just opened.
+    updatedAt: session.createdAt,
+  };
 }
 
 function matchesMentionQuery(label: string, normalizedQuery: string): boolean {

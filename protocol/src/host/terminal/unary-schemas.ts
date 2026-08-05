@@ -260,6 +260,41 @@ export type ListTerminalsResponseV22 = z.infer<
   typeof listTerminalsResponseSchemaV22
 >;
 
+// `terminal.readOutput@1.0` - read-only access to one session's output for a
+// caller that is an AGENT rather than a renderer. The host materializes the
+// session's scrollback, current screen and a short metadata header to a file
+// and returns that path; the caller reads or greps the file with its own
+// tools. A path rather than the text itself because a terminal's scrollback
+// is far larger than an RPC response should carry, and the reader is already
+// on this host - the same shape the managed-command log directory takes.
+//
+// The file is a regenerable projection of live emulator state, rewritten on
+// every call, so a path is never worth caching past the read that returned
+// it. Only plain `terminal` sessions are readable; a `terminal-agent`
+// session's conversation is `agent.getTranscript`'s job.
+//
+// Addressed to an epic like `agent.getTranscript` is, and for the same
+// reason: the host resolves `sessionId` among that epic's terminals only, so
+// what an agent can read is exactly what `terminal.list` shows it for the
+// same epic. A session in another epic is not readable here even for its
+// owner.
+export const readTerminalOutputRequestSchema = z.object({
+  epicId: z.string(),
+  // An unambiguous session-id prefix of at least 4 characters is accepted,
+  // matching the abbreviation rule the agent-facing id surfaces share.
+  sessionId: z.string().min(1),
+});
+export type ReadTerminalOutputRequest = z.infer<
+  typeof readTerminalOutputRequestSchema
+>;
+
+export const readTerminalOutputResponseSchema = z.object({
+  path: z.string().min(1),
+});
+export type ReadTerminalOutputResponse = z.infer<
+  typeof readTerminalOutputResponseSchema
+>;
+
 // `terminal.rename@1.0` - overrides the session's display title. Title
 // lives on the in-memory session record only; it does not persist across
 // host restarts (PTYs themselves don't either). `updated: false` means

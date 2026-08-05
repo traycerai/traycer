@@ -43,7 +43,8 @@ export function useHostSupportsMethod(
  * Hiding an affordance is safe under `null`, which is why the boolean form
  * exists. But any decision that could STRAND data must distinguish the two:
  * treating `null` as `false` acts on a fact not yet in evidence, and treating
- * `false` as `null` leaves the data stranded. See `useArchiveHiddenIds`, where
+ * `false` as `null` leaves the data stranded. See
+ * `useSidebarArchiveHiddenIds`, where
  * a known-absent host has to stop hiding archived rows entirely - otherwise
  * rows archived by a newer host stay hidden with no way to bring them back.
  */

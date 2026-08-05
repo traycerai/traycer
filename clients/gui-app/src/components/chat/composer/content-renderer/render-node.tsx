@@ -208,6 +208,20 @@ const RENDERERS: Partial<Record<string, NodeRenderer>> = {
       ),
       nodeKey: key,
     }),
+  // A sourced quote reads as a quote; its source rides in the attrs for the
+  // coding agent, and the accompanying mention chip is what shows the reader
+  // where it came from. Rendering it any louder would double-state that.
+  sourcedQuote: (node, key, context) =>
+    context.profile.renderBlockquote({
+      children: (
+        <ComposerNodeList
+          nodes={node.content ?? []}
+          keyPrefix={key}
+          context={context}
+        />
+      ),
+      nodeKey: key,
+    }),
 };
 
 export function RenderedComposerNode(props: {
