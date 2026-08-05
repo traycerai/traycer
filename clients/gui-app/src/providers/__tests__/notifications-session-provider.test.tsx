@@ -87,6 +87,16 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
     streamState.useClientSupport
       ? (streamState.client?.getMethodSupport(method) ?? null)
       : streamState.cloudFeedSupport,
+  useStreamMethodSchemaVersion: (
+    method: keyof HostStreamRpcRegistry & string,
+  ) => {
+    if (streamState.useClientSupport) {
+      return streamState.client?.getMethodSchemaVersion(method) ?? null;
+    }
+    return method === "host.notifications.cloudFeed.subscribe"
+      ? { major: 1, minor: 1 }
+      : { major: 1, minor: 2 };
+  },
 }));
 
 // Per the G8 decision the provider binds to the LOCAL host, not the app-wide
@@ -696,13 +706,24 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     await waitFor(() => {
+      // Mixed mode keeps the host durable-home feed open alongside the cloud
+      // relay. Free-tier local sources (app-local / collaboration room) are
+      // not reopened as streams; retained store rows are ignored by merge.
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
-      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
-      expect(useNotificationsStore.getState().entryIds).toEqual([]);
+      expect(streamClient.subscribedMethods).not.toContain(
+        "notifications.subscribe",
+      );
     });
+    // Pre-mixed local-only inventory may still sit in their stores; mixed
+    // mode no longer wipes them (the host feed survives the capability edge).
+    expect(useAppLocalNotificationsStore.getState().orderedIds.length).toBeGreaterThan(
+      0,
+    );
+    expect(useNotificationsStore.getState().entryIds.length).toBeGreaterThan(0);
 
     act(() => {
       streamClient.sessionFor("agent.activity.subscribe").emitServerFrame({
@@ -718,7 +739,6 @@ describe("<NotificationsSessionProvider />", () => {
     expect([
       ...(useAgentActivityStore.getState().byEpic.get("epic-1")?.working ?? []),
     ]).toEqual(["agent-1"]);
-    expect(useNotificationsStore.getState().entryIds).toEqual([]);
 
     act(() => {
       streamClient.sessionFor("agent.activity.subscribe").emitStatus("closed");
@@ -752,6 +772,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(firstClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
 
@@ -771,6 +792,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(secondClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
     expect(firstClient.sessionFor("agent.activity.subscribe").closeCount).toBe(
@@ -780,6 +802,77 @@ describe("<NotificationsSessionProvider />", () => {
       firstClient.sessionFor("host.notifications.cloudFeed.subscribe")
         .closeCount,
     ).toBe(1);
+    expect(
+      firstClient.sessionFor("host.notifications.feed.subscribe").closeCount,
+    ).toBe(1);
+  });
+
+  it("opens both partitioned notification streams only after schema versions negotiate", async () => {
+    const queryClient = new QueryClient();
+    const incompleteClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = incompleteClient;
+    streamState.cloudFeedSupport = "supported";
+    streamState.useClientSupport = true;
+    // Real client has no negotiated methods yet — mixed mode must stay local.
+    vi.spyOn(incompleteClient, "getMethodSupport").mockReturnValue("supported");
+    vi.spyOn(incompleteClient, "getMethodSchemaVersion").mockImplementation(
+      (method: string) =>
+        method === "host.notifications.cloudFeed.subscribe"
+          ? { major: 1, minor: 0 }
+          : { major: 1, minor: 1 },
+    );
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect([...incompleteClient.subscribedMethods].sort()).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.feed.subscribe",
+        "notifications.subscribe",
+      ]);
+    });
+    expect(incompleteClient.subscribedMethods).not.toContain(
+      "host.notifications.cloudFeed.subscribe",
+    );
+
+    const completeClient = new MockWsStreamClient();
+    vi.spyOn(completeClient, "getMethodSupport").mockReturnValue("supported");
+    vi.spyOn(completeClient, "getMethodSchemaVersion").mockImplementation(
+      (method: string) =>
+        method === "host.notifications.cloudFeed.subscribe"
+          ? { major: 1, minor: 1 }
+          : { major: 1, minor: 2 },
+    );
+    act(() => {
+      streamState.client = completeClient;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect([...completeClient.subscribedMethods].sort()).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
+      ]);
+    });
+    expect(completeClient.subscribedMethods).not.toContain(
+      "notifications.subscribe",
+    );
+    streamState.useClientSupport = false;
   });
 
   it("reopens activity after a recoverable terminal close", async () => {
@@ -803,6 +896,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
 
@@ -820,6 +914,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
         "agent.activity.subscribe",
       ]);
       act(() => {
@@ -828,7 +923,7 @@ describe("<NotificationsSessionProvider />", () => {
           .emitClosed(fatalClose("INCOMPATIBLE"));
         vi.advanceTimersByTime(2 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
       });
-      expect(streamClient.subscribedMethods).toHaveLength(3);
+      expect(streamClient.subscribedMethods).toHaveLength(4);
     } finally {
       vi.useRealTimers();
     }
@@ -855,12 +950,16 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
 
     const baseline = cloudRow("entry-baseline", 7);
+    const cloudSession = streamClient.sessionFor(
+      "host.notifications.cloudFeed.subscribe",
+    );
     act(() => {
-      streamClient.session.emitServerFrame({
+      cloudSession.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
         connectionState: "connected",
@@ -873,7 +972,7 @@ describe("<NotificationsSessionProvider />", () => {
 
     const arrived = cloudRow("entry-arrived", 8);
     act(() => {
-      streamClient.session.emitServerFrame({
+      cloudSession.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
         connectionState: "connected",
@@ -893,7 +992,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     act(() => {
-      streamClient.session.emitServerFrame({
+      cloudSession.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
         connectionState: "connected",
@@ -927,6 +1026,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
     act(() => {
@@ -966,8 +1066,10 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
       expect(useCloudNotificationsStore.getState().hasSnapshot).toBe(false);
       expect(useCloudNotificationsStore.getState().connectionState).toBe(
@@ -998,6 +1100,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(firstClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
     act(() => {
@@ -1019,6 +1122,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(replacementClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
       const cloud = useCloudNotificationsStore.getState();
       expect(cloud.hasSnapshot).toBe(false);
@@ -1050,6 +1154,9 @@ describe("<NotificationsSessionProvider />", () => {
       resetAuth("signed-in", "alice@example.com", "alice@example.com");
     });
     await waitFor(() => {
+      // The stream-factory override is the local-mode test harness path: it
+      // suppresses the host durable-home feed so this case can isolate the
+      // cloud entitlement wall without mixed-plane stream noise.
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",

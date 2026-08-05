@@ -11,6 +11,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsEntityRef,
+  HostNotificationsIndicatorStateRequestV11,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -90,6 +91,7 @@ const ENTITY: HostNotificationsEntityRef = {
 interface HostIndicatorStub {
   readonly response: HostNotificationsIndicatorStateResponse;
   readonly requestCount: { value: number };
+  readonly requests: HostNotificationsIndicatorStateRequestV11[];
 }
 
 interface CloudMarkReadStub {
@@ -112,6 +114,7 @@ function createHarness(
     mutations: { retry: false },
   });
   const requestCount = { value: 0 };
+  const requests: HostNotificationsIndicatorStateRequestV11[] = [];
   const cloudMarkRead: CloudMarkReadStub = { calls: [], mode: "applied" };
   let requestId = 0;
   const client = new HostClient<HostRpcRegistry>({
@@ -124,8 +127,9 @@ function createHarness(
         return `request-${String(requestId)}`;
       },
       handlers: {
-        "host.notifications.indicatorState": () => {
+        "host.notifications.indicatorState": (params) => {
           requestCount.value += 1;
+          requests.push(params);
           return hostResponse;
         },
         "host.notifications.cloudFeed.markRead": (params) => {
@@ -150,7 +154,7 @@ function createHarness(
   });
   return {
     queryClient,
-    hostIndicators: { response: hostResponse, requestCount },
+    hostIndicators: { response: hostResponse, requestCount, requests },
     cloudMarkRead,
   };
 }
@@ -324,6 +328,25 @@ function indicatorText(testId: string): string {
   return screen.getByTestId(testId).textContent;
 }
 
+async function expectSingleLocalIndicatorRequest(
+  harness: Harness,
+  input: {
+    readonly epicIds: ReadonlyArray<string>;
+    readonly chatIds: ReadonlyArray<string>;
+  },
+): Promise<void> {
+  await waitFor(() => {
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
+    expect(harness.hostIndicators.requests).toEqual([
+      {
+        epicIds: input.epicIds,
+        chatIds: input.chatIds,
+        home: "local",
+      },
+    ]);
+  });
+}
+
 /** An unread app-local failure on the entity. Client-side state that belongs
  * to neither feed, so it must contribute in both modes. */
 function seedAppLocalFailure(): void {
@@ -349,7 +372,7 @@ afterEach(() => {
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
-describe("cloud-derived notification indicators", () => {
+describe("mixed-plane notification indicators", () => {
   it("lights a chat indicator for an entry produced on another host", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
     applyCloudSnapshot(
@@ -372,10 +395,14 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
-    // The entry never entered this host's SQLite, so the v1 path could not
-    // have produced this - and it is not even consulted in cloud mode.
+    // The foreign row still lights the indicator even though the exact local
+    // partition is empty. That local partition is queried precisely once;
+    // the cloud frame remains the sole source for this foreign entry.
     expect(OTHER_HOST_ID).not.toBe(CONNECTED_HOST_ID);
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
   });
 
   it("rolls a foreign-host chat entry up into its epic indicator", async () => {
@@ -400,7 +427,10 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("epic")).toBe("pendingApproval");
     });
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [EPIC_ID],
+      chatIds: [],
+    });
   });
 
   it("stops lighting an approval once the cloud row carries resolvedAt", async () => {
@@ -471,6 +501,10 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
 
     screen.getByRole("button", { name: "Mark read" }).click();
 
@@ -479,7 +513,9 @@ describe("cloud-derived notification indicators", () => {
     });
     expect(indicatorText("row-read")).toBe("read");
     expect(harness.cloudMarkRead.calls).toEqual(["entry-b"]);
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    // Marking a cloud row changes neither the local partition nor its query;
+    // an optimistic cloud mutation must not trigger a duplicate local read.
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
   });
 
   it("keeps a degraded mark-read's icon agreeing with its retained row, then reconverges on the next snapshot", async () => {
@@ -556,7 +592,10 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadFailure");
     });
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
   });
 });
 

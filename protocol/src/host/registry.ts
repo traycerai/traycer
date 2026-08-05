@@ -3,6 +3,7 @@ import {
   defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
   type DowngradeResult,
+  type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   defineVersionedStreamRpcRegistry,
@@ -177,6 +178,7 @@ import {
   managedCommandSubscribeOutputV10,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
+import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
@@ -215,8 +217,10 @@ import {
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
+  epicListTasksV13,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
+  epicListTasksUpgradeV12ToV13,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -242,6 +246,8 @@ import {
   epicSetPinnedV10,
   epicSubscribeV10,
   epicSubscribeV11,
+  epicSubscribeV12,
+  epicSubscribeV13,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
@@ -292,19 +298,27 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
-  hostNotificationsListDowngradeV21ToV10,
+  hostNotificationsIndicatorStateUpgradeV10ToV11,
+  hostNotificationsIndicatorStateV11,
+  hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
+  hostNotificationsListUpgradeV21ToV22,
   hostNotificationsListV10,
   hostNotificationsListV20,
   hostNotificationsListV21,
+  hostNotificationsListV22,
   hostNotificationsMarkAllRead,
+  hostNotificationsMarkAllReadUpgradeV10ToV11,
+  hostNotificationsMarkAllReadV11,
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
+  hostNotificationsFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV10,
+  hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedResolve,
   hostNotificationsCloudFeedClear,
@@ -517,6 +531,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
+export { hostRebindLocalStoreV10 };
 export { hostGetRateLimitUsageV10 };
 
 /**
@@ -2874,7 +2889,7 @@ export const workspacePrepareFoldersUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-const HOST_RPC_REGISTRY_DEFINITION = {
+const HOST_RPC_REGISTRY_OTHER_DEFINITION = {
   "host.status": {
     1: {
       latestMinor: 1,
@@ -2948,6 +2963,21 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.rebindLocalStore": {
+    // A pre-durability host cannot repair a refused local WAL safely, so this
+    // button is simply absent when its optional protocol method is unsupported.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostRebindLocalStoreV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.getRateLimitUsage": {
     1: {
       latestMinor: 2,
@@ -3006,35 +3036,6 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
-    },
-  },
-  "host.notifications.list": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsListV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: hostNotificationsListV20,
-          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
-        },
-        1: {
-          contract: hostNotificationsListV21,
-          upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV21ToV10,
-      },
     },
   },
   "host.notificationHooks.status": {
@@ -3128,19 +3129,6 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "host.notifications.markAllRead": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsMarkAllRead,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "host.notifications.clearAll": {
     degrade: { kind: "unsupported" },
     1: {
@@ -3200,19 +3188,6 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: hostNotificationsCloudFeedClearAll,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.notifications.indicatorState": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsIndicatorState,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -3828,7 +3803,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -3841,6 +3816,10 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         2: {
           contract: epicListTasksV12,
           upgradeFromPreviousVersion: epicListTasksUpgradeV11ToV12,
+        },
+        3: {
+          contract: epicListTasksV13,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -5639,12 +5618,175 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
 } as const;
 
-export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
-  RELEASED_FLOOR_METHOD_NAMES,
-  HOST_RPC_REGISTRY_DEFINITION,
-);
+// These three post-v1 notification minors carry the large protocol Zod unions
+// that tip declaration emit over TS7056's serialization ceiling. Keep the
+// authoring literal separate so the exported registry can widen only their
+// storage slots while `defineFloorAwareVersionedRpcRegistry` still validates
+// every precise version and bridge at this call site.
+const HOST_RPC_NOTIFICATION_METHODS = {
+  "host.notifications.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 2,
+      versions: {
+        0: {
+          contract: hostNotificationsListV20,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
+        },
+        1: {
+          contract: hostNotificationsListV21,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
+        },
+        2: {
+          contract: hostNotificationsListV22,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV21ToV22,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationsListDowngradeV22ToV10,
+      },
+    },
+  },
+  "host.notifications.markAllRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkAllRead,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsMarkAllReadV11,
+          upgradeFromPreviousVersion:
+            hostNotificationsMarkAllReadUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.indicatorState": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: hostNotificationsIndicatorState,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsIndicatorStateV11,
+          upgradeFromPreviousVersion:
+            hostNotificationsIndicatorStateUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
 
-export type HostRpcRegistry = typeof hostRpcRegistry;
+const HOST_RPC_REGISTRY_DEFINITION = {
+  ...HOST_RPC_REGISTRY_OTHER_DEFINITION,
+  ...HOST_RPC_NOTIFICATION_METHODS,
+} as const;
+
+type HostRpcNotificationMethodMap = {
+  readonly "host.notifications.list": {
+    readonly degrade: { readonly kind: "unsupported" };
+    readonly 1: {
+      readonly latestMinor: 0;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsListV10;
+          readonly upgradeFromPreviousVersion: null;
+        };
+      };
+      readonly downgradePathsFromLatest: Record<never, never>;
+    };
+    readonly 2: {
+      readonly latestMinor: 2;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsListV20;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV10ToV20;
+        };
+        readonly 1: {
+          readonly contract: typeof hostNotificationsListV21;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV20ToV21;
+        };
+        readonly 2: {
+          readonly contract: typeof hostNotificationsListV22;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV21ToV22;
+        };
+      };
+      readonly downgradePathsFromLatest: {
+        readonly 1: typeof hostNotificationsListDowngradeV22ToV10;
+      };
+    };
+  };
+  readonly "host.notifications.markAllRead": {
+    readonly degrade: { readonly kind: "unsupported" };
+    readonly 1: {
+      readonly latestMinor: 1;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsMarkAllRead;
+          readonly upgradeFromPreviousVersion: null;
+        };
+        readonly 1: {
+          readonly contract: typeof hostNotificationsMarkAllReadV11;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsMarkAllReadUpgradeV10ToV11;
+        };
+      };
+      readonly downgradePathsFromLatest: Record<never, never>;
+    };
+  };
+  readonly "host.notifications.indicatorState": {
+    readonly degrade: { readonly kind: "unsupported" };
+    readonly 1: {
+      readonly latestMinor: 1;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsIndicatorState;
+          readonly upgradeFromPreviousVersion: null;
+        };
+        readonly 1: {
+          readonly contract: typeof hostNotificationsIndicatorStateV11;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsIndicatorStateUpgradeV10ToV11;
+        };
+      };
+      readonly downgradePathsFromLatest: Record<never, never>;
+    };
+  };
+};
+
+/**
+ * The post-v1 notification slots are manually named only at the
+ * declaration-emission boundary. Each slot retains its exact contracts and
+ * bridges, so callers keep resolver/query checking against the latest
+ * request and response shapes. The full precise literal above is still
+ * statically and dynamically validated before this branded registry is
+ * created.
+ */
+export type HostRpcRegistry = VersionedRpcRegistry<
+  typeof HOST_RPC_REGISTRY_OTHER_DEFINITION & HostRpcNotificationMethodMap
+>;
+
+export const hostRpcRegistry: HostRpcRegistry =
+  defineFloorAwareVersionedRpcRegistry(
+    RELEASED_FLOOR_METHOD_NAMES,
+    HOST_RPC_REGISTRY_DEFINITION,
+  );
 
 /**
  * Combined streaming-RPC registry for the `/stream` WS manifest.
@@ -5697,17 +5839,25 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
       // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
-      // `rootDirty`. @1.0 stays installed and FROZEN: a renderer that
+      // `rootDirty`; @1.2 adds optional durability keys to cloudSyncStatus;
+      // @1.3 adds the optional live-vs-pending promotion state.
+      // @1.0 stays installed and FROZEN: a renderer that
       // negotiated it never receives the new kinds, and the resolver gates
       // emission on the negotiated version rather than assuming the peer will
       // tolerate an unknown frame.
-      latestMinor: 1,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicSubscribeV10,
         },
         1: {
           contract: epicSubscribeV11,
+        },
+        2: {
+          contract: epicSubscribeV12,
+        },
+        3: {
+          contract: epicSubscribeV13,
         },
       },
     },
@@ -5742,7 +5892,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -5750,15 +5900,21 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         1: {
           contract: hostNotificationsFeedSubscribeV11,
         },
+        2: {
+          contract: hostNotificationsFeedSubscribeV12,
+        },
       },
     },
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
+        },
+        1: {
+          contract: hostNotificationsCloudFeedSubscribeV11,
         },
       },
     },

@@ -14,6 +14,12 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { CommentSidebar } from "@/components/comments/comment-sidebar";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 
 const EPIC_ID = "epic-1";
@@ -70,6 +76,11 @@ function threadFixture(): CommentThreadWire {
 
 let queryClient: QueryClient;
 let messenger: MockHostMessenger<HostRpcRegistry>;
+/** Cloud-homed open-epic session for the read-failure suite: the sidebar now
+ *  reads durability via `useEpicDurabilityStatus`, which requires a live
+ *  epic session. Default is non-local so those cases still exercise the RPC
+ *  path rather than the local-mode gate. */
+let defaultEpicHandle: OpenEpicStoreHandle;
 
 beforeEach(() => {
   respondToListThreads = () => ({ threads: [] });
@@ -92,12 +103,22 @@ beforeEach(() => {
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   hostClientRef.current = client;
+  defaultEpicHandle = createOpenEpicStore({
+    epicId: EPIC_ID,
+    streamClientFactory: noopEpicStreamClientFactory,
+    userId: "user-1",
+    onAuthError: null,
+  });
+  // Cloud-backed epics leave durability unset; only local lifecycle states
+  // populate this field. That keeps the normal list-query assertions below.
+  defaultEpicHandle.store.setState({ durabilityStatus: null });
 });
 
 afterEach(() => {
   cleanup();
   queryClient.clear();
   hostClientRef.current = null;
+  defaultEpicHandle.dispose();
   useCommentThreadsStore.setState({
     activeByEpicId: {},
     hoverByEpicId: {},
@@ -107,18 +128,29 @@ afterEach(() => {
   });
 });
 
-function renderSidebar() {
+const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
+function renderSidebar(epicHandle: OpenEpicStoreHandle = defaultEpicHandle) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <CommentSidebar
-        epicId={EPIC_ID}
-        artifactType="spec"
-        artifactId={ARTIFACT_ID}
-        anchorPositions={{ positions: new Map() }}
-        currentUserId="user-1"
-        canModerate={false}
-        onActivateThread={() => undefined}
-      />
+      <EpicSessionContext.Provider value={epicHandle}>
+        <CommentSidebar
+          epicId={EPIC_ID}
+          artifactType="spec"
+          artifactId={ARTIFACT_ID}
+          anchorPositions={{ positions: new Map() }}
+          currentUserId="user-1"
+          canModerate={false}
+          onActivateThread={() => undefined}
+        />
+      </EpicSessionContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -254,5 +286,69 @@ describe("<CommentSidebar /> read failures", () => {
 
     expect(unavailablePanel()).toBeNull();
     expect(screen.getByText(QUOTED_TEXT)).not.toBeNull();
+  });
+});
+
+describe("<CommentSidebar /> local durability honesty", () => {
+  let epicHandle: OpenEpicStoreHandle | null = null;
+  let listThreadsCalls = 0;
+
+  beforeEach(() => {
+    listThreadsCalls = 0;
+    respondToListThreads = () => {
+      listThreadsCalls += 1;
+      return { threads: [threadFixture()] };
+    };
+    epicHandle = createOpenEpicStore({
+      epicId: EPIC_ID,
+      streamClientFactory: noopEpicStreamClientFactory,
+      userId: "user-1",
+      onAuthError: null,
+    });
+  });
+
+  afterEach(() => {
+    epicHandle?.dispose();
+    epicHandle = null;
+  });
+
+  it("shows the explicit local comments-unavailable panel without a generic RPC failure", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    // Real open-epic store slot the sidebar reads via useEpicDurabilityStatus.
+    epicHandle.store.setState({ durabilityStatus: "local" });
+
+    renderSidebar(epicHandle);
+
+    expect(
+      await screen.findByText("Comments are available after cloud sync."),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("This epic is currently stored locally."),
+    ).not.toBeNull();
+    // Must not fall into the generic RPC-failure copy.
+    expect(screen.queryByText("Comments couldn't be loaded.")).toBeNull();
+    expect(screen.queryByText(/This doesn't mean there are none/)).toBeNull();
+    expect(screen.queryByText(/No open comments/)).toBeNull();
+    expect(unavailablePanel()).not.toBeNull();
+    // Local mode disables the list query — honesty without a failed RPC.
+    expect(listThreadsCalls).toBe(0);
+    expect(queryStatuses()).not.toContain("error");
+  });
+
+  it("still loads threads for a non-local epic through the real query path", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({ durabilityStatus: null });
+
+    renderSidebar(epicHandle);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+    expect(listThreadsCalls).toBeGreaterThan(0);
+    expect(
+      screen.queryByText("Comments are available after cloud sync."),
+    ).toBeNull();
   });
 });

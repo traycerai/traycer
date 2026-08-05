@@ -323,12 +323,12 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     });
     completeHandshake(sockets[0]);
 
-    // T5 (artifactRoomDirty) bumped the registry's latestMinor to 1 - the
-    // client now opens at {major:1, minor:1} rather than the pre-T5 {1,0}.
+    // Durability routing extends the existing frame at @1.2, while an older
+    // peer still negotiates and receives its frozen @1.1 frame set.
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: { major: 1, minor: 2 },
       params: { epicId: "epic-1" },
     });
     client.close();

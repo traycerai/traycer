@@ -86,6 +86,12 @@ export type FatalErrorDetails = {
    * a newer client then reads "not retryable".
    */
   readonly retryable?: boolean;
+  /**
+   * A separately-transported recovery action for a refused local WAL store.
+   * Optional and additive: old GUI clients ignore it, while the GUI route that
+   * can actually invoke a rebind never has to parse a human error string.
+   */
+  readonly localStoreRemedy?: string;
 };
 
 /**
@@ -226,6 +232,7 @@ export const fatalErrorDetailsSchema = z.object({
   // timeout) that the client recovers from with plain reconnect backoff, not
   // credential revalidation.
   retryable: z.boolean().optional(),
+  localStoreRemedy: z.string().min(1).optional(),
 });
 
 /** Canonical schema for the client `open` frame. */

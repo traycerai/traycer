@@ -9,11 +9,11 @@ import type {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  hostNotificationsSubscribeServerFrameSchemaV11,
+  hostNotificationsSubscribeServerFrameSchemaV12,
   type HostNotificationEntryV21,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrameV11,
+  type HostNotificationsSubscribeServerFrameV12,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -53,8 +53,9 @@ export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 export type HostNotificationFeedEntry = HostNotificationEntryV21;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrameV11,
+  HostNotificationsSubscribeServerFrameV12,
   | { readonly kind: "snapshot" }
+  | { readonly kind: "partitionSnapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
   | { readonly kind: "removed" }
@@ -569,7 +570,7 @@ export function openHostNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsSubscribeServerFrameSchemaV11.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV12.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;
@@ -577,6 +578,7 @@ export function openHostNotificationsStream(
       const frame = parsed.data;
       switch (frame.kind) {
         case "snapshot":
+        case "partitionSnapshot":
           useHostNotificationsStore.getState().applySnapshot(frame);
           // A schema-valid snapshot — not the raw transport `open` — is the
           // proof the stream is actually usable; the host resolver's async

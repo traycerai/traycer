@@ -147,6 +147,24 @@ export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);
 }
 
+export function useEpicDurabilityStatus(): NonNullable<
+  OpenEpicState["durabilityStatus"]
+> | null {
+  return useEpicStore((s) => s.durabilityStatus ?? null);
+}
+
+export function useEpicDurabilityPauseReason(): NonNullable<
+  OpenEpicState["durabilityPauseReason"]
+> | null {
+  return useEpicStore((s) => s.durabilityPauseReason ?? null);
+}
+
+export function useEpicDurabilityPromotionState(): NonNullable<
+  OpenEpicState["durabilityPromotionState"]
+> | null {
+  return useEpicStore((s) => s.durabilityPromotionState ?? null);
+}
+
 /**
  * Host dirtiness is known only after this subscription cycle's atomic @1.1
  * snapshot. A clean-looking map before then (or under a negotiated @1.0 host)

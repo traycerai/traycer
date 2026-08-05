@@ -26,7 +26,7 @@ import {
  */
 describe("epic.listTasks instance identity", () => {
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[2].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[3].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);
@@ -126,6 +126,21 @@ describe("epic.listTasks instance identity", () => {
       hasMore: false,
     });
     expect(parsed.tasks[0]?.pinned).toBe(true);
+  });
+
+  it("carries optional home marker on canonical list rows", () => {
+    const parsed = listTasksResponseSchema.parse({
+      tasks: [
+        {
+          epic: null,
+          phase: null,
+          pinned: false,
+          home: "local",
+        },
+      ],
+      hasMore: false,
+    });
+    expect(parsed.tasks[0]?.home).toBe("local");
   });
 
   it("defaults rows from a v1.0 host to unpinned", () => {

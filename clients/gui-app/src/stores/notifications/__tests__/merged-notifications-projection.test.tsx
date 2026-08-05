@@ -576,7 +576,11 @@ describe("cloud feed projection authority", () => {
     useCloudNotificationsStore.getState().reset();
   });
 
-  it("uses only the cloud snapshot when retained local replicas still contain rows", () => {
+  it("concatenates host local-home rows with the cloud partition and ignores free-tier local-only sources", () => {
+    // Mixed mode keeps the host feed as the exact local durable-home
+    // partition and the cloud relay as the complementary partition. App-local
+    // and collaboration rows are local-mode-only sources and must not re-enter
+    // the mixed feed (they would double-count host-plane failures).
     applyHostSnapshot([hostDone("local-host", 100, null)], {
       unreadCount: 1,
       attentionCount: 0,
@@ -592,19 +596,88 @@ describe("cloud feed projection authority", () => {
 
     const { result } = renderHook(() => ({
       ids: useMergedNotificationIds(),
-      row: useMergedNotificationRow(cloudNotificationFeedId(cloud.entryId)),
+      hostRow: useMergedNotificationRow(hostFeedId("local-host")),
+      cloudRow: useMergedNotificationRow(cloudNotificationFeedId(cloud.entryId)),
       unreadCount: useMergedNotificationUnreadCount(),
       bell: useNotificationBellState(),
       hostState: useNotificationCenterHostState(),
     }));
 
     expect(result.current.ids).toEqual([
+      hostFeedId("local-host"),
       cloudNotificationFeedId(cloud.entryId),
     ]);
-    expect(result.current.row?.sourceId).toBe("entry-cloud");
-    expect(result.current.unreadCount).toBe(1);
+    expect(result.current.hostRow?.source).toBe("host");
+    expect(result.current.cloudRow?.sourceId).toBe("entry-cloud");
+    expect(result.current.unreadCount).toBe(2);
     expect(result.current.bell).toEqual({ kind: "quietDot" });
     expect(result.current.hostState.isPartial).toBe(false);
+  });
+
+  it("sums exact mixed unread and attention from both partition summaries without double counting", () => {
+    applyHostSnapshot(
+      [hostPrompt("local-prompt", 200, null), hostDone("local-done", 150, null)],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("cloud-done", 9, null),
+        {
+          ...cloudDone("cloud-prompt", 10, null),
+          entry: {
+            ...cloudDone("cloud-prompt", 10, null).entry,
+            kind: "approval.requested",
+            severity: "needs_action",
+            outcome: null,
+            resolvedAt: null,
+            readAt: null,
+          },
+          coalesceKey: "approval.requested:cloud-prompt",
+        },
+      ],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 12,
+    });
+
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      attention: useAttentionNotificationIds(),
+    }));
+
+    // Protocol order: local plane first, then cloud plane.
+    expect(result.current.ids).toEqual([
+      hostFeedId("local-prompt"),
+      hostFeedId("local-done"),
+      cloudNotificationFeedId("cloud-prompt"),
+      cloudNotificationFeedId("cloud-done"),
+    ]);
+    expect(result.current.unreadCount).toBe(4);
+    expect(result.current.bell).toEqual({ kind: "attention", count: 2 });
+    expect(result.current.attention).toEqual([
+      hostFeedId("local-prompt"),
+      cloudNotificationFeedId("cloud-prompt"),
+    ]);
+  });
+
+  it("treats a null host or cloud summary as partial rather than understating the mixed total", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", 7, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() => ({
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      hostState: useNotificationCenterHostState(),
+    }));
+
+    // Host summary is still null (no local partition snapshot landed).
+    expect(result.current.unreadCount).toBe(0);
+    expect(result.current.bell).toEqual({ kind: "unknown" });
+    expect(result.current.hostState.isPartial).toBe(true);
   });
 
   it("keys a row by entryId alone - originHostId is display metadata, not identity", () => {

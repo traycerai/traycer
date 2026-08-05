@@ -595,9 +595,17 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         .sort(),
     [tree, visibleIds],
   );
+  const indicatorChatEpicIds = useMemo(
+    () =>
+      Object.fromEntries(
+        indicatorChatIds.map((chatId) => [chatId, epicId]),
+      ),
+    [indicatorChatIds, epicId],
+  );
   const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds: indicatorChatIds,
+    chatEpicIds: indicatorChatEpicIds,
     enabled: indicatorChatIds.length > 0,
   });
   const setSelectableIds = bulkSelection?.setSelectableIds ?? null;

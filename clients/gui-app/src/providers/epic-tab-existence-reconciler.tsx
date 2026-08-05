@@ -7,8 +7,13 @@ import {
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
+  CURRENT_EPIC_VERSION,
+  CURRENT_PHASE_VERSION,
+} from "@traycer-clients/shared/epic/epic-version";
+import {
   GET_TASK_CONTEXTS_MAX_IDS,
   type GetTaskContextsResponse,
+  type ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useShallow } from "zustand/react/shallow";
@@ -17,6 +22,7 @@ import {
   useHostCompatibility,
   type HostRpcRegistry,
 } from "@/lib/host";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -53,8 +59,17 @@ import {
  *
  * Reading an absent/failed response as "no epics exist" would make
  * `missingEpicIds` return every open tab and close all of them.
+ *
+ * Local-homed epics: pure cloud `getTaskContexts` cannot see unpromoted
+ * epics. The host-merged first page of `epic.listTasks` carries them with
+ * `home: "local"` (durable via the home registry). Those ids are unioned into
+ * the existing set and also excluded as force-close candidates, so a local
+ * epic's tab survives app relaunch without relying on session-scoped
+ * exemptions.
  */
 const RECONCILE_METHOD = "epic.getTaskContexts" as const;
+const LOCAL_HOME_LIST_METHOD = "epic.listTasks" as const;
+const LOCAL_HOME_LIST_LIMIT = 100;
 
 export function EpicTabExistenceReconciler() {
   const seed = usePersistedEpicTabReconcileSeed();
@@ -150,7 +165,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileRun }) {
   // value is a fresh `Set` per computation, so the effect below can re-run on
   // an unrelated render; `completionAppliedRef` keeps the apply once-only, as
   // it did for the paginated implementation.
-  const existingEpicIds = useHostQueries<
+  const existingFromContexts = useHostQueries<
     HostRpcRegistry,
     typeof RECONCILE_METHOD,
     ReadonlySet<string> | null
@@ -162,8 +177,44 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileRun }) {
     combine: combineExistingEpicIds,
   });
 
+  // First page of host-merged listTasks carries every local-homed epic
+  // (prepended, exempt from cursor paging). Used as the durable home-marker
+  // source for force-close exemption across app relaunches.
+  const localHomeListParams = useMemo(
+    () => ({
+      limit: LOCAL_HOME_LIST_LIMIT,
+      filters: { taskType: "epic" as const },
+      extensionPhaseVersion: String(CURRENT_PHASE_VERSION),
+      extensionEpicVersion: String(CURRENT_EPIC_VERSION),
+    }),
+    [],
+  );
+  const localHomeListQuery = useHostQuery<
+    HostRpcRegistry,
+    typeof LOCAL_HOME_LIST_METHOD
+  >({
+    client,
+    method: LOCAL_HOME_LIST_METHOD,
+    params: localHomeListParams,
+    cacheKeyIdentity: [props.run.identity, props.run.attempt, "local-home"],
+    options: { enabled: true },
+  });
+
+  const localHomedEpicIds = useMemo((): ReadonlySet<string> | null => {
+    if (!localHomeListQuery.isSuccess) return null;
+    return localHomedEpicIdsFromListTasks(localHomeListQuery.data);
+  }, [localHomeListQuery.data, localHomeListQuery.isSuccess]);
+
+  const existingEpicIds = useMemo((): ReadonlySet<string> | null => {
+    if (existingFromContexts === null) return null;
+    if (localHomedEpicIds === null) return null;
+    if (localHomedEpicIds.size === 0) return existingFromContexts;
+    return new Set([...existingFromContexts, ...localHomedEpicIds]);
+  }, [existingFromContexts, localHomedEpicIds]);
+
   useEffect(() => {
     if (existingEpicIds === null) return;
+    if (localHomedEpicIds === null) return;
     if (completionAppliedRef.current) return;
     completionAppliedRef.current = true;
     // Never force-close an epic this session just created (or is creating):
@@ -177,14 +228,19 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileRun }) {
     // by `EpicAccessCoordinator` (via the live session's `epicDeleted` /
     // `accessLost` / unavailable-`snapshotFetchError` signals), not here, so
     // this exclusion cannot hide a real "epic is gone" signal.
+    //
+    // Local-homed epics (`home: "local"` on the host-merged listTasks row) are
+    // also never force-close candidates. That marker is durable across app
+    // relaunches (host home registry), not session-scoped.
     const staleEpicIds = closableStaleEpicIds(
       missingEpicIds(openEpicIds, existingEpicIds),
+      localHomedEpicIds,
     );
     if (staleEpicIds.length > 0) {
       useComposerRunSettingsStore.getState().clearEpicRunSettings(staleEpicIds);
       tabCommandCoordinator.handleEpicAccessLoss(staleEpicIds);
     }
-  }, [existingEpicIds, openEpicIds]);
+  }, [existingEpicIds, localHomedEpicIds, openEpicIds]);
 
   return null;
 }
@@ -221,6 +277,19 @@ function combineExistingEpicIds(
   return existingEpicIds;
 }
 
+function localHomedEpicIdsFromListTasks(
+  page: ListTasksResponse,
+): ReadonlySet<string> {
+  const localHomed = new Set<string>();
+  for (const task of page.tasks) {
+    if (task.home !== "local") continue;
+    const epicId = task.epic?.light?.id;
+    if (typeof epicId !== "string" || epicId.length === 0) continue;
+    localHomed.add(epicId);
+  }
+  return localHomed;
+}
+
 function chunkEpicIds(
   epicIds: ReadonlyArray<string>,
   maxPerChunk: number,
@@ -241,14 +310,18 @@ function chunkEpicIds(
  *    landing flows share);
  *  - it has a live open-epic session in the registry (`peek` reads without
  *    disturbing MRU ordering);
- *  - it has an active (non-failed) initial-chat handoff (the GUI-chat flow).
- * Each marks an epic this session opened or created, for which a transient
- * absence from the cloud is propagation lag rather than a deletion. Evaluated
- * fresh here, at close time, so a session/handoff that appears after the
- * reconcile RPC resolves still counts.
+ *  - it has an active (non-failed) initial-chat handoff (the GUI-chat flow);
+ *  - the host-merged listTasks response tagged it `home: "local"` (durable
+ *    across sessions via the home registry — not session-scoped).
+ * The first three mark an epic this session opened or created, for which a
+ * transient absence from the cloud is propagation lag rather than a deletion.
+ * The home marker is the durable counterpart for unpromoted local epics.
+ * Evaluated fresh here, at close time, so a session/handoff that appears after
+ * the reconcile RPC resolves still counts.
  */
 function closableStaleEpicIds(
   candidateEpicIds: ReadonlyArray<string>,
+  localHomedEpicIds: ReadonlySet<string>,
 ): ReadonlyArray<string> {
   if (candidateEpicIds.length === 0) return candidateEpicIds;
   const handoffState = useInitialChatHandoffStore.getState();
@@ -257,7 +330,8 @@ function closableStaleEpicIds(
     (epicId) =>
       !wasEpicCreatedThisSession(epicId) &&
       registry.peek(epicId) === null &&
-      !selectHasActiveInitialChatHandoffForEpic(handoffState, epicId),
+      !selectHasActiveInitialChatHandoffForEpic(handoffState, epicId) &&
+      !localHomedEpicIds.has(epicId),
   );
 }
 

@@ -1,11 +1,16 @@
+import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { useRebindLocalStoreMutation } from "@/hooks/local-store/use-rebind-local-store-mutation";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
+import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
 import { getClientAppVersion } from "@/lib/app-version";
 import { describeVersionSkew } from "@/lib/host/version-skew-copy";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import type { SnapshotFetchError } from "@/stores/epics/open-epic/store";
 
 interface SnapshotErrorBannerProps {
@@ -45,7 +50,13 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
         <p className="text-ui-xs text-muted-foreground">
           {props.error.message}
         </p>
+        {props.error.code === "LOCAL_STORE_UNAVAILABLE" ? (
+          <LocalStoreRepair error={props.error} />
+        ) : null}
         <div className="flex flex-wrap justify-center gap-2">
+          {props.error.code === "ENTITLEMENT_REQUIRED" ? (
+            <UpgradeButton />
+          ) : null}
           <Button
             type="button"
             size="sm"
@@ -68,5 +79,86 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
+  const requestFreshSnapshot = useEpicRequestFreshSnapshot();
+  const rebindLocalStore = useRebindLocalStoreMutation();
+  const [confirmRepairOpen, setConfirmRepairOpen] = useState(false);
+  const [repairRefusal, setRepairRefusal] = useState<{
+    readonly message: string;
+    readonly remedy: string;
+  } | null>(null);
+  return (
+    <>
+      <p
+        className="text-ui-xs text-muted-foreground"
+        data-testid="local-store-refusal-remedy"
+      >
+        {repairRefusal?.remedy ?? props.error.localStoreRemedy}
+      </p>
+      {repairRefusal === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          {repairRefusal.message}
+        </p>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        data-testid="local-store-rebind"
+        disabled={props.error.localStoreRemedy === undefined}
+        onClick={() => setConfirmRepairOpen(true)}
+      >
+        Rebind local store
+      </Button>
+      <ConfirmDestructiveDialog
+        open={confirmRepairOpen}
+        onOpenChange={setConfirmRepairOpen}
+        title="Rebind this local store?"
+        description="Confirm that no other Traycer host is using this data directory. Rebinding while another host is writing could put your local data at risk."
+        cascadeSummary={null}
+        actionLabel="I’ve stopped the other host"
+        isPending={rebindLocalStore.isPending}
+        onConfirm={() => {
+          rebindLocalStore.mutate(
+            { confirmOldHostStopped: true },
+            {
+              onSuccess: (response) => {
+                if (response.status === "rebound") {
+                  setConfirmRepairOpen(false);
+                  requestFreshSnapshot();
+                  return;
+                }
+                if (response.status === "refused") {
+                  setRepairRefusal({
+                    message: response.message,
+                    remedy: response.remedy,
+                  });
+                }
+              },
+            },
+          );
+        }}
+      />
+    </>
+  );
+}
+
+function UpgradeButton() {
+  const runnerHost = useRunnerHost();
+  return (
+    <Button
+      type="button"
+      size="sm"
+      data-testid="snapshot-error-upgrade"
+      onClick={() => {
+        void runnerHost.openExternalLink(
+          resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
+        );
+      }}
+    >
+      Upgrade
+    </Button>
   );
 }

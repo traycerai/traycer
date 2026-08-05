@@ -16,6 +16,7 @@ import {
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListUpgradeV10ToV20,
+  hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListDowngradeV21ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
@@ -894,7 +895,7 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
 });
 
 describe("host.notifications registry membership", () => {
-  it("registers list majors 1 and 2 with the V10↔V20 upgrade/downgrade bridges", () => {
+  it("registers list majors 1 and 2 with the V10↔V22 upgrade/downgrade bridges", () => {
     expect(
       hostRpcRegistry["host.notifications.list"][1].versions[0].contract,
     ).toBe(hostNotificationsListV10);
@@ -907,7 +908,7 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsListUpgradeV10ToV20);
     expect(
       hostRpcRegistry["host.notifications.list"][2].downgradePathsFromLatest[1],
-    ).toBe(hostNotificationsListDowngradeV21ToV10);
+    ).toBe(hostNotificationsListDowngradeV22ToV10);
   });
 
   it("registers one flat unary contract per non-list method", () => {
@@ -940,7 +941,10 @@ describe("host.notifications registry membership", () => {
         .contract,
     ).toBe(hostNotificationsFeedSubscribeV10);
     expect(
-      Object.hasOwn(hostStreamRpcRegistry["host.notifications.feed.subscribe"], "2"),
+      Object.hasOwn(
+        hostStreamRpcRegistry["host.notifications.feed.subscribe"],
+        "2",
+      ),
     ).toBe(false);
     expect(
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1]
@@ -950,8 +954,10 @@ describe("host.notifications registry membership", () => {
 
   it("keeps the local-feed method compatible in both directions while cloud feed remains explicitly unsupported by an old peer", () => {
     const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
-    const { ["host.notifications.cloudFeed.subscribe"]: _cloudFeed, ...oldManifest } =
-      currentManifest;
+    const {
+      ["host.notifications.cloudFeed.subscribe"]: _cloudFeed,
+      ...oldManifest
+    } = currentManifest;
 
     expect(
       checkStreamMethodCompatibility(
@@ -981,7 +987,10 @@ describe("host.notifications registry membership", () => {
       ),
     ).toMatchObject({
       ok: false,
-      details: { code: "INCOMPATIBLE", upgradeGuidance: { hostShouldUpgrade: true } },
+      details: {
+        code: "INCOMPATIBLE",
+        upgradeGuidance: { hostShouldUpgrade: true },
+      },
     });
   });
 });

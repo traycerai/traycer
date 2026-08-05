@@ -4,6 +4,7 @@ import {
   epicSubscribeServerFrameSchema,
   epicSubscribeServerFrameSchemaV10,
   epicSubscribeServerFrameSchemaV11,
+  epicSubscribeServerFrameSchemaV12,
   epicSubscribeV10,
 } from "@traycer/protocol/host/epic/subscribe";
 
@@ -95,6 +96,25 @@ describe("epic.subscribe@1.0 server frames", () => {
         expect(parsed.hasBinaryPayload).toBe(false);
       }
     }
+  });
+
+  it("keeps durability additive for an older renderer", () => {
+    const frame = {
+      kind: "cloudSyncStatus" as const,
+      epicId: "epic-1",
+      status: "connected" as const,
+      durability: "paused" as const,
+      pauseReason: "access-revoked" as const,
+      hasBinaryPayload: false as const,
+    };
+    expect(epicSubscribeServerFrameSchemaV12.parse(frame)).toMatchObject(frame);
+    const legacy = epicSubscribeServerFrameSchemaV11.parse(frame);
+    expect(legacy).toEqual({
+      kind: "cloudSyncStatus",
+      epicId: "epic-1",
+      status: "connected",
+      hasBinaryPayload: false,
+    });
   });
 
   it("parses a text-only pong frame", () => {

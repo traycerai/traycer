@@ -184,14 +184,11 @@ export function NotificationsSessionProvider(
       useAppLocalNotificationsStore
         .getState()
         .markEntityAsRead(entity, Date.now());
-      if (notificationFeedMode === "cloud") {
-        // The v1 entity RPC consumes ONE host's SQLite; in cloud mode the
-        // rows in view can belong to any host, so consumption has to address
-        // the entries themselves.
-        markCloudEntityRead(entity);
-        return;
-      }
+      // The host feed is always the exact local durable-home partition. In
+      // mixed mode the cloud fan-out covers the other partition as well; both
+      // calls are necessary, but neither can address the other plane's rows.
       markEntityRead(entity);
+      if (notificationFeedMode === "cloud") markCloudEntityRead(entity);
     },
     [markEntityRead, markCloudEntityRead, notificationFeedMode],
   );
@@ -217,6 +214,7 @@ export function NotificationsSessionProvider(
       if (localHostId !== hostId) return;
       if (
         frame.kind === "snapshot" ||
+        frame.kind === "partitionSnapshot" ||
         frame.kind === "cleared" ||
         frame.kind === "removed"
       ) {
@@ -482,16 +480,17 @@ export function NotificationsSessionProvider(
           });
         },
       );
-      return;
     }
     if (notificationFeedMode === "upgrade-required") {
       useCloudNotificationsStore.getState().setConnectionState("unavailable");
       return;
     }
-    disposerRef.current = openNotificationsStream(
-      createNotificationsStream,
-      onAuthError,
-    );
+    if (notificationFeedMode === "local") {
+      disposerRef.current = openNotificationsStream(
+        createNotificationsStream,
+        onAuthError,
+      );
+    }
     if (
       hostDisposerRef.current === null &&
       getNotificationsStreamFactoryOverride() === null &&
@@ -615,17 +614,10 @@ export function NotificationsSessionProvider(
     if (previousFeedModeRef.current !== notificationFeedMode) {
       previousFeedModeRef.current = notificationFeedMode;
       tearDown();
-      // A cloud-to-local capability change must never leave cloud rows on
-      // screen, and the reverse must begin with no local fallback rows.
+      // The cloud relay is session-owned and must restart across a capability
+      // change. The local durable-home feed remains open in BOTH modes, so it
+      // deliberately survives the mixed-plane transition.
       resetCloudRelaySession();
-      // Entering either cloud-only state must also discard the retained v1
-      // cursor and rows. Selectors are gated, but this prevents a later mode
-      // transition from treating stale local pagination as current truth.
-      if (notificationFeedMode !== "local") {
-        useHostNotificationsStore.getState().reset();
-        useAppLocalNotificationsStore.getState().reset();
-        useNotificationsStore.getState().reset();
-      }
     }
     // A replaced stream client under the SAME host + user (the app-wide
     // liveness rebuild after the client was closed underneath the provider)

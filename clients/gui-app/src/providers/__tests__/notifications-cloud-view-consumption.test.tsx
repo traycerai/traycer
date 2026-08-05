@@ -56,6 +56,10 @@ vi.mock("@/lib/host", () => ({
 // Feed-mode capability still reads the app-wide stream binding.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: () => feedSupport.value,
+  useStreamMethodSchemaVersion: (method: string) =>
+    method === "host.notifications.cloudFeed.subscribe"
+      ? { major: 1, minor: 1 }
+      : { major: 1, minor: 2 },
 }));
 
 // Per G8 the provider binds to the LOCAL host, so these two hooks replace

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  HostNotificationsIndicatorStateRequest,
+  HostNotificationsIndicatorStateRequestV11,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/notifications/contracts";
@@ -19,6 +19,10 @@ const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
 export interface UseHostNotificationIndicatorsArgs {
   readonly epicIds: ReadonlyArray<string>;
   readonly chatIds: ReadonlyArray<string>;
+  /** Chat ids do not encode durable home; callers that select a home provide
+   * their owning epic for exact partitioning. */
+  readonly chatEpicIds?: Readonly<Record<string, string>>;
+  readonly home?: "local";
   readonly enabled: boolean;
 }
 
@@ -41,8 +45,14 @@ export function useHostNotificationIndicators(
   const client = useHostClient();
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const requests = useMemo(
-    () => indicatorRequests(args.epicIds, args.chatIds),
-    [args.epicIds, args.chatIds],
+    () =>
+      indicatorRequests(
+        args.epicIds,
+        args.chatIds,
+        args.chatEpicIds ?? {},
+        args.home,
+      ),
+    [args.epicIds, args.chatIds, args.chatEpicIds, args.home],
   );
   const combined = useHostQueries<
     HostRpcRegistry,
@@ -61,7 +71,11 @@ export function useHostNotificationIndicators(
     options: {
       enabled: args.enabled && userId !== null,
     },
-    combine: (results) => ({
+    combine: (
+      results: Array<
+        UseQueryResult<HostNotificationsIndicatorStateResponse, HostRpcError>
+      >,
+    ) => ({
       data: mergeIndicatorResponses(results),
       isPending: results.some((result) => result.isPending),
       isFetching: results.some((result) => result.isFetching),
@@ -77,14 +91,29 @@ export function useHostNotificationIndicators(
 export function indicatorRequests(
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
-): ReadonlyArray<HostNotificationsIndicatorStateRequest> {
+  chatEpicIds: Readonly<Record<string, string>> = {},
+  home: "local" | undefined = undefined,
+): ReadonlyArray<HostNotificationsIndicatorStateRequestV11> {
   const epicChunks = chunkIds(epicIds);
   const chatChunks = chunkIds(chatIds);
   const count = Math.max(epicChunks.length, chatChunks.length);
-  return Array.from({ length: count }, (_value, index) => ({
-    epicIds: [...(epicChunks[index] ?? [])],
-    chatIds: [...(chatChunks[index] ?? [])],
-  }));
+  return Array.from({ length: count }, (_value, index) => {
+    const chatIdsForRequest = [...(chatChunks[index] ?? [])];
+    const chatEpicIdsForRequest = Object.fromEntries(
+      chatIdsForRequest.flatMap((chatId) => {
+        const epicId = chatEpicIds[chatId];
+        return epicId === undefined ? [] : [[chatId, epicId]];
+      }),
+    );
+    return {
+      epicIds: [...(epicChunks[index] ?? [])],
+      chatIds: chatIdsForRequest,
+      ...(home === undefined ? {} : { home }),
+      ...(Object.keys(chatEpicIdsForRequest).length === 0
+        ? {}
+        : { chatEpicIds: chatEpicIdsForRequest }),
+    };
+  });
 }
 
 function chunkIds(

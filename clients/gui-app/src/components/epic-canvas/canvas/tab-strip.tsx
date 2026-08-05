@@ -237,9 +237,14 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
+  const chatEpicIds = useMemo(
+    () => Object.fromEntries(chatIds.map((chatId) => [chatId, epicId])),
+    [chatIds, epicId],
+  );
   const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds,
+    chatEpicIds,
     enabled: chatIds.length > 0,
   });
 

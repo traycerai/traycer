@@ -244,7 +244,7 @@ describe("<EpicConnectionToasts />", () => {
     // Transport open + cloud caught up is what latches "connected once".
     act(() => {
       streams[0].callbacks.onConnectionStatus("open", null);
-      streams[0].callbacks.onCloudSyncStatus("connected");
+      streams[0].callbacks.onCloudSyncStatus("connected", undefined, undefined);
     });
 
     act(() => {

@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type {
   ListTasksResponse,
-  ListTaskLight,
+  ListTaskLightV13,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
@@ -40,14 +40,14 @@ interface NextPageVariables {
   readonly cursor: string;
 }
 
-const EMPTY_TASKS: readonly ListTaskLight[] = [];
+const EMPTY_TASKS: readonly ListTaskLightV13[] = [];
 const EMPTY_PAGES: readonly ListTasksResponse[] = [];
 const EMPTY_FIRST_PAGE: ListTasksResponse = { tasks: [], hasMore: false };
 
 export interface CloudEpicTasksQueryResult {
   readonly hostId: string | null;
   readonly currentUserId: string | null;
-  readonly tasks: readonly ListTaskLight[];
+  readonly tasks: readonly ListTaskLightV13[];
   readonly query: CloudEpicTasksFirstPageQuery;
   readonly fetchNextPage: () => void;
   readonly hasNextPage: boolean;
@@ -178,7 +178,7 @@ export function useCloudEpicTasksQuery(
     nextPageMutation.variables.identity === identity;
   const mutateNextPage = nextPageMutation.mutate;
 
-  const tasks = useMemo<readonly ListTaskLight[]>(() => {
+  const tasks = useMemo<readonly ListTaskLightV13[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;
     // Dedupe by task id, first occurrence wins (the first page outranks the
     // tails): a personal pin moves a row across server page boundaries, so

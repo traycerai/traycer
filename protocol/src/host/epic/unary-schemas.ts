@@ -500,6 +500,27 @@ export const listTaskLightSchema = taskLightSchema.extend({
 });
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
+/**
+ * Durable home for an epic as known by the host local-room registry.
+ * Present only on host-merged `epic.listTasks` rows (never on pure cloud
+ * payloads). Optional so released clients and older hosts ignore absence.
+ *
+ * - `local`: unpromoted / mid-promotion; synthesized from the home registry
+ * - `cloud`: reserved for future host-side tagging of cloud-homed rows
+ *
+ * Support-facing fact: unpromoted (`home: "local"`) epics exist only on this
+ * device's host. Cloud tooling (platform UI, support reports, server
+ * listTasks) cannot see them until promotion flips home to cloud.
+ */
+export const epicListHomeSchema = z.enum(["local", "cloud"]);
+export type EpicListHome = z.infer<typeof epicListHomeSchema>;
+
+// `epic.listTasks@1.3` list row: personal pin bit plus optional durability home.
+export const listTaskLightSchemaV13 = listTaskLightSchema.extend({
+  home: epicListHomeSchema.optional(),
+});
+export type ListTaskLightV13 = z.infer<typeof listTaskLightSchemaV13>;
+
 export const listTasksRequestSchemaV11 = z.object({
   limit: z.number(),
   cursor: z.string().optional(),
@@ -543,8 +564,18 @@ export const listTasksResponseSchemaV10 = z.object({
 });
 export type ListTasksResponseV10 = z.infer<typeof listTasksResponseSchemaV10>;
 
-export const listTasksResponseSchema = z.object({
+// Frozen at the 1.1/1.2 pin-aware shape (no home marker).
+export const listTasksResponseSchemaV12 = z.object({
   tasks: z.array(listTaskLightSchema),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  facets: listTasksFacetsSchema.optional(),
+});
+export type ListTasksResponseV12 = z.infer<typeof listTasksResponseSchemaV12>;
+
+// Latest listTasks response: pin-aware rows plus optional host-side home.
+export const listTasksResponseSchema = z.object({
+  tasks: z.array(listTaskLightSchemaV13),
   nextCursor: z.string().optional(),
   hasMore: z.boolean(),
   facets: listTasksFacetsSchema.optional(),

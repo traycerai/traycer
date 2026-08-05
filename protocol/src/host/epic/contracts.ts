@@ -48,6 +48,7 @@ import {
   listTasksRequestSchemaV11,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
+  listTasksResponseSchemaV12,
   removeEpicRepoRequestSchema,
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
@@ -89,6 +90,8 @@ import {
 import {
   epicSubscribeV10,
   epicSubscribeV11,
+  epicSubscribeV12,
+  epicSubscribeV13,
 } from "@traycer/protocol/host/epic/subscribe";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
@@ -101,13 +104,14 @@ export const epicListTasksV10 = defineRpcContract({
 });
 
 // `epic.listTasks@1.1` adds the signed-in user's personal `pinned` bit to each
-// row and reuses CloudData's canonical current list response schema. The
-// request is unchanged; an older host's rows upgrade as unpinned.
+// row. The request is unchanged; an older host's rows upgrade as unpinned.
+// Response shape is frozen at the pin-aware (pre-home) schema so later home
+// tagging lands on a new minor rather than rewriting released 1.1/1.2.
 export const epicListTasksV11 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: listTasksRequestSchemaV11,
-  responseSchema: listTasksResponseSchema,
+  responseSchema: listTasksResponseSchemaV12,
 });
 
 export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
@@ -129,7 +133,7 @@ export const epicListTasksV12 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: listTasksRequestSchema,
-  responseSchema: listTasksResponseSchema,
+  responseSchema: listTasksResponseSchemaV12,
 });
 
 export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
@@ -140,6 +144,29 @@ export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
   to: epicListTasksV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
+});
+
+// `epic.listTasks@1.3` adds the optional per-row `home` marker so the host can
+// union local-homed registry rows into the cloud list without breaking older
+// clients (absence ⇒ treat as cloud / unknown). Request is unchanged from 1.2.
+export const epicListTasksV13 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicListTasksV12,
+  typeof epicListTasksV13
+>({
+  from: epicListTasksV12.schemaVersion,
+  to: epicListTasksV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    tasks: response.tasks.map((task) => ({ ...task })),
+  }),
 });
 
 // Personal cloud preference. Optional/non-floor so clients retain the released
@@ -495,4 +522,9 @@ export const epicSearchArtifactsV10 = defineRpcContract({
   responseSchema: searchArtifactsResponseSchema,
 });
 
-export { epicSubscribeV10, epicSubscribeV11 };
+export {
+  epicSubscribeV10,
+  epicSubscribeV11,
+  epicSubscribeV12,
+  epicSubscribeV13,
+};

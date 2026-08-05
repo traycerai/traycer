@@ -9,7 +9,10 @@ import {
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudSyncStatus,
+  EpicDurabilityPauseReason,
+  EpicDurabilityStatus,
   EpicMigrationPhase,
+  EpicPromotionState,
 } from "@traycer/protocol/host/epic/subscribe";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
@@ -88,6 +91,8 @@ export interface SnapshotFetchError {
    * `describeVersionSkew` (`@/lib/host/version-skew-copy`).
    */
   readonly upgradeGuidance: FatalErrorDetails["upgradeGuidance"];
+  /** The local-store repair copy is carried separately from the error text. */
+  readonly localStoreRemedy?: string;
 }
 
 /**
@@ -164,13 +169,30 @@ function isUnavailableUnauthorized(details: FatalErrorDetails): boolean {
   );
 }
 
+// `details.reason` is a host-authored string aimed at a log line, which is the
+// right default for codes the renderer has nothing better to say about. The two
+// terminal codes s0 added are the exception: they name a condition the user can
+// understand and, for one of them, act on - so they get copy rather than the
+// raw reason. Unknown codes keep falling through to `reason`.
+function terminalCloseMessage(details: FatalErrorDetails): string {
+  switch (details.code) {
+    case "ROOM_UNINITIALIZED":
+      return "This epic cannot be opened because its collaboration room was never initialized.";
+    case "ENTITLEMENT_REQUIRED":
+      return "Cloud sync is not available on your current plan.";
+    default:
+      return details.reason;
+  }
+}
+
 function snapshotFetchErrorFrom(
   details: FatalErrorDetails,
 ): SnapshotFetchError {
   return {
     code: details.code,
-    message: details.reason,
+    message: terminalCloseMessage(details),
     upgradeGuidance: details.upgradeGuidance,
+    localStoreRemedy: details.localStoreRemedy,
   };
 }
 
@@ -350,6 +372,12 @@ export interface OpenEpicState {
    * proof.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /** Optional @1.2 routing truth; null preserves the legacy sync pill. */
+  readonly durabilityStatus?: EpicDurabilityStatus | null;
+  /** Present only for the two recognised paused reasons. */
+  readonly durabilityPauseReason?: EpicDurabilityPauseReason | null;
+  /** Optional @1.3 distinction behind a durable promotion reservation. */
+  readonly durabilityPromotionState?: EpicPromotionState | null;
   /** `true` only after a cloud-status frame for this exact open cycle. */
   readonly hasFreshCloudSyncStatus: boolean;
   /**
@@ -743,6 +771,9 @@ export function createOpenEpicStore(
   // connection status. The sync pill must instead consult
   // `hasFreshCloudSyncStatus`, which is the per-cycle acknowledgement proof.
   let cloudSyncStatus: EpicCloudSyncStatus = "connected";
+  let durabilityStatus: EpicDurabilityStatus | null = null;
+  let durabilityPauseReason: EpicDurabilityPauseReason | null = null;
+  let durabilityPromotionState: EpicPromotionState | null = null;
   let hasFreshCloudSyncStatus = false;
   let currentStatus: StreamConnectionStatus = "connecting";
   // Flips true on the first successful connect so a later drop reads as
@@ -1570,19 +1601,25 @@ export function createOpenEpicStore(
         // blended from, so a reader that needs to know WHERE unsynced work is
         // sitting can never observe the two out of step. Every site that
         // moves `transportStatus` / `cloudSyncStatus` /
-        // `hasFreshCloudSyncStatus` / `hasConnectedOnce`
+        // `hasFreshCloudSyncStatus` / `hasConnectedOnce` / routing durability
         // must set through this.
         const connectionStateSlice = (): Pick<
           OpenEpicState,
           | "connectionStatus"
           | "hostTransportStatus"
           | "cloudSyncStatus"
+          | "durabilityStatus"
+          | "durabilityPauseReason"
+          | "durabilityPromotionState"
           | "hasFreshCloudSyncStatus"
           | "hasConnectedOnce"
         > => ({
           connectionStatus: currentStatus,
           hostTransportStatus: transportStatus,
           cloudSyncStatus,
+          durabilityStatus,
+          durabilityPauseReason,
+          durabilityPromotionState,
           hasFreshCloudSyncStatus,
           hasConnectedOnce,
         });
@@ -2133,10 +2170,19 @@ export function createOpenEpicStore(
                 migration: NOT_ALLOWED_MIGRATION_SLICE,
               });
             },
-            onCloudSyncStatus: (status) => {
+            onCloudSyncStatus: (
+              status,
+              durability,
+              pauseReason,
+              promotionState,
+            ) => {
               if (disposed || generation !== streamGeneration) return;
               const previousCloudSyncStatus = cloudSyncStatus;
               cloudSyncStatus = status;
+              durabilityStatus = durability ?? null;
+              durabilityPauseReason =
+                durability === "paused" ? (pauseReason ?? null) : null;
+              durabilityPromotionState = promotionState ?? null;
               hasFreshCloudSyncStatus = true;
               if (
                 hasConnectedOnce &&
@@ -2190,6 +2236,11 @@ export function createOpenEpicStore(
               const cycleDurabilityState = startedSubscriptionCycle
                 ? resetDurabilityProofForOpenCycle()
                 : null;
+              if (startedSubscriptionCycle) {
+                durabilityStatus = null;
+                durabilityPauseReason = null;
+                durabilityPromotionState = null;
+              }
               const nextStatus = syncCurrentConnectionStatus();
               hasFreshRootSnapshotForOpenCycle = false;
               set(
@@ -2257,6 +2308,9 @@ export function createOpenEpicStore(
           clearUnsyncedQueue();
           transportStatus = "connecting";
           cloudSyncStatus = "connected";
+          durabilityStatus = null;
+          durabilityPauseReason = null;
+          durabilityPromotionState = null;
           const cycleDurabilityState = resetDurabilityProofForOpenCycle();
           // A fresh re-subscribe bootstraps from scratch, so the next connect is
           // "connecting", not "reconnecting": clear the latch and let only a

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useEpicCommentThreads } from "@/hooks/comments/use-epic-comment-threads";
+import { useEpicDurabilityStatus } from "@/lib/epic-selectors";
 import {
   useActiveThreadId,
   useCommentThreadsStore,
@@ -59,9 +60,11 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const activeThreadId = useActiveThreadId(epicId);
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
+  const durabilityStatus = useEpicDurabilityStatus();
+  const localCommentsUnavailable = durabilityStatus === "local";
 
   const query = useEpicCommentThreads(epicId, artifactType, artifactId, {
-    enabled: true,
+    enabled: !localCommentsUnavailable,
   });
 
   const sorted = useMemo(() => {
@@ -80,7 +83,8 @@ export function CommentSidebar(props: CommentSidebarProps) {
   // that is disabled because no host client is ready is unknown for the same
   // reason: it has never produced a snapshot.
   const isUnavailable =
-    query.data === undefined && query.fetchStatus !== "fetching";
+    localCommentsUnavailable ||
+    (query.data === undefined && query.fetchStatus !== "fetching");
 
   const handleExpandedChange = useCallback(
     (threadId: string, next: boolean) => {
@@ -121,6 +125,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
         <SidebarBody
           isLoading={query.isLoading}
           isUnavailable={isUnavailable}
+          localCommentsUnavailable={localCommentsUnavailable}
           sorted={sorted}
           filter={filter}
           epicId={epicId}
@@ -144,6 +149,7 @@ interface SidebarBodyProps {
    *  is unknown rather than empty. See where it is derived in
    *  {@link CommentSidebar}. */
   readonly isUnavailable: boolean;
+  readonly localCommentsUnavailable: boolean;
   readonly sorted: ReadonlyArray<SortedThread>;
   readonly filter: CommentThreadStatusFilter;
   readonly epicId: string;
@@ -175,7 +181,11 @@ function SidebarBody(props: SidebarBodyProps) {
   // Ordered ahead of the empty state on purpose: both render zero threads, and
   // only one of them knows that to be true.
   if (props.isUnavailable) {
-    return <UnavailableState />;
+    return (
+      <UnavailableState
+        localCommentsUnavailable={props.localCommentsUnavailable}
+      />
+    );
   }
   if (props.sorted.length === 0) {
     return (
@@ -241,7 +251,9 @@ function EmptyState({ filter, onPromptDraft }: EmptyStateProps) {
  * emits a `<warning>` for an unavailable artifact instead of an empty list
  * (`protocol/src/comments/comments-xml-formatting.ts`).
  */
-function UnavailableState() {
+function UnavailableState(props: {
+  readonly localCommentsUnavailable: boolean;
+}) {
   return (
     <div
       data-slot="comment-sidebar-unavailable"
@@ -256,10 +268,14 @@ function UnavailableState() {
       <MessageSquareWarning className="size-6 text-muted-foreground" />
       <div className="flex flex-col gap-1">
         <p className="text-ui-sm text-muted-foreground">
-          Comments couldn't be loaded.
+          {props.localCommentsUnavailable
+            ? "Comments are available after cloud sync."
+            : "Comments couldn't be loaded."}
         </p>
         <p className="text-ui-xs text-muted-foreground/80">
-          This doesn't mean there are none.
+          {props.localCommentsUnavailable
+            ? "This epic is currently stored locally."
+            : "This doesn't mean there are none."}
         </p>
       </div>
     </div>

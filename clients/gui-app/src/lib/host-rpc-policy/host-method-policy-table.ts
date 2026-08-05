@@ -271,6 +271,13 @@ const LATEST_SCHEDULING = {
 export const HOST_METHOD_POLL_TABLE = {
   "host.status": { ...LATEST_SCHEDULING, poll: null },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // Explicit, state-changing local-store repair: rapid confirmation clicks
+  // must stay ordered and must never be coalesced into one implicit claim.
+  "host.rebindLocalStore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },

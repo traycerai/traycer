@@ -1,6 +1,7 @@
 import type {
   PermissionRole,
   ListTaskLight,
+  ListTaskLightV13,
   TaskOwnershipScope,
   TaskWorkspaceIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -49,6 +50,9 @@ export interface HistoryItem {
   ownership: HistoryOwnershipScope;
   permissionRole: PermissionRole | null;
   isPinned: boolean;
+  /** True only for a host-synthesized local-home task row. Missing legacy
+   *  fixtures and callers are cloud-backed. */
+  isLocalHome?: boolean;
 }
 
 export interface HistoryFilters {
@@ -72,7 +76,7 @@ const HISTORY_GROUP_LABELS: Record<HistoryRecencyBucket, string> = {
 };
 
 export function buildHistoryItemsFromTasks(
-  tasks: ReadonlyArray<ListTaskLight>,
+  tasks: ReadonlyArray<ListTaskLight | ListTaskLightV13>,
   nowMs: number,
   userId: string | null,
 ): ReadonlyArray<HistoryItem> {
@@ -90,6 +94,7 @@ export function buildHistoryItemsFromTasks(
           nowMs,
           role: task.epic?.permission?.role ?? null,
           isPinned: task.pinned ?? false,
+          isLocalHome: "home" in task && task.home === "local",
         }),
       ];
     }
@@ -111,6 +116,7 @@ export function buildHistoryItemsFromTasks(
         nowMs,
         role: task.phase?.permission?.role ?? null,
         isPinned: false,
+        isLocalHome: false,
       }),
     ];
   });
@@ -126,6 +132,7 @@ function buildHistoryItem(args: {
   nowMs: number;
   role: PermissionRole | null;
   isPinned: boolean;
+  isLocalHome: boolean;
 }): HistoryItem {
   const {
     light,
@@ -137,6 +144,7 @@ function buildHistoryItem(args: {
     nowMs,
     role,
     isPinned,
+    isLocalHome,
   } = args;
   const ownership = light.createdBy === userId ? "mine" : "shared";
   return {
@@ -162,6 +170,7 @@ function buildHistoryItem(args: {
     ownership,
     permissionRole: historyPermissionRole(ownership, role),
     isPinned,
+    isLocalHome,
   };
 }
 

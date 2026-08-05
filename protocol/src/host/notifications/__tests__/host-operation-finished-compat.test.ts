@@ -13,13 +13,17 @@ import {
   hostNotificationEntrySchemaV21,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
+  hostNotificationsFeedSubscribeV12,
   hostNotificationsListDowngradeV21ToV10,
+  hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListResponseSchemaV21,
   hostNotificationsListUpgradeV20ToV21,
+  hostNotificationsListUpgradeV21ToV22,
   hostNotificationsListV20,
   hostNotificationsListV21,
+  hostNotificationsListV22,
   hostNotificationsSubscribeServerFrameSchema,
   hostNotificationsSubscribeServerFrameSchemaV10,
   hostNotificationsSubscribeServerFrameSchemaV11,
@@ -191,24 +195,29 @@ describe("released schemas stay frozen", () => {
 });
 
 describe("registry wiring", () => {
-  it("advertises @2.1 as the canonical list minor with @2.0 still installed", () => {
+  it("advertises @2.2 as the canonical list minor with prior v2 minors installed", () => {
     const line = hostRpcRegistry["host.notifications.list"][2];
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(hostNotificationsListV20);
     expect(line.versions[1].contract).toBe(hostNotificationsListV21);
+    expect(line.versions[2].contract).toBe(hostNotificationsListV22);
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(
       hostNotificationsListUpgradeV20ToV21,
     );
+    expect(line.versions[2].upgradeFromPreviousVersion).toBe(
+      hostNotificationsListUpgradeV21ToV22,
+    );
     expect(line.downgradePathsFromLatest[1]).toBe(
-      hostNotificationsListDowngradeV21ToV10,
+      hostNotificationsListDowngradeV22ToV10,
     );
   });
 
-  it("advertises feed @1.1 with @1.0 still installed for older peers", () => {
+  it("advertises feed @1.2 with prior minors installed for older peers", () => {
     const line = hostStreamRpcRegistry["host.notifications.feed.subscribe"][1];
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(hostNotificationsFeedSubscribeV10);
     expect(line.versions[1].contract).toBe(hostNotificationsFeedSubscribeV11);
+    expect(line.versions[2].contract).toBe(hostNotificationsFeedSubscribeV12);
   });
 
   it("keeps the legacy subscribe stream frozen at @1.0", () => {

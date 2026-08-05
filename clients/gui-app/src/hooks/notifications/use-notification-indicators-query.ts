@@ -12,21 +12,21 @@ import {
 } from "@/stores/notifications/notification-indicator-state";
 
 /**
- * Per-entity indicator flags for one surface, from whichever feed is
- * authoritative - mirroring how the notification center itself is mode-aware.
+ * Per-entity indicator flags for one surface. In mixed mode the host and
+ * cloud calls each return one exact durable-home partition and their boolean
+ * flags are ORed; neither side derives counts from its loaded rows.
  *
- * In cloud mode the flags come from the cloud snapshot this client already
- * holds. That is the only derivation that can be correct across hosts: an
- * entry produced on host B never enters host A's SQLite, so the host's v1
- * `indicatorState` (computed over ONE host's rows and its own `read_at`)
- * cannot light a tab bound to host A, and its read state only clears once a
- * marker has round-tripped back down to that specific host. Deriving from the
- * store the popover renders also makes the icon and the row it represents
- * incapable of disagreeing, including while the cloud is degraded.
+ * The mixed mode label remains `cloud`, but its inputs are two disjoint
+ * durable-home partitions: the host's v1.1 `home: local` indicator response
+ * and the cloud snapshot. A foreign cloud row never enters the local origin,
+ * while a local-homed row is absent from the cloud partition, so the OR merge
+ * neither drops nor double-counts a notification. The cloud store still owns
+ * optimistic cloud-row reads, keeping its visible row and its contribution to
+ * the indicator coherent while that mutation is in flight.
  *
- * In local mode this is exactly today's host path: old/methodless hosts and
- * the local-only product keep the v1 RPC, which is not issued at all in cloud
- * mode.
+ * In local mode this remains the whole-origin host path for old/methodless
+ * hosts and the local-only product; only mixed mode asks the host for its
+ * `home: local` partition.
  *
  * App-local failure rows contribute in BOTH modes - they are client-side
  * state, neither host nor cloud state - and are folded in downstream by
@@ -36,23 +36,59 @@ export function useNotificationIndicators(
   args: UseHostNotificationIndicatorsArgs,
 ): HostNotificationsIndicatorStateResponse {
   const feedMode = useNotificationFeedMode();
-  const isCloud = feedMode === "cloud";
+  const isMixed = feedMode === "cloud";
   const hostIndicators = useHostNotificationIndicators({
     epicIds: args.epicIds,
     chatIds: args.chatIds,
-    enabled: args.enabled && !isCloud,
+    chatEpicIds: args.chatEpicIds,
+    home: isMixed ? "local" : undefined,
+    enabled: args.enabled,
   });
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   const cloudIndicators = useMemo(
     () =>
-      isCloud && args.enabled
+      isMixed && args.enabled
         ? selectCloudNotificationIndicators(
             cloudRows,
             args.epicIds,
             args.chatIds,
           )
         : EMPTY_INDICATOR_STATE_RESPONSE,
-    [isCloud, args.enabled, cloudRows, args.epicIds, args.chatIds],
+    [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds],
   );
-  return isCloud ? cloudIndicators : hostIndicators.data;
+  return isMixed
+    ? mergeNotificationIndicatorPartitions(hostIndicators.data, cloudIndicators)
+    : hostIndicators.data;
+}
+
+function mergeNotificationIndicatorPartitions(
+  local: HostNotificationsIndicatorStateResponse,
+  cloud: HostNotificationsIndicatorStateResponse,
+): HostNotificationsIndicatorStateResponse {
+  return {
+    epics: mergeIndicatorRecord(local.epics, cloud.epics),
+    chats: mergeIndicatorRecord(local.chats, cloud.chats),
+  };
+}
+
+function mergeIndicatorRecord(
+  local: HostNotificationsIndicatorStateResponse["epics"],
+  cloud: HostNotificationsIndicatorStateResponse["epics"],
+): HostNotificationsIndicatorStateResponse["epics"] {
+  const merged = { ...local };
+  for (const [id, cloudState] of Object.entries(cloud)) {
+    const localState = merged[id];
+    merged[id] =
+      localState === undefined
+        ? cloudState
+        : {
+            pendingApproval:
+              localState.pendingApproval || cloudState.pendingApproval,
+            pendingInterview:
+              localState.pendingInterview || cloudState.pendingInterview,
+            unreadFailure: localState.unreadFailure || cloudState.unreadFailure,
+            unreadDone: localState.unreadDone || cloudState.unreadDone,
+          };
+  }
+  return merged;
 }

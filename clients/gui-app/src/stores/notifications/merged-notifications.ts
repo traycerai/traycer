@@ -27,7 +27,6 @@ import {
 } from "@/lib/notifications/notification-category";
 import {
   classifyNotificationLifecycle,
-  compareAttentionOrder,
   compareFeedIdAscending,
   type NotificationAttentionTier,
 } from "@/lib/notifications/notification-lifecycle";
@@ -216,13 +215,19 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   return useMemo(() => {
     if (feedMode === "cloud") {
-      const rows = Object.values(cloudRows)
+      // The host and cloud projections are ordered lanes, not two clocks.
+      // `updatedAt` has distinct semantics in each plane, so only compare
+      // timestamps inside one lane and concatenate them in protocol order.
+      const localRows = hostIds
+        .map((id) => rowFromHostEntryForOrigin(hostById[id], activeHostId))
+        .sort(compareFeedCandidates);
+      const remoteRows = Object.values(cloudRows)
         .filter(
           (row): row is HostNotificationsCloudFeedRow => row !== undefined,
         )
         .map(rowFromCloudFeedRow);
-      rows.sort(compareFeedCandidates);
-      return rows;
+      remoteRows.sort(compareFeedCandidates);
+      return [...localRows, ...remoteRows];
     }
     if (feedMode === "upgrade-required") return [];
     const globalEntriesById = new Map(
@@ -307,14 +312,32 @@ export function useAttentionNotificationIds(): ReadonlyArray<string> {
         } => entry.classification.section === "attention",
       )
       .map(({ row, classification }) => ({ row, tier: classification.tier }));
-    attentionRows.sort((a, b) =>
-      compareAttentionOrder(
-        { tier: a.tier, createdAt: a.row.createdAt, feedId: a.row.feedId },
-        { tier: b.tier, createdAt: b.row.createdAt, feedId: b.row.feedId },
-      ),
-    );
+    attentionRows.sort(comparePartitionedAttentionOrder);
     return attentionRows.map((entry) => entry.row.feedId);
   }, [rows]);
+}
+
+/**
+ * Attention retains its severity tiers across planes, but once two rows share
+ * a tier their plane is the protocol ordering key. This deliberately never
+ * compares a local `updatedAt` to a cloud relay timestamp.
+ */
+function comparePartitionedAttentionOrder(
+  left: AttentionOrderEntry,
+  right: AttentionOrderEntry,
+): number {
+  if (left.tier !== right.tier) {
+    return left.tier === "blocking" ? -1 : 1;
+  }
+  const planeDelta = notificationPlaneOrder(left.row) - notificationPlaneOrder(right.row);
+  if (planeDelta !== 0) return planeDelta;
+  return compareFeedCandidates(left.row, right.row);
+}
+
+function notificationPlaneOrder(row: MergedNotificationRow): number {
+  if (row.source === "host") return 0;
+  if (row.source === "cloud") return 1;
+  return 0;
 }
 
 /** Every non-attention row, chronological, filtered by the open-session
@@ -341,18 +364,18 @@ function rowFromLocalFeedId(input: {
   readonly globalEntry: NotificationEntry | null;
   readonly hostOriginId: string | null;
 }): MergedNotificationRow | null {
-  if (input.feedMode !== "local") return null;
+  if (input.feedMode === "upgrade-required") return null;
   switch (input.parsed.source) {
     case "host":
       return input.hostEntry === null
         ? null
         : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
     case "app-local":
-      return input.appLocalEntry === null
+      return input.feedMode !== "local" || input.appLocalEntry === null
         ? null
         : rowFromAppLocalEntry(input.appLocalEntry);
     case "global":
-      return input.globalEntry === null
+      return input.feedMode !== "local" || input.globalEntry === null
         ? null
         : rowFromGlobalEntry(input.globalEntry);
     case "cloud":
@@ -401,10 +424,14 @@ export function useMergedNotificationRow(
 export function useMergedNotificationUnreadCount(): number {
   const feedMode = useNotificationFeedMode();
   const hostUnread = useHostNotificationUnreadCount();
+  const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  if (feedMode === "cloud") return cloudSummary?.unreadCount ?? 0;
+  if (feedMode === "cloud") {
+    if (hostSummary === null || cloudSummary === null) return 0;
+    return hostUnread + cloudSummary.unreadCount;
+  }
   if (feedMode === "upgrade-required") return 0;
   return mergedUnreadCount({
     hostUnread,
@@ -443,11 +470,14 @@ export function useNotificationBellState(): NotificationBellState {
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
-    if (cloudSummary === null) return { kind: "unknown" };
-    if (cloudSummary.attentionCount > 0) {
-      return { kind: "attention", count: cloudSummary.attentionCount };
+    if (hostSummary === null || cloudSummary === null) {
+      return { kind: "unknown" };
     }
-    return cloudSummary.unreadCount > 0
+    const attention = hostSummary.attentionCount + cloudSummary.attentionCount;
+    if (attention > 0) {
+      return { kind: "attention", count: attention };
+    }
+    return hostSummary.unreadCount + cloudSummary.unreadCount > 0
       ? { kind: "quietDot" }
       : { kind: "clear" };
   }
@@ -498,13 +528,16 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
   const feedMode = useNotificationFeedMode();
   const localSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  // The cloud relay is the complete authority once the host confirms support.
-  // The v1 replica is intentionally discarded at the mode boundary, so using
-  // its null summary here would make an exact cloud feed look perpetually cold.
+  // In mixed mode BOTH summaries are exact partitions. A null in either lane
+  // makes the unified center partial rather than pretending the other lane is
+  // complete truth.
   const summary = feedMode === "cloud" ? cloudSummary : localSummary;
   return {
     hostLabel: hostEntry?.label ?? null,
-    isPartial: activeHostId === null || summary === null,
+    isPartial:
+      activeHostId === null ||
+      summary === null ||
+      (feedMode === "cloud" && localSummary === null),
   };
 }
 
@@ -784,6 +817,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     method: "host.notifications.markAllRead",
     mapVariables: (variables) => ({
       beforeUpdatedAt: variables.beforeUpdatedAt,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.markAllRead(),
@@ -822,6 +856,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "recent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.loadMore(),
@@ -867,6 +902,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "attention",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.loadMoreAttention(),
@@ -918,6 +954,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "unreadRecent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor ?? undefined,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.loadMoreUnreadRecent(),
@@ -971,8 +1008,8 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           cloudMarkRead.mutate({ entryId: target.sourceId });
           return;
         }
-        if (feedMode !== "local") return;
         if (parsed.source === "host") {
+          if (feedMode === "upgrade-required") return;
           if (client === null) return;
           markHostRead.mutate({
             feedId,
@@ -981,10 +1018,13 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           return;
         }
         if (parsed.source === "global") {
+          if (feedMode !== "local") return;
           globalMarkAsRead(parsed.sourceId);
           return;
         }
-        appLocalMarkAsRead(parsed.sourceId, Date.now());
+        if (feedMode === "local") {
+          appLocalMarkAsRead(parsed.sourceId, Date.now());
+        }
       },
       resolve: (row) => {
         if (row.source === "cloud") {
@@ -992,12 +1032,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           cloudResolve.mutate({ entryId: row.sourceId });
           return;
         }
-        if (feedMode !== "local") return;
         // Only host `needs_action` rows are dismiss-eligible (app-local rows
         // are `failure`, global rows are `info` - neither reaches the blocking
         // tier), so this is host-only by construction. `row.createdAt` is the
         // host entry's `updatedAt` - the occurrence token the host guards on.
         if (row.source !== "host") return;
+        if (feedMode === "upgrade-required") return;
         // A retained-but-disconnected host keeps `client !== null` while its
         // active host id drops to null; firing resolve then only yields an
         // unbound-rejection toast while the row cannot change. Gate on the same
@@ -1038,6 +1078,13 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
               }
             }
           })();
+          if (client !== null && client.getActiveHostId() !== null) {
+            markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
+            const occurrences = loadedBlockingAttentionOccurrences();
+            if (occurrences.length > 0) {
+              resolveHostAll.mutate({ occurrences });
+            }
+          }
           return;
         }
         if (feedMode !== "local") return;
@@ -1113,21 +1160,25 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         cloudClearAll.mutate({ observedVersion: cloudVersion });
       },
       loadMoreHost: () => {
-        if (feedMode !== "local") return;
+        if (feedMode === "upgrade-required") return;
         if (hostNextCursor === null || client === null) return;
         loadMoreHost.mutate({ cursor: hostNextCursor });
       },
       canLoadMoreHost:
-        feedMode === "local" && hostNextCursor !== null && client !== null,
+        feedMode !== "upgrade-required" &&
+        hostNextCursor !== null &&
+        client !== null,
       isLoadingMoreHost: loadMoreHost.isPending,
       hasHostLoadError,
       loadMoreAttention: () => {
-        if (feedMode !== "local") return;
+        if (feedMode === "upgrade-required") return;
         if (hostAttentionCursor === null || client === null) return;
         loadMoreAttention.mutate({ cursor: hostAttentionCursor });
       },
       canLoadMoreAttention:
-        feedMode === "local" && hostAttentionCursor !== null && client !== null,
+        feedMode !== "upgrade-required" &&
+        hostAttentionCursor !== null &&
+        client !== null,
       isLoadingMoreAttention: loadMoreAttention.isPending,
       hasAttentionLoadError,
       // Unlike the other two tracks, a `null` cursor here is ambiguous on its
@@ -1137,12 +1188,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       // it: only once a page has actually loaded does a `null` cursor mean
       // genuine exhaustion.
       loadMoreUnreadRecent: () => {
-        if (feedMode !== "local") return;
+        if (feedMode === "upgrade-required") return;
         if (client === null) return;
         loadMoreUnreadRecent.mutate({ cursor: hostUnreadRecentCursor });
       },
       canLoadMoreUnreadRecent:
-        feedMode === "local" &&
+        feedMode !== "upgrade-required" &&
         client !== null &&
         (hostUnreadRecentCursor !== null || !unreadRecentHasLoadedOnce),
       isLoadingMoreUnreadRecent: loadMoreUnreadRecent.isPending,

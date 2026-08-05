@@ -65,6 +65,13 @@ type GetTaskContextsRequest = RequestOfMethod<
   HostRpcRegistry,
   "epic.getTaskContexts"
 >;
+type ListTasksResponse = ResponseOfMethod<HostRpcRegistry, "epic.listTasks">;
+type ListTasksRequest = RequestOfMethod<HostRpcRegistry, "epic.listTasks">;
+
+const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
+  tasks: [],
+  hasMore: false,
+};
 
 const compatibleHostStatus: HostStatusResponse = {
   ready: true,
@@ -143,11 +150,15 @@ interface MountOptions {
   readonly getTaskContexts: (
     params: GetTaskContextsRequest,
   ) => Promise<GetTaskContextsResponse> | GetTaskContextsResponse;
+  readonly listTasks?: (
+    params: ListTasksRequest,
+  ) => Promise<ListTasksResponse> | ListTasksResponse;
 }
 
 function buildMessengerFactory(
   options: MountOptions,
 ): MessengerFactory<HostRpcRegistry> {
+  const listTasks = options.listTasks ?? (() => EMPTY_LIST_TASKS_RESPONSE);
   return (args) =>
     new MockHostMessenger<HostRpcRegistry>({
       registry: args.registry,
@@ -155,6 +166,7 @@ function buildMessengerFactory(
       handlers: {
         "host.status": () => compatibleHostStatus,
         "epic.getTaskContexts": (params) => options.getTaskContexts(params),
+        "epic.listTasks": (params) => listTasks(params),
       },
     });
 }
@@ -366,6 +378,138 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
     await waitFor(() => {
       expect(collectOpenEpicIds()).not.toContain(OPEN_EPIC_ID);
     });
+    queryClient.clear();
+  });
+});
+
+/**
+ * Durability proof for the local-homed protection path. `mountReconciler`
+ * mounts a fresh reconciler with none of the session-scoped exemptions
+ * (`wasEpicCreatedThisSession`, the open-epic registry, an active initial-chat
+ * handoff) ever populated for this epic - the same state a cold app relaunch
+ * starts from. If the tab survives here, survival can only be attributed to
+ * the durable `home: "local"` marker on the host-merged `epic.listTasks` row,
+ * not to a session marker that a relaunch would have already cleared.
+ */
+const LOCAL_HOME_EPIC_ID = "epic-local-homed-across-relaunch";
+
+function localHomedListTasksRow(
+  epicId: string,
+): ListTasksResponse["tasks"][number] {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: "Local-only epic",
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "active",
+        createdAt: 1,
+        updatedAt: 2,
+        createdBy: "user-1",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    pinned: false,
+    home: "local",
+  };
+}
+
+describe("EpicTabExistenceReconciler local-homed durable protection", () => {
+  beforeEach(() => {
+    restoreFetch = installAuthFetch();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.installSourceReconciliation();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    useEpicCanvasStore
+      .getState()
+      .closeTabsForEpics([OPEN_EPIC_ID, LOCAL_HOME_EPIC_ID]);
+    useInitialChatHandoffStore.getState().resetForTests();
+    clearSessionCreatedEpics();
+    resetNegotiatedManifests();
+    vi.restoreAllMocks();
+    restoreFetch();
+  });
+
+  it("keeps a local-homed epic's tab open even when getTaskContexts reports it missing, with no session-scoped exemption in play", async () => {
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    // Open a second tab for the local-homed epic before mounting - mirrors a
+    // persisted tab restored at app start, before any session state (created-
+    // this-session marker, open-epic registry entry, initial-chat handoff)
+    // could exist for it.
+    useEpicCanvasStore.getState().openEpicTab(LOCAL_HOME_EPIC_ID, "Local Epic");
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          // The cloud has no record of this local-only epic; every other
+          // open id (OPEN_EPIC_ID) resolves confirmed so the test isolates
+          // the local-homed exemption rather than the "missing" default.
+          tasks[taskId] =
+            taskId === LOCAL_HOME_EPIC_ID
+              ? null
+              : {
+                  epic: {
+                    light: {
+                      id: taskId,
+                      title: "Confirmed",
+                      initialUserPrompt: "",
+                      ticketCount: 0,
+                      specCount: 0,
+                      storyCount: 0,
+                      reviewCount: 0,
+                      status: "active",
+                      createdAt: 1,
+                      updatedAt: 2,
+                      createdBy: "user-1",
+                      version: "1",
+                    },
+                    permission: null,
+                    repos: [],
+                    workspaces: [],
+                    roomInfo: null,
+                  },
+                };
+        }
+        return { tasks };
+      },
+    );
+
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
+      tasks: [localHomedListTasksRow(LOCAL_HOME_EPIC_ID)],
+      hasMore: false,
+    }));
+
+    const queryClient = mountReconciler({ getTaskContexts, listTasks });
+
+    await waitFor(() => {
+      expect(getTaskContexts).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(listTasks).toHaveBeenCalledTimes(1);
+    });
+
+    // Give the reconciliation effect a tick to run to completion (or to
+    // wrongly close the tab) before asserting the durable outcome.
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).toContain(OPEN_EPIC_ID);
+    });
+    expect(collectOpenEpicIds()).toContain(LOCAL_HOME_EPIC_ID);
     queryClient.clear();
   });
 });

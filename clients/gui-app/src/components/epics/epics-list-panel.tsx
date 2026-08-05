@@ -1486,7 +1486,10 @@ function HistoryPinControl(props: {
 }): ReactNode {
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
-  const label = props.item.isPinned
+  const cloudOnly = props.item.isLocalHome === true;
+  const label = cloudOnly
+    ? `Pinning ${displayTitle} is available after cloud sync`
+    : props.item.isPinned
     ? `Unpin ${displayTitle} from top`
     : `Pin ${displayTitle} to top`;
   return (
@@ -1497,14 +1500,18 @@ function HistoryPinControl(props: {
           aria-label={label}
           aria-pressed={props.item.isPinned}
           data-testid="epics-list-row-pin"
-          disabled={props.isPending}
+          data-local-home-pin-unavailable={cloudOnly || undefined}
+          disabled={props.isPending || cloudOnly}
           className={cn(
             "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
-            props.item.isPinned
+            cloudOnly
+              ? "text-muted-foreground opacity-40"
+              : props.item.isPinned
               ? "text-primary opacity-100"
               : "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100",
           )}
           onClick={() => {
+            if (cloudOnly) return;
             props.onSetPinned(props.item.epicId, !props.item.isPinned);
           }}
         >
@@ -1516,7 +1523,9 @@ function HistoryPinControl(props: {
           />
         </button>
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>
+        {cloudOnly ? "Pinning is available after cloud sync." : label}
+      </TooltipContent>
     </Tooltip>
   );
 }

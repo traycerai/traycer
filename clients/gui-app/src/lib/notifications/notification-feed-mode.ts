@@ -1,16 +1,33 @@
-import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
+import {
+  useStreamMethodSchemaVersion,
+  useStreamMethodSupport,
+} from "@/lib/host/stream-runtime-context";
 
 export type NotificationFeedMode = "local" | "cloud" | "upgrade-required";
 
 /**
- * The notification center has one authoritative source at a time. The v1
- * local feed is the capability fallback for older or otherwise methodless
- * hosts. Capability negotiation stays local while pending so an offline host
- * cannot blank retained rows; only confirmed method support selects cloud.
+ * A cloud-capable host is mixed-plane only once all durable-home projections
+ * negotiated. An older host may advertise the relay but still expose whole
+ * origin summaries; selecting both there would double-count replicas. In that
+ * case local remains the single safe view until the host upgrades.
  */
 export function useNotificationFeedMode(): NotificationFeedMode {
   const cloudFeedSupport = useStreamMethodSupport(
     "host.notifications.cloudFeed.subscribe",
   );
-  return cloudFeedSupport === "supported" ? "cloud" : "local";
+  const cloudFeedVersion = useStreamMethodSchemaVersion(
+    "host.notifications.cloudFeed.subscribe",
+  );
+  const localFeedVersion = useStreamMethodSchemaVersion(
+    "host.notifications.feed.subscribe",
+  );
+  const hasCloudProjection =
+    cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 1;
+  const hasLocalProjection =
+    localFeedVersion?.major === 1 && localFeedVersion.minor >= 2;
+  return cloudFeedSupport === "supported" &&
+    hasCloudProjection &&
+    hasLocalProjection
+    ? "cloud"
+    : "local";
 }

@@ -43,7 +43,10 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
-import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  anyTooltipHasText,
+  tooltipTextNear,
+} from "@/components/ui/__tests__/tooltip-probe";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -592,6 +595,26 @@ describe("<EpicsListPanel />", () => {
 
     expect(await screen.findByText("Phase somehow pinned")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
+  });
+
+  it("disables pin mutation for a local-home epic and names the cloud-sync boundary", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+        isPinned: false,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pinning Local only epic is available after cloud sync",
+    });
+    expect(pin.hasAttribute("disabled")).toBe(true);
+    expect(pin.getAttribute("data-local-home-pin-unavailable")).toBe("true");
+    fireEvent.click(pin);
+    expect(testState.setPinnedMutate).not.toHaveBeenCalled();
+    expect(tooltipTextNear(pin)).toBe("Pinning is available after cloud sync.");
   });
 
   // The Sweep control keeps its slot in every task row rather than appearing

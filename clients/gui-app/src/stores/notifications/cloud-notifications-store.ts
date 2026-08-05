@@ -5,7 +5,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
-  hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
   type HostNotificationsCloudFeedRow,
   type HostNotificationsCloudFeedSummary,
   type HostNotificationsEntityRef,
@@ -357,7 +357,7 @@ export function openCloudNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsCloudFeedSubscribeServerFrameSchemaV10.safeParse(
+        hostNotificationsCloudFeedSubscribeServerFrameSchemaV11.safeParse(
           envelope,
         );
       if (!parsed.success) {
@@ -365,7 +365,8 @@ export function openCloudNotificationsStream(
         return;
       }
       switch (parsed.data.kind) {
-        case "snapshot": {
+        case "snapshot":
+        case "partitionSnapshot": {
           const arrivals = useCloudNotificationsStore
             .getState()
             .applySnapshot(parsed.data);
