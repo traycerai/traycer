@@ -3,13 +3,12 @@ import type {
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { ChevronRight, MessageSquareText } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
 import { answeredQuestionsSummaryFromCounts } from "@/components/chat/chat-activity-groups";
 import type { ChatMessageForkAction } from "@/components/chat/chat-message";
 import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
@@ -49,8 +48,6 @@ export function InterviewSegment(props: InterviewSegmentProps) {
     forkAction,
   } = props;
   const [open, setOpen] = useState(forkedWithoutAnswer);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const measuredOpenChange = useChatMeasuredOpenChange(setOpen, triggerRef);
 
   if (status === "streaming") return null;
 
@@ -65,12 +62,11 @@ export function InterviewSegment(props: InterviewSegmentProps) {
   return (
     <Collapsible
       open={open}
-      onOpenChange={measuredOpenChange}
+      onOpenChange={setOpen}
       className="text-ui-sm text-muted-foreground"
     >
       <div className="flex max-w-full items-center gap-1">
         <CollapsibleTrigger
-          ref={triggerRef}
           data-find-include="true"
           data-chat-find-unit={findUnitId ?? undefined}
           className={cn(

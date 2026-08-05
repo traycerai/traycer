@@ -87,6 +87,7 @@ function buildHandle(epicId: string, title: string): FakeHandle {
     dispose: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => !state.isDirty,
+    hotArtifactRoomIdsForTests: () => [],
     setDirty: (isDirty, queueSize) => {
       state.isDirty = isDirty;
       state.unsyncedQueueSize = queueSize;

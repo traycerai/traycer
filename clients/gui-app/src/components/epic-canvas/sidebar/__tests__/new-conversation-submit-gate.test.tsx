@@ -13,6 +13,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
@@ -401,8 +402,10 @@ describe("NewConversationModalBody direct submit gate", () => {
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,

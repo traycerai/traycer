@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   activityGroupSummary,
   buildChatActivityTimeline,
+  hidesSoleReasoningHeader,
   latestActivityLabel,
+  reasoningSummaryLabel,
 } from "@/components/chat/chat-activity-groups";
-import type { ChatActivityTimelineItem } from "@/components/chat/chat-activity-groups";
+import type {
+  ActivityGroupModel,
+  ChatActivityTimelineItem,
+} from "@/components/chat/chat-activity-groups";
+import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-key";
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import type { AgentMessageSend } from "@traycer/protocol/persistence/epic/content-blocks";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
@@ -251,18 +257,246 @@ describe("chat activity grouping", () => {
   // from counts then fell through to the generic "Ran activity" - so a lone
   // reasoning block advertised itself as an unspecified tool run, and the word
   // "Thought" it used to render for itself vanished from the find index too.
+  //
+  // The two are NOT the same label. 0 is a measurement, and the block renders
+  // it as "Thought for 1s" because "Thought for 0s" describes nothing; null is
+  // the absence of one. Summing collapsed the distinction, so the group said
+  // "Thought" over a child saying "Thought for 1s" - and `hidesSoleReasoningHeader`
+  // then deleted the child's header on the strength of the two being identical,
+  // taking the only "Thought for 1s" in the transcript, and its find unit, with it.
   it.each([
-    ["no duration at all", null],
-    ["a zero duration", 0],
-  ])("labels a completed lone reasoning block with %s as thought", (_, ms) => {
-    const timeline = buildCompleteTimeline([
-      reasoningSegment("reasoning-1", false, ms),
+    ["no duration at all", null, "Thought"],
+    ["a zero duration", 0, "Thought for 1s"],
+  ])(
+    "labels a completed lone reasoning block with %s exactly as the block labels itself",
+    (_, ms, expected) => {
+      const timeline = buildCompleteTimeline([
+        reasoningSegment("reasoning-1", false, ms),
+      ]);
+
+      if (timeline[0]?.kind !== "activity_group") {
+        throw new Error("Expected a group around the lone block");
+      }
+      expect(timeline[0].group.summary).toBe(expected);
+      // The equality the header-suppression rule rests on, asserted rather than
+      // assumed: the group's whole label IS what the child would have rendered.
+      expect(timeline[0].group.summary).toBe(reasoningSummaryLabel(ms));
+      expect(hidesSoleReasoningHeader(timeline[0].group.segments)).toBe(true);
+    },
+  );
+
+  // The same equality across the range, so a formatter change on either side
+  // cannot quietly break the premise for some durations and not others.
+  it.each([null, 0, 1, 400, 500, 1000, 2400, 2500, 61_000, 3_600_000])(
+    "keeps the sole-reasoning group label identical to the block's own label (%s ms)",
+    (ms) => {
+      const timeline = buildCompleteTimeline([
+        reasoningSegment("reasoning-1", false, ms),
+      ]);
+      if (timeline[0]?.kind !== "activity_group") {
+        throw new Error("Expected a group around the lone block");
+      }
+      expect(timeline[0].group.label).toBe(reasoningSummaryLabel(ms));
+    },
+  );
+
+  // The clause moves forward only. A new block starting to stream says nothing
+  // about what the run has already done, and letting it lead made the header
+  // shuttle - reported from the running app, fixed once for the duration case,
+  // and still live here: with no `startedAt` in persisted history the total
+  // stays 0, so a duration-only guard never fired and `Thought` went back to
+  // `Thinking` on the next block.
+  it("never returns to thinking once a block has completed, even with no durations", () => {
+    const completed = reasoningSegment("reasoning-1", false, null);
+    expect(soleGroupLabel(buildActiveTimeline([completed]))).toBe("Thought");
+
+    const withNewStream = buildActiveTimeline([
+      completed,
+      reasoningSegment("reasoning-2", true, null),
+    ]);
+    expect(soleGroupLabel(withNewStream)).toBe("Thought");
+
+    const bothDone = buildActiveTimeline([
+      completed,
+      reasoningSegment("reasoning-2", false, null),
+    ]);
+    expect(soleGroupLabel(bothDone)).toBe("Thought");
+  });
+
+  // A finished block with no duration is NOT only a history artifact: an
+  // interrupted, superseded or errored block is finished and unmeasurable too
+  // (`completedDurationMs` returns null because its timestamp is the turn-end),
+  // so a run can mix measured and unmeasurable blocks live. The sum is then a
+  // floor, and saying "Thought for 5s" claims a total nobody measured.
+  it("marks a duration that is only a floor when a finished block was unmeasurable", () => {
+    const timeline = buildActiveTimeline([
+      reasoningSegment("reasoning-1", false, 5_000),
+      reasoningSegment("reasoning-2", false, null),
     ]);
 
-    if (timeline[0]?.kind !== "activity_group") {
-      throw new Error("Expected a group around the lone block");
-    }
-    expect(timeline[0].group.summary).toBe("Thought");
+    expect(soleGroupLabel(timeline)).toBe("Thought for 5s+");
+  });
+
+  // The reason it is a "+" and not a fallback to the duration-less "Thought":
+  // that fallback walks the label BACKWARDS the moment an unmeasurable block
+  // joins a run that had already measured one - which is the exact shuttle
+  // `thinkingCompleted` was added to stop, one field over. A floor only grows.
+  it("never drops a measured duration when an unmeasurable block joins", () => {
+    const measured = reasoningSegment("reasoning-1", false, 5_000);
+    expect(soleGroupLabel(buildActiveTimeline([measured]))).toBe(
+      "Thought for 5s",
+    );
+
+    const joined = buildActiveTimeline([
+      measured,
+      reasoningSegment("reasoning-2", false, null),
+    ]);
+    expect(soleGroupLabel(joined)).toBe("Thought for 5s+");
+
+    const grown = buildActiveTimeline([
+      measured,
+      reasoningSegment("reasoning-2", false, null),
+      reasoningSegment("reasoning-3", false, 6_000),
+    ]);
+    expect(soleGroupLabel(grown)).toBe("Thought for 11s+");
+  });
+
+  // The "+" has no analogue in `reasoningSummaryLabel`, so it would break the
+  // equality `hidesSoleReasoningHeader` bets on if it could ever appear on a
+  // sole block. It cannot: it needs one measured block AND one unmeasurable
+  // one, and that is two segments. Asserted rather than argued.
+  it.each([null, 0, 5_000])(
+    "never marks a sole reasoning block as a floor (%s ms)",
+    (ms) => {
+      const timeline = buildCompleteTimeline([
+        reasoningSegment("reasoning-1", false, ms),
+      ]);
+      const group = soleGroup(timeline, 0);
+
+      expect(group.label).not.toContain("+");
+      expect(group.label).toBe(reasoningSummaryLabel(ms));
+      expect(hidesSoleReasoningHeader(group.segments)).toBe(true);
+    },
+  );
+
+  // A block still STREAMING is not a finished-but-unmeasurable one. It carries
+  // no duration either, but counting it as a floor marker would put a "+" on
+  // every run that is merely still thinking.
+  it("does not mark a floor for a block that is still streaming", () => {
+    const timeline = buildActiveTimeline([
+      reasoningSegment("reasoning-1", false, 5_000),
+      reasoningSegment("reasoning-2", true, null),
+    ]);
+
+    expect(soleGroupLabel(timeline)).toBe("Thought for 5s");
+  });
+
+  // The header-suppression rule is keyed on the group's SHAPE, and the shape is
+  // NOT append-only: a backgrounded command and a matched question tool both
+  // leave the run they were in. The group id comes from the first segment, so
+  // the list shrinks under an unchanged id on a mounted component - and a
+  // shape-only rule would flip back to headerless there and unfold a completed
+  // trace nobody opened.
+  describe("shape removals", () => {
+    // The removal itself, at the model level: same group id, one member fewer,
+    // and the shape rule duly flips back to headerless. That flip is REAL and is
+    // not corrected here - `ActivityGroupSegment` latches the header on its own
+    // render history, because two of the three removal paths are invisible from
+    // this file (`buildAssistantSegments` suppresses subagent spawn tools and
+    // edit tool calls before this builder ever runs).
+    it("shrinks a group in place when its command is promoted to the background", () => {
+      const segments = [
+        reasoningSegment("reasoning-1", false, 2000),
+        commandSegment("command-1", "bun test", true, null),
+      ];
+
+      const before = soleGroup(buildCompleteTimeline(segments), 0);
+      expect(before.segments).toHaveLength(2);
+      expect(hidesSoleReasoningHeader(before.segments)).toBe(false);
+
+      // The host starts tracking the exec as a background item mid-turn.
+      const after = soleGroup(
+        buildCompleteTimelineWithPromoted(segments, new Set(["command-1"])),
+        0,
+      );
+      // The id is what makes this dangerous: React keeps the same component.
+      expect(after.id).toBe(before.id);
+      expect(after.segments).toHaveLength(1);
+      expect(hidesSoleReasoningHeader(after.segments)).toBe(true);
+    });
+
+    it("shrinks a group in place when a question tool's interview arrives", () => {
+      const questionTool = toolSegment("tool-1", "question", {
+        questions: [{ question: "Where?", options: [] }],
+      });
+      const reasoning = reasoningSegment("reasoning-1", false, 2000);
+
+      const before = soleGroup(
+        buildCompleteTimeline([reasoning, questionTool]),
+        0,
+      );
+      expect(before.segments).toHaveLength(2);
+
+      const after = soleGroup(
+        buildCompleteTimeline([
+          reasoning,
+          questionTool,
+          interviewSegment("tool-1:interview"),
+        ]),
+        0,
+      );
+      expect(after.id).toBe(before.id);
+      expect(after.segments).toHaveLength(1);
+    });
+
+    // A run that STARTS after a promoted card is a different group with a
+    // different id, so it is a fresh component with no header to preserve. An
+    // earlier revision marked it as a remnant anyway, which put the duplicate
+    // `Thinking` header back on every message beginning with a background
+    // command - reinstating the exact defect the rule exists to remove.
+    it("gives the run after a promoted segment its own id", () => {
+      const timeline = buildCompleteTimelineWithPromoted(
+        [
+          commandSegment("command-1", "bun test", true, null),
+          reasoningSegment("reasoning-1", false, 2000),
+        ],
+        new Set(["command-1"]),
+      );
+
+      const group = soleGroup(timeline, 1);
+      expect(group.id).toBe(deriveActivityGroupRenderId("reasoning-1"));
+      expect(hidesSoleReasoningHeader(group.segments)).toBe(true);
+    });
+
+    it("leaves an untouched sole reasoning group headerless", () => {
+      const group = soleGroup(
+        buildCompleteTimeline([reasoningSegment("reasoning-1", false, 2000)]),
+        0,
+      );
+      expect(hidesSoleReasoningHeader(group.segments)).toBe(true);
+    });
+  });
+
+  it("leads with thinking only while nothing has completed yet", () => {
+    const timeline = buildActiveTimeline([
+      reasoningSegment("reasoning-1", true, null),
+    ]);
+    expect(soleGroupLabel(timeline)).toBe("Thinking");
+  });
+
+  // A streaming block contributes no duration even when it carries one:
+  // `ReasoningSegment` labels a streaming block "Thinking" and ignores the
+  // number, so counting it would let the group read "Thought for 3s" over a
+  // child still reading "Thinking" - and the header-suppression rule would then
+  // hide a header that did NOT say the same thing.
+  it("ignores a streaming block's duration so the group cannot outrun the child", () => {
+    const timeline = buildActiveTimeline([
+      reasoningSegment("reasoning-1", true, 3000),
+    ]);
+    // "Thinking" is what `ReasoningSegment` renders for any streaming block,
+    // whatever its duration - so this is the label equality again, for the one
+    // case `reasoningSummaryLabel` is not consulted.
+    expect(soleGroupLabel(timeline)).toBe("Thinking");
   });
 
   it("still leads with the thinking clause when a duration-less block has siblings", () => {
@@ -277,10 +511,13 @@ describe("chat activity grouping", () => {
     expect(timeline[0].group.summary).toBe("Thought, ran 1 command");
   });
 
-  // Guards the `thinkingStreaming` precedence: one block still running must not
-  // let an earlier settled block's total become the headline, or the summary
-  // would claim a finished duration while thinking is visibly still going.
-  it("prefers the live clause over an accumulated duration while any block streams", () => {
+  // The accumulated duration OUTRANKS a still-streaming block, so the clause
+  // only ever grows. Leading with a bare "thinking" whenever anything streamed
+  // made the header shuttle - "Thought for 4s, read 1 file" -> "Thinking" ->
+  // "Thought for 9s, read 1 file" - on every new block, and the middle state
+  // was a run that had demonstrably read a file describing itself as nothing
+  // but a thought.
+  it("keeps the accumulated duration in the summary while a later block streams", () => {
     const timeline = buildCompleteTimeline([
       reasoningSegment("reasoning-1", false, 4000),
       toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
@@ -290,7 +527,50 @@ describe("chat activity grouping", () => {
     if (timeline[0]?.kind !== "activity_group") {
       throw new Error("Expected one activity group");
     }
+    expect(timeline[0].group.summary).toBe("Thought for 4s, read 1 file");
+  });
+
+  // The one case with no duration to show: nothing has finished thinking yet.
+  it("reads 'Thinking' only until the first block completes", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", true, null),
+      toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
+    ]);
+
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected one activity group");
+    }
     expect(timeline[0].group.summary).toBe("Thinking, read 1 file");
+  });
+
+  // Monotonic: every new block can only push the clause forward, never back to
+  // a label the reader already saw replaced.
+  it("never regresses the thinking clause as blocks accumulate", () => {
+    const summaryOf = (segments: ReadonlyArray<MessageSegment>): string => {
+      const timeline = buildCompleteTimeline(segments);
+      if (timeline[0]?.kind !== "activity_group") {
+        throw new Error("Expected one activity group");
+      }
+      return timeline[0].group.summary;
+    };
+
+    expect([
+      summaryOf([reasoningSegment("reasoning-1", true, null)]),
+      summaryOf([reasoningSegment("reasoning-1", false, 4000)]),
+      summaryOf([
+        reasoningSegment("reasoning-1", false, 4000),
+        reasoningSegment("reasoning-2", true, null),
+      ]),
+      summaryOf([
+        reasoningSegment("reasoning-1", false, 4000),
+        reasoningSegment("reasoning-2", false, 5000),
+      ]),
+    ]).toEqual([
+      "Thinking",
+      "Thought for 4s",
+      "Thought for 4s",
+      "Thought for 9s",
+    ]);
   });
 
   it("keeps streaming activity active with a stable summary label", () => {
@@ -912,6 +1192,43 @@ describe("chat activity grouping", () => {
     ).toBe("Ran pwd");
   });
 });
+
+function soleGroupLabel(
+  timeline: ReadonlyArray<ChatActivityTimelineItem>,
+): string {
+  if (timeline[0]?.kind !== "activity_group") {
+    throw new Error("Expected a group at the head of the timeline");
+  }
+  return timeline[0].group.label;
+}
+
+function soleGroup(
+  timeline: ReadonlyArray<ChatActivityTimelineItem>,
+  index: number,
+): ActivityGroupModel {
+  // Range-checked BEFORE the read. An out-of-range index is the likeliest way
+  // a caller gets this wrong, and reading `.kind` off the undefined it returns
+  // throws a TypeError that names neither the index nor the helper.
+  //
+  // Checked on the length rather than on `item === undefined`, which is the
+  // obvious spelling: this repo does not set `noUncheckedIndexedAccess`, so the
+  // element type excludes undefined and `no-unnecessary-condition` rejects a
+  // comparison the type system believes can never be true. The runtime
+  // disagrees with the type here, and the length is the part of that both agree
+  // on.
+  if (index < 0 || index >= timeline.length) {
+    throw new Error(
+      `Expected an activity group at index ${index}, but the timeline holds ${timeline.length}`,
+    );
+  }
+  const item = timeline[index];
+  if (item.kind !== "activity_group") {
+    throw new Error(
+      `Expected an activity group at index ${index}, got ${item.kind}`,
+    );
+  }
+  return item.group;
+}
 
 function buildCompleteTimeline(
   segments: ReadonlyArray<MessageSegment>,

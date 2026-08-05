@@ -118,6 +118,7 @@ const EMPTY_SUBSCRIPTION: GitListChangedFilesSubscriptionResult = {
   repoState: null,
   repoMode: null,
   pollStartedAtMs: null,
+  watcherStatus: null,
 };
 
 function snapshotResult(

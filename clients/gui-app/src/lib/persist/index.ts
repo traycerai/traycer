@@ -14,6 +14,7 @@ export {
   interviewDraftKey,
   interviewDraftKeyPrefix,
   landingTerminalsKey,
+  readingPositionKeyPrefix,
   openEpicKey,
   persistKey,
   scopeBucket,

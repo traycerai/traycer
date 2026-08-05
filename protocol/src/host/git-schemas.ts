@@ -669,3 +669,110 @@ export const gitSubscribeStatusEventSchemaV12 = z.discriminatedUnion("type", [
 export type GitSubscribeStatusEventV12 = z.infer<
   typeof gitSubscribeStatusEventSchemaV12
 >;
+
+// ---- Stream v1.3: watcher health ---------------------------------------- //
+//
+// The host keeps a filesystem watcher per subscribed repo and falls back to
+// adaptive polling when it cannot. Both modes are correct - polling heals every
+// missed event on its next tick - but they differ by up to 30s of staleness,
+// and one of the fallback causes is a machine-level limit the USER can lift
+// (Linux `fs.inotify.max_user_watches`). Until this minor the difference was
+// invisible on the wire: "my Git changes are slow" and "this host ran out of
+// inotify watches" produced identical frames.
+//
+// Deliberately NOT on `git.getCapabilities`: watcher health is dynamic, not a
+// property of the host install. A capacity degrade reverses on its own when a
+// neighbouring repo frees watches, so a unary read would have to be polled -
+// exactly what this stream exists to avoid.
+
+/**
+ * Watcher health for the subscribed repo, carried on `snapshot`/`updated` v1.3
+ * frames. Platform-neutral: every platform falls back to polling on a watcher
+ * runtime error; only the `detail` text is platform-specific.
+ *
+ * `state` is the CONTRACT; `detail` is diagnostics:
+ * - `starting` - no watcher yet. Every subscription begins here (the watcher
+ *   arms against the repo root resolved by the first poll), so this is a normal
+ *   opening state, not a fault. Frames still flow, on the polling cadence.
+ * - `watching` - armed; frames are event-driven.
+ * - `degraded-capacity` - nothing is armed because the watch budget could not
+ *   cover this repo. RETRYABLE and self-healing: the host re-arms when capacity
+ *   frees. This is the state whose `detail` carries a user-actionable remedy.
+ * - `degraded-error` - the watcher failed and will NOT be retried for the life
+ *   of this host process (a retry would stack kernel resource liabilities).
+ *   Polling continues indefinitely; the remedy is a host restart.
+ *
+ * `detail` is a HUMAN-READABLE diagnostic string - render it, never parse it.
+ * Its wording, precision and language are all unstable by design (it carries
+ * things like measured directory counts and a sysctl remedy), which is exactly
+ * why they are not schema. `null` whenever there is nothing to add, which
+ * includes every non-degraded state.
+ */
+export const gitWatcherStatusSchema = z.object({
+  state: z.enum([
+    "starting",
+    "watching",
+    "degraded-capacity",
+    "degraded-error",
+  ]),
+  detail: z.string().nullable(),
+});
+export type GitWatcherStatus = z.infer<typeof gitWatcherStatusSchema>;
+
+/**
+ * `git.subscribeStatus@1.3` event - v1.2 frames plus `watcher` on
+ * `snapshot`/`updated`. The `error` variant is unchanged: a git-compute failure
+ * says nothing about watcher health, and the two degrade independently.
+ *
+ * COMPAT POSTURE: additive, same two independent guards as v1.1's `submodules`
+ * - the host resolver projects frames onto the negotiated minor's frozen shape
+ * (explicit field picks, never a spread), and released clients parse with
+ * non-strict zod, which strips unknown fields. Do not remove either guard.
+ *
+ * Frames are NOT emitted per watcher transition: the field rides the ordinary
+ * snapshot/updated cadence, so a transition surfaces on the next frame. The
+ * host widens its emission gate so a transition on an otherwise-unchanged repo
+ * still produces one - without that, an idle repo would sit on a stale value
+ * until its next real change, which is unbounded.
+ */
+export const gitSubscribeStatusEventSchemaV13 = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("snapshot"),
+    runningDir: z.string(),
+    headSha: z.string(),
+    branch: z.string().nullable(),
+    files: z.array(gitChangedFileV11Schema),
+    fingerprint: z.string(),
+    nestedFingerprint: z.string(),
+    repoMode: repoModeSchema,
+    repoState: repoStateSchema,
+    submodules: z.array(submoduleChangesetSchema),
+    pollStartedAtMs: z.number().int(),
+    freshNonce: z.string().nullable(),
+    watcher: gitWatcherStatusSchema,
+  }),
+  z.object({
+    type: z.literal("updated"),
+    runningDir: z.string(),
+    headSha: z.string(),
+    branch: z.string().nullable(),
+    files: z.array(gitChangedFileV11Schema),
+    fingerprint: z.string(),
+    nestedFingerprint: z.string(),
+    repoMode: repoModeSchema,
+    repoState: repoStateSchema,
+    changedPaths: z.array(z.string()),
+    submodules: z.array(submoduleChangesetUpdatedSchemaV11),
+    pollStartedAtMs: z.number().int(),
+    freshNonce: z.string().nullable(),
+    watcher: gitWatcherStatusSchema,
+  }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+    isFatal: z.boolean(),
+  }),
+]);
+export type GitSubscribeStatusEventV13 = z.infer<
+  typeof gitSubscribeStatusEventSchemaV13
+>;

@@ -10,6 +10,10 @@ import { vi, type Mock } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
+import {
+  createComposerEditorIncarnation,
+  type ComposerEditorIncarnation,
+} from "@/lib/composer/composer-editor-incarnation";
 
 export type FakeEditorSelection = {
   readonly from: number;
@@ -68,6 +72,7 @@ export function createFakeComposerPromptEditorHandle(
   }> = [];
   const clears: number[] = [];
   const focuses: number[] = [];
+  let editorIncarnation = createComposerEditorIncarnation();
 
   const applyContent = (
     next: JsonContent,
@@ -86,8 +91,11 @@ export function createFakeComposerPromptEditorHandle(
     applyContent(next, nextSelection, "sync");
   });
 
-  const buildHandle = (): ComposerPromptEditorHandle => ({
+  const buildHandle = (
+    incarnation: ComposerEditorIncarnation,
+  ): ComposerPromptEditorHandle => ({
     isReady: () => ready,
+    getEditorIncarnation: () => (ready ? incarnation : null),
     hasFocus: () => false,
     focus: () => {
       focuses.push(1);
@@ -116,7 +124,7 @@ export function createFakeComposerPromptEditorHandle(
     dismissActiveSuggestion: () => false,
   });
 
-  const handle = buildHandle();
+  const handle = buildHandle(editorIncarnation);
   const editorRef: { current: ComposerPromptEditorHandle | null } = {
     current: handle,
   };
@@ -136,7 +144,8 @@ export function createFakeComposerPromptEditorHandle(
     editorRef,
     rebuild: () => {
       ready = true;
-      const next = buildHandle();
+      editorIncarnation = createComposerEditorIncarnation();
+      const next = buildHandle(editorIncarnation);
       editorRef.current = next;
       return next;
     },

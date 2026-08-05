@@ -58,6 +58,18 @@ import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-e
 // keeps the two clocks from fighting: a picker opened inside the window reuses
 // cache and leaves a live server alone, and one opened after it refetches -
 // respawning a reaped server exactly when the user is about to pick a model.
+//
+// Host availability recovery is deliberately NOT a refresh point. The
+// recovery sweep (`invalidateHostScope` with an active refetch) would beat
+// `staleTime: Infinity` and re-probe every harness at once - a provider CLI
+// spawn burst that stalls a slow host, flaps stream health, and triggers the
+// next sweep (traycer#912). `query-invalidator.ts` therefore exempts
+// `agent.gui.listModels` / `agent.gui.listCommands` from the recovery sweep
+// ENTIRELY - not refetched, and not marked stale either. Marking them would
+// only defer the burst: an invalidated query is stale regardless of
+// `staleTime`, so the next mount of this hook would re-probe every harness at
+// once. Recovery leaves them untouched and the intent edges above pick up
+// whatever is genuinely due.
 export const HARNESS_CATALOG_REFRESH_AFTER_MS = 15 * 60 * 1000;
 const HARNESS_AVAILABILITY_REFRESH_MS = 15 * 60 * 1000;
 

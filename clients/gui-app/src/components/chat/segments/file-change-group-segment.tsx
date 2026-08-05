@@ -132,6 +132,7 @@ export function FileChangeGroupSegment(props: FileChangeGroupSegmentProps) {
           segment={file}
           variant="row"
           headerFindUnitId={null}
+          initiallyOpen={false}
         />
       ))}
       {artifacts.map((artifact) => (

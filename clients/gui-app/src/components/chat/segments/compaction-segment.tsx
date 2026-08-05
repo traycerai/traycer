@@ -1,6 +1,5 @@
 import { ChevronDown, ChevronRight, FoldVertical } from "lucide-react";
-import { useRef, useState } from "react";
-import { useChatMeasuredBooleanToggle } from "@/components/chat/chat-measured-item-change-context";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TraycerMarkdown } from "@/markdown";
@@ -71,8 +70,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
   const isStreaming = status === "streaming";
   const isErrored = status === "errored";
   const [expanded, setExpanded] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded, triggerRef);
+  const toggleExpanded = (): void => setExpanded((current) => !current);
 
   // A failed compaction has no boundary, so there are no real metrics and no
   // summary to expand - only the failure and its reason.
@@ -120,7 +118,6 @@ export function CompactionSegment(props: CompactionSegmentProps) {
         <span aria-hidden className="h-px flex-1 bg-border/60" />
         {hasSummary ? (
           <button
-            ref={triggerRef}
             type="button"
             onClick={toggleExpanded}
             aria-expanded={expanded}

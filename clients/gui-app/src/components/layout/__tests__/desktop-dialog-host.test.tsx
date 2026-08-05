@@ -488,6 +488,8 @@ function createDirtyEpicHandle(
     getArtifactFragment: () => null,
     getArtifactBodyAwareness: () => null,
     getArtifactBodyAvailability: () => "unavailable",
+    getArtifactRoomId: () => null,
+    acquireArtifactBodyLease: () => () => {},
     readArtifactTitle: () => null,
   }));
   return {
@@ -499,6 +501,7 @@ function createDirtyEpicHandle(
     dispose: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => !store.getState().isDirty,
+    hotArtifactRoomIdsForTests: () => [],
   };
 }
 

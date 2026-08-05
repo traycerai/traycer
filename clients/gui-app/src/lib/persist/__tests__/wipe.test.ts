@@ -64,6 +64,7 @@ const LOCAL_SEED: Record<string, string> = {
   "traycer-gui-app:settings": "{}",
   "traycer-gui-app:composer-run-settings:anon": "{}",
   "traycer-gui-app:open-epic:u1:e1": "{}",
+  "traycer-gui-app:reading-position:u1:epic-1:view:native:tile-1": "{}",
   "traycer.token": "secret-auth-token",
   "some-unrelated-key": "keep-me",
   "traycer-gui-appX:foo": "must-not-be-swept",
@@ -205,8 +206,8 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(order[order.length - 1]).toBe("reload");
     // hostClear precedes every sweep removal.
     expect(order[0]).toBe("hostClear");
-    // 3 local + 2 session persisted keys are swept (the seeds above).
-    expect(order.filter((e) => e.includes("removeItem")).length).toBe(5);
+    // 4 local + 2 session persisted keys are swept (the seeds above).
+    expect(order.filter((e) => e.includes("removeItem")).length).toBe(6);
   });
 
   it("awaits `hostClear` BEFORE sweeping (a rejecting clear aborts the sweep + reload)", async () => {

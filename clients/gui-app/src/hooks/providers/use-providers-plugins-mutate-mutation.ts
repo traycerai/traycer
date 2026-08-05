@@ -82,6 +82,17 @@ export function useProvidersPluginsMutate(): UseMutationResult<
         providersNativeQueryKeys.pluginsList(ctx.hostId, ctx.listParams),
         data,
       );
+      // Writing the list is not enough: icons are cached SEPARATELY, under
+      // `staleTime: Infinity` with polling off, keyed by the plugin's reported
+      // version. That version is nullable - for a plugin that reports none, a
+      // remove-then-add under the same id lands on the identical key, and the
+      // previous install's artwork would be served for the rest of the session.
+      // Only a mutation can produce that, so the invalidation belongs here.
+      const hostId = ctx.hostId;
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          providersNativeQueryKeys.isPluginIconKey(hostId, query.queryKey),
+      });
     },
     onError: (error, variables) => {
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {

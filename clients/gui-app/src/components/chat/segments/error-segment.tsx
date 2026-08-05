@@ -1,17 +1,56 @@
+import { useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { buildReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import { capturePersistedAgentError } from "@/lib/report-issue-error-capture";
 
 interface ErrorSegmentProps {
   message: string;
   code: string | null;
+  recoverable: boolean;
   findUnitId: string | null;
 }
 
 // Static error row. Auth errors (`code: "auth"`) render here like any other
 // error - the durable transcript row is what keeps a headless (A2A-triggered)
 // auth failure visible after the composer's re-auth banner clears.
-export function ErrorSegment({ code, findUnitId, message }: ErrorSegmentProps) {
+export function ErrorSegment({
+  code,
+  findUnitId,
+  message,
+  recoverable,
+}: ErrorSegmentProps) {
+  // Built at CLICK time, never at render. This row is durable transcript: it
+  // mounts whenever the chat is opened, which is one or more commits BEFORE
+  // `SupportContextRegistryBridge`'s effects publish that chat's own
+  // id/harness/model (chat state arrives through a store subscription, so it
+  // trails a route change by two commits). Both `buildReportIssueDraftContext`
+  // and `capturePersistedAgentError` snapshot that registry, and the harness
+  // id doubles as the fingerprint's `causalProvider` - so building at render
+  // would file the report under the PREVIOUSLY open chat and cluster it under
+  // the wrong provider. Report time is the only moment the registry is known
+  // to describe this row's chat. Deferring also keeps the draft honest when
+  // the runtime accumulator replaces a same-blockId error under a MOUNTED row
+  // (blockId is this row's React key) - the click reads today's props.
+  //
+  // The real message/code reach ONLY the private diagnostics branch - the
+  // public prefill stays null-bodied because both fields are host/harness-
+  // supplied free text and the public context does no redaction (see the
+  // hostile transcript-code test).
+  const buildReportContext = useCallback(
+    () =>
+      buildReportIssueDraftContext(
+        createReportIssueContext({
+          title: "Agent error",
+          message: null,
+          code: null,
+          source: "Chat",
+        }),
+        capturePersistedAgentError({ message, code, recoverable }),
+      ),
+    [code, message, recoverable],
+  );
   return (
     <div
       data-chat-find-unit={findUnitId ?? undefined}
@@ -38,12 +77,7 @@ export function ErrorSegment({ code, findUnitId, message }: ErrorSegmentProps) {
           </span>
         </div>
         <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Agent error",
-            message: null,
-            code: null,
-            source: "Chat",
-          })}
+          context={buildReportContext}
           presentation="icon"
           className="-mt-1 -mr-1 shrink-0"
         />

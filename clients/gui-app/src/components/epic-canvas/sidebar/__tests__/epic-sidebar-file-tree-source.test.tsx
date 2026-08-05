@@ -1,3 +1,4 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -240,6 +241,11 @@ class MockStreamSession implements IStreamSession {
   sendClientFrame(envelope: { readonly kind: string }): void {
     this.clientFrameKinds.push(envelope.kind);
   }
+  /** Never negotiates: this fake exercises no version-dependent path. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return null;
+  }
+
   requestReconnect(): void {}
   close(): void {
     this.statusChangeHandler?.("closed", { kind: "caller" });

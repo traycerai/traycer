@@ -6,6 +6,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
 
 const DIRTY_CONTENT: JsonContent = {
@@ -443,8 +444,10 @@ describe("LandingComposer direct submit gate", () => {
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,

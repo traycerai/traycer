@@ -10,7 +10,7 @@
 
 export const PERSIST_PREFIX = "traycer-gui-app";
 
-// Seven stores bucket their key by the signed-in identity; an absent/empty
+// Account-scoped stores bucket their key by the signed-in identity; an absent/empty
 // identity collapses to the shared anonymous bucket. Preserved verbatim from
 // the per-store `ANONYMOUS_USER_KEY = "anon"` + `value.length > 0` logic.
 export const scopeBucket = (value: string | null): string =>
@@ -111,6 +111,12 @@ export const interviewDraftKey = (chatId: string, blockId: string): string =>
     encodeURIComponent(blockId),
   );
 
+export const readingPositionKeyPrefix = (accountId: string): string =>
+  `${scopedPersistKey(
+    "reading-position",
+    encodeURIComponent(scopeBucket(accountId)),
+  )}:`;
+
 // Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
 // of per-path activity entries (worktrees-enrichment-persistence.ts). A host
 // id is always non-empty, so no `scopeBucket` collapse applies.
@@ -143,7 +149,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (8) ────────────────────────────────────────────
+  // ── Scoped zustand stores (9) ────────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -176,6 +182,7 @@ export const PERSIST_STORES = [
     leaf: "app-local-notifications",
     kind: "scoped",
   },
+  { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
   // ── Static zustand stores (26) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },

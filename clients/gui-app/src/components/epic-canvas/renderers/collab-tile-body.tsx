@@ -104,6 +104,8 @@ const GUEST_COLLAB_USER: CollabUser = deriveCollabUser({
  * locks the surface.
  */
 export function CollabTileBody(props: CollabTileBodyProps) {
+  // `useEpicArtifactFragment` takes the artifact-room lease itself, which is
+  // what materializes the room and pins it for this editor's lifetime.
   const fragment = useEpicArtifactFragment(props.node.id);
   const artifactRoomAwareness = useEpicArtifactBodyAwareness(props.node.id);
   const bodyAvailability = useEpicArtifactBodyAvailability(props.node.id);
