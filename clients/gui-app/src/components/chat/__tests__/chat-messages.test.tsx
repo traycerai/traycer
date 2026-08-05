@@ -68,7 +68,6 @@ import {
 
 const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
-const PILL_SHOW_DEBOUNCE_MS = 150;
 const LEGEND_LIST_HEADER_PX = 40;
 const DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX = 80;
 
@@ -403,7 +402,7 @@ function dispatchKeyInScope(key: string): void {
 
 /**
  * Enter free-scrolling and leave the strict end so the Jump-to-latest pill can
- * show after the 150ms debounce. Drives a scrollTop departure and waits for
+ * show immediately. Drives a scrollTop departure and waits for
  * the isAtEnd=false -> free-scrolling mode flip (the only automatic path after
  * anchor removal). Does not assert a specific scrollTop - callers that need a
  * known park should call fireScrollTopAndFlush afterward and re-check mode.
@@ -780,6 +779,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           taskTitle={options.taskTitle ?? "Test chat"}
           taskId={taskId}
           epicId={epicId}
+          hostId={null}
           messages={state.messages}
           backgroundItems={state.backgroundItems}
           getMessageActions={() => null}
@@ -821,11 +821,6 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
 }
 
 async function waitForPillVisible(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 40);
-    });
-  });
   await waitFor(() => {
     expect(isJumpPillVisible()).toBe(true);
   });
@@ -889,8 +884,8 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  describe("pill debounce", () => {
-    it("does not show the Jump-to-latest chip immediately on leaving the end, then shows after 150ms", async () => {
+  describe("pill departure feedback", () => {
+    it("shows Jump to latest on the first confirmed reader departure", async () => {
       const messages = makeTranscript(20);
       renderChatMessages({ messages, scrollStateKey: "pill-debounce-key" });
       await settleLegendList();
@@ -898,25 +893,6 @@ describe("ChatMessages scroll policy", () => {
       expect(isJumpPillVisible()).toBe(false);
 
       await enterFreeScrollingAwayFromEnd();
-
-      // Debounced show: still hidden before 150ms.
-      expect(isJumpPillVisible()).toBe(false);
-
-      // Real (not fake) wall-clock timers - margin wide enough to absorb
-      // scheduling jitter under load without weakening what this proves
-      // (still well short of the 150ms debounce).
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS - 60);
-        });
-      });
-      expect(isJumpPillVisible()).toBe(false);
-
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 90);
-        });
-      });
       expect(isJumpPillVisible()).toBe(true);
     });
 
@@ -926,15 +902,61 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
 
       await enterFreeScrollingAwayFromEnd();
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 30);
-        });
-      });
-      expect(isJumpPillVisible()).toBe(true);
+      await waitForPillVisible();
 
       fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
       expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("keeps animated Jump to latest owned through an under-landing and concurrent growth", async () => {
+      const messages = makeTranscript(24);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "pill-owned-navigation-key",
+      });
+      await settleLegendList();
+      await enterFreeScrollingAwayFromEnd();
+      await waitForPillVisible();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const node = getScrollNode();
+      const scrollToEnd = vi
+        .spyOn(list, "scrollToEnd")
+        .mockImplementation((options): Promise<void> => {
+          if (options?.animated === true) {
+            node.scrollTop = Math.floor(maxScrollTopFor(node) / 2);
+          } else {
+            node.scrollTop = maxScrollTopFor(node);
+          }
+          fireEvent.scroll(node);
+          return Promise.resolve();
+        });
+
+      fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      expect(node.dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+
+      // Content grows after the smooth-scroll target was chosen. The first
+      // settle therefore sees a real under-landing and reissues against the
+      // new end, without exposing a transient free-scrolling state/pill.
+      setLegendListScrollContainerScrollHeightOverride(node.scrollHeight + 360);
+      act(() => {
+        node.dispatchEvent(new Event("scrollend"));
+      });
+      await waitFor(() => {
+        expect(scrollToEnd).toHaveBeenCalledWith({ animated: false });
+      });
+      expect(node.dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+
+      act(() => {
+        node.dispatchEvent(new Event("scrollend"));
+      });
+      await settleLegendList();
+      expect(node.scrollTop).toBe(maxScrollTopFor(node));
+      expect(node.dataset.scrollMode).toBe("following-end");
+      scrollToEnd.mockRestore();
     });
   });
 
@@ -1036,11 +1058,7 @@ describe("ChatMessages scroll policy", () => {
 
       // Re-enter following via the pill after free-scrolling away.
       await enterFreeScrollingAwayFromEnd();
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 30);
-        });
-      });
+      await waitForPillVisible();
       fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
       await settleLegendList();
 
@@ -1310,7 +1328,14 @@ describe("ChatMessages scroll policy", () => {
             stoppedAt: 1_700_000_000_000,
             reason: "user",
             turnHadOutput: true,
-            turnReplyText: "partial",
+            turnReplySegments: [
+              {
+                id: "seg-partial",
+                kind: "text",
+                markdown: "partial",
+                isStreaming: false,
+              },
+            ],
           },
           runState: null,
         },
@@ -1482,6 +1507,9 @@ describe("ChatMessages scroll policy", () => {
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
       });
+      const ownedScrollNode = getScrollNode();
+      ownedScrollNode.scrollTop = maxScrollTopFor(ownedScrollNode);
+      fireEvent.scroll(ownedScrollNode);
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
 
       // Wait until comfortably PAST op1's own fallback (750ms after op1 was
@@ -3302,6 +3330,7 @@ describe("ChatMessages scroll policy", () => {
             taskTitle="Test chat"
             taskId="task-1"
             epicId="epic-1"
+            hostId={null}
             messages={messages}
             backgroundItems={undefined}
             getMessageActions={() => null}
@@ -4119,8 +4148,9 @@ describe("ChatMessages scroll policy", () => {
         });
       });
       await waitFor(() => {
-        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       });
+      expect(isJumpPillVisible()).toBe(true);
 
       // Genuine permanent close before the original row ever hydrates.
       // Order matches production: tab-key eviction + liveness false, then
@@ -4366,7 +4396,8 @@ describe("ChatMessages scroll policy", () => {
       });
 
       // Tail-only partial: mount-time clamp lands at the partial snapshot's
-      // own end (temporary following-end while the raw coordinate is pending).
+      // own end while the raw coordinate is pending. The visible mode stays
+      // honestly free-scrolling so the reader always has a recovery action.
       const partialMessages = fullMessages.slice(180);
       setLegendListScrollContainerScrollHeightOverride(
         LEGEND_LIST_HEADER_PX + partialMessages.length * 90 + 40,
@@ -4390,8 +4421,9 @@ describe("ChatMessages scroll policy", () => {
         });
       });
       await waitFor(() => {
-        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       });
+      expect(isJumpPillVisible()).toBe(true);
 
       const list = legendListRefHolder.current;
       if (list === null) {
@@ -4538,15 +4570,16 @@ describe("ChatMessages scroll policy", () => {
         });
       });
       await waitFor(() => {
-        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       });
+      expect(isJumpPillVisible()).toBe(true);
 
-      // Bare non-publishing pointerdown (disclosure click shape) - bumps
-      // generation but must not publish free-scrolling or release the gate.
+      // Bare non-publishing pointerdown (disclosure click shape) bumps the
+      // generation but must not release the gate or hide the recovery pill.
       act(() => {
         fireEvent.pointerDown(screen.getByTestId("chat-transcript-container"));
       });
-      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Passive/programmatic scroll without a meaningful position change -
       // the deleted handleScroll generation-mismatch check used to release

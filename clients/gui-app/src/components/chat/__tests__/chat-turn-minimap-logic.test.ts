@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM,
+  CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  compactChatTurnMinimapPreview,
   CHAT_TURN_MINIMAP_EDGE_INSET_REM,
   CHAT_TURN_MINIMAP_END_HIT_PADDING,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
@@ -488,5 +490,104 @@ describe("resolveChatTurnMinimapRowViewportDistance", () => {
 
   it("returns null when row geometry is unavailable", () => {
     expect(resolveChatTurnMinimapRowViewportDistance({}, 0)).toBeNull();
+  });
+});
+
+describe("compactChatTurnMinimapPreview", () => {
+  it("normalizes whitespace and drops empty text", () => {
+    expect(compactChatTurnMinimapPreview("  hello\n\n  world  ")).toBe(
+      "hello world",
+    );
+    expect(compactChatTurnMinimapPreview("   \n\t ")).toBeNull();
+    expect(compactChatTurnMinimapPreview(null)).toBeNull();
+    expect(compactChatTurnMinimapPreview(undefined)).toBeNull();
+  });
+
+  it("retains only a bounded head of a very long turn", () => {
+    // The rail holds one of these per turn. Before this bound, a long
+    // transcript kept a second full-length copy of itself here.
+    const long = `Prompt ${"u".repeat(500_000)}`;
+    const preview = compactChatTurnMinimapPreview(long);
+
+    expect(preview).not.toBeNull();
+    expect((preview ?? "").length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
+    expect((preview ?? "").startsWith("Prompt uuu")).toBe(true);
+    // Elided rather than silently cut.
+    expect((preview ?? "").endsWith("…")).toBe(true);
+  });
+
+  it("still fills the budget when the head is mostly whitespace", () => {
+    // Collapsing runs of whitespace can shrink text far below the scan
+    // window, so the scan has to read past the budget to fill it.
+    const spaced = `${"a \n".repeat(100_000)}end`;
+    const preview = compactChatTurnMinimapPreview(spaced);
+
+    // Budget essentially filled (a trailing space may be trimmed before the
+    // ellipsis), rather than starved by the collapse.
+    expect((preview ?? "").length).toBeGreaterThan(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS - 5,
+    );
+    expect((preview ?? "").length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
+    expect((preview ?? "").startsWith("a a a")).toBe(true);
+  });
+
+  it("leaves a short turn untouched and unelided", () => {
+    expect(compactChatTurnMinimapPreview("short reply")).toBe("short reply");
+  });
+});
+
+describe("compactChatTurnMinimapPreview surrogate safety", () => {
+  it("never truncates in the middle of an astral character", () => {
+    // The 200th UTF-16 unit lands inside the emoji, so a code-unit slice would
+    // emit a lone high surrogate - rendered as a replacement glyph, and read
+    // aloud by a screen reader since this text is also the jump target's
+    // accessible name.
+    const text = `${"a".repeat(199)}\u{1F600}${"b".repeat(300)}`;
+    const preview = compactChatTurnMinimapPreview(text);
+    if (preview === null) throw new Error("expected a preview");
+
+    expect(preview).toBe(preview.replace(/\uFFFD/g, ""));
+    for (let index = 0; index < preview.length; index += 1) {
+      const code = preview.charCodeAt(index);
+      const isLead = code >= 0xd800 && code <= 0xdbff;
+      if (!isLead) continue;
+      const next = preview.charCodeAt(index + 1);
+      expect(Number.isNaN(next) ? -1 : next).toBeGreaterThanOrEqual(0xdc00);
+    }
+    // The pair is dropped whole rather than split.
+    expect(preview.endsWith("\u2026")).toBe(true);
+  });
+
+  it("keeps an astral character that fits entirely inside the budget", () => {
+    const preview = compactChatTurnMinimapPreview("hi \u{1F600} there");
+    expect(preview).toBe("hi \u{1F600} there");
+  });
+});
+
+describe("compactChatTurnMinimapPreview whitespace-heavy input", () => {
+  it("finds the visible text after a long run of whitespace", () => {
+    // A fixed-length prefix scan normalized this to the empty string and lost
+    // the preview entirely - and with it the jump target's accessible name.
+    const text = `${" ".repeat(900)}the actual message`;
+    expect(compactChatTurnMinimapPreview(text)).toBe("the actual message");
+  });
+
+  it("still collapses interior whitespace to single spaces", () => {
+    expect(compactChatTurnMinimapPreview("a\n\n\n  b\t\tc")).toBe("a b c");
+  });
+
+  it("truncates on visible characters, not on source offset", () => {
+    const text = `${"\n".repeat(500)}${"z".repeat(400)}`;
+    const preview = compactChatTurnMinimapPreview(text);
+    if (preview === null) throw new Error("expected a preview");
+    expect(preview.startsWith("z".repeat(50))).toBe(true);
+    expect(preview.endsWith("\u2026")).toBe(true);
+    expect(preview.length).toBeLessThanOrEqual(
+      CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS + 1,
+    );
   });
 });

@@ -34,6 +34,7 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
     },
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
+    hotArtifactRoomIdsForTests: () => [],
     disposeCount: 0,
   };
   return h;

@@ -890,17 +890,17 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * Absolutely overlays the transcript (decision log #3) instead of
              * pushing its height via flex, so streamed replies flow visually
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset. The wrapper owns the opaque
-             * backdrop and a paint-only 1px overdraw so fractional scrolling
-             * cannot expose the transcript between the dock and tile edge. The
-             * full-width positioning layer stays pointer-transparent; centered
-             * lower surfaces opt back in so their invisible gutters cannot
-             * cover the scrollbar.
+             * transcript's bottom content inset. The full-width positioning
+             * layer must remain both pointer- and paint-transparent so it
+             * cannot cover the transcript scrollbar or its edge lanes.
+             * Centered lower surfaces opt back into pointer handling and own
+             * their opaque backplates (including the bottom seam seal), so
+             * transcript content cannot show through the actual chrome.
              */}
             {view.snapshotLoaded ? (
               <div
                 ref={setLowerSurfacesElement}
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-canvas after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']"
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
                 data-chat-lower-surfaces-overlay=""
               >
                 <div className="pointer-events-none">
@@ -2272,6 +2272,7 @@ function ChatSessionMessagesSurface(
               taskTitle={props.node.name}
               taskId={props.node.id}
               epicId={props.epicId}
+              hostId={props.tabHostId}
               messages={props.messages}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}

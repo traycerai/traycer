@@ -527,14 +527,18 @@ export interface ChatMessageStoppedInfo {
    */
   readonly turnHadOutput: boolean;
   /**
-   * The turn's assistant reply text, aggregated across every row of the
-   * turn (not just this one) via the same join `collectAssistantReplyText`
-   * uses. A content-less boundary row's own segments can never supply
-   * copyable text, so the elapsed footer's copy button reads this instead
-   * of the row-local text whenever the row itself is empty - see
-   * `AssistantMessageBody`. Empty string when the turn produced no text.
+   * Every assistant segment in the turn, in order and BY REFERENCE. A
+   * content-less boundary row's own segments can never supply copyable text,
+   * so the elapsed footer's copy button reads these instead of the row-local
+   * ones whenever the row itself is empty - see `AssistantMessageBody`, which
+   * runs `collectAssistantReplyText` over them at render time.
+   *
+   * Deliberately not the joined string: materializing it here kept a second
+   * full copy of the turn's prose alive for every stopped turn in the
+   * transcript, for the sake of a copy button that needs it only when the row
+   * it belongs to is on screen. The pointer array costs a word per segment.
    */
-  readonly turnReplyText: string;
+  readonly turnReplySegments: ReadonlyArray<MessageSegment>;
 }
 
 export interface ChatMessage {

@@ -62,6 +62,17 @@ export class LogicalStream implements IStreamSession {
   readonly params: unknown;
   readonly qos: QosClassValue;
   private schemaVersion: SchemaVersion;
+  /**
+   * Whether `schemaVersion` has survived a real negotiation against the host
+   * manifest, as opposed to the PROVISIONAL client-canonical value the
+   * constructor is seeded with (`RemoteSession.subscribe` opens the stream
+   * before the host's manifest can be consulted).
+   *
+   * `getNegotiatedSchemaVersion` is gated on this: reporting the provisional
+   * value would claim a version the host never agreed to, which is precisely
+   * the "guessed high" failure the consumers of that value parse against.
+   */
+  private negotiated = false;
   private readonly port: LogicalStreamPort;
 
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -130,6 +141,17 @@ export class LogicalStream implements IStreamSession {
   /** Updated by the session when a resume renegotiates the version. */
   updateSchemaVersion(version: SchemaVersion): void {
     this.schemaVersion = version;
+    this.negotiated = true;
+  }
+
+  /**
+   * `IStreamSession.getNegotiatedSchemaVersion`. `null` until the session has
+   * actually opened this stream against the host manifest, and `null` again
+   * from the moment the connection drops - mirroring the local
+   * `StreamSession`, which clears its own value in `resetForReconnect`.
+   */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return this.negotiated ? this.schemaVersion : null;
   }
 
   isDisposed(): boolean {
@@ -163,6 +185,12 @@ export class LogicalStream implements IStreamSession {
     }
     if (status === "closed") {
       this.disposed = true;
+    }
+    if (status !== "open") {
+      // The negotiated version belongs to the connection that negotiated it. A
+      // resume re-runs `openSubscription`, which re-establishes it; until then
+      // this stream has no agreed version, exactly as before its first open.
+      this.negotiated = false;
     }
     this.transition(status, reason);
   }

@@ -34,24 +34,24 @@ export function registerHostPickerDirectory(
 /**
  * Loads the entries for the currently bound host directory.
  *
- * The directory id + revision is part of the query key so directory-change
- * notifications can force a refetch simply by bumping `revision`. When no
+ * The key is STABLE (directory id only). Directory-change notifications force
+ * a refetch via `invalidateQueries` on this key - never by minting a new key:
+ * a revision-in-key design blanked `data` to `undefined` for every consumer
+ * on every emit, and the 15s registry poll turned that into an app-wide
+ * loading flash (terminal tiles unmounted through the reachability gate).
+ * A same-key invalidate keeps the previous `data` during the refetch. When no
  * directory is bound the query is keyed on `queryKeys.hostPickerMissing()`
  * and disabled, matching the rest of the host-aware query surface.
  */
 export function useHostPickerList(
   directoryId: string | null,
-  revision: number,
 ): UseQueryResult<readonly HostDirectoryEntry[]> {
   return useQuery<readonly HostDirectoryEntry[]>(
-    hostPickerListQueryOptions(directoryId, revision),
+    hostPickerListQueryOptions(directoryId),
   );
 }
 
-function hostPickerListQueryOptions(
-  directoryId: string | null,
-  revision: number,
-) {
+function hostPickerListQueryOptions(directoryId: string | null) {
   if (directoryId === null) {
     return queryOptions<readonly HostDirectoryEntry[]>({
       queryKey: uiQueryKeys.hostPickerMissing(),
@@ -60,7 +60,7 @@ function hostPickerListQueryOptions(
     });
   }
   return queryOptions<readonly HostDirectoryEntry[]>({
-    queryKey: uiQueryKeys.hostPicker(directoryId, revision),
+    queryKey: uiQueryKeys.hostPicker(directoryId),
     queryFn: () => {
       const registeredDirectory = directoriesById.get(directoryId);
       if (registeredDirectory === undefined) {
@@ -70,11 +70,12 @@ function hostPickerListQueryOptions(
     },
     // `list()` is a synchronous in-memory snapshot behind a promise - there
     // is nothing to cache. Under the global 60s staleTime, a consumer that
-    // mounted at revision 0 was served ANOTHER consumer's boot-time fetch of
-    // the same key - an empty list captured before the host published - and
-    // never refetched, rendering every bound tab "Bound host is offline" for
-    // the whole session (2026-07-14 incident). Always refetch on mount, and
-    // let superseded revision entries fall out of the cache quickly.
+    // mounted late was served ANOTHER consumer's boot-time fetch of the same
+    // key - an empty list captured before the host published - and never
+    // refetched, rendering every bound tab "Bound host is offline" for the
+    // whole session (2026-07-14 incident). `staleTime: 0` (every mount
+    // refetches) paired with the onChange -> invalidate wiring in
+    // `useHostDirectoryList` is the load-bearing fix - keep BOTH.
     staleTime: 0,
     gcTime: 30_000,
   });

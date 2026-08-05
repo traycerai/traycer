@@ -1,24 +1,15 @@
 import {
   useCallback,
-  useEffect,
   useLayoutEffect,
   useRef,
-  useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
-
-/**
- * How long the window takes to fold away once the run stops being live.
- *
- * Also the delay before its children unmount - the rows must stay in the DOM
- * for the whole exit or the box would collapse against empty content and the
- * transition would have nothing to show. The CSS transition is driven from
- * this same constant (inline `transitionDuration`) rather than a `duration-300`
- * class, so the timer and the animation cannot drift apart.
- */
-export const LIVE_ACTIVITY_WINDOW_EXIT_MS = 300;
+import {
+  LIVE_ACTIVITY_WINDOW_EXIT_MS,
+  useLiveActivityWindowMounted,
+} from "./live-activity-window-mount";
 
 /**
  * Distance from the bottom, in px, within which the window still counts as
@@ -56,9 +47,8 @@ interface LiveActivityWindowProps {
  * Two things it adds:
  *
  * 1. Gesture containment. The transcript is a LegendList whose scroll policy
- *    reads any real wheel/touch/pointer gesture as intent to leave the live
- *    edge - `chatWheelShouldCancelLiveFollow` returns true for EVERY upward
- *    delta - and drops the reader into `free-scrolling` with a jump-to-latest
+ *    reads wheel/touch/pointer gestures as reader intent at the live edge and
+ *    drops an upward departure into `free-scrolling` with a jump-to-latest
  *    pill. Looking back two rows in here must not trigger that, so the gesture
  *    is stopped at this element. `overscroll-contain` alone is not enough: it
  *    governs scroll CHAINING, not event propagation, and the transcript's
@@ -73,30 +63,16 @@ interface LiveActivityWindowProps {
  */
 export function LiveActivityWindow(props: LiveActivityWindowProps) {
   const { shown, children } = props;
-  const [mounted, setMounted] = useState(shown);
+  // Same hook `ActivityGroupSegment` reads, deliberately called twice rather
+  // than lifted into a prop. Both calls take the identical `shown` value in the
+  // identical commit, so they enter and leave together; keeping this one here
+  // leaves the window self-contained and its own tests driving only `shown`.
+  const mounted = useLiveActivityWindowMounted(shown);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Stays true while the window hugs the newest row; a manual scroll up (to
   // read something that already went past) suspends the pin until the reader
   // returns to the bottom.
   const pinnedRef = useRef(true);
-
-  // Entering is a render-phase adjustment (React's documented "adjusting state
-  // when a prop changes" pattern), not an effect: the rows must be in the DOM
-  // in the same commit that turns the window on, and deferring that to an
-  // effect would flash an empty box for a frame.
-  if (shown && !mounted) setMounted(true);
-
-  // Leaving is deferred so the height transition has content to animate
-  // against. The setState is inside the timer callback, never in the effect
-  // body - an effect that set state synchronously would cascade a render.
-  useEffect(() => {
-    if (shown || !mounted) return;
-    const timer = setTimeout(
-      () => setMounted(false),
-      LIVE_ACTIVITY_WINDOW_EXIT_MS,
-    );
-    return () => clearTimeout(timer);
-  }, [mounted, shown]);
 
   const bindScroller = useCallback((node: HTMLDivElement | null) => {
     scrollRef.current = node;
@@ -111,9 +87,9 @@ export function LiveActivityWindow(props: LiveActivityWindowProps) {
     pinnedRef.current = true;
 
     // NATIVE listeners, on this element, and deliberately NOT React's
-    // `onWheel`/`onTouchMove`. The transcript attaches its own `wheel` and
-    // `touchmove` listeners directly to the LegendList scroll node
-    // (`chat-messages.tsx`), which is a DESCENDANT of React's root container.
+    // `onWheel`/`onTouchMove`. The follow latch attaches its own `wheel` and
+    // `touchmove` listeners directly to the LegendList scroll node, which is
+    // a DESCENDANT of React's root container.
     // Native bubbling therefore reaches that listener before React dispatches
     // any synthetic event at the root, so `stopPropagation()` on a synthetic
     // event would run long after the damage was done.

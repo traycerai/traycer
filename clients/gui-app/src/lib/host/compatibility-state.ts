@@ -10,6 +10,18 @@ import { useHostClient } from "@/lib/host/runtime";
 
 const HOST_STATUS_PROBE = {};
 
+/**
+ * What the host's `host.status` answer said about itself, held alongside the
+ * `compatible` verdict. A busy host that was up and serving turns
+ * (traycer#860) used to be indistinguishable from one that never started,
+ * because the probe read only success/failure and discarded this payload.
+ */
+export interface HostStatusSnapshot {
+  readonly busy: boolean;
+  readonly busySessionCount: number;
+  readonly hostVersion: string;
+}
+
 export type HostCompatibility =
   | {
       readonly status: "checking";
@@ -26,6 +38,8 @@ export type HostCompatibility =
        * not treat this as a startup failure.
        */
       readonly degraded: boolean;
+      /** The answer that produced (or last refreshed) this verdict. */
+      readonly hostStatus: HostStatusSnapshot;
     }
   | {
       readonly status: "failed";
@@ -97,27 +111,31 @@ export function useHostCompatibilityProbe(): HostCompatibility {
       error: probe.error,
     };
   }
-  if (probe.isSuccess) {
-    return {
-      status: "compatible",
-      retry: () => void probe.refetch(),
-      degraded: false,
-    };
-  }
-  // Hold a verdict this host has already given. `staleTime: Infinity` keeps a
-  // success cached, but a host-scoped invalidation (every stream availability
-  // recovery issues one) refetches anyway - and a refetch that FAILS used to
-  // drop `isSuccess` and tear the whole workspace down mid-session, reporting a
-  // running host as a startup failure (traycer#860). TanStack keeps the last
-  // successful `data` alongside the error, which is exactly the evidence that
-  // this host answered the handshake: compatibility cannot change without the
-  // host changing, and a host swap re-keys this query (it is host-id scoped),
-  // so holding here can never mask a real verdict.
+  // A present answer IS the compatible verdict, fresh or held. The fresh case
+  // (`isSuccess`) and the held case below used to be separate branches that
+  // differed only in `degraded`; `isSuccess` implies `isError` is false, so
+  // one data-presence check covers both without changing either answer.
+  //
+  // Holding a verdict this host has already given: `staleTime: Infinity` keeps
+  // a success cached, but a host-scoped invalidation (every stream
+  // availability recovery issues one) refetches anyway - and a refetch that
+  // FAILS used to drop `isSuccess` and tear the whole workspace down
+  // mid-session, reporting a running host as a startup failure (traycer#860).
+  // TanStack keeps the last successful `data` alongside the error, which is
+  // exactly the evidence that this host answered the handshake: compatibility
+  // cannot change without the host changing, and a host swap re-keys this
+  // query (it is host-id scoped), so holding here can never mask a real
+  // verdict.
   if (probe.data !== undefined) {
     return {
       status: "compatible",
       retry: () => void probe.refetch(),
       degraded: probe.isError,
+      hostStatus: {
+        busy: probe.data.busy,
+        busySessionCount: probe.data.busySessionCount,
+        hostVersion: probe.data.hostVersion,
+      },
     };
   }
   if (probe.isError) {

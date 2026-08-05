@@ -20,6 +20,7 @@ import {
   resolveChatTurnMinimapRowViewportDistance,
   resolveChatTurnMinimapTopStyle,
   type ChatTurnMinimapListState,
+  compactChatTurnMinimapPreview,
 } from "@/components/chat/chat-turn-minimap-logic";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { cn } from "@/lib/utils";
@@ -91,11 +92,6 @@ function isHumanUserMessage(message: ChatMessageModel): boolean {
   return message.role === "user" && message.agentSenderInfo === null;
 }
 
-function compactMinimapPreview(text: string | null | undefined): string | null {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
-  return compact.length > 0 ? compact : null;
-}
-
 /** Last assistant row's text before the next user row of any kind (A2A rows
  *  still end a turn). */
 function resolveFinalAssistantTextForTurn(
@@ -123,8 +119,8 @@ function deriveChatTurnMinimapItems(
     items.push({
       id: message.id,
       rowIndex: index,
-      userText: compactMinimapPreview(message.content),
-      assistantText: compactMinimapPreview(
+      userText: compactChatTurnMinimapPreview(message.content),
+      assistantText: compactChatTurnMinimapPreview(
         resolveFinalAssistantTextForTurn(messages, index),
       ),
     });

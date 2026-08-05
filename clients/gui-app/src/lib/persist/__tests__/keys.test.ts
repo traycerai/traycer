@@ -15,6 +15,7 @@ import {
   landingTerminalsKey,
   openEpicKey,
   persistKey,
+  readingPositionKeyPrefix,
   scopeBucket,
   worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
@@ -106,7 +107,7 @@ describe("persist key builders — output-preserving against current source", ()
     );
   });
 
-  it("emits the current localStorage key for each of the 8 scoped stores", () => {
+  it("emits the current localStorage key for each scoped persistence family", () => {
     // Source: src/stores/composer/composer-run-settings-store.ts
     // (`composerRunSettingsPersistKey`).
     expect(composerRunSettingsKey(null)).toBe(
@@ -160,6 +161,11 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(appLocalNotificationsKey("u1")).toBe(
       "traycer-gui-app:app-local-notifications:u1",
+    );
+    // Source: src/lib/reading-position/service.ts. This is a per-record
+    // family, so the builder intentionally ends in a delimiter.
+    expect(readingPositionKeyPrefix("u/1")).toBe(
+      "traycer-gui-app:reading-position:u%2F1:",
     );
   });
 

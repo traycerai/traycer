@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildChatFindRows,
   chatFindActivityGroupChildHeaderUnitId,
+  chatFindActivityGroupSummaryUnitId,
   chatFindMessageContentUnitId,
   chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
@@ -301,23 +302,111 @@ describe("chat find projection", () => {
     )[0].units.map((unit) => unit.unitId);
 
     // The run starts at the reasoning block, because the tool stands alone.
-    const groupId = deriveActivityGroupRenderId("reasoning-after-tool");
+    // Probed through the group SUMMARY unit: the group's sole reasoning block
+    // renders unheaded, so it contributes no child unit of its own - but the
+    // group id is derived the same way and discriminates the same mistake.
     expect(unitIds).toContain(
-      chatFindActivityGroupChildHeaderUnitId(groupId, "reasoning-after-tool"),
+      chatFindActivityGroupSummaryUnitId(
+        deriveActivityGroupRenderId("reasoning-after-tool"),
+      ),
     );
     // The id the empty-set projection would have produced must NOT appear.
     expect(unitIds).not.toContain(
-      chatFindActivityGroupChildHeaderUnitId(
+      chatFindActivityGroupSummaryUnitId(
         deriveActivityGroupRenderId("tool-live-promoted"),
-        "reasoning-after-tool",
       ),
     );
   });
 
-  // Every child is indexed unconditionally: a reveal force-opens the group, and
-  // every child renders headed - with its own anchor - in both the live window
-  // and the expanded body.
-  it("indexes the reasoning child alongside the group summary", () => {
+  // A group that is NOTHING BUT one reasoning block renders it unheaded - the
+  // group summary is its label verbatim - so it must not also be projected as a
+  // child unit. A unit with no anchor counts a match the reveal can never
+  // paint, and here it would double-count the very same words.
+  it("does not index a lone reasoning child, whose header does not render", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      segments: [
+        {
+          id: "reasoning-alone",
+          kind: "reasoning",
+          markdown: "body",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+
+    // Exactly once - in the group summary ("Thought for 2s"). The label is
+    // still findable; it is just not counted twice.
+    expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(1);
+    expect(row.units.map((unit) => unit.unitId)).not.toContain(
+      chatFindActivityGroupChildHeaderUnitId(
+        deriveActivityGroupRenderId("reasoning-alone"),
+        "reasoning-alone",
+      ),
+    );
+  });
+
+  // A group that SHRANK back to one reasoning block keeps its VISIBLE header -
+  // the renderer latches it so a completed trace does not unfold itself - but
+  // the projection is rebuilt from the model and sees only the shape, so it
+  // emits no unit. That asymmetry is deliberate and one-directional: a header
+  // that is not a find target. The words are still indexed once, on the group
+  // summary, which by definition says the same thing. The dangerous direction -
+  // a counted match with no anchor to paint - cannot arise, because the
+  // renderer drops the anchor whenever the projection drops the unit.
+  it("stops indexing the reasoning child once its sibling is backgrounded", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      segments: [
+        {
+          id: "reasoning-remnant",
+          kind: "reasoning",
+          markdown: "body",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+        {
+          id: "command-backgrounded",
+          kind: "command",
+          command: "bun test --watch",
+          cwd: null,
+          exitCode: null,
+          isStreaming: true,
+          endState: null,
+          stopped: false,
+          progress: null,
+          startedAt: 0,
+          backgroundTask: null,
+          parentId: null,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows(
+      [assistant],
+      TILE_INSTANCE_ID,
+      new Set(["command-backgrounded"]),
+    )[0];
+
+    expect(row.units.map((unit) => unit.unitId)).not.toContain(
+      chatFindActivityGroupChildHeaderUnitId(
+        deriveActivityGroupRenderId("reasoning-remnant"),
+        "reasoning-remnant",
+      ),
+    );
+    // Still findable, exactly once, through the summary of the group it is now
+    // the whole of.
+    expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(1);
+  });
+
+  // The moment the group holds anything else, its summary stops being that
+  // block's label ("Thought for 2s, ran 1 command"), the header comes back, and
+  // the unit must come back with it - or the row is unfindable and a reveal
+  // targeting it has no anchor to paint.
+  it("indexes a reasoning child that has a non-reasoning sibling", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
       segments: [
@@ -347,9 +436,48 @@ describe("chat find projection", () => {
 
     const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
 
-    // Once in the group summary ("Thought for 2s, ran 1 command"), once as the
-    // child's own header.
-    expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(2);
+    expect(row.units.map((unit) => unit.unitId)).toContain(
+      chatFindActivityGroupChildHeaderUnitId(
+        deriveActivityGroupRenderId("reasoning-with-sibling"),
+        "reasoning-with-sibling",
+      ),
+    );
+  });
+
+  // Two or more blocks DO each keep a header: the group summary carries their
+  // SUM, so only the rows tell them apart. Their units must come back.
+  it("indexes every reasoning child once a group holds more than one", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      segments: [
+        {
+          id: "reasoning-first",
+          kind: "reasoning",
+          markdown: "body",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+        {
+          id: "reasoning-second",
+          kind: "reasoning",
+          markdown: "body",
+          isStreaming: false,
+          durationMs: 3200,
+        },
+      ],
+    };
+
+    const unitIds = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())
+      .flatMap((row) => row.units)
+      .map((unit) => unit.unitId);
+    const groupId = deriveActivityGroupRenderId("reasoning-first");
+
+    expect(unitIds).toContain(
+      chatFindActivityGroupChildHeaderUnitId(groupId, "reasoning-first"),
+    );
+    expect(unitIds).toContain(
+      chatFindActivityGroupChildHeaderUnitId(groupId, "reasoning-second"),
+    );
   });
 
   it("indexes the always-visible subagent header (name + type) and dedupes progress", () => {
