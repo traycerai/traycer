@@ -56,7 +56,7 @@ export function useChatPromptStashSource(
 
 /**
  * Chat surface prompt-stash destination: restore requires the exact ready
- * editor generation captured at restore start, and appends against the
+ * editor incarnation captured at restore start, and appends against the
  * draft store's latest content at insertion time (not a pre-materialization
  * snapshot). Selection is intentionally reset so the editor applies the
  * replacement with its focus-at-end behavior.
@@ -70,20 +70,26 @@ export function useChatPromptStashDestination(
       captureIdentity: (): PromptStashDestinationIdentity | null => {
         const handle = editorRef.current;
         if (handle === null || !handle.isReady()) return null;
+        const editorIncarnation = handle.getEditorIncarnation();
+        if (editorIncarnation === null) return null;
         return {
           surface: "chat",
           identity: taskId,
-          editorGeneration: handle,
+          editorIncarnation,
         };
       },
       importAndInsert: (args) => {
         const handle = editorRef.current;
+        const editorIncarnation =
+          handle !== null && handle.isReady()
+            ? handle.getEditorIncarnation()
+            : null;
         if (
           args.identity.surface !== "chat" ||
           args.identity.identity !== taskId ||
           handle === null ||
-          !handle.isReady() ||
-          args.identity.editorGeneration !== handle
+          editorIncarnation === null ||
+          args.identity.editorIncarnation !== editorIncarnation
         ) {
           return Promise.resolve({ status: "stale" });
         }

@@ -16,6 +16,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
@@ -871,8 +872,10 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
       },
     ],
   };
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,

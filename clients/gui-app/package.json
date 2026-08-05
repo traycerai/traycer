@@ -114,6 +114,7 @@
     "zustand": "catalog:"
   },
   "devDependencies": {
+    "@rolldown/plugin-babel": "catalog:",
     "@tanstack/eslint-plugin-query": "catalog:",
     "@tanstack/eslint-plugin-router": "catalog:",
     "@tanstack/react-query-devtools": "catalog:",
@@ -125,6 +126,8 @@
     "@types/pdfmake": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "babel-plugin-react-compiler": "catalog:",
     "@typescript-eslint/eslint-plugin": "catalog:",
     "@typescript-eslint/parser": "catalog:",
     "eslint": "catalog:",
