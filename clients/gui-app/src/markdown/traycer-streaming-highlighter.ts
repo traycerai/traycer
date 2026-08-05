@@ -30,23 +30,23 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
   private readonly listeners = new Set<ReadyListener>();
   private unsubDoc: (() => void) | null = null;
   private unsubPreset: (() => void) | null = null;
-  private booted = false;
+  /** One-time document/preset observers - not cleared on core load failure. */
+  private observersAttached = false;
+  /**
+   * In-flight core load. Cleared on rejection so a later `highlight` /
+   * `subscribe` can retry after a transient chunk or theme failure. Successful
+   * loads leave the promise settled with `core` set.
+   */
+  private coreLoad: Promise<void> | null = null;
 
   private ensureBoot(): void {
-    if (this.booted) return;
-    this.booted = true;
+    this.attachObserversOnce();
+    void this.ensureCore();
+  }
 
-    void getOrCreateHighlighter()
-      .then((highlighter) => {
-        this.core = highlighter;
-        return ensureActiveThemePair(highlighter);
-      })
-      .then(() => {
-        this.notify();
-      })
-      .catch(() => {
-        // Leave core null; consumers keep the plain <pre> fallback.
-      });
+  private attachObserversOnce(): void {
+    if (this.observersAttached) return;
+    this.observersAttached = true;
 
     if (typeof document !== "undefined") {
       const observer = new MutationObserver(() => {
@@ -65,6 +65,38 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
       if (state.themePreset === prev.themePreset) return;
       this.onThemeSurfaceChange();
     });
+  }
+
+  private ensureCore(): Promise<void> {
+    if (this.core !== null) return Promise.resolve();
+    if (this.coreLoad !== null) return this.coreLoad;
+
+    this.coreLoad = getOrCreateHighlighter()
+      .then(async (highlighter) => {
+        await ensureActiveThemePair(highlighter);
+        this.core = highlighter;
+        this.notify();
+      })
+      .catch(() => {
+        // Leave core null for plain <pre> fallback, and clear the latch so a
+        // later call can retry (transient import / theme load failures).
+        this.core = null;
+        this.coreLoad = null;
+      });
+
+    return this.coreLoad;
+  }
+
+  /** Test-only: drop core and observers so suites can re-boot cleanly. */
+  resetForTests(): void {
+    this.core = null;
+    this.coreLoad = null;
+    this.listeners.clear();
+    this.unsubDoc?.();
+    this.unsubPreset?.();
+    this.unsubDoc = null;
+    this.unsubPreset = null;
+    this.observersAttached = false;
   }
 
   private onThemeSurfaceChange(): void {
@@ -149,4 +181,9 @@ const traycerStreamingHighlighter = new TraycerStreamingHighlighter();
 /** Shared adapter for StreamingMarkdown and product CodeBlock chrome. */
 export function getTraycerStreamingHighlighter(): StreamingHighlighter {
   return traycerStreamingHighlighter;
+}
+
+/** Drop singleton readiness state between tests that mock the Shiki boot path. */
+export function resetTraycerStreamingHighlighterForTests(): void {
+  traycerStreamingHighlighter.resetForTests();
 }

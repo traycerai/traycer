@@ -40,6 +40,30 @@ const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
 };
 
 /**
+ * Merge product attribute allowlists onto a base schema without dropping
+ * caller-supplied attributes for the same tag (spread overwrite would).
+ */
+function mergeTraycerTagAttributes(
+  baseAttributes: Schema["attributes"],
+): Schema["attributes"] {
+  const base = baseAttributes ?? {};
+  const traycerAttrs = TRAYCER_TAG_ATTRIBUTES ?? {};
+  const merged: NonNullable<Schema["attributes"]> = { ...base };
+  for (const tag of TRAYCER_TAG_NAMES) {
+    const required = traycerAttrs[tag];
+    if (!Array.isArray(required)) continue;
+    if (!Object.hasOwn(base, tag)) {
+      merged[tag] = [...required];
+      continue;
+    }
+    const existing = base[tag];
+    const existingList = Array.isArray(existing) ? existing : [];
+    merged[tag] = [...existingList, ...required];
+  }
+  return merged;
+}
+
+/**
  * Extend Tailmark's (or any base) sanitize schema with Traycer product tags and
  * file-link protocols. Used as `StreamingMarkdown`'s `sanitizeSchema` so the
  * base `streamdown:` incomplete-link protocol is preserved.
@@ -56,10 +80,7 @@ export function extendTraycerSanitizeSchema(schema: Schema): Schema {
       ],
     },
     tagNames: [...(schema.tagNames ?? []), ...TRAYCER_TAG_NAMES],
-    attributes: {
-      ...schema.attributes,
-      ...TRAYCER_TAG_ATTRIBUTES,
-    },
+    attributes: mergeTraycerTagAttributes(schema.attributes),
   };
 }
 

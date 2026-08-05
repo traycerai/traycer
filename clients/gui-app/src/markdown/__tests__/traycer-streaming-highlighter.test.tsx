@@ -12,6 +12,7 @@ import {
   useThrottledHighlight,
   type StreamingHighlighter,
 } from "@tailmark/react";
+import * as shikiHighlighter from "@/markdown/shiki-highlighter";
 import {
   getOrCreateHighlighter,
   MAX_HIGHLIGHT_CHARS,
@@ -20,7 +21,10 @@ import {
   highlightCacheSizeForTests,
   resetHighlightCacheForTests,
 } from "@/markdown/shiki-highlight-cache";
-import { getTraycerStreamingHighlighter } from "@/markdown/traycer-streaming-highlighter";
+import {
+  getTraycerStreamingHighlighter,
+  resetTraycerStreamingHighlighterForTests,
+} from "@/markdown/traycer-streaming-highlighter";
 
 // The real curated-core highlighter doubles as a smoke test of the
 // `shiki/core` + explicit-grammar setup (no full-bundle registry).
@@ -146,5 +150,37 @@ describe("useThrottledHighlight + Traycer adapter", () => {
     rerender({ code: "const a = 1;" });
     expect(result.current).not.toBeNull();
     expect(codeToHtml.mock.calls.length).toBe(firstCalls);
+  });
+});
+
+describe("TraycerStreamingHighlighter boot retry", () => {
+  afterEach(() => {
+    resetTraycerStreamingHighlighterForTests();
+  });
+
+  it("retries core load after a transient getOrCreateHighlighter failure", async () => {
+    resetTraycerStreamingHighlighterForTests();
+    const realCore = await getOrCreateHighlighter();
+    const getOrCreate = vi
+      .spyOn(shikiHighlighter, "getOrCreateHighlighter")
+      .mockRejectedValueOnce(new Error("transient load failure"))
+      .mockResolvedValue(realCore);
+    vi.spyOn(shikiHighlighter, "ensureActiveThemePair").mockResolvedValue(
+      undefined,
+    );
+
+    const hl = highlighter();
+    expect(hl.highlight("const x = 1;", "ts")).toBeNull();
+    await waitFor(() => {
+      expect(getOrCreate).toHaveBeenCalledTimes(1);
+    });
+    // Failure cleared the latch; another call must try again.
+    expect(hl.highlight("const x = 1;", "ts")).toBeNull();
+    await waitFor(() => {
+      expect(getOrCreate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    await waitFor(() => {
+      expect(hl.highlight("const x = 1;", "ts")).not.toBeNull();
+    });
   });
 });
