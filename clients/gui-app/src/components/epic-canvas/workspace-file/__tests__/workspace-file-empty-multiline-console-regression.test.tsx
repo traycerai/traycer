@@ -138,6 +138,75 @@ function EmptyFileEditHarness(): ReactNode {
 }
 
 describe("empty workspace file: real activation, multi-line insert, then blur back to empty (RESUME9 regression)", () => {
+  it("preserves the native Diffs undo and redo timeline across controlled rerenders", async () => {
+    const rendered = render(<EmptyFileEditHarness />);
+
+    fireEvent.click(rendered.getByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID));
+    await waitFor(() => {
+      expect(getRegisteredDiffEditor(SURFACE_ID)).not.toBeUndefined();
+    });
+    const editor = getRegisteredDiffEditor(SURFACE_ID);
+    if (editor === undefined) throw new Error("editor never attached");
+
+    await act(async () => {
+      editor.applyEdits([
+        {
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+          newText: "undoable draft",
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(editor.canUndo).toBe(true);
+    expect(editor.getFile()?.contents).toBe("undoable draft");
+    const fileHost = rendered.container.querySelector("diffs-container");
+    const contentElement =
+      fileHost?.shadowRoot?.querySelector<HTMLElement>("[data-content]");
+    if (contentElement === null || contentElement === undefined) {
+      throw new Error("editor content element never rendered");
+    }
+    const detectedPlatform =
+      navigator.platform.length > 0
+        ? navigator.platform
+        : (navigator.userAgentData?.platform ?? "unknown");
+    const macLike = /macOS|MacIntel|iPhone|iPad|iPod/i.test(detectedPlatform);
+    const primaryModifier = macLike ? { metaKey: true } : { ctrlKey: true };
+    act(() => {
+      contentElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "z",
+          code: "KeyZ",
+          ...primaryModifier,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        }),
+      );
+    });
+    expect(editor.getFile()?.contents).toBe("");
+    expect(editor.canRedo).toBe(true);
+
+    act(() => {
+      contentElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "z",
+          code: "KeyZ",
+          ...primaryModifier,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        }),
+      );
+    });
+    expect(editor.getFile()?.contents).toBe("undoable draft");
+    cleanup();
+  });
+
   it("typing a second line then blurring back to empty under the same file identity causes no console error and no throw", async () => {
     const consoleErrors: unknown[][] = [];
     const consoleErrorSpy = vi

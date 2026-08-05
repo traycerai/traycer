@@ -26,6 +26,7 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -827,6 +828,33 @@ describe("<KeybindingProvider /> inside a Diffs editor boundary", () => {
 
     expect(event?.defaultPrevented).toBe(false);
     expect(useEpicCanvasStore.getState().activeTabId).toBe(firstTabId);
+  });
+
+  it("never reserves Diffs' native undo and redo chords as app actions", () => {
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "app.settings.open": "mod+z",
+        "app.history.open": "mod+shift+z",
+      },
+    });
+    const editor = renderDiffsBoundaryProvider("/epics/e1");
+    const primaryModifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+
+    const undo = fireKeyDownOn(editor, {
+      code: "KeyZ",
+      key: "z",
+      ...primaryModifier,
+    });
+    const redo = fireKeyDownOn(editor, {
+      code: "KeyZ",
+      key: "z",
+      ...primaryModifier,
+      shiftKey: true,
+    });
+
+    expect(undo.defaultPrevented).toBe(false);
+    expect(redo.defaultPrevented).toBe(false);
   });
 
   it("does not let entering the editor mid-chord break a multi-digit sequence typed entirely inside it", () => {

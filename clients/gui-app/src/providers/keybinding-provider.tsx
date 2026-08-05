@@ -298,16 +298,12 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       if (event.defaultPrevented) return;
-      // A Diffs editor boundary only claims BARE typing (no leader modifier) -
-      // that's real text input, and it must reach the editor untouched. A
-      // modified chord (⌘1, a reserved shortcut, ...) was never meant to type
-      // a character, so it still resolves as a reserved action below, exactly
-      // as it would outside the editor. `!hasLeaderModifier(event)` here is
-      // the same condition already checked at the top of this handler via
-      // `allLeaderModifiersReleased`, so `resetHintSession` (which clears any
-      // armed digit sequence) has already run for this event by the time we
-      // bypass to the editor - no separate reset is needed here.
-      if (isDiffsEditorEvent(event) && !hasLeaderModifier(event)) return;
+      // A Diffs editor boundary claims bare typing plus its native history
+      // commands. Other modified chords (⌘1, a reserved shortcut, ...) still
+      // resolve as app actions below. Undo/redo are different: Diffs owns a
+      // custom edit stack, so even a persisted user binding must not reserve
+      // Cmd/Ctrl-Z or Shift-Cmd/Ctrl-Z before the editor sees them.
+      if (isDiffsEditorOwnedKey(event, hasLeaderModifier(event))) return;
       if (isArtifactEditorLinkShortcut(event)) return;
 
       // Digit actions (e.g. ⌘1 or header tab sequences like ⌥1,0) must match
@@ -454,6 +450,22 @@ function resolveReservedAction(event: KeyboardEvent): ActionId | null {
   const actionId = findActionForChord(chord);
   if (actionId === null) return null;
   return isExternallyHandled(actionId) ? null : actionId;
+}
+
+function isDiffsHistoryShortcut(event: KeyboardEvent): boolean {
+  return (
+    hasPlatformModKey(event) && !event.altKey && event.key.toLowerCase() === "z"
+  );
+}
+
+function isDiffsEditorOwnedKey(
+  event: KeyboardEvent,
+  hasLeaderModifier: boolean,
+): boolean {
+  return (
+    isDiffsEditorEvent(event) &&
+    (!hasLeaderModifier || isDiffsHistoryShortcut(event))
+  );
 }
 
 function isArtifactEditorLinkShortcut(event: KeyboardEvent): boolean {
