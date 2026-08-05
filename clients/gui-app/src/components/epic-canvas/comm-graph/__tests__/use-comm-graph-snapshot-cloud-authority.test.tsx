@@ -225,7 +225,13 @@ describe("useCommGraphSnapshot cloud authority", () => {
       commGraphCursorForEvent(localEvent),
     );
 
-    act(() => cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null));
+    act(() => {
+      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null);
+      cloudRequests[0].handlers.onCaughtUp(
+        { ingestVersion: 20, eventId: "cloud-event" },
+        20,
+      );
+    });
 
     await waitFor(() =>
       expect(readCommGraphTimelineEpicState("epic-1").cursor?.eventId).toBe(
@@ -292,13 +298,64 @@ describe("useCommGraphSnapshot cloud authority", () => {
       localCursor,
     );
 
-    act(() => cloudRequests[0].handlers.onEvent(cloudEvent()));
+    act(() => {
+      cloudRequests[0].handlers.onEvent(cloudEvent());
+      cloudRequests[0].handlers.onCaughtUp(
+        { ingestVersion: 20, eventId: "cloud-event" },
+        20,
+      );
+    });
 
     await waitFor(() =>
       expect(readCommGraphTimelineEpicState("epic-1").cursor?.eventId).toBe(
         "cloud-event",
       ),
     );
+  });
+
+  it("releases a held local cursor when the cloud head ends in a skipped row", async () => {
+    const localRequests: CommGraphSubscriptionRequest[] = [];
+    __setCommGraphSubscriptionOpenerForTests((request) => {
+      localRequests.push(request);
+      return { close: vi.fn() };
+    });
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+    await waitFor(() => expect(localRequests).toHaveLength(1));
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    const localCursor = {
+      timestamp: 3_000,
+      hostId: "origin-a",
+      id: 12,
+    };
+    act(() => {
+      useCommGraphTimelineStore.getState().setCursor("epic-1", localCursor);
+      cloudRequests[0].handlers.onAvailability("available");
+      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 21, null);
+    });
+    expect(readCommGraphTimelineEpicState("epic-1").cursor).toEqual(
+      localCursor,
+    );
+
+    act(() =>
+      cloudRequests[0].handlers.onCaughtUp(
+        { ingestVersion: 21, eventId: "unrepresentable-row" },
+        21,
+      ),
+    );
+
+    await waitFor(() =>
+      expect(readCommGraphTimelineEpicState("epic-1").cursor).toBeNull(),
+    );
+    expect(cloudRequests[0].readSinceCursor()).toEqual({
+      ingestVersion: 21,
+      eventId: "unrepresentable-row",
+    });
   });
 
   it("uses a signed-in non-origin host to relay the cloud feed", async () => {

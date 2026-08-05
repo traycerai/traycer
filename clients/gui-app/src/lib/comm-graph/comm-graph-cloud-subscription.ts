@@ -32,6 +32,10 @@ export interface CommGraphCloudSubscriptionHandlers {
     frontier: number | null,
   ) => void;
   readonly onEvent: (event: HostCommunicationGraphCloudFeedEvent) => void;
+  readonly onCaughtUp: (
+    cursor: HostCommunicationGraphCloudFeedCursor | null,
+    headVersion: number,
+  ) => void;
   readonly onStatus: (status: CommGraphHostStatus) => void;
 }
 
@@ -73,6 +77,7 @@ export class CommGraphCloudSubscriptionManager {
   private cursor: HostCommunicationGraphCloudFeedCursor | null = null;
   private historyBoundary: number | null = null;
   private historyBoundaryInitialized = false;
+  private historyCaughtUp = false;
   private availability: CommGraphCloudAvailability = "pending";
   private events: CommGraphEvent[] = [];
   private lastArrival: CommGraphEvent | null = null;
@@ -199,6 +204,7 @@ export class CommGraphCloudSubscriptionManager {
     // arrival boundary so that backlog cannot pulse as live activity.
     this.historyBoundary = null;
     this.historyBoundaryInitialized = false;
+    this.historyCaughtUp = false;
     this.lastArrival = null;
     this.publish();
   }
@@ -221,6 +227,10 @@ export class CommGraphCloudSubscriptionManager {
 
   getSnapshot(): CommGraphSnapshot {
     return this.snapshot;
+  }
+
+  isInitialHistoryCaughtUp(): boolean {
+    return this.historyCaughtUp;
   }
 
   subscribe(listener: () => void): () => void {
@@ -284,6 +294,10 @@ export class CommGraphCloudSubscriptionManager {
             if (!isCurrent()) return;
             this.apply([event], null, null);
           },
+          onCaughtUp: (cursor, headVersion) => {
+            if (!isCurrent()) return;
+            this.applyCaughtUp(cursor, headVersion);
+          },
           onStatus: (status) => {
             if (!isCurrent()) return;
             this.applyStatus(hostId, status);
@@ -320,6 +334,7 @@ export class CommGraphCloudSubscriptionManager {
     if (this.availability !== "available") {
       this.historyBoundary = null;
       this.historyBoundaryInitialized = false;
+      this.historyCaughtUp = false;
       this.lastArrival = null;
     }
     this.availability = "available";
@@ -382,6 +397,20 @@ export class CommGraphCloudSubscriptionManager {
       eventId: event.eventId,
     };
     return true;
+  }
+
+  private applyCaughtUp(
+    cursor: HostCommunicationGraphCloudFeedCursor | null,
+    headVersion: number,
+  ): void {
+    if (cursor !== null && isCursorAfter(cursor, this.cursor)) {
+      this.cursor = cursor;
+    }
+    const boundary = this.historyBoundary;
+    if (this.historyBoundaryInitialized && headVersion >= (boundary ?? 0)) {
+      this.historyCaughtUp = true;
+    }
+    this.publish();
   }
 
   private noteArrival(row: CommGraphEvent): void {
@@ -541,4 +570,16 @@ function normalizeCloudEvent(
     originChatId: event.originChatId,
     originRefId: event.originRefId,
   };
+}
+
+function isCursorAfter(
+  candidate: HostCommunicationGraphCloudFeedCursor,
+  current: HostCommunicationGraphCloudFeedCursor | null,
+): boolean {
+  return (
+    current === null ||
+    candidate.ingestVersion > current.ingestVersion ||
+    (candidate.ingestVersion === current.ingestVersion &&
+      candidate.eventId > current.eventId)
+  );
 }

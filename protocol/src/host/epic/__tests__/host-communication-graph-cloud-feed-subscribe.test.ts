@@ -179,6 +179,22 @@ describe("host.communicationGraph.subscribe@1.0 frames", () => {
     expect(parsed.kind === "event" && parsed.event.historicalUpload).toBe(true);
   });
 
+  it("parses explicit caught-up progress beyond skipped wire rows", () => {
+    const parsed =
+      hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10.parse({
+        kind: "caughtUp",
+        epicId: "epic-1",
+        headVersion: 101,
+        cursor: { ingestVersion: 101, eventId: "skipped-row" },
+        hasBinaryPayload: false,
+      });
+    expect(parsed).toMatchObject({
+      kind: "caughtUp",
+      headVersion: 101,
+      cursor: { ingestVersion: 101, eventId: "skipped-row" },
+    });
+  });
+
   it("parses the connectionState: reconnecting degrade frame", () => {
     const parsed =
       hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10.parse({

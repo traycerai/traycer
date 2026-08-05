@@ -493,6 +493,20 @@ export const hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10 =
       ...textFrameFields,
     }),
     /**
+     * Explicit proof that every cloud row through `headVersion` has been
+     * accounted for, including rows the serving host skipped because this
+     * wire version cannot represent them. `cursor` is the exact raw cloud
+     * resume position after that accounting; it may therefore advance beyond
+     * the last event frame visible to this client.
+     */
+    z.object({
+      kind: z.literal("caughtUp"),
+      epicId: z.string(),
+      headVersion: z.number().int().nonnegative(),
+      cursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
+      ...textFrameFields,
+    }),
+    /**
      * The relay could not currently reach the cloud feed (transient HTTP
      * failure, or the relay has not yet re-authenticated). The client keeps
      * its retained graph and cursor untouched and waits for either a later

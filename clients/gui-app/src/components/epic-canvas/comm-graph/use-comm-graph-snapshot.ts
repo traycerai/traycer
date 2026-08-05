@@ -214,24 +214,17 @@ export function useCommGraphSnapshot(
     () => cloudManager.getAvailability(),
     () => "pending" as const,
   );
+  const cloudHistoryCaughtUp = cloudManager.isInitialHistoryCaughtUp();
 
   useEffect(() => {
     if (cloudAvailability !== "available") return;
-    // Availability and the initial snapshot are distinct wire frames. Preserve
-    // a held local cursor until the feed cursor reaches the initial cloud head.
-    // The snapshot is bounded, so its remaining history can legally arrive in
-    // later event frames; an empty cloud log has head 0 and is already caught
-    // up even though its cursor is null.
-    if (
-      !cloudSnapshot.hosts.some((host) => {
-        const boundary = host.snapshotBoundary?.highestId;
-        return boundary !== undefined && (host.cursor ?? 0) >= (boundary ?? 0);
-      })
-    ) {
-      return;
-    }
+    // Availability, the bounded initial snapshot, and caught-up progress are
+    // distinct wire frames. Preserve a held local cursor until the relay says
+    // every row through the initial cloud head has been accounted for. The
+    // explicit signal also covers terminal rows skipped as unrepresentable.
+    if (!cloudHistoryCaughtUp) return;
     reconcileCommGraphCloudAuthorityCursor(epicId, cloudSnapshot.events);
-  }, [cloudAvailability, cloudSnapshot.events, cloudSnapshot.hosts, epicId]);
+  }, [cloudAvailability, cloudHistoryCaughtUp, cloudSnapshot.events, epicId]);
 
   // The CLAIM is an effect, so its cleanup balances a StrictMode double-invoke.
   // The host set goes in WITH it so a retained manager's stale desired set is

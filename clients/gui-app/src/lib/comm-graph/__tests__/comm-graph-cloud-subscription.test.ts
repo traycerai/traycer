@@ -80,6 +80,9 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
     handlers.onAvailability("available");
     handlers.onSnapshot([cloudEvent({})], 10, null);
+    expect(manager.isInitialHistoryCaughtUp()).toBe(false);
+    handlers.onCaughtUp({ ingestVersion: 10, eventId: "event-1" }, 10);
+    expect(manager.isInitialHistoryCaughtUp()).toBe(true);
     // A changed head/snapshot may replay the retained cursor; it is never a
     // bootstrap replacement and cannot duplicate or clear the first row.
     handlers.onSnapshot(
@@ -131,6 +134,31 @@ describe("CommGraphCloudSubscriptionManager", () => {
       null,
     );
     expect(manager.getSnapshot().lastArrival).toBeNull();
+  });
+
+  it("advances resume progress through a caught-up skipped terminal row", () => {
+    const recorded = recordedOpener();
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      recorded.opener,
+      () => undefined,
+    );
+    manager.setRelayHostIds(["relay-b"]);
+    manager.attach();
+    const handlers = recorded.requests[0].handlers;
+
+    handlers.onAvailability("available");
+    handlers.onSnapshot([cloudEvent({})], 11, null);
+    handlers.onCaughtUp(
+      { ingestVersion: 11, eventId: "unrepresentable-row" },
+      11,
+    );
+
+    expect(manager.isInitialHistoryCaughtUp()).toBe(true);
+    expect(recorded.requests[0].readSinceCursor()).toEqual({
+      ingestVersion: 11,
+      eventId: "unrepresentable-row",
+    });
   });
 
   it("suppresses initial and historical-upload pulses but reports a later live row", () => {

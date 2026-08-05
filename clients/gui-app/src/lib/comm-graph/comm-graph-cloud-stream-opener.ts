@@ -58,6 +58,9 @@ function openCommGraphCloudSubscription(
       } else if (frame.kind === "event") {
         handlers.onStatus("live");
         handlers.onEvent(frame.event);
+      } else if (frame.kind === "caughtUp") {
+        handlers.onStatus("live");
+        handlers.onCaughtUp(frame.cursor, frame.headVersion);
       } else if (frame.kind === "connectionState") {
         handlers.onStatus("reconnecting");
       }
