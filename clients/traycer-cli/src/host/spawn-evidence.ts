@@ -390,12 +390,19 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         // `runTaskAndVerifyStart` would time out on a spawn that had in
         // fact left evidence.
         const retained = retainAuthenticMarkers(combined, writerIdentified);
-        // Retaining first also makes the cap safe for the positional
-        // boundary, without needing to remember what it evicted. Everything
-        // kept past the boundary is stamped, and the cap keeps the most
-        // RECENT entries - so once a stamped marker has been seen, the
-        // window still holds one. The boundary can never fall out from
-        // under the survivors and leave them looking pre-boundary.
+        // Latch on a stamped marker seen in the STREAM, not just in the
+        // pre-baseline seed. Capability belongs to the writer, but `observed`
+        // does not outlive the file: a rotation clears it, and the
+        // replacement has no stamped prefix to re-seed from, so without this
+        // the boundary is forgotten and an unstamped marker-shaped line in
+        // the new file reads as pre-boundary evidence - the collision this
+        // reader exists to reject.
+        //
+        // The CAP cannot lose the boundary that way (everything kept past it
+        // is stamped, and the cap keeps the most recent entries), which is
+        // why no promotion is needed there. Rotation is a different loss and
+        // needs this.
+        writerIdentified = writerIdentified || markersIdentifyWriter(retained);
         observed = retained.slice(-MAX_RETAINED_MARKERS);
         return observed;
       } finally {

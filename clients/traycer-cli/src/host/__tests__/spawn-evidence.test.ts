@@ -486,6 +486,33 @@ describe("spawn-evidence substrate", () => {
       expect(findPostBaselineTerminalMarker(markers)?.phase).toBe("crashed");
     });
 
+    it("remembers a stamped marker seen in the stream across a rotation", async () => {
+      // The stamped marker arrives POST-baseline (the ordinary case - the
+      // supervisor writes `starting` after the baseline is taken), so the
+      // pre-baseline seed never sees it. If that is not latched, rotation
+      // clears `observed`, the replacement has no stamped prefix to re-seed
+      // from, and a marker-shaped host line in the new file is trusted.
+      const baseline = await captureLogFileBaseline(mocks.logPath);
+      const reader = createPostBaselineMarkerReader(baseline);
+
+      await appendFile(
+        mocks.logPath,
+        "[2026-01-01T00:00:00.000Z] phase=starting writer=supervisor\n",
+      );
+      expect(await reader.read()).toHaveLength(1);
+
+      // Rotation: a brand new file, no stamped prefix, and the host's own
+      // output is the first thing in it.
+      await rm(mocks.logPath, { force: true });
+      await writeFile(
+        mocks.logPath,
+        "[2026-01-01T00:05:00.000Z] phase=starting\n",
+        "utf8",
+      );
+
+      expect(await reader.read()).toHaveLength(0);
+    });
+
     it("scans a pre-baseline region larger than one chunk without buffering it whole", async () => {
       // The prefix is streamed in 64KiB chunks, so a stamped marker beyond
       // the first chunk must still be found - and a marker split across a
