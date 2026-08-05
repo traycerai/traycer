@@ -54,6 +54,34 @@ const DISPATCHER_CLOSE_TIMEOUT_MS = 1_000;
 let recordedExitCode: number | null = null;
 let watchdogTimer: NodeJS.Timeout | null = null;
 let networkTeardown: Promise<void> | null = null;
+// Distinct from "the recorded code is non-zero": a command that fails normally
+// emits an `error` envelope and earns its code. This flag means the PROCESS
+// failed out from under the command - an unhandled rejection or uncaught
+// exception - which the command itself knows nothing about.
+let processFatal = false;
+
+/**
+ * Record that a process-fatal handler has selected failure for this process.
+ *
+ * Draining means the interrupted command keeps running and can still finish,
+ * so the runner has to be able to ask whether the process it is about to
+ * report success for is already doomed. See `isProcessFatal`.
+ */
+export function markProcessFatal(): void {
+  processFatal = true;
+}
+
+/**
+ * Whether a process-fatal handler already selected failure.
+ *
+ * The runner checks this before emitting a terminal `ok`: with the desktop now
+ * trusting a terminal `ok` over a non-zero exit, a success envelope emitted
+ * after a fatal would report a failed install/update as successful. The CLI
+ * must not make that claim in the first place.
+ */
+export function isProcessFatal(): boolean {
+  return processFatal;
+}
 
 /**
  * Finish the process: record the code, arm the backstop, flush output, shut

@@ -87,7 +87,7 @@ import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
-import { finishAndExit } from "./runner/exit";
+import { finishAndExit, markProcessFatal } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
@@ -2046,6 +2046,11 @@ function exitAfterUnhandledFailure(
     return;
   }
   fatalExitInProgress = true;
+  // Tell the runner the PROCESS has failed. Draining leaves an interrupted
+  // command running, and a command that goes on to succeed must not emit a
+  // terminal `ok` for a process that is already doomed - Desktop now trusts
+  // that envelope over the exit code. See runner.ts and exit.ts.
+  markProcessFatal();
   const error = errorFromUnknown(cause);
   logger.error(message, { exitCode: 1 }, error);
   Sentry.captureException(cause);

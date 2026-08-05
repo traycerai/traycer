@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import { errorFromUnknown } from "../logger";
-import { toCliError } from "./errors";
-import { finishAndExit } from "./exit";
+import { CLI_ERROR_CODES, toCliError } from "./errors";
+import { finishAndExit, isProcessFatal } from "./exit";
 import { createOutput, type Output, type ProgressInfo } from "./output";
 import {
   type RawRunnerFlags,
@@ -89,6 +89,28 @@ export async function runCommand(
     // down the second before letting the loop end - see exit.ts for why the
     // process no longer tears itself down here.
     await finishAndExit(cliErr.exitCode);
+    return;
+  }
+  // A process-fatal handler (unhandled rejection / uncaught exception) may
+  // have fired WHILE this command was running. Draining is what makes that
+  // survivable - the command keeps going and can still return a result - but
+  // the process has already failed, and Desktop now trusts a terminal `ok`
+  // over a non-zero exit. Emitting success here would report a failed
+  // install/update/ensure as successful, so report what actually happened.
+  if (isProcessFatal()) {
+    runtime.logger.error(
+      "CLI command completed after a process-fatal failure",
+      { commandExitCode: result.exitCode, emittedAsJson: runtime.json },
+      // The originating error was already captured and logged by the fatal
+      // handler; this record is about the result being suppressed.
+      null,
+    );
+    output.emitError(
+      CLI_ERROR_CODES.UNEXPECTED,
+      "the CLI process failed while this command was running",
+      { commandExitCode: result.exitCode },
+    );
+    await finishAndExit(1);
     return;
   }
   runtime.logger.info("CLI command completed", {
