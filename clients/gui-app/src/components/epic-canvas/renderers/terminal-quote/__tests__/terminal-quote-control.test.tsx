@@ -13,20 +13,29 @@ afterEach(() => {
   cleanup();
 });
 
+function target(fields: {
+  chatId: string;
+  title: string;
+  isOpen: boolean;
+  isLastFocused: boolean;
+}): TerminalQuoteChatTarget {
+  return fields;
+}
+
 // The menu is controlled by the overlay in production; own that state here
 // too, so opening it goes through the same path.
 function ControlHarness(props: {
   readonly targets: ReadonlyArray<TerminalQuoteChatTarget>;
-  readonly onQuoteToChat: (chatId: string) => void;
-  readonly onQuoteToNewChat: () => void;
+  readonly onSendToChat: (chatId: string) => void;
+  readonly onSendToNewChat: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <TerminalQuoteControl
       anchor={ANCHOR}
       targets={props.targets}
-      onQuoteToChat={props.onQuoteToChat}
-      onQuoteToNewChat={props.onQuoteToNewChat}
+      onSendToChat={props.onSendToChat}
+      onSendToNewChat={props.onSendToNewChat}
       menuOpen={menuOpen}
       onMenuOpenChange={setMenuOpen}
     />
@@ -34,74 +43,124 @@ function ControlHarness(props: {
 }
 
 function renderControl(targets: ReadonlyArray<TerminalQuoteChatTarget>) {
-  const onQuoteToChat = vi.fn();
-  const onQuoteToNewChat = vi.fn();
+  const onSendToChat = vi.fn();
+  const onSendToNewChat = vi.fn();
   render(
     <ControlHarness
       targets={targets}
-      onQuoteToChat={onQuoteToChat}
-      onQuoteToNewChat={onQuoteToNewChat}
+      onSendToChat={onSendToChat}
+      onSendToNewChat={onSendToNewChat}
     />,
   );
-  return { onQuoteToChat, onQuoteToNewChat };
+  return { onSendToChat, onSendToNewChat };
+}
+
+async function openPanel(): Promise<void> {
+  await userEvent.click(screen.getByRole("button", { name: "Send to chat" }));
 }
 
 describe("TerminalQuoteControl", () => {
-  it("names the target chat on the primary action", async () => {
-    const { onQuoteToChat } = renderControl([
-      { chatId: "chat-1", title: "Kickoff", isLastFocused: true },
-      { chatId: "chat-2", title: "Docs", isLastFocused: false },
+  it("offers one action, which opens the chat list", async () => {
+    const { onSendToChat, onSendToNewChat } = renderControl([
+      target({
+        chatId: "chat-1",
+        title: "Kickoff",
+        isOpen: true,
+        isLastFocused: true,
+      }),
     ]);
 
-    // "Where is this going" is answered on the button, not behind a hover.
-    const primary = screen.getByRole("button", { name: "Quote into Kickoff" });
-    expect(primary.textContent).toContain("Kickoff");
+    // No primary target on the button: pressing it asks where, never guesses.
+    expect(screen.queryByRole("menuitem")).toBeNull();
+    await openPanel();
 
-    await userEvent.click(primary);
-    expect(onQuoteToChat).toHaveBeenCalledWith("chat-1");
+    expect(onSendToChat).not.toHaveBeenCalled();
+    expect(onSendToNewChat).not.toHaveBeenCalled();
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["KickoffLast used", "New chat"]);
   });
 
-  it("offers a new chat as the primary action when the Task has none", async () => {
-    const { onQuoteToNewChat, onQuoteToChat } = renderControl([]);
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Quote into a new chat" }),
-    );
-
-    expect(onQuoteToNewChat).toHaveBeenCalledOnce();
-    expect(onQuoteToChat).not.toHaveBeenCalled();
-  });
-
-  it("keeps every chat and a new-chat escape hatch behind the split", async () => {
-    const { onQuoteToChat } = renderControl([
-      { chatId: "chat-1", title: "Kickoff", isLastFocused: true },
-      { chatId: "chat-2", title: "Docs", isLastFocused: false },
+  it("bands open chats above the rest, and heads each band", async () => {
+    const { onSendToChat } = renderControl([
+      target({
+        chatId: "chat-1",
+        title: "Kickoff",
+        isOpen: true,
+        isLastFocused: true,
+      }),
+      target({
+        chatId: "chat-2",
+        title: "Docs",
+        isOpen: false,
+        isLastFocused: false,
+      }),
     ]);
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Choose where to quote" }),
-    );
+    await openPanel();
 
+    expect(screen.getByText("Open")).toBeTruthy();
+    expect(screen.getByText("Other chats")).toBeTruthy();
     expect(
       screen.getAllByRole("menuitem").map((item) => item.textContent),
     ).toEqual(["KickoffLast used", "Docs", "New chat"]);
 
     await userEvent.click(screen.getByRole("menuitem", { name: /Docs/ }));
-    expect(onQuoteToChat).toHaveBeenCalledWith("chat-2");
+    expect(onSendToChat).toHaveBeenCalledWith("chat-2");
   });
 
-  it("does not take focus from the terminal when pressed", () => {
+  it("drops the headings when there is only one band to head", async () => {
     renderControl([
-      { chatId: "chat-1", title: "Kickoff", isLastFocused: true },
+      target({
+        chatId: "chat-1",
+        title: "Kickoff",
+        isOpen: true,
+        isLastFocused: false,
+      }),
+      target({
+        chatId: "chat-2",
+        title: "Docs",
+        isOpen: true,
+        isLastFocused: false,
+      }),
     ]);
-    const primary = screen.getByRole("button", { name: "Quote into Kickoff" });
 
-    // A focus grab here would collapse the very selection being quoted.
-    const mouseDown = new MouseEvent("mousedown", {
-      bubbles: true,
-      cancelable: true,
-    });
-    primary.dispatchEvent(mouseDown);
-    expect(mouseDown.defaultPrevented).toBe(true);
+    await openPanel();
+
+    expect(screen.queryByText("Open")).toBeNull();
+    expect(screen.queryByText("Other chats")).toBeNull();
+  });
+
+  it("keeps New chat reachable when the Task has no chats", async () => {
+    const { onSendToNewChat } = renderControl([]);
+
+    await openPanel();
+    await userEvent.click(screen.getByRole("menuitem", { name: "New chat" }));
+
+    expect(onSendToNewChat).toHaveBeenCalledOnce();
+  });
+
+  it("pins New chat below the scrolling roster", async () => {
+    renderControl(
+      Array.from({ length: 30 }, (_, index) =>
+        target({
+          chatId: `chat-${index}`,
+          title: `Agent ${index}`,
+          isOpen: false,
+          isLastFocused: false,
+        }),
+      ),
+    );
+
+    await openPanel();
+    const newChat = screen.getByRole("menuitem", { name: "New chat" });
+    const roster = screen.getByRole("menuitem", {
+      name: "Agent 0",
+    }).parentElement;
+
+    // The roster scrolls; the action below it is a sibling, so a long list
+    // cannot push it out of reach.
+    expect(roster?.className).toContain("overflow-y-auto");
+    expect(roster?.contains(newChat)).toBe(false);
   });
 });

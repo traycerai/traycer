@@ -4,46 +4,56 @@ import type { ChatsSlice } from "@/stores/epics/open-epic/types";
 export interface TerminalQuoteChatTarget {
   readonly chatId: string;
   readonly title: string;
-  /** The chat the primary action targets - shown first and marked in the menu. */
+  /** Already tiled in the terminal's own view tab - listed ahead of the rest. */
+  readonly isOpen: boolean;
+  /** The chat the user last focused a composer in. Marked, never reordered. */
   readonly isLastFocused: boolean;
 }
 
+export interface TerminalQuoteChatTargetsInput {
+  /** Every chat in the Task, in the order the chats sidebar lists them. */
+  readonly orderedChatIds: readonly string[];
+  readonly chats: ChatsSlice;
+  /** Content ids of the tiles open in the terminal's own view tab. */
+  readonly openChatIds: ReadonlySet<string>;
+  readonly lastFocusedChatId: string | null;
+}
+
 /**
- * The chats a terminal quote can be sent to, best target first.
+ * The chats a terminal selection can be sent to.
  *
- * "Best" is the chat the user last focused a composer in - where they were
- * working - not the chat with the newest message, which during a long agent
- * turn is whichever agent happened to stream last. When nothing has been
- * focused yet (a freshly opened Task), the most recently updated chat is the
- * closest available stand-in, so the primary action is never dead while the
- * Task has chats to send to.
+ * Two bands, and the order within each is the sidebar's. Chats already open in
+ * this view come first because they are where the user is working right now -
+ * the selection is nearly always headed for something already on screen, and a
+ * list that opens with the four chats they can see reads as "pick one of
+ * these" rather than "search the Task". Everything else follows in the exact
+ * order the sidebar shows it, so the two lists never disagree about where a
+ * chat sits; recency is deliberately NOT the rule here, because during a long
+ * agent turn the most recently updated chat is just whichever agent streamed
+ * last.
  *
  * Archived chats are excluded: they are hidden from the sidebar, so offering
- * one here would send a quote somewhere the user cannot see it.
+ * one here would send a message somewhere the user cannot see it.
  */
 export function resolveTerminalQuoteChatTargets(
-  chats: ChatsSlice,
-  lastFocusedChatId: string | null,
+  input: TerminalQuoteChatTargetsInput,
 ): ReadonlyArray<TerminalQuoteChatTarget> {
-  const active = chats.allIds.flatMap((id) => {
-    if (!Object.hasOwn(chats.byId, id)) return [];
-    const chat = chats.byId[id];
+  const rows = input.orderedChatIds.flatMap((chatId) => {
+    if (!Object.hasOwn(input.chats.byId, chatId)) return [];
+    const chat = input.chats.byId[chatId];
     if (chat.archivedAt !== null) return [];
-    return [chat];
+    return [
+      {
+        chatId: chat.id,
+        // Addressed as the durable Agent, matching every other chat surface.
+        title: displayTitle(chat.title, "agent"),
+        isOpen: input.openChatIds.has(chat.id),
+        isLastFocused: chat.id === input.lastFocusedChatId,
+      },
+    ];
   });
-  const hasLastFocused = active.some((chat) => chat.id === lastFocusedChatId);
-  return active
-    .toSorted((left, right) => {
-      if (left.id === lastFocusedChatId) return -1;
-      if (right.id === lastFocusedChatId) return 1;
-      return right.updatedAt - left.updatedAt;
-    })
-    .map((chat) => ({
-      chatId: chat.id,
-      // Addressed as the durable Agent, matching every other chat surface.
-      title: displayTitle(chat.title, "agent"),
-      // Only a real focus record earns the mark; the recency fallback is a
-      // guess and must not claim to be where the user was last working.
-      isLastFocused: hasLastFocused && chat.id === lastFocusedChatId,
-    }));
+  return [
+    ...rows.filter((row) => row.isOpen),
+    ...rows.filter((row) => !row.isOpen),
+  ];
 }

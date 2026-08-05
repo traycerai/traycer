@@ -1,12 +1,14 @@
-import { useCallback, useState, type RefObject } from "react";
+import { useCallback, useMemo, useState, type RefObject } from "react";
 import { useStore } from "zustand";
 import type { Terminal } from "@xterm/xterm";
 
+import { useSidebarChatOrder } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import {
   useMaybeOpenEpicHandle,
   useOpenEpicHandle,
 } from "@/providers/use-open-epic-handle";
 import { useLastFocusedChatStore } from "@/stores/chat/last-focused-chat-store";
+import { useOpenTileContentIds } from "@/stores/epics/canvas/store";
 
 import { TerminalQuoteControl } from "./terminal-quote-control";
 import { resolveTerminalQuoteChatTargets } from "./terminal-quote-targets";
@@ -78,6 +80,7 @@ function TerminalQuoteOverlayLive(props: TerminalQuoteOverlayProps) {
     <TerminalQuoteAction
       actions={actions}
       epicId={props.epicId}
+      viewTabId={props.viewTabId}
       selectedText={selection.text}
       anchor={selection.anchor}
       menuOpen={menuOpen}
@@ -90,6 +93,7 @@ function TerminalQuoteOverlayLive(props: TerminalQuoteOverlayProps) {
 function TerminalQuoteAction(props: {
   readonly actions: TerminalQuoteActions;
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly selectedText: string;
   readonly anchor: TerminalSelectionAnchor;
   readonly menuOpen: boolean;
@@ -98,11 +102,15 @@ function TerminalQuoteAction(props: {
 }) {
   const handle = useOpenEpicHandle();
   const chats = useStore(handle.store, (state) => state.chats);
+  // Both borrowed rather than derived: the roster has to agree with the chats
+  // sidebar about order, and with the canvas about what is already on screen.
+  const orderedChatIds = useSidebarChatOrder(props.epicId);
+  const openChatIds = useOpenTileContentIds(props.viewTabId);
   const lastFocusedChatId = useLastFocusedChatStore(
     (state) => state.chatIdByEpicId[props.epicId] ?? null,
   );
   const { actions, onDone, onMenuOpenChange, selectedText } = props;
-  const quoteToChat = useCallback(
+  const sendToChat = useCallback(
     (chatId: string) => {
       actions.quoteToChat(chatId, selectedText);
       onMenuOpenChange(false);
@@ -110,18 +118,28 @@ function TerminalQuoteAction(props: {
     },
     [actions, onDone, onMenuOpenChange, selectedText],
   );
-  const quoteToNewChat = useCallback(() => {
+  const sendToNewChat = useCallback(() => {
     actions.quoteToNewChat(selectedText);
     onMenuOpenChange(false);
     onDone();
   }, [actions, onDone, onMenuOpenChange, selectedText]);
+  const targets = useMemo(
+    () =>
+      resolveTerminalQuoteChatTargets({
+        orderedChatIds,
+        chats,
+        openChatIds,
+        lastFocusedChatId,
+      }),
+    [chats, lastFocusedChatId, openChatIds, orderedChatIds],
+  );
 
   return (
     <TerminalQuoteControl
       anchor={props.anchor}
-      targets={resolveTerminalQuoteChatTargets(chats, lastFocusedChatId)}
-      onQuoteToChat={quoteToChat}
-      onQuoteToNewChat={quoteToNewChat}
+      targets={targets}
+      onSendToChat={sendToChat}
+      onSendToNewChat={sendToNewChat}
       menuOpen={props.menuOpen}
       onMenuOpenChange={props.onMenuOpenChange}
     />

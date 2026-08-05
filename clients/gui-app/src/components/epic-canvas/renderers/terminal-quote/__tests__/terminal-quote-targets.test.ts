@@ -10,7 +10,6 @@ import { resolveTerminalQuoteChatTargets } from "../terminal-quote-targets";
 function chat(fields: {
   id: string;
   title: string;
-  updatedAt: number;
   archivedAt: number | null;
 }): ChatProjection {
   return {
@@ -18,7 +17,7 @@ function chat(fields: {
     title: fields.title,
     parentId: null,
     createdAt: 0,
-    updatedAt: fields.updatedAt,
+    updatedAt: 0,
     userId: null,
     hostId: null,
     isTitleEditedByUser: false,
@@ -34,84 +33,136 @@ function chatsSlice(chats: ReadonlyArray<ChatProjection>): ChatsSlice {
   };
 }
 
+// The sidebar's own order, already resolved upstream by `useSidebarChatOrder`.
+const SIDEBAR_ORDER = ["chat-a", "chat-b", "chat-c", "chat-d"];
+
+const CHATS = chatsSlice([
+  chat({ id: "chat-a", title: "Kickoff", archivedAt: null }),
+  chat({ id: "chat-b", title: "Refactor", archivedAt: null }),
+  chat({ id: "chat-c", title: "Docs", archivedAt: null }),
+  chat({ id: "chat-d", title: "Spike", archivedAt: null }),
+]);
+
 describe("resolveTerminalQuoteChatTargets", () => {
-  const chats = chatsSlice([
-    chat({ id: "chat-old", title: "Kickoff", updatedAt: 10, archivedAt: null }),
-    chat({
-      id: "chat-new",
-      title: "Refactor",
-      updatedAt: 90,
-      archivedAt: null,
-    }),
-    chat({ id: "chat-mid", title: "Docs", updatedAt: 50, archivedAt: null }),
-  ]);
+  it("lists open chats first, each band in sidebar order", () => {
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: SIDEBAR_ORDER,
+      chats: CHATS,
+      openChatIds: new Set(["chat-c", "chat-a"]),
+      lastFocusedChatId: null,
+    });
 
-  it("puts the last focused chat first and marks it", () => {
-    const targets = resolveTerminalQuoteChatTargets(chats, "chat-old");
-
-    // "chat-new" streamed most recently, but the user was typing in "chat-old",
-    // and that is what the primary action targets.
+    // "chat-c" is open but sits below "chat-a" in the sidebar, and stays below
+    // it here: being open promotes a band, never a row within one.
     expect(targets.map((target) => target.chatId)).toEqual([
-      "chat-old",
-      "chat-new",
-      "chat-mid",
+      "chat-a",
+      "chat-c",
+      "chat-b",
+      "chat-d",
     ]);
-    expect(targets.map((target) => target.isLastFocused)).toEqual([
+    expect(targets.map((target) => target.isOpen)).toEqual([
+      true,
       true,
       false,
       false,
     ]);
   });
 
-  it("falls back to the most recent chat when nothing has been focused", () => {
-    const targets = resolveTerminalQuoteChatTargets(chats, null);
+  it("keeps sidebar order intact when nothing is open", () => {
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: SIDEBAR_ORDER,
+      chats: CHATS,
+      openChatIds: new Set(),
+      lastFocusedChatId: null,
+    });
 
-    expect(targets.map((target) => target.chatId)).toEqual([
-      "chat-new",
-      "chat-mid",
-      "chat-old",
+    expect(targets.map((target) => target.chatId)).toEqual(SIDEBAR_ORDER);
+  });
+
+  it("marks the last focused chat without moving it", () => {
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: SIDEBAR_ORDER,
+      chats: CHATS,
+      openChatIds: new Set(),
+      lastFocusedChatId: "chat-c",
+    });
+
+    // Recency is a hint, not the ordering: "chat-c" is marked where the
+    // sidebar puts it rather than jumping the queue.
+    expect(targets.map((target) => target.isLastFocused)).toEqual([
+      false,
+      false,
+      true,
+      false,
     ]);
-    // The fallback is a guess, so no row claims to be where the user was last
-    // working.
-    expect(targets.some((target) => target.isLastFocused)).toBe(false);
   });
 
   it("ignores a focus record for a chat that is gone", () => {
-    const targets = resolveTerminalQuoteChatTargets(chats, "chat-deleted");
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: SIDEBAR_ORDER,
+      chats: CHATS,
+      openChatIds: new Set(),
+      lastFocusedChatId: "chat-deleted",
+    });
 
-    expect(targets[0]?.chatId).toBe("chat-new");
     expect(targets.some((target) => target.isLastFocused)).toBe(false);
   });
 
   it("excludes archived chats, which the sidebar already hides", () => {
     const withArchived = chatsSlice([
-      chat({
-        id: "chat-live",
-        title: "Kickoff",
-        updatedAt: 10,
-        archivedAt: null,
-      }),
-      chat({ id: "chat-gone", title: "Old", updatedAt: 99, archivedAt: 5 }),
+      chat({ id: "chat-live", title: "Kickoff", archivedAt: null }),
+      chat({ id: "chat-gone", title: "Old", archivedAt: 5 }),
     ]);
 
-    expect(
-      resolveTerminalQuoteChatTargets(withArchived, "chat-gone").map(
-        (target) => target.chatId,
-      ),
-    ).toEqual(["chat-live"]);
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: ["chat-gone", "chat-live"],
+      chats: withArchived,
+      // Even open, an archived chat stays out - it is not somewhere the user
+      // can follow the message to.
+      openChatIds: new Set(["chat-gone"]),
+      lastFocusedChatId: "chat-gone",
+    });
+
+    expect(targets.map((target) => target.chatId)).toEqual(["chat-live"]);
+  });
+
+  it("drops an ordered id with no live chat record", () => {
+    const targets = resolveTerminalQuoteChatTargets({
+      orderedChatIds: ["chat-a", "chat-vanished", "chat-b"],
+      chats: CHATS,
+      openChatIds: new Set(),
+      lastFocusedChatId: null,
+    });
+
+    expect(targets.map((target) => target.chatId)).toEqual([
+      "chat-a",
+      "chat-b",
+    ]);
   });
 
   it("reports no targets for a Task with no chats", () => {
-    expect(resolveTerminalQuoteChatTargets(chatsSlice([]), null)).toEqual([]);
+    expect(
+      resolveTerminalQuoteChatTargets({
+        orderedChatIds: [],
+        chats: chatsSlice([]),
+        openChatIds: new Set(),
+        lastFocusedChatId: null,
+      }),
+    ).toEqual([]);
   });
 
   it("names an untitled chat the way every other chat surface does", () => {
     const untitled = chatsSlice([
-      chat({ id: "chat-1", title: "", updatedAt: 1, archivedAt: null }),
+      chat({ id: "chat-1", title: "", archivedAt: null }),
     ]);
 
-    expect(resolveTerminalQuoteChatTargets(untitled, null)[0]?.title).toBe(
-      "Untitled agent",
-    );
+    expect(
+      resolveTerminalQuoteChatTargets({
+        orderedChatIds: ["chat-1"],
+        chats: untitled,
+        openChatIds: new Set(),
+        lastFocusedChatId: null,
+      })[0]?.title,
+    ).toBe("Untitled agent");
   });
 });

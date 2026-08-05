@@ -397,6 +397,33 @@ export function getCanvasRootForTab(tabId: string): TileLayoutNode | null {
   return useEpicCanvasStore.getState().canvasByTabId[tabId]?.root ?? null;
 }
 
+const EMPTY_CONTENT_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Content ids of every tile open in `tabId`'s canvas - the "what is already
+ * on screen here" question, for surfaces that offer to open something.
+ *
+ * Reads `tilesByInstanceId` rather than walking the pane tree: the store keeps
+ * the two in step (every payload has a tree tab and vice versa, see
+ * `reconcileCanvasInvariants`), so the payload map is the cheaper half of the
+ * same fact. Background strip tabs count as open - they are a click away, not
+ * somewhere else.
+ *
+ * Content ids, not instance ids: the same chat can be open in two tiles, and
+ * a caller asking "is this chat open" wants one answer.
+ */
+export function useOpenTileContentIds(
+  tabId: string | undefined,
+): ReadonlySet<string> {
+  const tiles = useEpicCanvas(tabId).tilesByInstanceId;
+  return useMemo(() => {
+    const ids = Object.values(tiles).flatMap((ref) =>
+      ref === undefined ? [] : [ref.id],
+    );
+    return ids.length === 0 ? EMPTY_CONTENT_IDS : new Set(ids);
+  }, [tiles]);
+}
+
 /**
  * Locate an open tab by content id in `tabId`'s canvas. Returns the holding
  * pane's id plus the tab's `instanceId` (activation/close key on instanceId).

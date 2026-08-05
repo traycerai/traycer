@@ -8,9 +8,15 @@ import {
   useReducer,
   type ReactNode,
 } from "react";
-import type { EpicTreeIndex } from "@/lib/epic-selectors";
-import { sortNodeIds, type NodeComparator } from "@/lib/epic-sort";
+import { useEpicTreeIndex, type EpicTreeIndex } from "@/lib/epic-selectors";
+import {
+  isDefaultSort,
+  makeNodeComparator,
+  sortNodeIds,
+  type NodeComparator,
+} from "@/lib/epic-sort";
 import { withMemberToggled } from "@/lib/immutable-set";
+import { useChatSort } from "@/stores/epics/left-panel-store";
 
 export type SidebarBulkSelectionPanelId = "chats" | "artifacts";
 
@@ -270,6 +276,50 @@ export function collectVisibleSidebarTreeIds(args: {
   };
   args.rootIds.forEach(visit);
   return results;
+}
+
+const CHAT_NODE_FILTER: SidebarTreeFilterFn = (type) => type === "chat";
+
+/**
+ * Every chat in the Task, flattened into the order the chats sidebar lists
+ * them in: the user's own sort mode for that panel, applied by the same
+ * comparator at every level, walked by the same collector the sidebar rows
+ * are built from. Any surface that offers "pick one of this Task's chats"
+ * should read the order from here rather than sorting its own copy, or the
+ * two drift the first time the sort mode changes.
+ *
+ * Flattening is the only departure from what the sidebar renders. Expansion
+ * is a tree affordance, and a flat list has nothing to expand - so the walk
+ * runs as if every parent were open, and a nested chat keeps its place
+ * directly under its parent.
+ *
+ * Terminal agents are excluded even though the sidebar panel shows them
+ * alongside chats: they have no composer, so they are not somewhere a message
+ * can be sent.
+ */
+export function useSidebarChatOrder(epicId: string): readonly string[] {
+  const tree = useEpicTreeIndex();
+  const sort = useChatSort(epicId);
+  return useMemo(() => {
+    const comparator = isDefaultSort(sort) ? null : makeNodeComparator(sort);
+    const rootIds = sortNodeIds(
+      tree.rootIds.filter(
+        (id) =>
+          Object.hasOwn(tree.nodeById, id) &&
+          CHAT_NODE_FILTER(tree.nodeById[id].type),
+      ),
+      tree.nodeById,
+      comparator,
+    );
+    return collectVisibleSidebarTreeIds({
+      rootIds,
+      expandedIds: new Set(Object.keys(tree.nodeById)),
+      tree,
+      treeFilter: CHAT_NODE_FILTER,
+      visibleIds: null,
+      comparator,
+    });
+  }, [sort, tree]);
 }
 
 export function rootmostSelectedSidebarIds(args: {

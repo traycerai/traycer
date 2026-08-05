@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 
 import { appendTerminalQuoteToDraft } from "@/components/chat/quote/append-terminal-quote-to-draft";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicCreateChatForHost } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   openCreatedChatWhenProjectedWithNavigation,
@@ -45,7 +45,13 @@ export function useTerminalQuoteActions(
   const handle = useOpenEpicHandle();
   const tabHostId = useTabHostId();
   const navigateNested = useEpicNestedFocusNavigation();
-  const createChat = useEpicCreateChat();
+  // Tab-scoped, not app-wide: this tile is bound to `tabHostId` for life, and
+  // the open intent below waits for the new chat to land in THAT host's epic
+  // projection. `useEpicCreateChat` stamps the app-wide active host instead, so
+  // whenever the two diverge the chat is created on one host while the watcher
+  // listens on the other - the wait then just expires after 30s and the tile
+  // never opens. Same reasoning as `chat-fork-dialog.tsx`.
+  const createChat = useEpicCreateChatForHost();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (state) => state.prepareOpenTileInTabFocusTarget,
   );

@@ -1,9 +1,10 @@
-import { ChevronDown, TextQuote } from "lucide-react";
+import { ChevronDown, MessageSquareShare } from "lucide-react";
 
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -17,26 +18,32 @@ import {
 
 interface TerminalQuoteControlProps {
   readonly anchor: TerminalSelectionAnchor;
-  /** Chats this Task can send to, best target first. Empty is a valid state. */
+  /** Chats this Task can send to, open ones first. Empty is a valid state. */
   readonly targets: ReadonlyArray<TerminalQuoteChatTarget>;
-  readonly onQuoteToChat: (chatId: string) => void;
-  readonly onQuoteToNewChat: () => void;
+  readonly onSendToChat: (chatId: string) => void;
+  readonly onSendToNewChat: () => void;
   readonly menuOpen: boolean;
   readonly onMenuOpenChange: (open: boolean) => void;
 }
 
 /**
- * The floating action over a terminal selection: quote into the chat the user
- * was last working in, or pick a different one.
+ * The floating action over a terminal selection: one button that asks where
+ * the selection is going, and a panel that answers it.
  *
- * Reads as a sibling of the transcript's quote popover - same popover surface,
- * same quiet chrome, no entrance animation - because it is the same action in a
- * different place. The one thing added is the split: the target chat is named
- * on the button itself rather than hidden behind a hover, since "where is this
- * going" is the question a floating Quote button otherwise leaves open.
+ * Reads as a sibling of the transcript's quote popover and the composer's
+ * `@`-picker - same popover surface, same quiet chrome, same micro-type
+ * section headings - because it is the same kind of action in a different
+ * place. Deliberately not a split button: a primary target guessed from focus
+ * history is right often enough to be tempting and wrong often enough to send
+ * a selection somewhere the user was not looking, and the recovery for that is
+ * worse than one extra click.
  */
 export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
-  const primaryTarget = props.targets.length === 0 ? null : props.targets[0];
+  const openTargets = props.targets.filter((target) => target.isOpen);
+  const otherTargets = props.targets.filter((target) => !target.isOpen);
+  // The headings earn their space only when they separate something. With
+  // every chat open - or none - they would label a single undivided list.
+  const banded = openTargets.length > 0 && otherTargets.length > 0;
 
   return (
     <div
@@ -47,104 +54,95 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
       )}
       style={{ top: props.anchor.top }}
     >
-      <div className="flex items-stretch overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
-        {primaryTarget === null ? (
-          <ControlButton
-            label="New chat"
-            secondaryLabel={null}
-            ariaLabel="Quote into a new chat"
-            onClick={props.onQuoteToNewChat}
-          />
-        ) : (
-          <ControlButton
-            label="Quote"
-            secondaryLabel={primaryTarget.title}
-            ariaLabel={`Quote into ${primaryTarget.title}`}
-            onClick={() => props.onQuoteToChat(primaryTarget.chatId)}
-          />
-        )}
-        <span aria-hidden className="w-px shrink-0 bg-border" />
-        {/*
-          Non-modal: a modal Radix menu writes overflow/padding onto <body>
-          for its scroll lock, and a layout change that reaches this pane
-          refits the terminal - which makes xterm drop the very selection the
-          menu was opened to act on. Nothing here needs the modal behaviour.
-        */}
-        <DropdownMenu
-          modal={false}
-          open={props.menuOpen}
-          onOpenChange={props.onMenuOpenChange}
-        >
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label="Choose where to quote"
-              className={cn(
-                "inline-flex shrink-0 items-center px-1.5 transition-colors",
-                "hover:bg-accent hover:text-accent-foreground",
-                "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-                "data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
-              )}
-            >
-              <ChevronDown className="size-3.5" aria-hidden />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="start"
-            className="max-w-[min(90vw,20rem)]"
+      {/*
+        Non-modal: a modal Radix menu writes overflow/padding onto <body>
+        for its scroll lock, and a layout change that reaches this pane
+        refits the terminal - which makes xterm drop the very selection the
+        menu was opened to act on. Nothing here needs the modal behaviour.
+      */}
+      <DropdownMenu
+        modal={false}
+        open={props.menuOpen}
+        onOpenChange={props.onMenuOpenChange}
+      >
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex min-w-0 items-center gap-1.5 rounded-md border border-border px-2 py-1",
+              "bg-popover text-ui-xs font-medium text-popover-foreground shadow-lg transition-colors",
+              "hover:bg-accent hover:text-accent-foreground",
+              "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+              "data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+            )}
           >
-            {props.targets.map((target) => (
-              <DropdownMenuItem
-                key={target.chatId}
-                onSelect={() => props.onQuoteToChat(target.chatId)}
-              >
-                <span className="min-w-0 flex-1 truncate">{target.title}</span>
-                {target.isLastFocused ? (
-                  <span className="shrink-0 text-ui-xs text-muted-foreground">
-                    Last used
-                  </span>
+            <MessageSquareShare className="size-3.5 shrink-0" aria-hidden />
+            <span className="shrink-0">Send to chat</span>
+            <ChevronDown
+              className="size-3 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          </button>
+        </DropdownMenuTrigger>
+        {/*
+          Three bands: an empty header slot a filter would drop into, the
+          scrolling roster, and a pinned "New chat". The column is what keeps
+          that last one reachable - the roster shrinks when the pane is short,
+          rather than pushing the action out of view.
+        */}
+        <DropdownMenuContent
+          align="start"
+          className="flex w-max min-w-[min(90vw,14rem)] max-w-[min(90vw,20rem)] flex-col overflow-y-hidden"
+        >
+          {props.targets.length > 0 ? (
+            <>
+              <div className="max-h-[40vh] min-h-0 flex-1 overflow-y-auto">
+                {banded ? <DropdownMenuLabel>Open</DropdownMenuLabel> : null}
+                {openTargets.map((target) => (
+                  <ChatTargetItem
+                    key={target.chatId}
+                    target={target}
+                    onSelect={props.onSendToChat}
+                  />
+                ))}
+                {banded ? (
+                  <DropdownMenuLabel>Other chats</DropdownMenuLabel>
                 ) : null}
-              </DropdownMenuItem>
-            ))}
-            {props.targets.length > 0 ? <DropdownMenuSeparator /> : null}
-            <DropdownMenuItem onSelect={props.onQuoteToNewChat}>
-              New chat
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+                {otherTargets.map((target) => (
+                  <ChatTargetItem
+                    key={target.chatId}
+                    target={target}
+                    onSelect={props.onSendToChat}
+                  />
+                ))}
+              </div>
+              <DropdownMenuSeparator className="shrink-0" />
+            </>
+          ) : null}
+          <DropdownMenuItem
+            className="shrink-0"
+            onSelect={props.onSendToNewChat}
+          >
+            New chat
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
 
-function ControlButton(props: {
-  readonly label: string;
-  readonly secondaryLabel: string | null;
-  readonly ariaLabel: string;
-  readonly onClick: () => void;
+function ChatTargetItem(props: {
+  readonly target: TerminalQuoteChatTarget;
+  readonly onSelect: (chatId: string) => void;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={props.ariaLabel}
-      // Keeps focus off the button so pressing it cannot collapse or clear the
-      // terminal selection before the click lands.
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={props.onClick}
-      className={cn(
-        "inline-flex min-w-0 items-center gap-1.5 px-2 py-1 text-left transition-colors",
-        "text-ui-xs font-medium text-popover-foreground",
-        "hover:bg-accent hover:text-accent-foreground",
-        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-      )}
-    >
-      <TextQuote className="size-3.5 shrink-0" aria-hidden />
-      <span className="shrink-0">{props.label}</span>
-      {props.secondaryLabel === null ? null : (
-        <span className="min-w-0 truncate font-normal text-muted-foreground">
-          {props.secondaryLabel}
+    <DropdownMenuItem onSelect={() => props.onSelect(props.target.chatId)}>
+      <span className="min-w-0 flex-1 truncate">{props.target.title}</span>
+      {props.target.isLastFocused ? (
+        <span className="shrink-0 text-ui-xs text-muted-foreground">
+          Last used
         </span>
-      )}
-    </button>
+      ) : null}
+    </DropdownMenuItem>
   );
 }
