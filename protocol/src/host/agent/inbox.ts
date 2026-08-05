@@ -30,6 +30,7 @@
  * reconnecting monitor never replays a stale broadcast.
  */
 import {
+  defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
@@ -366,7 +367,7 @@ export const agentInboxReadV10 = defineRpcContract({
   responseSchema: agentInboxReadResponseSchema,
 });
 
-// ─── `agent.inbox.read@1.1` - bounded durable-inbox page ─────────────────
+// ─── `agent.inbox.read@2.0` - bounded durable-inbox page ─────────────────
 //
 // A durable inbox can contain many full 16 MiB prompts while a monitor is
 // disconnected. Keep @1.0 frozen for existing clients, but make the canonical
@@ -378,39 +379,67 @@ export const agentInboxReadCursorSchema = z.object({
 });
 export type AgentInboxReadCursor = z.infer<typeof agentInboxReadCursorSchema>;
 
-export const agentInboxReadRequestSchemaV11 =
+export const agentInboxReadRequestSchemaV20 =
   agentInboxReadRequestSchema.extend({
     /** Resume after this oldest-first durable inbox row, or start at the head. */
     after: agentInboxReadCursorSchema.nullable(),
   });
-export type AgentInboxReadRequestV11 = z.infer<
-  typeof agentInboxReadRequestSchemaV11
+export type AgentInboxReadRequestV20 = z.infer<
+  typeof agentInboxReadRequestSchemaV20
 >;
 
-export const agentInboxReadResponseSchemaV11 =
+export const agentInboxReadResponseSchemaV20 =
   agentInboxReadResponseSchema.extend({
     /** Cursor for the following page, or null when this page reached the end. */
     nextCursor: agentInboxReadCursorSchema.nullable(),
   });
-export type AgentInboxReadResponseV11 = z.infer<
-  typeof agentInboxReadResponseSchemaV11
+export type AgentInboxReadResponseV20 = z.infer<
+  typeof agentInboxReadResponseSchemaV20
 >;
 
-export const agentInboxReadV11 = defineRpcContract({
+export const agentInboxReadV20 = defineRpcContract({
   method: "agent.inbox.read",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: agentInboxReadRequestSchemaV11,
-  responseSchema: agentInboxReadResponseSchemaV11,
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: agentInboxReadRequestSchemaV20,
+  responseSchema: agentInboxReadResponseSchemaV20,
 });
 
-export const agentInboxReadUpgradeV10ToV11 = defineUpgradePath<
+export const agentInboxReadUpgradeV10ToV20 = defineUpgradePath<
   typeof agentInboxReadV10,
-  typeof agentInboxReadV11
+  typeof agentInboxReadV20
 >({
   from: agentInboxReadV10.schemaVersion,
-  to: agentInboxReadV11.schemaVersion,
+  to: agentInboxReadV20.schemaVersion,
   upgradeRequest: (request) => ({ ...request, after: null }),
   upgradeResponse: (response) => ({ ...response, nextCursor: null }),
+});
+
+export const agentInboxReadDowngradeV20ToV10 = defineDowngradePath<
+  typeof agentInboxReadV20,
+  typeof agentInboxReadV10
+>({
+  from: agentInboxReadV20.schemaVersion,
+  to: agentInboxReadV10.schemaVersion,
+  downgradeRequest: (request) => {
+    if (request.after !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Paginated inbox reads require a newer Traycer host. Upgrade the host before using --after.",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: { epicId: request.epicId, agentId: request.agentId },
+    };
+  },
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: { messages: response.messages },
+  }),
 });
 
 // ─── `agent.inbox.ack@1.0` - unary durable-inbox acknowledgement ──────────
