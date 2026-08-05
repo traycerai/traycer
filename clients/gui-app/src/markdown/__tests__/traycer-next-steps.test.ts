@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { repairMarkdown } from "@/markdown/markdown-repair";
 import {
   parseTraycerNextStepsMarkdown,
   repairTraycerNextStepsMarkdown,
@@ -250,9 +249,6 @@ describe("repairTraycerNextStepsMarkdown", () => {
     );
   });
 
-  it("is wired into repairMarkdown", () => {
-    expect(repairMarkdown("<TRAYCER_NEXT_STEPS>\nText")).toContain(
-      "</TRAYCER_NEXT_STEPS>",
-    );
-  });
+  // Intentionally not wired into Tailmark `repairs`: custom repairs force the
+  // full-document repair path. TextSegment peels next-steps before render.
 });
