@@ -39,6 +39,17 @@ export function setLegendListSyntheticScrollEventsEnabled(
   });
 }
 
+/**
+ * Opt-in browser-faithful mode: when true, programmatic `scrollTop` /
+ * `scrollTo` writes also dispatch a bubbling native `scroll` event.
+ * Default stays false so existing suites that park geometry during setup
+ * without wanting `onIsAtEndChange` to run are unaffected. Enable per test
+ * via `enableLegendListBrowserScrollEvents()`.
+ */
+let dispatchBrowserScrollEventsOnProgrammaticScroll = false;
+let browserScrollEventDispatchDepth = 0;
+const MAX_BROWSER_SCROLL_EVENT_DISPATCH_DEPTH = 16;
+
 export function setLegendListScrollContainerScrollHeightOverride(
   heightPx: number | null,
 ): void {
@@ -57,6 +68,34 @@ export function setLegendListMessageRowHeightOverrides(
   onTestFinished(() => {
     messageRowHeightOverrides = new Map();
   });
+}
+
+/**
+ * Makes subsequent `scrollTop` / `scrollTo` writes on HTMLElements fire a
+ * browser-like `scroll` event (bubbling). Auto-resets when the current test
+ * finishes. Use only when a regression must exercise production's
+ * `onScroll` → `onIsAtEndChange` chain after a programmatic restore/land.
+ */
+export function enableLegendListBrowserScrollEvents(): void {
+  dispatchBrowserScrollEventsOnProgrammaticScroll = true;
+  onTestFinished(() => {
+    dispatchBrowserScrollEventsOnProgrammaticScroll = false;
+  });
+}
+
+function maybeDispatchBrowserScrollEvent(element: HTMLElement): void {
+  if (!dispatchBrowserScrollEventsOnProgrammaticScroll) return;
+  if (
+    browserScrollEventDispatchDepth >= MAX_BROWSER_SCROLL_EVENT_DISPATCH_DEPTH
+  ) {
+    return;
+  }
+  browserScrollEventDispatchDepth += 1;
+  try {
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  } finally {
+    browserScrollEventDispatchDepth -= 1;
+  }
 }
 
 function rectOf(x: number, y: number, width: number, height: number): DOMRect {
@@ -177,7 +216,14 @@ export function installLegendListViewportMetrics(): void {
   const scrollTopSetSpy = vi
     .spyOn(HTMLElement.prototype, "scrollTop", "set")
     .mockImplementation(function (this: HTMLElement, value: number) {
+      const previous = scrollTopByElement.get(this) ?? 0;
       scrollTopByElement.set(this, value);
+      // Mirror browsers: only fire when the stored offset actually changed.
+      // The comparison suppresses same-offset re-entrant writes; divergent
+      // writers are bounded by maybeDispatchBrowserScrollEvent's depth guard.
+      if (previous !== value) {
+        maybeDispatchBrowserScrollEvent(this);
+      }
     });
   const scrollLeftGetSpy = vi
     .spyOn(HTMLElement.prototype, "scrollLeft", "get")
@@ -267,6 +313,8 @@ export function installLegendListViewportMetrics(): void {
       if (typeof first === "number") {
         const second = args[1];
         this.scrollLeft = first;
+        // Assigning scrollTop goes through the setter above, which optionally
+        // dispatches a browser-like scroll event under the opt-in flag.
         this.scrollTop = typeof second === "number" ? second : 0;
         dispatchSyntheticScrollEnd(this);
         return;
@@ -396,5 +444,24 @@ export async function advanceLegendListFrames(
  * LegendList or sleeping on the runner's wall clock.
  */
 export async function settleLegendList(): Promise<void> {
+  // The base branch's split ChatMessages suites install the virtual browser
+  // clock above. This branch replaces those suites with one consolidated
+  // integration suite whose race coverage intentionally keeps the real
+  // scheduler. Preserve both contracts: virtualize callers that opt in, and
+  // retain the prior browser-like settle for callers that do not.
+  if (!legendListTestClockInstalled) {
+    await act(async () => {
+      for (let frame = 0; frame < 12; frame += 1) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 80);
+      });
+    });
+    return;
+  }
+
   await advanceLegendListFrames(12);
 }

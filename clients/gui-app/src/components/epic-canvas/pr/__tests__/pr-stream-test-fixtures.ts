@@ -1,3 +1,4 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 /**
  * The one mock stream session + client the `pr.*` suites drive.
  *
@@ -47,6 +48,11 @@ export class MockStreamSession<
     _binaryPayload: Uint8Array | null,
   ): void {
     this.sentClientFrames.push(envelope);
+  }
+
+  /** Never negotiates: this fake exercises no version-dependent path. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return null;
   }
 
   requestReconnect(): void {

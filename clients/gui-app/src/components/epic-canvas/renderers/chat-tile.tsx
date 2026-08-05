@@ -86,7 +86,6 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { isChatRunInProgress } from "@/stores/chats/chat-session-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
@@ -871,13 +870,10 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
               tabHostId={view.tabHostId}
               workspaceRoots={view.linkResolutionRoots}
               messages={view.messages}
-              localProvenanceMessageIds={view.localProvenanceMessageIds}
-              consumeLocalProvenance={view.consumeLocalProvenance}
               backgroundItems={view.lower.backgroundItems}
               scrollRequest={backgroundScrollRequest}
               surfaceVisible={view.surfaceVisible}
               systemOverlayActive={systemOverlayActive}
-              isChatStreaming={view.isChatStreaming}
               getMessageActions={view.getMessageActions}
               nextStepActions={view.nextStepActions}
               planActions={view.planActions}
@@ -894,17 +890,17 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * Absolutely overlays the transcript (decision log #3) instead of
              * pushing its height via flex, so streamed replies flow visually
              * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset. The wrapper owns the opaque
-             * backdrop and a paint-only 1px overdraw so fractional scrolling
-             * cannot expose the transcript between the dock and tile edge. The
-             * full-width positioning layer stays pointer-transparent; centered
-             * lower surfaces opt back in so their invisible gutters cannot
-             * cover the scrollbar.
+             * transcript's bottom content inset. The full-width positioning
+             * layer must remain both pointer- and paint-transparent so it
+             * cannot cover the transcript scrollbar or its edge lanes.
+             * Centered lower surfaces opt back into pointer handling and own
+             * their opaque backplates (including the bottom seam seal), so
+             * transcript content cannot show through the actual chrome.
              */}
             {view.snapshotLoaded ? (
               <div
                 ref={setLowerSurfacesElement}
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-canvas after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']"
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
                 data-chat-lower-surfaces-overlay=""
               >
                 <div className="pointer-events-none">
@@ -1101,7 +1097,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
       pendingUserMessages: s.pendingUserMessages,
-      localProvenanceMessageIds: s.localProvenanceMessageIds,
       currentComposerSettings: s.currentComposerSettings,
       liveAssistantMessage: s.liveAssistantMessage,
       worktreeBinding: s.worktreeBinding,
@@ -2118,13 +2113,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
-    localProvenanceMessageIds: state.localProvenanceMessageIds,
-    consumeLocalProvenance: handle.store.getState().consumeLocalProvenance,
     surfaceVisible,
     surfaceFocused,
-    // Ticket 15 (decision #29): the sanctioned host-owned streaming signal
-    // for the fresh-open policy - NOT the trailing-assistant heuristic.
-    isChatStreaming: isChatRunInProgress(state.runStatus),
     getMessageActions: messageActionsFor,
     nextStepActions,
     planActions,
@@ -2165,15 +2155,10 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
-  readonly localProvenanceMessageIds: ReadonlySet<string>;
-  readonly consumeLocalProvenance: (messageId: string) => void;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
-  /** Ticket 15 (decision #29): host-owned streaming signal for the fresh-open
-   *  policy - NOT the trailing-assistant heuristic. */
-  readonly isChatStreaming: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
@@ -2287,9 +2272,8 @@ function ChatSessionMessagesSurface(
               taskTitle={props.node.name}
               taskId={props.node.id}
               epicId={props.epicId}
+              hostId={props.tabHostId}
               messages={props.messages}
-              localProvenanceMessageIds={props.localProvenanceMessageIds}
-              consumeLocalProvenance={props.consumeLocalProvenance}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}
@@ -2297,7 +2281,6 @@ function ChatSessionMessagesSurface(
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
               systemOverlayActive={props.systemOverlayActive}
-              isChatStreaming={props.isChatStreaming}
               composerOverlayHeight={props.composerOverlayHeight}
             />
           </ChatMarkdownLinkProvider>

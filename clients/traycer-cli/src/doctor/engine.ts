@@ -11,6 +11,7 @@ import {
   readBootstrapMarkers,
   type BootstrapLogEntry,
 } from "../host/bootstrap-log";
+import { isFatalSignal } from "../host/crash-diagnostics";
 import {
   readHostPidMetadata,
   type HostPidMetadata,
@@ -501,23 +502,28 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const recentMarkers = await readBootstrapMarkers(opts.environment, 20);
   const recentCrash = lastCrashMarker(recentMarkers);
   if (recentCrash !== null) {
-    const fields = recentCrash.fields;
+    const fields = recentCrash.entry.fields;
+    const baseTitle =
+      recentCrash.entry.phase === "failed-to-spawn"
+        ? "Host failed to spawn recently"
+        : "Host crashed recently";
     issues.push({
       code: DOCTOR_ISSUE_CODES.RECENT_CRASH_MARKERS,
-      severity:
-        hostProcessAlive || serviceStatus?.state === "running"
+      severity: recentCrash.recovered
+        ? "warning"
+        : hostProcessAlive || serviceStatus?.state === "running"
           ? "warning"
           : "error",
-      title:
-        recentCrash.phase === "failed-to-spawn"
-          ? "Host failed to spawn recently"
-          : "Host crashed recently",
-      message: formatMarkerMessage(recentCrash),
+      title: recentCrash.recovered
+        ? `${baseTitle} (recovered by restart)`
+        : baseTitle,
+      message: formatMarkerMessage(recentCrash.entry),
       fixAction: "host-logs",
       terminalCommand: `traycer host logs --tail 200`,
       details: {
-        phase: recentCrash.phase,
-        timestamp: recentCrash.timestamp,
+        phase: recentCrash.entry.phase,
+        timestamp: recentCrash.entry.timestamp,
+        recovered: recentCrash.recovered,
         fields,
       },
     });
@@ -581,16 +587,27 @@ function layer0GuaranteeIssue(
 
 function lastCrashMarker(
   entries: readonly BootstrapLogEntry[],
-): BootstrapLogEntry | null {
+): { readonly entry: BootstrapLogEntry; readonly recovered: boolean } | null {
+  let recovered = false;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     if (entry === undefined) continue;
-    if (entry.phase === "crashed" || entry.phase === "failed-to-spawn") {
-      return entry;
+    if (
+      entry.phase === "crashed" ||
+      entry.phase === "failed-to-spawn" ||
+      // A fatal signal (SIGABRT et al.) is a crash wearing the killed phase:
+      // Node fatal aborts on POSIX surface as signal deaths, and skipping
+      // them here would hide exactly the evidence the enrichment attaches.
+      (entry.phase === "killed" && isFatalSignal(entry.fields.signal))
+    ) {
+      return { entry, recovered };
     }
     if (entry.phase === "starting") {
-      // A more recent successful start cancels the older crash signal.
-      return null;
+      // A more recent start used to CANCEL the crash signal entirely - which
+      // erased the evidence in exactly the auto-respawn-recovered case where
+      // the crash is the only thing worth diagnosing. It now only downgrades
+      // the finding to "recovered".
+      recovered = true;
     }
   }
   return null;
@@ -599,10 +616,14 @@ function lastCrashMarker(
 function formatMarkerMessage(entry: BootstrapLogEntry): string {
   const parts: string[] = [`phase=${entry.phase}`, `at=${entry.timestamp}`];
   if (entry.fields.code !== undefined) parts.push(`code=${entry.fields.code}`);
+  if (entry.fields.exitMeaning !== undefined)
+    parts.push(`meaning=${entry.fields.exitMeaning}`);
   if (entry.fields.signal !== undefined)
     parts.push(`signal=${entry.fields.signal}`);
   if (entry.fields.error !== undefined)
     parts.push(`error=${entry.fields.error}`);
+  if (entry.fields.report !== undefined)
+    parts.push(`report=${entry.fields.report}`);
   return parts.join(" ");
 }
 

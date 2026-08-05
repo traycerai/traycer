@@ -62,14 +62,14 @@ interface RefBox<T> {
 
 /**
  * Tracks clean leader-hold sessions and publishes leader owners relative to the
- * modifier combo actually held (`mod`, `alt`, or `modShift`). Holding one leader
- * always reveals that modifier's owner, and also reveals the OTHER modifiers'
- * owners when a DIFFERENT scope owns them - so two sibling app scopes (canvas
- * tabs own `mod`, header tabs own `alt`) still show `⌘` and `⌥` badges together.
- * A lone overlay scope that binds all three dimensions (the model picker: `⌘`
- * rail, `⌥` reasoning, `⌘⇧` profile) only lights the one matching the held
- * combo. The dispatcher's chord matching still owns route-aware action
- * selection and fires digit shortcuts from the actual key event immediately.
+ * modifier combo actually held (`mod`, `alt`, or `modShift`). Holding either
+ * ordinary leader reveals that modifier's owner and the other ordinary
+ * modifier's owner when a DIFFERENT scope owns it - so two sibling app scopes
+ * (canvas tabs own `mod`, header tabs own `alt`) still show `⌘` and `⌥` badges
+ * together. The shifted leader is an exact-owner-only tier: an unowned Cmd+Shift
+ * hold must never fall through to the ordinary leaders. The dispatcher's chord
+ * matching still owns route-aware action selection and fires digit shortcuts
+ * from the actual key event immediately.
  */
 export function KeybindingProvider(props: KeybindingProviderProps) {
   const { router, children } = props;
@@ -106,15 +106,14 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       setLeaderState(next);
     };
 
-    // Publish the held modifier's owner always; publish the OTHER modifiers'
-    // owners only when a DIFFERENT scope owns them. Two sibling app scopes
-    // (canvas tabs own `mod`, header tabs own `alt`) still light both badge sets
-    // on a single hold - the #3966 "show both task tabs" behavior. But a lone
-    // overlay scope binding ALL THREE dimensions (the model picker: ⌘ rail, ⌥
-    // reasoning, ⌘⇧ profile) owns each dimension under one scope id, so its
-    // badge consumers can only be disambiguated by the held combo: ⌘ lights the
-    // rail, ⌥ lights reasoning, ⌘⇧ lights the profile dropdown, never more than
-    // one at once.
+    // Publish the held ordinary modifier's owner and the OTHER ordinary
+    // modifier's owner only when a DIFFERENT scope owns it. Two sibling app
+    // scopes (canvas tabs own `mod`, header tabs own `alt`) still light both
+    // badge sets on a single hold - the #3966 "show both task tabs" behavior.
+    // The shifted leader is exact-owner-only: Cmd+Shift must not light ordinary
+    // Cmd/Option badges when no scope owns the `modShift` mask. A lone overlay
+    // scope binding all three dimensions (the model picker: ⌘ rail, ⌥
+    // reasoning, ⌘⇧ profile) therefore lights only the matching tier.
     const resolveVisibleLeaderState = (
       heldModifier: LeaderModifier,
       pathname: string,
@@ -122,6 +121,17 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const modOwner = resolveLeaderOwner("mod");
       const altOwner = resolveLeaderOwner("alt");
       const modShiftOwner = resolveLeaderOwner("modShift");
+      if (heldModifier === "modShift") {
+        return {
+          modHeld: false,
+          altHeld: false,
+          modShiftHeld: modShiftOwner !== null,
+          modOwnerScopeId: null,
+          altOwnerScopeId: null,
+          modShiftOwnerScopeId: modShiftOwner,
+          pathname,
+        };
+      }
       const showMod =
         heldModifier === "mod" ||
         (modOwner !== null &&
@@ -132,27 +142,26 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         (altOwner !== null &&
           altOwner !== modOwner &&
           altOwner !== modShiftOwner);
-      const showModShift =
-        heldModifier === "modShift" ||
-        (modShiftOwner !== null &&
-          modShiftOwner !== modOwner &&
-          modShiftOwner !== altOwner);
       return {
         modHeld: showMod && modOwner !== null,
         altHeld: showAlt && altOwner !== null,
-        modShiftHeld: showModShift && modShiftOwner !== null,
+        modShiftHeld: false,
         modOwnerScopeId: showMod ? modOwner : null,
         altOwnerScopeId: showAlt ? altOwner : null,
-        modShiftOwnerScopeId: showModShift ? modShiftOwner : null,
+        modShiftOwnerScopeId: null,
         pathname,
       };
     };
 
-    const hasVisibleLeaderOwners = (): boolean => {
+    const hasLeaderOwner = (modifier: LeaderModifier): boolean => {
+      if (modifier === "modShift") {
+        return resolveLeaderOwner("modShift") !== null;
+      }
+      // Ordinary Cmd/Option sessions intentionally retain the sibling-owner
+      // behavior: holding one ordinary modifier can still reveal the other
+      // ordinary scope when only that scope is active.
       return (
-        resolveLeaderOwner("mod") !== null ||
-        resolveLeaderOwner("alt") !== null ||
-        resolveLeaderOwner("modShift") !== null
+        resolveLeaderOwner("mod") !== null || resolveLeaderOwner("alt") !== null
       );
     };
 
@@ -194,7 +203,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         return;
       }
       const pathname = adapter.getPathname();
-      if (!hasVisibleLeaderOwners()) {
+      if (!hasLeaderOwner(modifier)) {
         spendHintSession(pathname);
         return;
       }
@@ -243,9 +252,9 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const cleanMod = modKeyHeld && !event.altKey && !event.shiftKey;
       const cleanAlt = event.altKey && !modKeyHeld && !event.shiftKey;
       const cleanModShift = modKeyHeld && event.shiftKey && !event.altKey;
-      if (cleanMod && hasVisibleLeaderOwners()) return "mod";
-      if (cleanAlt && hasVisibleLeaderOwners()) return "alt";
-      if (cleanModShift && hasVisibleLeaderOwners()) return "modShift";
+      if (cleanMod && hasLeaderOwner("mod")) return "mod";
+      if (cleanAlt && hasLeaderOwner("alt")) return "alt";
+      if (cleanModShift && hasLeaderOwner("modShift")) return "modShift";
       return null;
     };
 
@@ -261,7 +270,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const pathname = adapter.getPathname();
       const session = hintSessionRef.current;
       if (session.status === "pending" || session.status === "visible") {
-        if (!hasVisibleLeaderOwners()) {
+        if (!hasLeaderOwner(session.modifier)) {
           spendHintSession(pathname);
           return;
         }
@@ -385,17 +394,18 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     };
 
     // A scope registering/unregistering (e.g. the model picker opening or
-    // closing) can change who owns visible leader badges. Re-resolve a VISIBLE
-    // session immediately so badges flip without waiting for the next key event;
-    // if no scope owns either leader anymore, the session is spent.
+    // closing) can change who owns visible leader badges. Re-resolve a pending
+    // or visible session immediately; if its owner disappears, spend the
+    // session so a transient owner loss cannot be repaired by a stale timer.
     const handleScopeChange = () => {
       const session = hintSessionRef.current;
-      if (session.status !== "visible") return;
+      if (session.status !== "pending" && session.status !== "visible") return;
       const pathname = adapter.getPathname();
-      if (!hasVisibleLeaderOwners()) {
+      if (!hasLeaderOwner(session.modifier)) {
         spendHintSession(pathname);
         return;
       }
+      if (session.status !== "visible") return;
       showLeaderHints(session.modifier, pathname);
     };
 

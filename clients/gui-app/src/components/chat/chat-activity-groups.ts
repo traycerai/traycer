@@ -82,9 +82,6 @@ export type ChatActivityTimelineItem =
 interface ActivitySummaryCounts {
   // Summed duration of every completed reasoning block folded into the group.
   thinkingDurationMs: number;
-  // A reasoning block in the group is still streaming, so the group's summary
-  // leads with "Thinking" instead of a duration that does not exist yet.
-  thinkingStreaming: boolean;
   // The group contains reasoning AT ALL. Tracked separately from the duration
   // because a completed block can legitimately have none: `completedDurationMs`
   // returns null when the block carries no `startedAt` (persisted history), and
@@ -92,6 +89,31 @@ interface ActivitySummaryCounts {
   // both summed to 0 and the summary fell through to the generic "Ran activity"
   // - losing the "Thought" line the block used to render for itself.
   thinkingPresent: boolean;
+  // At least one reasoning block reported a duration. Distinguishes the two
+  // ways `thinkingDurationMs` stays 0: a same-millisecond block (a real
+  // measurement, which the child renders as "Thought for 1s") from persisted
+  // history with no `startedAt` at all (no measurement, "Thought"). Summing
+  // alone cannot tell them apart, and the child's own formatter can - which is
+  // how the group header and the block it stands in for came to disagree.
+  thinkingDurationKnown: boolean;
+  // At least one FINISHED block contributed nothing to the sum, so
+  // `thinkingDurationMs` is a floor rather than a total. A block is finished
+  // with no duration when it was interrupted, superseded or errored (its
+  // timestamp is the turn-end, not the real finish) or when it predates
+  // `startedAt` - see `completedDurationMs`.
+  //
+  // The clause marks this with a trailing "+" instead of dropping the number.
+  // Dropping it is what a plain "all durations known" check would do, and that
+  // walks the label BACKWARDS - `thought for 5s` -> `thought` the moment an
+  // interrupted block joins a run that had already measured one. That reverse
+  // step is the exact defect `thinkingCompleted` exists to prevent, and it is
+  // reachable live, not just in history. A floor only ever grows.
+  thinkingDurationPartial: boolean;
+  // At least one reasoning block has finished. Once that is true the clause
+  // says "thought", never "thinking", however many new blocks start streaming -
+  // the header describes the whole run, and a run that has already thought does
+  // not stop having done so.
+  thinkingCompleted: boolean;
   exploredFiles: number;
   readFiles: number;
   searched: number;
@@ -180,8 +202,10 @@ const RUN_TOOL_NAMES = new Set(["bash", "shell", "run_command", "command"]);
 function createEmptyCounts(): ActivitySummaryCounts {
   return {
     thinkingDurationMs: 0,
-    thinkingStreaming: false,
     thinkingPresent: false,
+    thinkingDurationKnown: false,
+    thinkingDurationPartial: false,
+    thinkingCompleted: false,
     exploredFiles: 0,
     readFiles: 0,
     searched: 0,
@@ -240,23 +264,26 @@ function buildChatActivityTimelineImpl(
   const out: ChatActivityTimelineItem[] = [];
   let run: ActivityGroupDetailSegment[] = [];
 
+  // Every run becomes a group, including a run that is one lone reasoning
+  // block. #597 special-cased that to a standalone segment to avoid rendering
+  // "Thought for Xs" twice (group summary + the child's own header), but a
+  // standalone-vs-group decision that can flip mid-turn - the moment a tool
+  // call joins the lone block - is exactly the container change this design
+  // exists to eliminate.
+  //
+  // The duplicate IS suppressed for a run that is nothing but one reasoning
+  // block (`hidesSoleReasoningHeader`), where the group header's whole label is
+  // that block's label. Everywhere else the block keeps its own header: that
+  // header carries its label, its collapse on completion and its find anchor,
+  // and a group reading "Thought for 2s, ran 3 commands" is NOT standing in for
+  // it.
+  //
+  // Runs SHRINK as well as grow - promotion and suppression both remove members
+  // mid-turn, here and upstream in `buildAssistantSegments` - so that rule can
+  // flip back. This builder does not try to track it; the component that stays
+  // mounted across the shrink does. See `everHeaded` in `ActivityGroupSegment`.
   const flushRun = (): void => {
     if (run.length === 0) return;
-    // Every run becomes a group, including a run that is one lone reasoning
-    // block. #597 special-cased that to a standalone segment to avoid rendering
-    // "Thought for Xs" twice (group summary + the child's own header), but a
-    // standalone-vs-group decision that can flip mid-turn - the moment a tool
-    // call joins the lone block - is exactly the container change this design
-    // exists to eliminate.
-    //
-    // The duplicate is accepted, deliberately and in both containers. A
-    // reasoning block keeps its own nested header wherever it renders: that
-    // header is what carries its "Thinking" / "Thought for Xs" label, its
-    // collapse on completion and its find anchor, and stripping it in one place
-    // made the same rows read differently depending on where you saw them.
-    // Suppressing it conditionally is worse still - the condition can only be
-    // the group's segment count, which flips under a growing run and takes the
-    // child's body with it. A redundant line costs far less than either.
     const group = activityGroupFromRun(run);
     out.push({ kind: "activity_group", id: group.id, group });
     run = [];
@@ -299,6 +326,10 @@ function buildChatActivityTimelineImpl(
       });
       continue;
     }
+    // Either promotion can start returning true MID-TURN for a segment already
+    // sitting in a rendered group: the durable marker is fixed, but the host's
+    // `backgroundItems` set is transient and grows while the turn runs. The run
+    // then splits around a member it used to contain.
     if (
       segment.kind === "tool" &&
       shouldPromoteToolSegment(segment, promotedToolBlockIds)
@@ -378,6 +409,74 @@ export function activityGroupSummary(
 
   if (parts.length === 0) return "Ran activity";
   return capitalizeFirst(parts.join(", "));
+}
+
+/**
+ * True when the group is NOTHING BUT one reasoning block, which then renders
+ * without a header row of its own.
+ *
+ * In that shape the group header's whole label is that block's label verbatim
+ * ("Thinking" / "Thought for Xs") - the row said the same thing a second time,
+ * one line lower, and kept saying it after the streaming stopped. `thinkingPhrase`
+ * and `reasoningSummaryLabel` are held to producing the same string for the same
+ * block precisely so "verbatim" is a fact rather than an approximation.
+ *
+ * The "nothing but" is load-bearing, not defensive. Keying this on the reasoning
+ * count alone also caught the far more common `[reasoning, tool, tool]` shape,
+ * where the group header reads "Thought for 2s, ran 3 commands" and is NOT that
+ * block's label - so dropping the row left a paragraph of thinking floating
+ * between tool rows with no title on it at all. A block only loses its header
+ * when the group header is unambiguously standing in for it.
+ *
+ * PURE FUNCTION OF THE CURRENT SHAPE, and it can flip in BOTH directions - runs
+ * do not only grow. A run loses a segment when a command or tool is promoted to
+ * the background, when a question tool's interview arrives, and - upstream of
+ * this file entirely - when `buildAssistantSegments` suppresses a subagent spawn
+ * tool or an edit tool call. The group id comes from the first segment, so
+ * `[reasoning, X] -> [reasoning]` happens under an unchanged id.
+ *
+ * Nothing here tries to detect that. An earlier revision carried a `shrunk` flag
+ * on the model and it was wrong twice over: it could not see the removals that
+ * happen before the builder runs, and it could not tell "shrank under the
+ * reader" from "loaded already this shape", so a message that merely STARTS with
+ * a backgrounded command got the duplicate header back forever. The reverse flip
+ * is a property of what a group has already SHOWN, so it is handled where that
+ * outlives a render - `headedIds` on the activity-group open store.
+ *
+ * Shared with `chat-find-projection`, which emits a child header unit exactly
+ * when this is false - so the units and the ANCHORS agree, and a match is never
+ * counted where it cannot be painted.
+ */
+export function hidesSoleReasoningHeader(
+  segments: ReadonlyArray<ActivityGroupDetailSegment>,
+): boolean {
+  return segments.length === 1 && segments[0].kind === "reasoning";
+}
+
+/**
+ * What a reasoning block calls itself, in one place. A streaming block reads
+ * "Thinking" and ignores whatever duration it may already carry; a finished one
+ * reads its total.
+ *
+ * `thinkingPhrase` is held to producing exactly these three strings, lower-cased,
+ * for a group whose only segment is one reasoning block - which is the entire
+ * basis on which `hidesSoleReasoningHeader` deletes the block's own header.
+ */
+export function reasoningBlockLabel(
+  isStreaming: boolean,
+  durationMs: number | null,
+): string {
+  return isStreaming ? "Thinking" : reasoningSummaryLabel(durationMs);
+}
+
+/** The label any activity-group child shows for itself, reasoning included. */
+export function activityChildLabel(
+  segment: ActivityGroupDetailSegment,
+): string {
+  if (segment.kind === "reasoning") {
+    return reasoningBlockLabel(segment.isStreaming, segment.durationMs);
+  }
+  return latestActivityLabel(segment);
 }
 
 export function latestActivityLabel(segment: ActivitySegment): string {
@@ -713,32 +812,93 @@ function countReasoningSegment(
   segment: ReasoningSegment,
 ): void {
   counts.thinkingPresent = true;
-  if (segment.isStreaming) counts.thinkingStreaming = true;
-  if (segment.durationMs !== null) {
-    counts.thinkingDurationMs += segment.durationMs;
+  if (segment.isStreaming) {
+    // A block still streaming contributes nothing but its presence, even if it
+    // already carries a duration: `ReasoningSegment` labels a streaming block
+    // "Thinking" and ignores the number, so counting it here would let the
+    // group say "Thought for 3s" over a child still saying "Thinking" - and
+    // `hidesSoleReasoningHeader` would then hide a header that did NOT say the
+    // same thing.
+    return;
   }
+  counts.thinkingCompleted = true;
+  if (segment.durationMs === null) {
+    // Finished, but unmeasurable - interrupted, superseded, errored, or older
+    // than `startedAt`. The sum it does not join stops being a total.
+    counts.thinkingDurationPartial = true;
+    return;
+  }
+  counts.thinkingDurationKnown = true;
+  counts.thinkingDurationMs += segment.durationMs;
+}
+
+/**
+ * The label a reasoning block shows for itself. Lives here, next to the group
+ * clause it has to agree with, and is imported by `ReasoningSegment` (the
+ * rendered header) and by `chat-find-projection` (its find unit) so all three
+ * spellings of "how long did it think" come from one place.
+ *
+ * `Math.max(1, ...)` is why: a block that started and finished inside the same
+ * millisecond has a real, measured duration of 0 and reads "Thought for 1s",
+ * because "Thought for 0s" describes nothing. A block with no measurement at
+ * all - persisted history, no `startedAt` - is `null` and reads "Thought".
+ */
+export function reasoningSummaryLabel(durationMs: number | null): string {
+  if (durationMs === null) return "Thought";
+  return `Thought for ${thoughtClockDuration(durationMs)}`;
+}
+
+/**
+ * The ONE place a thinking duration becomes a string. `reasoningSummaryLabel`
+ * (the block's own header) and `thinkingPhrase` (the group clause standing in
+ * for it) both route through here, so the equality `hidesSoleReasoningHeader`
+ * bets on is structural rather than two copies of a rounding rule kept in step
+ * by hand.
+ *
+ * `Math.max(1, ...)` is why the rule needs a home: a block that started and
+ * finished inside the same millisecond has a real, measured duration of 0 and
+ * reads "1s", because "0s" describes nothing. A block with no measurement at
+ * all is `null` and never reaches here.
+ */
+function thoughtClockDuration(durationMs: number): string {
+  return formatClockDuration(Math.max(1, Math.round(durationMs / 1000)));
 }
 
 /**
  * Leading clause of a group summary that contains reasoning.
  *
- * A still-streaming block has no duration yet, so it reads "thinking" - which
- * also gives a sole-reasoning group a real label from its very first token
- * (without it the summary would fall through to the generic "Ran activity"
- * until the block completed). Streaming wins over the accumulated duration:
- * while one block streams, a settled earlier one's total is not the headline.
+ * MONOTONE: `thinking` -> `thought` -> `thought for Xs`, and never backwards.
+ * None of the three flags it reads can clear (reasoning is the one child kind
+ * that never leaves a run), so the clause can only move forward.
  *
- * A completed block with no usable duration reads a bare "thought", mirroring
- * `reasoningSummaryLabel`'s own null fallback. Falling through to null here
- * would hand the group the generic "Ran activity" label and erase every trace
- * of the thinking from both the summary and the find index.
+ * Two revisions got this wrong in the same way - by letting a NEW streaming
+ * block erase what the run had already done. First a bare "thinking" whenever
+ * anything streamed, which shuttled `Thought for 5s, read 3 files` ->
+ * `Thinking` -> `Thought for 11s, read 3 files`. Then a duration-only guard,
+ * which fixed that everywhere except history with no `startedAt`: total 0,
+ * `thought` -> `thinking` -> `thought` on the next block. `thinkingCompleted`
+ * closes it - a run that has already thought does not stop having done so.
+ *
+ * The three branches are exactly `reasoningSummaryLabel`'s three cases, in
+ * lower case, and must stay that way: for a group whose only segment is one
+ * reasoning block this string IS the whole label, and
+ * `hidesSoleReasoningHeader` drops the block's own header on the strength of
+ * the two being identical.
+ *
+ * The "+" suffix is the one thing here `reasoningSummaryLabel` has no analogue
+ * for, and it CANNOT break that equality: it needs one finished block with a
+ * duration and another without, which is two segments, and a group of two
+ * segments is never headerless.
  */
 function thinkingPhrase(counts: ActivitySummaryCounts): string | null {
-  if (counts.thinkingStreaming) return "thinking";
   if (!counts.thinkingPresent) return null;
-  if (counts.thinkingDurationMs <= 0) return "thought";
-  const seconds = Math.max(1, Math.round(counts.thinkingDurationMs / 1000));
-  return `thought for ${formatClockDuration(seconds)}`;
+  if (counts.thinkingDurationKnown) {
+    const clause = `thought for ${thoughtClockDuration(counts.thinkingDurationMs)}`;
+    // A floor, not a total - some finished block could not be measured.
+    return counts.thinkingDurationPartial ? `${clause}+` : clause;
+  }
+  if (counts.thinkingCompleted) return "thought";
+  return "thinking";
 }
 
 function capitalizeFirst(value: string): string {

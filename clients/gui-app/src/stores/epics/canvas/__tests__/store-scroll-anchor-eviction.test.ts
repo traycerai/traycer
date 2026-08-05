@@ -2,13 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { epicCanvasKey } from "@/lib/persist";
 import {
-  useTileScrollAnchorStore,
+  readExactReadingPosition,
+  readReadingPosition,
+  readingPositionIdentityForTileInstance,
+  resetReadingPositionServiceForTests,
+  saveReadingPosition,
+} from "@/lib/reading-position";
+import {
+  isTileScrollAnchor,
   type TileScrollAnchor,
-} from "@/stores/epics/canvas/tile-scroll-anchor-store";
+} from "@/hooks/scroll/scroll-anchor-types";
 import {
   evictChatTabState,
   evictChatTabStateForEpic,
-  hasSavedChatTabState,
+  peekSavedChatTabState,
   restoreChatTabState,
   saveChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
@@ -36,6 +43,11 @@ import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { useTileFindStore } from "@/stores/tile-find";
 import type { TileFindCapability, TileFindUiState } from "@/stores/tile-find";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import {
+  pendingHydrationRestore,
+  rememberPendingHydrationRestore,
+  resetPendingHydrationRestoreForTesting,
+} from "@/stores/chats/chat-tab-pending-hydration-restore";
 import { evictTileFindUiForEpic } from "@/stores/tile-find/tile-find-store";
 import {
   evictChatTurnMinimapActiveEntries,
@@ -92,6 +104,7 @@ function identityFor(epicId: string): ChatTabPersistenceIdentity {
     tileInstanceId: CHAT_A.instanceId,
     epicId,
     chatId: CHAT_A.id,
+    hostId: CHAT_A.hostId,
   };
 }
 
@@ -103,6 +116,12 @@ function seedTicket5PerTabState(epicId: string): void {
     anchorMessageId: "msg-seed",
     anchorIndex: 0,
     offset: 24,
+  });
+  rememberPendingHydrationRestore(identity, {
+    mode: "free-scrolling",
+    anchorMessageId: "msg-pending",
+    anchorIndex: 1,
+    offset: 12,
   });
   getOrCreateActivityGroupOpenStore(identity)
     .getState()
@@ -131,7 +150,7 @@ function seedTicket5PerTabState(epicId: string): void {
 
 function expectTicket5PerTabStatePresent(epicId: string): void {
   const identity = identityFor(epicId);
-  expect(hasSavedChatTabState(identity)).toBe(true);
+  expect(peekSavedChatTabState(identity) !== null).toBe(true);
   expect(restoreChatTabState(identity, []).mode).toBe("free-scrolling");
   expect(
     getOrCreateActivityGroupOpenStore(identity)
@@ -155,6 +174,9 @@ function expectTicket5PerTabStatePresent(epicId: string): void {
     useTileFindStore.getState().uiByTileInstanceId[CHAT_A.instanceId],
   ).toEqual(SEEDED_TILE_FIND_UI);
   expect(restoreChatTurnMinimapActiveEntry(identity)).toBe("msg-seed");
+  expect(pendingHydrationRestore(identity)?.anchorMessageId).toBe(
+    "msg-pending",
+  );
 }
 
 function expectTicket5TabKeysEvicted(epicId: string): void {
@@ -178,9 +200,10 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
     useTileFindStore.getState().uiByTileInstanceId[CHAT_A.instanceId],
   ).toBeUndefined();
   // Durable scroll + minimap still restore via chat-key after tab-key eviction.
-  expect(hasSavedChatTabState(identity)).toBe(true);
+  expect(peekSavedChatTabState(identity) !== null).toBe(true);
   expect(restoreChatTabState(identity, []).mode).toBe("free-scrolling");
   expect(restoreChatTurnMinimapActiveEntry(identity)).toBe("msg-seed");
+  expect(pendingHydrationRestore(identity)).toBeNull();
   // A2A / activity-group registries: getOrCreate after tab-key eviction
   // builds a fresh store seeded from the durable snapshot the sweep wrote.
   expect(
@@ -225,7 +248,7 @@ beforeEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.persist.setOptions({ name: epicCanvasKey(null) });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useTileScrollAnchorStore.setState({ anchors: {} });
+  resetReadingPositionServiceForTests();
   useToolOpenStore.setState({ openIds: new Set() });
   useSubagentOpenStore.setState({ openIds: new Set() });
   evictChatTabState([SPEC_A.instanceId]);
@@ -235,10 +258,12 @@ beforeEach(() => {
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
   useTileFindStore.getState().resetForTests();
+  resetPendingHydrationRestoreForTesting();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetReadingPositionServiceForTests();
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useToolOpenStore.setState({ openIds: new Set() });
   useSubagentOpenStore.setState({ openIds: new Set() });
@@ -249,34 +274,40 @@ afterEach(() => {
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
   useTileFindStore.getState().resetForTests();
+  resetPendingHydrationRestoreForTesting();
 });
 
 describe("canvas store scroll-anchor sweep", () => {
-  it("evicts a tile's anchor when its canvas is permanently removed", () => {
+  it("evicts a closed tile's exact anchor while retaining its content fallback", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-evict", "Evict Me");
     store.openTileInTab(tabId, SPEC_A);
-    useTileScrollAnchorStore.getState().setAnchor(SPEC_A.instanceId, ANCHOR);
+    const identity = readingPositionIdentityForTileInstance(SPEC_A.instanceId);
+    saveReadingPosition(identity, "native", ANCHOR);
 
     useEpicCanvasStore.getState().closeTabsForEpics(["epic-evict"]);
 
     expect(
-      useTileScrollAnchorStore.getState().getAnchor(SPEC_A.instanceId),
-    ).toBeUndefined();
+      readExactReadingPosition(identity, "native", isTileScrollAnchor),
+    ).toBeNull();
+    expect(readReadingPosition(identity, "native", isTileScrollAnchor)).toEqual(
+      ANCHOR,
+    );
   });
 
   it("preserves the anchor across a hide-for-reopen close (tile stays live)", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-hide", "Hide Me");
     store.openTileInTab(tabId, SPEC_A);
-    useTileScrollAnchorStore.getState().setAnchor(SPEC_A.instanceId, ANCHOR);
+    const identity = readingPositionIdentityForTileInstance(SPEC_A.instanceId);
+    saveReadingPosition(identity, "native", ANCHOR);
 
     // closeTab hides the tab but keeps its canvas (and tiles) for reopen, so the
     // instanceId never leaves the live set and the sweep must NOT clear it.
     store.closeTab(tabId);
 
     expect(
-      useTileScrollAnchorStore.getState().getAnchor(SPEC_A.instanceId),
+      readExactReadingPosition(identity, "native", isTileScrollAnchor),
     ).toEqual(ANCHOR);
   });
 });

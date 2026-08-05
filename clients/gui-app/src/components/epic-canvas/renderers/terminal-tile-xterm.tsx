@@ -276,6 +276,16 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     cursorBlink,
     allowProposedApi: true,
     scrollback: 5000,
+    // xterm's own slider defaults to a 14px VS Code-width gutter. The app's
+    // scrollbars are 4px (`index.css`), and a terminal tile is routinely docked
+    // beside a chat pane, so the two bars have to agree. Slider colors come
+    // through the ITheme in `terminal-theme.ts`.
+    //
+    // Setting a width is also the only switch that turns xterm's overview ruler
+    // on, which is what finally gives find-in-terminal's `matchOverviewRuler`
+    // color somewhere to paint. The ruler's own left-edge outline is suppressed
+    // via `overviewRulerBorder` in the theme.
+    scrollbar: { width: 4 },
     fontFamily,
     fontSize: effectiveFontSize,
     letterSpacing: 0,

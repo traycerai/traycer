@@ -215,6 +215,7 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
   localHostState: "unknown",
   stage: "loading",
   progress: null,
+  lastProgress: null,
   provisioningError: null,
   provisioning: false,
   removed: false,
@@ -233,6 +234,7 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
     retry: () => undefined,
     degraded: false,
     unreachable: false,
+    hostStatus: null,
   },
 };
 
