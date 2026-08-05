@@ -42,6 +42,7 @@ import {
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
+import { hasFreshStopIntent } from "../host/stop-intent";
 import {
   attestLaunchdSupervisorPid,
   readLayer0Frame,
@@ -125,6 +126,46 @@ export interface HostStartTarget {
  * never has to infer the transport from the descriptor's type.
  */
 export const LAYER0_STATUS_FD = 3;
+
+/**
+ * Crash-relaunch budget (int #4826, from OSS #916).
+ *
+ * A host that crashes while the desktop app is CLOSED had no guardian: the
+ * desktop health monitor is not running, launch converge needs a launch, and on
+ * Windows the Scheduled Task's `RestartOnFailure` demonstrably did not relaunch
+ * a task whose action exited `0xC0000409`. macOS (`KeepAlive{SuccessfulExit:
+ * false}`) and Linux (`Restart=on-failure`) already do this; the supervisor now
+ * does it itself so all three behave the same and Windows stops being the odd
+ * one out.
+ *
+ * This layer sits UNDER those service managers, never replacing them: once the
+ * budget is spent the supervisor exits with the child's own code, so launchd,
+ * systemd, and the next Windows logon remain the outer backstop.
+ */
+export const MAX_CONSECUTIVE_RELAUNCHES = 5;
+
+/**
+ * Spacing before each relaunch, indexed by how many have already been made; the
+ * last entry repeats. Deliberately faster off the mark than the desktop
+ * governor's `[0, 60_000, 300_000]`: that one arbitrates while a user is
+ * present and other recovery exists, whereas here the host is provably dead and
+ * nothing else is watching. Caps at a minute so a machine that cannot start a
+ * host is not hammered.
+ */
+export const RELAUNCH_BACKOFF_MS: readonly number[] = [
+  1_000, 5_000, 15_000, 30_000, 60_000,
+];
+
+/**
+ * How long a child must have RUN before its death is forgiven and the attempt
+ * counter resets.
+ *
+ * Mirrors `SUSTAINED_HEALTH_MS` in the desktop's recovery governor, and for the
+ * same hard-won reason recorded there: a single "it started" observation must
+ * not re-arm the budget, because a host that dies 20s into boot every time
+ * would then relaunch forever. Only real uptime counts.
+ */
+export const SUSTAINED_UPTIME_RESET_MS = 300_000;
 
 export interface ResolveHostStartTargetDeps {
   readonly readInstallRecord: (
@@ -271,6 +312,21 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     excludeNames: ReadonlySet<string>,
   ) => Promise<CrashReportMatch | null>;
   readonly createStderrTee: (environment: Environment) => StderrTee;
+  // Relaunch-loop seams. `sleep` keeps the backoff out of wall-clock time in
+  // tests (a five-attempt run would otherwise cost ~110s and make the suite
+  // load-sensitive); `hasStopIntent` is the "was this death asked for?" check.
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly hasStopIntent: (
+    environment: Environment,
+    nowMs: number,
+  ) => Promise<boolean>;
+  // Consecutive relaunches allowed before the supervisor gives up and hands
+  // the machine back to launchd / systemd / the next logon. A dependency
+  // rather than a bare constant so a test can state which behaviour it is
+  // exercising: `0` pins a single attempt (the terminal-marker and
+  // crash-diagnostics tests), a small number exercises exhaustion without
+  // paying for five.
+  readonly maxRelaunches: number;
 }
 
 const defaultRunDeps: RunHostStartDeps = {
@@ -299,6 +355,13 @@ const defaultRunDeps: RunHostStartDeps = {
     prepareCrashReportsDir(dir, MAX_KEPT_CRASH_REPORTS),
   findCrashReport: findCrashReportSince,
   createStderrTee: (environment) => new StderrLogTee(environment),
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    }),
+  hasStopIntent: hasFreshStopIntent,
+  maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
 };
 
 // Long-running entrypoint invoked by the OS service manager. Resolves
@@ -445,340 +508,40 @@ export async function runHostStart(
     return deps.exit(0);
   }
 
-  let target: HostStartTarget;
-  try {
-    target = await resolveHostStartTarget(opts, deps);
-  } catch (err) {
-    if (err instanceof CliError) {
-      logger.warn("Host supervisor target resolution failed", {
-        environment: opts.environment,
-        code: err.code,
-        exitCode: err.exitCode,
-        attemptId,
-      });
-      const detailLine = JSON.stringify({
-        code: err.code,
-        message: err.message,
-        details: err.details,
-      });
-      await deps.writeMarker(
-        opts.environment,
-        "failed-to-spawn",
-        markerFields(
-          attemptId,
-          supervisorPid,
-          {
-            shell: undefined,
-            args: undefined,
-            bundle: undefined,
-            exitCode: undefined,
-            signal: undefined,
-            error: `${err.code}: ${err.message}`,
-          },
-          null,
-        ),
-      );
-      await writeProbeTerminalIfAttested({
-        context: probeContext,
-        attemptId,
-        supervisorPid,
-        reason: `target-resolution-${err.code}`,
-        deps,
-        environment: opts.environment,
-      });
-      deps.onError(`traycer host start: ${err.code}: ${err.message}`);
-      deps.onError(detailLine);
-      return deps.exit(err.exitCode);
-    }
-    logger.error(
-      "Host supervisor target resolution threw unexpectedly",
-      { environment: opts.environment, exitCode: 1 },
-      errorFromUnknown(err),
-    );
-    await writeProbeTerminalIfAttested({
-      context: probeContext,
-      attemptId,
-      supervisorPid,
-      reason: "target-resolution-unexpected",
-      deps,
-      environment: opts.environment,
-    });
-    throw err;
-  }
-
-  logger.info("Host supervisor target resolved", {
-    environment: opts.environment,
-    version: target.record.version,
-    argCount: target.args.length,
-    hasCwdOverride: opts.cwd !== null,
-  });
-
-  const envOverrides = await deps.readEnvOverrides();
-  logger.debug("Host supervisor loaded env overrides", {
-    environment: opts.environment,
-    overrideCount: Object.keys(envOverrides).length,
-  });
-  const env: NodeJS.ProcessEnv = {
-    ...applyEnvOverrides(process.env, envOverrides),
-    TERM_PROGRAM: "traycer",
-  };
-  // Cap the host's V8 young generation at creation time on EVERY platform.
-  // This is the single cross-platform host launch path, so applying it here
-  // gives Linux (systemd) and Windows (schtasks, which cannot set env vars in
-  // its task XML) the same cap macOS gets from its LaunchAgent plist. The helper
-  // dedups when the inherited env already carries it (the macOS plist case).
-  env.NODE_OPTIONS = withHostNodeOptions(env.NODE_OPTIONS);
-  // The host resolves its slot from its own `config.environment` (baked
-  // per build) - the supervisor passes no environment arg or env. It also
-  // computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the
-  // bundled `traycer` is symlinked) and puts it on PATH, so no `traycer` path
-  // needs to be handed down here.
-
-  // Bound the log before anything appends to this run. Nothing truncates
-  // `host.log` - every writer appends - so a start is the only safe moment to
-  // roll it: the fd opened below lives for the child's whole lifetime and would
-  // follow the file across a rename, splitting one session across two files.
-  // Under the cap this is a no-op, so consecutive starts still share one log.
-  const rotation = await deps.rotateLog(opts.environment);
-  logger.debug("Host supervisor checked log rotation", {
-    environment: opts.environment,
-    rotation,
-  });
-
-  // Create + prune the diagnostic-report destination BEFORE the spawn: the
-  // relative `--report-directory=crash-reports` in NODE_OPTIONS resolves
-  // against the child cwd, and a crash before the host's own runtime arming
-  // must still have somewhere to land. Never throws.
-  const crashReportsDirPath = crashReportsDirFor(target.cwd);
-  const preexistingReportNames = new Set(
-    await deps.prepareCrashReportsDir(crashReportsDirPath),
-  );
-
-  await deps.writeMarker(
-    opts.environment,
-    "starting",
-    markerFields(
-      attemptId,
-      supervisorPid,
-      {
-        shell: undefined,
-        args: target.args,
-        bundle: target.executable,
-        exitCode: undefined,
-        signal: undefined,
-        error: undefined,
-      },
-      null,
-    ),
-  );
-
-  const logFd = await deps.openLogFd(opts.environment);
-  // `--layer0-status-fd` is the AUTHORIZATION for the framed Layer-0 status
-  // transport, not a hint about it: the host writes a status frame only when
-  // this supervisor names the descriptor, and is a hard no-op otherwise. It
-  // is therefore passed if and only if the `stdio` vector below actually
-  // opens the pipe (probe mode). Passing it speculatively would re-create the
-  // defect it exists to close - the host used to sniff fd 3's type, and
-  // Node's own IPC channel is a Unix-domain socket on fd 3, so unrelated IPC
-  // received raw frames. Version skew is safe both ways: an N-1 host scans
-  // argv and ignores the unknown flag, and a current host that is not given
-  // the flag simply writes nothing.
-  const hostArgs = [
-    ...target.args,
-    "--layer0-attempt-id",
-    attemptId,
-    ...(probeContext === null
-      ? []
-      : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
-  ] as const;
-
-  // The `make dev-desktop` host runtime is a `.cmd` wrapper that execs
-  // `node <bundle>` (production is a real `.exe`). bun/Node launch a `.cmd`
-  // through cmd.exe but do NOT quote a wrapper path containing spaces (e.g.
-  // "C:\Users\Traycer Dev\..."), so cmd splits it and fails with
-  // "'C:\Users\Traycer' is not recognized". Invoke cmd.exe ourselves with a
-  // verbatim, fully-quoted command line on Windows; every other case spawns
-  // the executable directly.
-  const launch = resolveSpawnInvocation(target.executable, hostArgs);
-
-  // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
-  // report before any post-spawn statement runs, and the report scan treats
-  // this as its lower bound (with additional slack for mtime granularity).
-  const childSpawnedAtMs = Date.now();
-  let child: ChildProcess;
-  try {
-    child = deps.spawn(launch.command, launch.args, {
-      cwd: target.cwd,
-      env,
-      // Index LAYER0_STATUS_FD of this vector IS the descriptor named by
-      // `--layer0-status-fd` above; the two must not drift apart. stdout
-      // stays on the log fd; stderr is piped so the supervisor can tee it -
-      // byte-for-byte into `host.log` BY PATH (a host-side log rotation
-      // strands an fd-bound copy in `host.log.1`) plus a bounded in-memory
-      // tail for the crash marker.
-      stdio:
-        probeContext === null
-          ? ["ignore", logFd, "pipe"]
-          : ["ignore", logFd, "pipe", "pipe"],
-      windowsHide: process.platform === "win32",
-      ...(launch.windowsVerbatimArguments
-        ? { windowsVerbatimArguments: true }
-        : {}),
-    });
-  } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    logger.error(
-      "Host supervisor spawn failed",
-      { environment: opts.environment, exitCode: 66 },
-      errorFromUnknown(cause),
-    );
-    await deps.writeMarker(
-      opts.environment,
-      "failed-to-spawn",
-      markerFields(
-        attemptId,
-        supervisorPid,
-        {
-          shell: undefined,
-          args: undefined,
-          bundle: target.executable,
-          exitCode: undefined,
-          signal: undefined,
-          error: message,
-        },
-        null,
-      ),
-    );
-    await writeProbeTerminalIfAttested({
-      context: probeContext,
-      attemptId,
-      supervisorPid,
-      reason: "host-spawn-failed",
-      deps,
-      environment: opts.environment,
-    });
-    deps.onError(
-      `traycer host start: ${CLI_ERROR_CODES.HOST_SPAWN_FAILED}: ${message}`,
-    );
-    return deps.exit(66);
-  }
-
-  // Stderr tee (see the stdio comment above): bounded path-addressed mirror
-  // into host.log plus the head+tail capture for the crash marker. Failures
-  // are swallowed - a diagnostics write must never take the supervisor down.
-  const stderrTee = deps.createStderrTee(opts.environment);
-  // Resolves when the stderr stream ends (or errors). `exit` fires when the
-  // process dies, NOT when its pipes have drained, so the finalize path waits
-  // on THIS (bounded) before writing the marker - otherwise the fatal text can
-  // still be unread in the pipe and the capture comes out empty in exactly the
-  // abnormal-death case this feature exists for.
-  let resolveStderrEnded: () => void = () => undefined;
-  const stderrEnded = new Promise<void>((resolve) => {
-    resolveStderrEnded = resolve;
-  });
-  if (child.stderr === null || child.stderr === undefined) {
-    resolveStderrEnded();
-  } else {
-    const stderr = child.stderr;
-    stderr.on("data", (chunk: Buffer) => {
-      stderrTee.append(chunk);
-    });
-    // MANDATORY, not defensive: the stream is a live `Readable` this process
-    // owns, and Node rethrows an unhandled stream `error` as an uncaught
-    // exception. A read error on this pipe (EIO, or EPIPE after an abnormal
-    // child death - i.e. precisely the crash case) would kill the supervisor
-    // BEFORE it writes the terminal marker Desktop reads. Swallow it and
-    // settle the wait: whatever bytes arrived are still worth recording, and
-    // `error` may arrive instead of `end`.
-    stderr.on("error", () => {
-      resolveStderrEnded();
-    });
-    stderr.on("end", () => {
-      resolveStderrEnded();
-    });
-    stderr.on("close", () => {
-      resolveStderrEnded();
-    });
-  }
-
-  const probeObservation =
-    probeContext === null
-      ? null
-      : observeProbeStatus({
-          child,
-          context: probeContext,
-          attemptId,
-          supervisorPid,
-          deps,
-          environment: opts.environment,
-        });
-  // `persistChildExit` awaits this inside a try/catch, but ONLY on the `exit`
-  // path. If the child fails asynchronously (`child.once("error", …)`, e.g.
-  // ENOENT) or simply never exits, nothing is ever attached - so a rejected
-  // `writeProbeMarker` (disk full, EACCES on the marker path) surfaces as an
-  // unhandled rejection and can take the supervisor down. Killing the
-  // supervisor because a diagnostic marker could not be written is a strictly
-  // worse outcome than not writing it.
+  // ---- Relaunch loop ------------------------------------------------------
   //
-  // Marking it handled here rather than replacing the promise: `.catch()`
-  // returns a NEW promise and leaves `probeObservation` itself rejected but
-  // acknowledged, so `persistChildExit` still observes the failure and still
-  // logs it with its own context. Swallowing it into a resolved
-  // `{ marker: null }` would trade the crash for silence.
-  void probeObservation?.catch(() => undefined);
+  // Everything above this point is a GATE and runs exactly once: probe
+  // authority, and the incumbent check that decides whether this supervisor
+  // should exist at all. Everything below is per-attempt.
+  let attemptNumber = 0;
+  let consecutiveRelaunches = 0;
+  let shuttingDown = false;
+  let currentChild: ChildProcess | null = null;
 
-  // `spawn()` may report a failure asynchronously (notably ENOENT on some
-  // platforms).  It is an EventEmitter error, not an exception from spawn,
-  // so it needs the same terminal evidence path as a synchronous failure.
-  // Guard both listeners: some child implementations subsequently emit exit.
-  let childFinalized = false;
-  const finalizeChildExit = (
-    code: number | null,
-    signal: NodeJS.Signals | null,
-  ): void => {
-    if (childFinalized) return;
-    childFinalized = true;
-    void persistChildExit({
-      code,
-      signal,
-      deps,
-      logger,
-      environment: opts.environment,
-      attemptId,
-      supervisorPid,
-      bundle: target.executable,
-      probeObservation,
-      childSpawnedAtMs,
-      stderrTee,
-      stderrEnded,
-      crashReportsDirPath,
-      preexistingReportNames,
-    });
-  };
-  const finalizeChildSpawnError = (cause: Error): void => {
-    if (childFinalized) return;
-    childFinalized = true;
-    void persistAsyncChildSpawnFailure({
-      cause,
-      deps,
-      logger,
-      environment: opts.environment,
-      attemptId,
-      supervisorPid,
-      bundle: target.executable,
-      probeContext,
-    });
-  };
-
+  // Registered ONCE for the supervisor's whole life. Five relaunches must not
+  // install five listener sets, so the handler reads a mutable reference to
+  // whichever child is current rather than closing over the first one.
+  //
+  // `shuttingDown` latches BEFORE the forward, and that ordering is the point:
+  // `launchctl bootout` and `systemctl stop` stop the host by signalling THIS
+  // process, which then kills its child - so without the latch that child's
+  // death is indistinguishable from a crash and the loop would relaunch a host
+  // in the middle of its own teardown. Setting the flag after forwarding would
+  // leave a window where the exit is processed while it is still false.
+  //
+  // This is the POSIX half of the deliberate-stop guard. Windows needs the
+  // other half (`host/stop-intent.ts`): there the supervisor is an orphaned
+  // grandchild that `schtasks /End` never signals at all.
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     process.on(sig, () => {
+      shuttingDown = true;
+      const child = currentChild;
       logger.debug("Host supervisor forwarding signal to child", {
         environment: opts.environment,
         signal: sig,
-        childPidKnown: child.pid !== undefined,
-        attemptId,
+        childPidKnown: child?.pid !== undefined,
       });
-      if (child.pid !== undefined) {
+      if (child !== null && child.pid !== undefined) {
         try {
           child.kill(sig);
         } catch (cause) {
@@ -794,8 +557,545 @@ export async function runHostStart(
     });
   }
 
-  child.once("error", finalizeChildSpawnError);
-  child.once("exit", finalizeChildExit);
+  for (;;) {
+    attemptNumber += 1;
+    const isFirstAttempt = attemptNumber === 1;
+    // D5: a fresh id per attempt. `spawn-evidence.ts` pairs a post-baseline
+    // `starting` marker with its terminal marker, so a relaunch has to read as
+    // a genuinely new attempt rather than a second ending for the first one.
+    const attemptId = randomUUID();
+    // Probe authority is a ONE-SHOT verdict about a specific transition, owned
+    // by the install/restart lifecycle. The first exit answers it honestly;
+    // later relaunches are availability work and must never re-arm or
+    // resurrect it.
+    const attemptProbeContext = isFirstAttempt ? probeContext : null;
+
+    // Re-ask the incumbent question before every RELAUNCH, not just at the top.
+    //
+    // The gate above answered it once, for a supervisor that used to die with
+    // its child. This loop instead holds a claim on the data dir across a
+    // backoff - seconds to minutes during which nothing is serving - which
+    // materially widens the double-spawn window that gate's own comment
+    // describes as only partly covered. `traycer host ensure` can legitimately
+    // bring a host up in exactly that window (Desktop's launch converge does
+    // this), and stacking a second one on top is the outcome the whole
+    // incumbent policy exists to prevent.
+    //
+    // Declining is still never eviction: exit 0 and leave the winner alone.
+    if (!isFirstAttempt && attemptProbeContext === null) {
+      const relaunchIncumbent = await deps.findIncumbentHost(opts.environment);
+      if (relaunchIncumbent !== null) {
+        logger.warn(
+          "Host supervisor abandoning relaunch - another host now owns this data dir",
+          {
+            environment: opts.environment,
+            incumbentPid: relaunchIncumbent.pid,
+            incumbentVersion: relaunchIncumbent.version,
+            attemptId,
+            supervisorPid,
+          },
+        );
+        return deps.exit(0);
+      }
+    }
+
+    // D5: re-resolved EVERY attempt, never cached. An install swap renames
+    // `install/` aside mid-life, and a supervisor that held the first attempt's
+    // path would relaunch a binary that has moved or vanished - today a fresh
+    // launchd/systemd-spawned supervisor re-resolves, and the loop has to keep
+    // that property.
+    let target: HostStartTarget;
+    try {
+      target = await resolveHostStartTarget(opts, deps);
+    } catch (err) {
+      // On a RELAUNCH the failure is usually transient (mid-swap, or a
+      // still-settling install), and no other layer is watching while the app
+      // is closed - so it costs an attempt from the budget and retries.
+      // The FIRST attempt keeps today's contract exactly: surface and exit.
+      if (!isFirstAttempt) {
+        const decision = await decideRelaunch({
+          deps,
+          logger,
+          environment: opts.environment,
+          reason: "target-resolution-failed",
+          consecutiveRelaunches,
+          shuttingDown,
+        });
+        if (decision.kind === "relaunch") {
+          consecutiveRelaunches = decision.consecutiveRelaunches;
+          continue;
+        }
+        return deps.exit(err instanceof CliError ? err.exitCode : 1);
+      }
+      if (err instanceof CliError) {
+        logger.warn("Host supervisor target resolution failed", {
+          environment: opts.environment,
+          code: err.code,
+          exitCode: err.exitCode,
+          attemptId,
+        });
+        const detailLine = JSON.stringify({
+          code: err.code,
+          message: err.message,
+          details: err.details,
+        });
+        await deps.writeMarker(
+          opts.environment,
+          "failed-to-spawn",
+          markerFields(
+            attemptId,
+            supervisorPid,
+            {
+              shell: undefined,
+              args: undefined,
+              bundle: undefined,
+              exitCode: undefined,
+              signal: undefined,
+              error: `${err.code}: ${err.message}`,
+            },
+            null,
+          ),
+        );
+        await writeProbeTerminalIfAttested({
+          context: attemptProbeContext,
+          attemptId,
+          supervisorPid,
+          reason: `target-resolution-${err.code}`,
+          deps,
+          environment: opts.environment,
+        });
+        deps.onError(`traycer host start: ${err.code}: ${err.message}`);
+        deps.onError(detailLine);
+        return deps.exit(err.exitCode);
+      }
+      logger.error(
+        "Host supervisor target resolution threw unexpectedly",
+        { environment: opts.environment, exitCode: 1 },
+        errorFromUnknown(err),
+      );
+      await writeProbeTerminalIfAttested({
+        context: attemptProbeContext,
+        attemptId,
+        supervisorPid,
+        reason: "target-resolution-unexpected",
+        deps,
+        environment: opts.environment,
+      });
+      throw err;
+    }
+
+    logger.info("Host supervisor target resolved", {
+      environment: opts.environment,
+      version: target.record.version,
+      argCount: target.args.length,
+      hasCwdOverride: opts.cwd !== null,
+    });
+
+    const envOverrides = await deps.readEnvOverrides();
+    logger.debug("Host supervisor loaded env overrides", {
+      environment: opts.environment,
+      overrideCount: Object.keys(envOverrides).length,
+    });
+    const env: NodeJS.ProcessEnv = {
+      ...applyEnvOverrides(process.env, envOverrides),
+      TERM_PROGRAM: "traycer",
+    };
+    // Cap the host's V8 young generation at creation time on EVERY platform.
+    // This is the single cross-platform host launch path, so applying it here
+    // gives Linux (systemd) and Windows (schtasks, which cannot set env vars in
+    // its task XML) the same cap macOS gets from its LaunchAgent plist. The helper
+    // dedups when the inherited env already carries it (the macOS plist case).
+    env.NODE_OPTIONS = withHostNodeOptions(env.NODE_OPTIONS);
+    // The host resolves its slot from its own `config.environment` (baked
+    // per build) - the supervisor passes no environment arg or env. It also
+    // computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the
+    // bundled `traycer` is symlinked) and puts it on PATH, so no `traycer` path
+    // needs to be handed down here.
+
+    // Bound the log before anything appends to this run. Nothing truncates
+    // `host.log` - every writer appends - so a start is the only safe moment to
+    // roll it: the fd opened below lives for the child's whole lifetime and would
+    // follow the file across a rename, splitting one session across two files.
+    // Under the cap this is a no-op, so consecutive starts still share one log.
+    const rotation = await deps.rotateLog(opts.environment);
+    logger.debug("Host supervisor checked log rotation", {
+      environment: opts.environment,
+      rotation,
+    });
+
+    // Create + prune the diagnostic-report destination BEFORE the spawn: the
+    // relative `--report-directory=crash-reports` in NODE_OPTIONS resolves
+    // against the child cwd, and a crash before the host's own runtime arming
+    // must still have somewhere to land. Never throws.
+    const crashReportsDirPath = crashReportsDirFor(target.cwd);
+    const preexistingReportNames = new Set(
+      await deps.prepareCrashReportsDir(crashReportsDirPath),
+    );
+
+    await deps.writeMarker(
+      opts.environment,
+      "starting",
+      markerFields(
+        attemptId,
+        supervisorPid,
+        {
+          shell: undefined,
+          args: target.args,
+          bundle: target.executable,
+          exitCode: undefined,
+          signal: undefined,
+          error: undefined,
+        },
+        null,
+      ),
+    );
+
+    const logFd = await deps.openLogFd(opts.environment);
+    // `--layer0-status-fd` is the AUTHORIZATION for the framed Layer-0 status
+    // transport, not a hint about it: the host writes a status frame only when
+    // this supervisor names the descriptor, and is a hard no-op otherwise. It
+    // is therefore passed if and only if the `stdio` vector below actually
+    // opens the pipe (probe mode). Passing it speculatively would re-create the
+    // defect it exists to close - the host used to sniff fd 3's type, and
+    // Node's own IPC channel is a Unix-domain socket on fd 3, so unrelated IPC
+    // received raw frames. Version skew is safe both ways: an N-1 host scans
+    // argv and ignores the unknown flag, and a current host that is not given
+    // the flag simply writes nothing.
+    const hostArgs = [
+      ...target.args,
+      "--layer0-attempt-id",
+      attemptId,
+      ...(probeContext === null
+        ? []
+        : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
+    ] as const;
+
+    // The `make dev-desktop` host runtime is a `.cmd` wrapper that execs
+    // `node <bundle>` (production is a real `.exe`). bun/Node launch a `.cmd`
+    // through cmd.exe but do NOT quote a wrapper path containing spaces (e.g.
+    // "C:\Users\Traycer Dev\..."), so cmd splits it and fails with
+    // "'C:\Users\Traycer' is not recognized". Invoke cmd.exe ourselves with a
+    // verbatim, fully-quoted command line on Windows; every other case spawns
+    // the executable directly.
+    const launch = resolveSpawnInvocation(target.executable, hostArgs);
+
+    // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
+    // report before any post-spawn statement runs, and the report scan treats
+    // this as its lower bound (with additional slack for mtime granularity).
+    const childSpawnedAtMs = Date.now();
+    let child: ChildProcess;
+    try {
+      child = deps.spawn(launch.command, launch.args, {
+        cwd: target.cwd,
+        env,
+        // Index LAYER0_STATUS_FD of this vector IS the descriptor named by
+        // `--layer0-status-fd` above; the two must not drift apart. stdout
+        // stays on the log fd; stderr is piped so the supervisor can tee it -
+        // byte-for-byte into `host.log` BY PATH (a host-side log rotation
+        // strands an fd-bound copy in `host.log.1`) plus a bounded in-memory
+        // tail for the crash marker.
+        stdio:
+          probeContext === null
+            ? ["ignore", logFd, "pipe"]
+            : ["ignore", logFd, "pipe", "pipe"],
+        windowsHide: process.platform === "win32",
+        ...(launch.windowsVerbatimArguments
+          ? { windowsVerbatimArguments: true }
+          : {}),
+      });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      logger.error(
+        "Host supervisor spawn failed",
+        { environment: opts.environment, exitCode: 66 },
+        errorFromUnknown(cause),
+      );
+      await deps.writeMarker(
+        opts.environment,
+        "failed-to-spawn",
+        markerFields(
+          attemptId,
+          supervisorPid,
+          {
+            shell: undefined,
+            args: undefined,
+            bundle: target.executable,
+            exitCode: undefined,
+            signal: undefined,
+            error: message,
+          },
+          null,
+        ),
+      );
+      await writeProbeTerminalIfAttested({
+        context: probeContext,
+        attemptId,
+        supervisorPid,
+        reason: "host-spawn-failed",
+        deps,
+        environment: opts.environment,
+      });
+      deps.onError(
+        `traycer host start: ${CLI_ERROR_CODES.HOST_SPAWN_FAILED}: ${message}`,
+      );
+      return deps.exit(66);
+    }
+
+    // Stderr tee (see the stdio comment above): bounded path-addressed mirror
+    // into host.log plus the head+tail capture for the crash marker. Failures
+    // are swallowed - a diagnostics write must never take the supervisor down.
+    const stderrTee = deps.createStderrTee(opts.environment);
+    // Resolves when the stderr stream ends (or errors). `exit` fires when the
+    // process dies, NOT when its pipes have drained, so the finalize path waits
+    // on THIS (bounded) before writing the marker - otherwise the fatal text can
+    // still be unread in the pipe and the capture comes out empty in exactly the
+    // abnormal-death case this feature exists for.
+    let resolveStderrEnded: () => void = () => undefined;
+    const stderrEnded = new Promise<void>((resolve) => {
+      resolveStderrEnded = resolve;
+    });
+    if (child.stderr === null || child.stderr === undefined) {
+      resolveStderrEnded();
+    } else {
+      const stderr = child.stderr;
+      stderr.on("data", (chunk: Buffer) => {
+        stderrTee.append(chunk);
+      });
+      // MANDATORY, not defensive: the stream is a live `Readable` this process
+      // owns, and Node rethrows an unhandled stream `error` as an uncaught
+      // exception. A read error on this pipe (EIO, or EPIPE after an abnormal
+      // child death - i.e. precisely the crash case) would kill the supervisor
+      // BEFORE it writes the terminal marker Desktop reads. Swallow it and
+      // settle the wait: whatever bytes arrived are still worth recording, and
+      // `error` may arrive instead of `end`.
+      stderr.on("error", () => {
+        resolveStderrEnded();
+      });
+      stderr.on("end", () => {
+        resolveStderrEnded();
+      });
+      stderr.on("close", () => {
+        resolveStderrEnded();
+      });
+    }
+
+    const probeObservation =
+      probeContext === null
+        ? null
+        : observeProbeStatus({
+            child,
+            context: probeContext,
+            attemptId,
+            supervisorPid,
+            deps,
+            environment: opts.environment,
+          });
+    // `persistChildExit` awaits this inside a try/catch, but ONLY on the `exit`
+    // path. If the child fails asynchronously (`child.once("error", …)`, e.g.
+    // ENOENT) or simply never exits, nothing is ever attached - so a rejected
+    // `writeProbeMarker` (disk full, EACCES on the marker path) surfaces as an
+    // unhandled rejection and can take the supervisor down. Killing the
+    // supervisor because a diagnostic marker could not be written is a strictly
+    // worse outcome than not writing it.
+    //
+    // Marking it handled here rather than replacing the promise: `.catch()`
+    // returns a NEW promise and leaves `probeObservation` itself rejected but
+    // acknowledged, so `persistChildExit` still observes the failure and still
+    // logs it with its own context. Swallowing it into a resolved
+    // `{ marker: null }` would trade the crash for silence.
+    void probeObservation?.catch(() => undefined);
+
+    // `spawn()` may report a failure asynchronously (notably ENOENT on some
+    // platforms).  It is an EventEmitter error, not an exception from spawn,
+    // so it needs the same terminal evidence path as a synchronous failure.
+    // Guard both listeners: some child implementations subsequently emit exit.
+    // The attempt's ending, AWAITED rather than fired-and-forgotten: the loop
+    // cannot decide whether to bring the host back without knowing how it
+    // died. `childFinalized` still guards the two listeners against
+    // double-settling - it is now per-attempt state, which is what makes it
+    // genuinely reusable rather than a one-shot latch on a process that was
+    // about to exit anyway.
+    currentChild = child;
+    let childFinalized = false;
+    const ending = await new Promise<ChildEnding>((resolve) => {
+      const settle = (value: ChildEnding): void => {
+        if (childFinalized) return;
+        childFinalized = true;
+        resolve(value);
+      };
+      // `spawn()` may report a failure asynchronously (notably ENOENT on some
+      // platforms). It is an EventEmitter error, not a throw from spawn, so it
+      // needs the same terminal-evidence path as a synchronous failure.
+      child.once("error", (cause: Error) =>
+        settle({ kind: "spawn-error", cause }),
+      );
+      child.once("exit", (code, signal) =>
+        settle({ kind: "exit", code, signal }),
+      );
+    });
+    currentChild = null;
+
+    if (ending.kind === "spawn-error") {
+      await persistAsyncChildSpawnFailure({
+        cause: ending.cause,
+        deps,
+        logger,
+        environment: opts.environment,
+        attemptId,
+        supervisorPid,
+        bundle: target.executable,
+        probeContext: attemptProbeContext,
+      });
+      // Same reasoning as a failed re-resolve: on a relaunch this is usually
+      // transient and nothing else is watching, so it spends budget and
+      // retries. The first attempt keeps today's contract - surface and exit.
+      if (!isFirstAttempt) {
+        const decision = await decideRelaunch({
+          deps,
+          logger,
+          environment: opts.environment,
+          reason: "spawn-failed",
+          consecutiveRelaunches,
+          shuttingDown,
+        });
+        if (decision.kind === "relaunch") {
+          consecutiveRelaunches = decision.consecutiveRelaunches;
+          continue;
+        }
+      }
+      return deps.exit(66);
+    }
+
+    const outcome = await persistChildExit({
+      code: ending.code,
+      signal: ending.signal,
+      deps,
+      logger,
+      environment: opts.environment,
+      attemptId,
+      supervisorPid,
+      bundle: target.executable,
+      probeObservation,
+      childSpawnedAtMs,
+      stderrTee,
+      stderrEnded,
+      crashReportsDirPath,
+      preexistingReportNames,
+    });
+
+    // A clean exit is the host standing down on purpose - never relaunch it.
+    // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
+    // restated, which is the point: one semantic on all three platforms.
+    if (!outcome.abnormal) {
+      return deps.exit(outcome.exitCode);
+    }
+
+    // D7: only real uptime forgives the budget. The desktop recovery governor
+    // records why a weaker rule is wrong - a host that dies shortly after boot
+    // every time answers "it started" every time, and treating that as recovery
+    // is what let the original respawn loop re-arm itself forever.
+    const ranForMs = Date.now() - childSpawnedAtMs;
+    if (ranForMs >= SUSTAINED_UPTIME_RESET_MS) {
+      consecutiveRelaunches = 0;
+    }
+
+    const decision = await decideRelaunch({
+      deps,
+      logger,
+      environment: opts.environment,
+      reason: ending.signal !== null ? "fatal-signal" : "crashed",
+      consecutiveRelaunches,
+      shuttingDown,
+    });
+    if (decision.kind !== "relaunch") {
+      return deps.exit(outcome.exitCode);
+    }
+    consecutiveRelaunches = decision.consecutiveRelaunches;
+  }
+}
+
+type ChildEnding =
+  | { readonly kind: "spawn-error"; readonly cause: Error }
+  | {
+      readonly kind: "exit";
+      readonly code: number | null;
+      readonly signal: NodeJS.Signals | null;
+    };
+
+type RelaunchDecision =
+  | { readonly kind: "relaunch"; readonly consecutiveRelaunches: number }
+  | { readonly kind: "stop" };
+
+/**
+ * The single place that answers "may this dead child be brought back?".
+ *
+ * Three refusals, in the order their evidence becomes available:
+ *
+ *  1. **Shutting down.** The POSIX stop path signals this supervisor, which
+ *     forwards to the child; relaunching there fights our own teardown.
+ *  2. **Stop intent.** The Windows stop path never signals this process at all
+ *     (`schtasks /End` kills only the task's root `wscript.exe`), so a stop
+ *     announces itself on disk instead. Checked immediately BEFORE the
+ *     relaunch rather than once at the top, so intent that lands mid-backoff is
+ *     still honoured.
+ *  3. **Budget.** Exhaustion exits with the child's own code, handing the
+ *     machine back to launchd / systemd / the next logon rather than spinning.
+ *
+ * A relaunch that survives all three still has to get past the incumbent
+ * re-check at the top of the next iteration.
+ */
+async function decideRelaunch(input: {
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly reason: string;
+  readonly consecutiveRelaunches: number;
+  readonly shuttingDown: boolean;
+}): Promise<RelaunchDecision> {
+  const { deps, logger, environment, reason } = input;
+  if (input.shuttingDown) {
+    logger.info("Host supervisor not relaunching - shutting down", {
+      environment,
+      reason,
+    });
+    return { kind: "stop" };
+  }
+  if (input.consecutiveRelaunches >= deps.maxRelaunches) {
+    logger.error(
+      "Host supervisor relaunch budget exhausted - leaving the host down",
+      {
+        environment,
+        reason,
+        attempts: input.consecutiveRelaunches,
+      },
+      null,
+    );
+    return { kind: "stop" };
+  }
+  if (await deps.hasStopIntent(environment, Date.now())) {
+    logger.info("Host supervisor not relaunching - a stop was requested", {
+      environment,
+      reason,
+    });
+    return { kind: "stop" };
+  }
+  const backoffMs =
+    RELAUNCH_BACKOFF_MS[
+      Math.min(input.consecutiveRelaunches, RELAUNCH_BACKOFF_MS.length - 1)
+    ] ?? 1_000;
+  // The only evidence a support pull will have that this loop ran at all.
+  logger.warn("Host supervisor relaunching the host", {
+    environment,
+    reason,
+    attempt: input.consecutiveRelaunches + 1,
+    maxAttempts: deps.maxRelaunches,
+    backoffMs,
+  });
+  await deps.sleep(backoffMs);
+  return {
+    kind: "relaunch",
+    consecutiveRelaunches: input.consecutiveRelaunches + 1,
+  };
 }
 
 async function persistAsyncChildSpawnFailure(input: {
@@ -842,7 +1142,6 @@ async function persistAsyncChildSpawnFailure(input: {
   input.deps.onError(
     `traycer host start: ${CLI_ERROR_CODES.HOST_SPAWN_FAILED}: ${message}`,
   );
-  input.deps.exit(66);
 }
 
 async function persistChildExit(input: {
@@ -860,7 +1159,7 @@ async function persistChildExit(input: {
   readonly stderrEnded: Promise<void>;
   readonly crashReportsDirPath: string;
   readonly preexistingReportNames: ReadonlySet<string>;
-}): Promise<void> {
+}): Promise<ChildExitOutcome> {
   if (input.probeObservation !== null) {
     try {
       const observation = await input.probeObservation;
@@ -940,7 +1239,7 @@ async function persistChildExit(input: {
         null,
       );
     }
-    return persistTerminalMarkerAndExit({
+    return persistTerminalMarker({
       deps,
       logger,
       environment,
@@ -967,6 +1266,11 @@ async function persistChildExit(input: {
             },
       ),
       exitCode: 128 + signalNumber(signal),
+      // A Node fatal abort on POSIX IS the crash, wearing a signal (see
+      // `describeFatalSignal`). A forwarded shutdown signal is not, so it
+      // resolves `null` here and never relaunches - a second, independent
+      // guard alongside the `shuttingDown` latch.
+      abnormal: fatalMeaning !== null,
     });
   }
   if (code === null || code === 0) {
@@ -975,7 +1279,7 @@ async function persistChildExit(input: {
       exitCode: code ?? 0,
       attemptId,
     });
-    return persistTerminalMarkerAndExit({
+    return persistTerminalMarker({
       deps,
       logger,
       environment,
@@ -994,6 +1298,7 @@ async function persistChildExit(input: {
         null,
       ),
       exitCode: code ?? 0,
+      abnormal: false,
     });
   }
   logger.error(
@@ -1025,7 +1330,7 @@ async function persistChildExit(input: {
       null,
     );
   }
-  return persistTerminalMarkerAndExit({
+  return persistTerminalMarker({
     deps,
     logger,
     environment,
@@ -1050,6 +1355,7 @@ async function persistChildExit(input: {
       },
     ),
     exitCode: code,
+    abnormal: true,
   });
 }
 
@@ -1184,14 +1490,24 @@ function isReadable(value: unknown): value is Readable {
   );
 }
 
-function persistTerminalMarkerAndExit(options: {
+/**
+ * Writes the attempt's terminal marker and reports how the child died.
+ *
+ * Deliberately no longer exits the process. The marker is per-ATTEMPT evidence
+ * (Desktop's readiness authority reads it, and `spawn-evidence.ts` pairs it
+ * with that attempt's `starting` marker), whereas exiting is a decision about
+ * the SUPERVISOR - which now outlives individual attempts. Collapsing the two
+ * is what made a crash necessarily fatal to the supervisor.
+ */
+function persistTerminalMarker(options: {
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
   readonly environment: Environment;
   readonly phase: Exclude<BootstrapPhase, "starting">;
   readonly fields: BootstrapMarkerFields;
   readonly exitCode: number;
-}): void {
+  readonly abnormal: boolean;
+}): ChildExitOutcome {
   try {
     options.deps.writeTerminalMarker(
       options.environment,
@@ -1200,7 +1516,7 @@ function persistTerminalMarkerAndExit(options: {
     );
   } catch (cause) {
     options.logger.error(
-      "Host supervisor could not persist terminal marker before exit",
+      "Host supervisor could not persist terminal marker",
       {
         environment: options.environment,
         phase: options.phase,
@@ -1208,11 +1524,18 @@ function persistTerminalMarkerAndExit(options: {
       },
       errorFromUnknown(cause),
     );
-  } finally {
-    // Marker persistence is best effort; it must never replace the child's
-    // actual exit code or cause a spurious service-manager restart.
-    options.deps.exit(options.exitCode);
   }
+  // Marker persistence is best effort; it must never replace the child's
+  // actual exit code or cause a spurious service-manager restart.
+  return { exitCode: options.exitCode, abnormal: options.abnormal };
+}
+
+export interface ChildExitOutcome {
+  readonly exitCode: number;
+  // Whether this is the kind of death the relaunch loop exists for. A clean
+  // exit (including the incumbent-declined path) and a forwarded shutdown
+  // signal are NOT abnormal; a nonzero exit and a fatal signal are.
+  readonly abnormal: boolean;
 }
 
 // Stamp every marker with the attempt's identity fields. Diagnostics stay

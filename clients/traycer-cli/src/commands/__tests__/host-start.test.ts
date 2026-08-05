@@ -296,6 +296,23 @@ function makeRunStubs(
     // actual `~/.traycer/host/pid.json` and probes whatever host is live on
     // this machine. Every test below would then decline instead of spawning.
     findIncumbentHost: async () => null,
+    // Same hazard class as `findIncumbentHost` above, now for the relaunch
+    // loop:
+    //   - unset, `hasStopIntent` falls through to the real implementation and
+    //     reads the developer's actual `~/.traycer/host/stop-intent.json`, so a
+    //     stray file left by a real `traycer host stop` would silently suppress
+    //     every relaunch assertion below;
+    //   - unset, `sleep` is a REAL timer, and one exhausted budget costs
+    //     1+5+15+30+60 = 111s of wall clock, which no 10s test timeout
+    //     survives.
+    hasStopIntent: async () => false,
+    sleep: async () => undefined,
+    // Pin the shared harness to a SINGLE attempt. Every test built on
+    // `makeRunStubs` predates the relaunch loop and asserts what one attempt
+    // records and exits with; letting them relaunch would silently change what
+    // they mean. The loop has its own describe block below, which opts back in
+    // with an explicit budget.
+    maxRelaunches: 0,
     readLiveProbeContext: async () => ({
       kind: "unauthorised" as const,
       reason: "no-journal" as const,
@@ -1518,5 +1535,345 @@ describe("service manifests never leak a flag `host start` does not have", () =>
     } finally {
       restoreUsername();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Crash-relaunch loop (int #4826, from OSS #916)
+//
+// A host that crashes while the desktop app is CLOSED had no guardian at all:
+// the health monitor is not running, launch converge needs a launch, and on
+// Windows the Scheduled Task did not restart a task whose action exited
+// 0xC0000409. The supervisor now relaunches its own child.
+//
+// The tests that assert an ABSENCE of relaunch matter most, because that is
+// where this feature can do damage (resurrecting a host the user stopped). They
+// are written so they cannot pass vacuously: the spawn seam counts calls, so a
+// mechanism that never ran at all fails just as loudly as one that ran twice.
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive N attempts whose child outcome is scripted per attempt.
+ *
+ * `outcomes[i]` is applied to the i-th spawn; the last entry repeats, so a
+ * "crashes forever" host is `[{ code: 7 }]`. Emitting from inside `spawn`
+ * (rather than a timer) guarantees the supervisor has attached its listeners,
+ * which is the same reason `withChildExit` does it that way.
+ */
+function withScriptedAttempts(
+  deps: Partial<RunHostStartDeps>,
+  outcomes: ReadonlyArray<{
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+  }>,
+): { deps: Partial<RunHostStartDeps>; children: StubChild[] } {
+  const originalSpawn = deps.spawn;
+  if (originalSpawn === undefined) {
+    throw new Error("test spawn dependency missing");
+  }
+  const children: StubChild[] = [];
+  return {
+    children,
+    deps: {
+      ...deps,
+      spawn: (command, args, options) => {
+        const index = children.length;
+        // A FRESH child per attempt, mirroring production: reusing one emitter
+        // would let a stale listener settle the next attempt's promise.
+        const child = makeStubChild();
+        children.push(child);
+        originalSpawn(command, args, options);
+        const outcome = outcomes[Math.min(index, outcomes.length - 1)] ?? {
+          code: 0,
+          signal: null,
+        };
+        setImmediate(() => {
+          child.emit("exit", outcome.code, outcome.signal);
+        });
+        const asUnknown: unknown = child;
+        return asUnknown as ChildProcess;
+      },
+    },
+  };
+}
+
+function startingAttemptIds(recorded: Recorded): string[] {
+  return recorded.markers
+    .filter((m) => m.phase === "starting")
+    .map((m) => String(m.fields.attemptId));
+}
+
+describe("runHostStart - crash relaunch loop", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("does not relaunch a host that exits cleanly", async () => {
+    // exit 0 is the host standing down on purpose - and is also the
+    // incumbent-declined path. `KeepAlive{SuccessfulExit:false}` restated.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 0, signal: null }]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+    // Not "no second marker" - the SPAWN seam, so a broken loop that never
+    // spawned anything at all could not pass this by accident.
+    expect(recorded.spawnCalls).toHaveLength(1);
+  });
+
+  it("relaunches a crashed host and gives the new attempt its own identity", async () => {
+    // `spawn-evidence.ts` pairs a post-baseline `starting` marker with its
+    // terminal marker. A relaunch that reused the first attempt's id would read
+    // as a second ending for the first attempt.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 7, signal: null },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+    const ids = startingAttemptIds(recorded);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(recorded.markers.filter((m) => m.phase === "crashed")).toHaveLength(
+      1,
+    );
+  });
+
+  it("gives up after the budget and exits with the child's own code", async () => {
+    // Exhaustion must hand the machine back to launchd / systemd / the next
+    // logon rather than spin - and must not launder the crash code into a 0.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 9, signal: null }]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 2 },
+        ),
+      recorded,
+    );
+
+    // 1 initial + 2 relaunches.
+    expect(recorded.spawnCalls).toHaveLength(3);
+    expect(recorded.exited).toBe(9);
+    expect(recorded.markers.filter((m) => m.phase === "crashed")).toHaveLength(
+      3,
+    );
+  });
+
+  it("relaunches a fatal signal death but never a forwarded shutdown signal", async () => {
+    // A Node fatal abort on POSIX IS the crash, wearing a signal. A forwarded
+    // SIGTERM is the opposite and must not be recovered.
+    const fatal = makeRunStubs(sampleRecord(exec), null);
+    const fatalScript = withScriptedAttempts(fatal.deps, [
+      { code: null, signal: "SIGABRT" },
+      { code: 0, signal: null },
+    ]);
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...fatalScript.deps, maxRelaunches: 5 },
+        ),
+      fatal.recorded,
+    );
+    expect(fatal.recorded.spawnCalls).toHaveLength(2);
+
+    const term = makeRunStubs(sampleRecord(exec), null);
+    const termScript = withScriptedAttempts(term.deps, [
+      { code: null, signal: "SIGTERM" },
+    ]);
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...termScript.deps, maxRelaunches: 5 },
+        ),
+      term.recorded,
+    );
+    expect(term.recorded.spawnCalls).toHaveLength(1);
+    expect(term.recorded.exited).toBe(128 + osConstants.signals.SIGTERM);
+  });
+
+  it("does not relaunch when a stop was requested", async () => {
+    // The Windows half of the deliberate-stop guard: `schtasks /End` never
+    // signals this process, so a stop announces itself on disk instead.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 1, signal: null }]);
+    let intentChecks = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => {
+              intentChecks += 1;
+              return true;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // Both halves matter: the guard was consulted, AND nothing respawned.
+    // Asserting only the spawn count would pass if the loop never ran.
+    expect(intentChecks).toBe(1);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(1);
+  });
+
+  it("abandons the relaunch when another host claims the data dir during backoff", async () => {
+    // Backoff holds a claim on the data dir for seconds-to-minutes while
+    // nothing serves. `traycer host ensure` can legitimately win that race, and
+    // stacking a second host on top is what the incumbent policy exists to
+    // prevent. Declining is never eviction: exit 0, leave the winner alone.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 3, signal: null }]);
+    let incumbentCalls = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            findIncumbentHost: async () => {
+              incumbentCalls += 1;
+              // Absent at the entry gate, present by the time we would respawn.
+              return incumbentCalls === 1
+                ? null
+                : {
+                    pid: 5150,
+                    version: "1.1.9",
+                    websocketUrl: "ws://127.0.0.1:9/rpc",
+                  };
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(incumbentCalls).toBe(2);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("re-resolves the install target on every attempt", async () => {
+    // An install swap renames `install/` aside mid-life. A supervisor holding
+    // the first attempt's path would relaunch a binary that has moved - today a
+    // fresh launchd-spawned supervisor re-resolves, and the loop must keep that.
+    const moved = "/opt/traycer/host/install/traycer-host-v2";
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 4, signal: null },
+      { code: 0, signal: null },
+    ]);
+    let reads = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            readInstallRecord: async () => {
+              reads += 1;
+              return sampleRecord(reads === 1 ? exec : moved);
+            },
+            pathExists: async () => true,
+          },
+        ),
+      recorded,
+    );
+
+    expect(reads).toBe(2);
+    expect(recorded.spawnCalls[0]?.command).toBe(exec);
+    expect(recorded.spawnCalls[1]?.command).toBe(moved);
+  });
+
+  it("reopens the host log fd for each attempt", async () => {
+    // The host rotates host.log BY RENAME. An fd held across a rotation writes
+    // the next child's stdout into host.log.1 - the same hazard oss #982 fixed
+    // for the stderr tee.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 5, signal: null },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.sequence.filter((s) => s === "open-fd")).toHaveLength(2);
+    expect(recorded.sequence.filter((s) => s === "rotate")).toHaveLength(2);
+  });
+
+  it("registers one set of signal listeners no matter how many attempts run", async () => {
+    // Five relaunches must not install five listener sets on `process`.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 6, signal: null }]);
+    const before = process.listenerCount("SIGTERM");
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 3 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(4);
+    expect(process.listenerCount("SIGTERM") - before).toBe(1);
+  });
+
+  it("resets the budget only after a child that actually ran for the sustained window", async () => {
+    // The governor's hard-won rule, transplanted: a host that dies shortly
+    // after boot every time answers "it started" every time, and treating that
+    // as recovery is what let the original respawn loop re-arm itself forever.
+    // Here every child dies INSTANTLY, so the budget must still terminate.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 8, signal: null }]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 2 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(3);
+    expect(recorded.exited).toBe(8);
   });
 });
