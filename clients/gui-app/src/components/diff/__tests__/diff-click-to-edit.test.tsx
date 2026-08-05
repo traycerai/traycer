@@ -184,8 +184,107 @@ describe("click-to-edit adapter", () => {
     });
     await act(async () => Promise.resolve());
 
-    expect(focus).toHaveBeenCalledWith({ lineNumber: 9, character: 0 });
+    expect(focus).toHaveBeenCalledWith({
+      lineNumber: 9,
+      character: 0,
+      preventScroll: true,
+    });
     unregister();
+  });
+
+  it("focuses the latest serial click without scrolling once attach completes", async () => {
+    const activate = vi.fn<Activate>(() =>
+      Promise.resolve({ kind: "activated" }),
+    );
+    const { result } = renderHook(() =>
+      useDiffClickToEdit({
+        surfaceId: "serial-attach-surface",
+        enabled: true,
+        active: true,
+        onActivate: activate,
+        onActivationError: vi.fn(),
+        onChange: vi.fn(),
+        onBlur: vi.fn(),
+        onSaveShortcut: vi.fn(),
+      }),
+    );
+    const editor = new Editor<undefined>({});
+    const focus = vi.spyOn(editor, "focus").mockImplementation(() => undefined);
+    const fileInstance = new File({}, undefined, true);
+
+    act(() => {
+      result.current.fileOptions.onLineClick?.(fileLine(3));
+      result.current.fileOptions.onLineClick?.(fileLine(9));
+      result.current.editorOptions.onAttach?.(editor, fileInstance);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(activate).toHaveBeenCalledTimes(2);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledWith({
+      lineNumber: 9,
+      character: 0,
+      preventScroll: true,
+    });
+  });
+
+  it("does not let a late attach focus an inactive kept-alive surface", async () => {
+    const { result, rerender } = renderHook(
+      (active: boolean) =>
+        useDiffClickToEdit({
+          surfaceId: "late-attach-surface",
+          enabled: true,
+          active,
+          onActivate: () => Promise.resolve({ kind: "activated" }),
+          onActivationError: vi.fn(),
+          onChange: vi.fn(),
+          onBlur: vi.fn(),
+          onSaveShortcut: vi.fn(),
+        }),
+      { initialProps: true },
+    );
+    const editor = new Editor<undefined>({});
+    const focus = vi.spyOn(editor, "focus").mockImplementation(() => undefined);
+    const fileInstance = new File({}, undefined, true);
+
+    act(() => {
+      result.current.fileOptions.onLineClick?.(fileLine(4));
+      result.current.editorOptions.onAttach?.(editor, fileInstance);
+      rerender(false);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("focuses automatic recovery at the first visible line without scrolling", async () => {
+    const { result } = renderHook(() =>
+      useDiffClickToEdit({
+        surfaceId: "recovery-attach-surface",
+        enabled: true,
+        active: true,
+        onActivate: () => Promise.resolve({ kind: "activated" }),
+        onActivationError: vi.fn(),
+        onChange: vi.fn(),
+        onBlur: vi.fn(),
+        onSaveShortcut: vi.fn(),
+      }),
+    );
+    const editor = new Editor<undefined>({});
+    const focus = vi.spyOn(editor, "focus").mockImplementation(() => undefined);
+
+    act(() => {
+      result.current.editorOptions.onAttach?.(
+        editor,
+        new File({}, undefined, true),
+      );
+    });
+    await act(async () => Promise.resolve());
+
+    expect(focus).toHaveBeenCalledWith({
+      lineNumber: "first-visible",
+      preventScroll: true,
+    });
   });
 
   it("flushes Cmd-S but leaves native Cmd-F untouched", () => {

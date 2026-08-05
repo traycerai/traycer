@@ -164,7 +164,10 @@ function applyEditError(editor: Editor<undefined>): string | null {
 
 function requireCapturedFileDiff(): FileDiffMetadata {
   expect(capturedFileDiffs.length).toBeGreaterThan(0);
-  return capturedFileDiffs[0];
+  const latest = capturedFileDiffs.at(-1);
+  if (latest === undefined)
+    throw new Error("No FileDiff metadata was captured");
+  return latest;
 }
 
 /**
@@ -582,8 +585,7 @@ index 1111111..2222222 100644
     );
 
     expect(capturedFileDiffs).toHaveLength(2);
-    const a = capturedFileDiffs[0];
-    const b = capturedFileDiffs[1];
+    const [a, b] = capturedFileDiffs;
     expect(a.name).toBe("a.ts");
     expect(b.name).toBe("b.ts");
     expect(a.isPartial).toBe(false);

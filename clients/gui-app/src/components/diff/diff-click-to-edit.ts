@@ -34,10 +34,11 @@ export function focusRegisteredDiffEditor(
   if (editor === undefined) return false;
   editor.focus(
     caret === null
-      ? { lineNumber: "first-visible" }
+      ? { lineNumber: "first-visible", preventScroll: true }
       : {
           lineNumber: caret.lineNumber,
           character: caret.character,
+          preventScroll: true,
         },
   );
   return true;

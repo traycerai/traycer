@@ -26,7 +26,10 @@ import { DIFF_PANEL_UNSAFE_CSS } from "@/lib/git/diff-tokens-css";
 import { cn } from "@/lib/utils";
 import { DiffEditProvider } from "@/components/diff/diff-edit-provider";
 import { DiffHighlightLoading } from "@/components/diff/diff-highlight-loading";
-import { useDiffsDiffHighlightReady } from "@/components/diff/use-diff-highlight-ready";
+import {
+  useDiffsDiffEditHighlightReady,
+  useDiffsDiffHighlightReady,
+} from "@/components/diff/use-diff-highlight-ready";
 import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
 import { EmptyOriginEditAffordance } from "@/components/diff/empty-origin-edit-affordance";
 
@@ -41,7 +44,21 @@ const DIFF_FIND_UNSAFE_CSS = `
   }
 `;
 
-const DIFF_PANEL_WITH_FIND_UNSAFE_CSS = `${DIFF_PANEL_UNSAFE_CSS}\n${DIFF_FIND_UNSAFE_CSS}`;
+/**
+ * A patch-parsed diff does not know how many unchanged lines follow its final
+ * hunk. Synchronous edit hydration does, so @pierre/diffs otherwise inserts a
+ * new trailing separator row during activation and changes the tile height
+ * (40px with the default theme). Keep the edit layout identical to the
+ * already-painted partial diff; keyboard navigation still reveals a hidden
+ * trailing line on demand through FileDiff.revealLine.
+ */
+const DIFF_EDIT_STABLE_LAYOUT_UNSAFE_CSS = `
+  :host-context([data-diffs-editor-boundary]) [data-separator-last] {
+    display: none;
+  }
+`;
+
+const DIFF_PANEL_WITH_FIND_UNSAFE_CSS = `${DIFF_PANEL_UNSAFE_CSS}\n${DIFF_FIND_UNSAFE_CSS}\n${DIFF_EDIT_STABLE_LAYOUT_UNSAFE_CSS}`;
 
 export interface DiffContentPrimitiveProps {
   readonly patch: string;
@@ -179,6 +196,13 @@ export function DiffContentPrimitive(
     theme: themeName,
     enabled: props.editSession === undefined,
   });
+  const editHighlightReady = useDiffsDiffEditHighlightReady({
+    fileDiffs,
+    theme: themeName,
+    enabled: props.editSession !== undefined,
+  });
+  const nonEmptyEditorReady =
+    props.editSession !== undefined && editHighlightReady;
 
   const pierreOverflow = resolvePierreOverflow(props.wordWrap);
   const confirmedEmptyNewFile =
@@ -219,6 +243,7 @@ export function DiffContentPrimitive(
             emptyFileEditSession,
             fileDiffs,
             highlightReady,
+            nonEmptyEditorReady,
             props,
             pierreOverflow,
             themeName,
@@ -265,12 +290,20 @@ function renderDiffContentBody(args: {
   > | null;
   readonly fileDiffs: ReadonlyArray<FileDiffMetadata>;
   readonly highlightReady: boolean;
+  readonly nonEmptyEditorReady: boolean;
   readonly props: DiffContentPrimitiveProps;
   readonly pierreOverflow: "wrap" | "scroll";
   readonly themeName: "pierre-light" | "pierre-dark";
   readonly resolvedTheme: ResolvedTheme;
 }): ReactNode {
   const { emptyFileEditSession, props } = args;
+  // Changing this inert comment when the edit cache becomes ready makes
+  // @pierre/diffs force one render of the hydrated model before its sibling
+  // edit-attach layout effect runs. The host node stays mounted; only the
+  // library's internal render cache is refreshed.
+  const diffUnsafeCSS = args.nonEmptyEditorReady
+    ? `${DIFF_PANEL_WITH_FIND_UNSAFE_CSS}\n/* traycer-edit-cache-ready */`
+    : DIFF_PANEL_WITH_FIND_UNSAFE_CSS;
   if (emptyFileEditSession !== null) {
     return (
       <File
@@ -303,9 +336,11 @@ function renderDiffContentBody(args: {
       // strand it the same way an unhydrated diff always did - render
       // read-only instead and let the caller's own validation (see
       // `validateGitEditContents`) surface the unavailable state.
-      edit={props.editSession !== undefined && !fileDiff.isPartial}
+      edit={args.nonEmptyEditorReady ? !fileDiff.isPartial : false}
       editorOptions={
-        fileDiff.isPartial ? undefined : props.editSession?.editorOptions
+        !args.nonEmptyEditorReady || fileDiff.isPartial
+          ? undefined
+          : props.editSession?.editorOptions
       }
       options={{
         disableFileHeader: !props.fileHeaders,
@@ -319,7 +354,7 @@ function renderDiffContentBody(args: {
         overflow: args.pierreOverflow,
         theme: args.themeName,
         themeType: args.resolvedTheme,
-        unsafeCSS: DIFF_PANEL_WITH_FIND_UNSAFE_CSS,
+        unsafeCSS: diffUnsafeCSS,
         ...props.editAdapter?.diffOptions,
       }}
     />

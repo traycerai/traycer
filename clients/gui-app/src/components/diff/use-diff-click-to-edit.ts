@@ -261,19 +261,23 @@ export function useDiffClickToEdit(props: {
         setAttached(true);
         queueMicrotask(() => {
           if (attachedEditorRef.current !== editor) return;
+          // A superseded/hidden surface can finish attaching after ownership
+          // has already moved. It must never steal focus (or scroll its kept-
+          // alive canvas) on that late completion.
+          if (!propsRef.current.active) return;
           const pending = pendingCaretRef.current;
           if (
             pending !== null &&
-            pending.generation === generationRef.current &&
-            propsRef.current.active
+            pending.generation === generationRef.current
           ) {
             editor.focus({
               lineNumber: pending.caret.lineNumber,
               character: pending.caret.character,
+              preventScroll: true,
             });
             return;
           }
-          editor.focus({ lineNumber: "first-visible" });
+          editor.focus({ lineNumber: "first-visible", preventScroll: true });
         });
       },
       onChange: (changedFile) => {

@@ -29,6 +29,7 @@ const captured = vi.hoisted(() => ({
   mountCount: 0,
   unmountCount: 0,
   lastEdit: null as boolean | null,
+  editRenderHistory: [] as boolean[],
   lastUnsafeCSS: null as string | null,
   pool: null as null | {
     setRenderOptions: Mock;
@@ -97,6 +98,7 @@ function MockFileDiff(props: {
   };
 }): ReactNode {
   const DiffsContainer = "diffs-container" as "div";
+  captured.editRenderHistory.push(props.edit === true);
   useEffect(() => {
     captured.overflows.push(props.options.overflow);
     captured.lastEdit = props.edit === true;
@@ -133,6 +135,7 @@ describe("<DiffContentPrimitive />", () => {
     captured.mountCount = 0;
     captured.unmountCount = 0;
     captured.lastEdit = null;
+    captured.editRenderHistory = [];
     captured.lastUnsafeCSS = null;
     captured.pool = null;
     captured.lastFileProps = null;
@@ -194,6 +197,7 @@ describe("<DiffContentPrimitive />", () => {
     expect(captured.mountCount).toBeGreaterThan(0);
     const mountsBeforeEdit = captured.mountCount;
     const unmountsBeforeEdit = captured.unmountCount;
+    const rendersBeforeEdit = captured.editRenderHistory.length;
     expect(captured.lastEdit).toBe(false);
 
     rendered.rerender(
@@ -221,8 +225,138 @@ describe("<DiffContentPrimitive />", () => {
     // No replacement: host identity stable and no additional mount/unmount cycle.
     expect(captured.mountCount).toBe(mountsBeforeEdit);
     expect(captured.unmountCount).toBe(unmountsBeforeEdit);
+    expect(captured.editRenderHistory.slice(rendersBeforeEdit)).toEqual([true]);
     expect(captured.lastEdit).toBe(true);
     expect(editContainer?.getAttribute("data-edit")).toBe("true");
+    expect(captured.lastUnsafeCSS).toContain(
+      ":host-context([data-diffs-editor-boundary]) [data-separator-last]",
+    );
+  });
+
+  it("keeps the same host read-only until the hydrated worker cache is ready, then enables edit", async () => {
+    let resolvePrime: (() => void) | null = null;
+    const primePromise = new Promise<void>((resolve) => {
+      resolvePrime = resolve;
+    });
+    captured.pool = {
+      setRenderOptions: vi.fn(() => Promise.resolve()),
+      primeDiffHighlightCache: vi.fn(() => primePromise),
+      primeFileHighlightCache: vi.fn(() => Promise.resolve()),
+    };
+    const editAdapter = createEditAdapter();
+    render(
+      <DiffContentPrimitive
+        patch="@@ -1 +1 @@\n-old\n+new\n"
+        cacheScope="cold-edit-cache"
+        mode="split"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile={false}
+        editAdapter={editAdapter}
+        editSession={{
+          editorOptions: editAdapter.editorOptions,
+          oldFile: { name: "src/app.ts", contents: "old\n" },
+          newFile: { name: "src/app.ts", contents: "new\n" },
+        }}
+      />,
+    );
+
+    const host = screen.getByTestId("file-diff");
+    expect(host.getAttribute("data-edit")).toBe("false");
+    expect(captured.pool.primeDiffHighlightCache).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolvePrime?.();
+      await primePromise;
+    });
+
+    await waitFor(() => {
+      expect(host.getAttribute("data-edit")).toBe("true");
+    });
+    expect(screen.getByTestId("file-diff")).toBe(host);
+    expect(captured.lastUnsafeCSS).toContain("traycer-edit-cache-ready");
+  });
+
+  it("ignores a late worker result for a superseded edit target", async () => {
+    let resolveFirst: (() => void) | null = null;
+    let resolveSecond: (() => void) | null = null;
+    const firstPrime = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondPrime = new Promise<void>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const primeDiffHighlightCache = vi
+      .fn()
+      .mockReturnValueOnce(firstPrime)
+      .mockReturnValueOnce(secondPrime);
+    captured.pool = {
+      setRenderOptions: vi.fn(() => Promise.resolve()),
+      primeDiffHighlightCache,
+      primeFileHighlightCache: vi.fn(() => Promise.resolve()),
+    };
+    const editAdapter = createEditAdapter();
+    const firstNewFile = { name: "src/app.ts", contents: "new\n" };
+    const rendered = render(
+      <DiffContentPrimitive
+        patch="@@ -1 +1 @@\n-old\n+new\n"
+        cacheScope="serial-edit-cache"
+        mode="split"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile={false}
+        editAdapter={editAdapter}
+        editSession={{
+          editorOptions: editAdapter.editorOptions,
+          oldFile: { name: "src/app.ts", contents: "old\n" },
+          newFile: firstNewFile,
+        }}
+      />,
+    );
+    const host = screen.getByTestId("file-diff");
+    expect(host.getAttribute("data-edit")).toBe("false");
+
+    rendered.rerender(
+      <DiffContentPrimitive
+        patch="@@ -1 +1 @@\n-old\n+new\n"
+        cacheScope="serial-edit-cache"
+        mode="split"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile={false}
+        editAdapter={editAdapter}
+        editSession={{
+          editorOptions: editAdapter.editorOptions,
+          oldFile: { name: "src/app.ts", contents: "old\n" },
+          newFile: { name: "src/app.ts", contents: "newer\n" },
+        }}
+      />,
+    );
+    expect(primeDiffHighlightCache).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveFirst?.();
+      await firstPrime;
+    });
+    expect(host.getAttribute("data-edit")).toBe("false");
+
+    await act(async () => {
+      resolveSecond?.();
+      await secondPrime;
+    });
+    await waitFor(() => {
+      expect(host.getAttribute("data-edit")).toBe("true");
+    });
+    expect(screen.getByTestId("file-diff")).toBe(host);
   });
 
   it("gates FileDiff until primeDiffHighlightCache resolves with token transformer options", async () => {
@@ -333,6 +467,7 @@ describe("<DiffContentPrimitive /> empty-origin behavior", () => {
     captured.mountCount = 0;
     captured.unmountCount = 0;
     captured.lastEdit = null;
+    captured.editRenderHistory = [];
     captured.lastUnsafeCSS = null;
     captured.pool = null;
     captured.lastFileProps = null;

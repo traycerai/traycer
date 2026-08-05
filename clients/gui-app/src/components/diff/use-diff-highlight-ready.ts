@@ -82,3 +82,50 @@ export function useDiffsDiffHighlightReady(props: {
     prepare: pool === undefined ? null : prepareHighlight,
   });
 }
+
+/**
+ * Every edit target must finish its own worker-cache generation before the
+ * existing FileDiff instance enables `edit`. Unlike the first-paint gate
+ * above, this resets for each new hydrated FileDiff array: the read-only
+ * partial model and the hydrated edit model intentionally use different
+ * cache identities.
+ */
+export function useDiffsDiffEditHighlightReady(props: {
+  readonly fileDiffs: ReadonlyArray<FileDiffMetadata>;
+  readonly theme: DiffsThemeNames;
+  readonly enabled: boolean;
+}): boolean {
+  const pool = useWorkerPool();
+  const { enabled, fileDiffs, theme } = props;
+  const [preparedTarget, setPreparedTarget] =
+    useState<ReadonlyArray<FileDiffMetadata> | null>(null);
+
+  useEffect(() => {
+    if (!enabled || pool === undefined || fileDiffs.length === 0) return;
+    let cancelled = false;
+    void theme;
+    void Promise.all(
+      fileDiffs.map((fileDiff) => pool.primeDiffHighlightCache(fileDiff)),
+    ).then(
+      () => {
+        if (!cancelled) setPreparedTarget(fileDiffs);
+      },
+      () => {
+        // Match first-paint behavior: a failed worker must not permanently
+        // disable editing. The forced render on release lets Diffs take its
+        // main-thread fallback path.
+        if (!cancelled) setPreparedTarget(fileDiffs);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, fileDiffs, pool, theme]);
+
+  return (
+    !enabled ||
+    pool === undefined ||
+    fileDiffs.length === 0 ||
+    preparedTarget === fileDiffs
+  );
+}
