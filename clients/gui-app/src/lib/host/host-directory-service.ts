@@ -99,6 +99,12 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private lastKnownLocalHostId: string | null = loadPersistedLocalHostId();
   private remoteEntries: readonly HostDirectoryEntry[] = [];
+  /**
+   * The snapshot most recently fanned out through `emit()`, kept so the poll
+   * path (`emitIfSnapshotChanged`) can suppress no-change re-emits. `null`
+   * only before the first emit.
+   */
+  private lastEmittedSnapshot: readonly HostDirectoryEntry[] | null = null;
   private selected: HostDirectoryEntry | null = null;
   /**
    * Tracks the user's explicit selection gesture via `selectById(...)`
@@ -495,7 +501,11 @@ export class HostDirectoryService implements IHostDirectoryService {
       this.consumeUnboundFollowUpRestore(outcome.entries);
     }
     this.reconcileSelection();
-    this.emit();
+    // Emit only when the merged snapshot actually changed. The 15s registry
+    // poll lands here on every tick; an unconditional emit made every
+    // `onChange` consumer (17 query call sites) re-render/refetch app-wide
+    // each tick even when nothing changed.
+    this.emitIfSnapshotChanged();
     appLogger.debug("[host-directory] refresh complete", {
       outcome: outcome.kind,
       localCount: this.localEntry === null ? 0 : 1,
@@ -830,9 +840,26 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   private emit(): void {
     const snapshot = this.snapshot();
+    this.lastEmittedSnapshot = snapshot;
     for (const listener of this.listeners) {
       listener(snapshot, this.localEntry);
     }
+  }
+
+  /**
+   * Poll-path emit: skips the fan-out when the snapshot is value-equal to the
+   * last one emitted. Every non-poll mutation (local host change, selection,
+   * re-enrollment) still emits unconditionally and refreshes the baseline, so
+   * a change landing between two polls can never be swallowed.
+   */
+  private emitIfSnapshotChanged(): void {
+    if (
+      this.lastEmittedSnapshot !== null &&
+      hostDirectorySnapshotsEqual(this.lastEmittedSnapshot, this.snapshot())
+    ) {
+      return;
+    }
+    this.emit();
   }
 }
 
@@ -939,6 +966,17 @@ function hostDirectoryEntriesEqual(
 
 function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
   return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
+}
+
+function hostDirectorySnapshotsEqual(
+  a: readonly HostDirectoryEntry[],
+  b: readonly HostDirectoryEntry[],
+): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  // Index access is in-bounds for both arrays under the length check above.
+  return a.every((entry, index) => hostDirectoryEntriesEqual(entry, b[index]));
 }
 
 /**

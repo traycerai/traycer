@@ -1,11 +1,13 @@
 import "../../../../../__tests__/test-browser-apis";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import type { Awareness } from "y-protocols/awareness";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 
 interface FakeStreamHandle {
@@ -376,6 +378,51 @@ describe("createOpenEpicStore", () => {
     );
     expect(handle().applied.length).toBe(1);
     expectBytesEqual(handle().applied[0], expectedReconcile);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("collapses a long offline queue on flush without losing edits or under-reporting its size", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().callbacks.onConnectionStatus("reconnecting", null);
+
+    // Past the 32-entry collapse threshold, so the buffer is merged at least
+    // once while the edits are still only in memory.
+    const EDIT_COUNT = 40;
+    for (let index = 0; index < EDIT_COUNT; index += 1) {
+      opened.doc.getMap("epic").set(`k${index}`, `v${index}`);
+    }
+    expect(handle().applied.length).toBe(0);
+    // Collapsing the buffer must not make the UI under-report unsynced work:
+    // the size is a count of edits, not of retained buffers.
+    expect(opened.store.getState().unsyncedQueueSize).toBe(EDIT_COUNT);
+
+    // Recovery runs through the snapshot reconcile, which is derived from the
+    // live doc - so collapsing the buffer cannot cost an edit.
+    handle().callbacks.onConnectionStatus("open", null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+
+    expect(handle().applied.length).toBe(1);
+    const replayed = new Y.Doc();
+    Y.applyUpdate(replayed, handle().applied[0]);
+    for (let index = 0; index < EDIT_COUNT; index += 1) {
+      expect(replayed.getMap("epic").get(`k${index}`)).toBe(`v${index}`);
+    }
     expect(opened.store.getState().unsyncedQueueSize).toBe(0);
 
     opened.dispose();
@@ -874,6 +921,28 @@ describe("createOpenEpicStore", () => {
     (artifacts as Y.Map<unknown>).set(artifactId, entry);
   }
 
+  /**
+   * Artifact-room docs are only materialized while something leases them, so
+   * every fragment reader in these tests stands in for a mounted editor. The
+   * lease is intentionally not released: the room must stay hot for the rest
+   * of the test, exactly as it would while the editor is on screen.
+   */
+  function leasedFragment(
+    opened: OpenEpicStoreHandle,
+    artifactId: string,
+  ): Y.XmlFragment | null {
+    opened.store.getState().acquireArtifactBodyLease(artifactId);
+    return opened.store.getState().getArtifactFragment(artifactId);
+  }
+
+  function leasedAwareness(
+    opened: OpenEpicStoreHandle,
+    artifactId: string,
+  ): Awareness | null {
+    opened.store.getState().acquireArtifactBodyLease(artifactId);
+    return opened.store.getState().getArtifactBodyAwareness(artifactId);
+  }
+
   it("resolves an artifact body fragment from the artifact-room doc seeded by onArtifactRoomSnapshot", () => {
     const { factory, handle } = fakeFactory();
     const opened = createOpenEpicStore({
@@ -915,7 +984,7 @@ describe("createOpenEpicStore", () => {
       "ready",
     );
     expect(state.getArtifactBodyAvailability("art-1")).toBe("ready");
-    const fragment = state.getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     expect(fragment).not.toBeNull();
     // The fragment must live in the artifact-room doc, not in the root Epic doc, so
     // editor binding does not accidentally mutate root metadata.
@@ -1039,7 +1108,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(artifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     expect(fragment).not.toBeNull();
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
@@ -1091,9 +1160,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(artifactRoomDoc),
     );
 
-    const artifactRoomAwareness = opened.store
-      .getState()
-      .getArtifactBodyAwareness("art-1");
+    const artifactRoomAwareness = leasedAwareness(opened, "art-1");
     expect(artifactRoomAwareness).not.toBeNull();
     if (artifactRoomAwareness === null)
       throw new Error("missing artifactRoom awareness");
@@ -1154,9 +1221,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(new Y.Doc()),
     );
 
-    const artifactRoomAwareness = opened.store
-      .getState()
-      .getArtifactBodyAwareness("art-1");
+    const artifactRoomAwareness = leasedAwareness(opened, "art-1");
     expect(artifactRoomAwareness).not.toBeNull();
     if (artifactRoomAwareness === null)
       throw new Error("missing artifactRoom awareness");
@@ -1202,7 +1267,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(new Y.Doc()),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1255,7 +1320,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(new Y.Doc()),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1286,9 +1351,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(new Y.Doc()),
     );
     expect(handle().artifactRoomApplied.length).toBe(0);
-    const refreshedFragment = opened.store
-      .getState()
-      .getArtifactFragment("art-1");
+    const refreshedFragment = leasedFragment(opened, "art-1");
     expect(refreshedFragment).not.toBeNull();
     if (refreshedFragment === null)
       throw new Error("missing refreshed fragment");
@@ -1322,7 +1385,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(new Y.Doc()),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1367,7 +1430,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     // Snapshot the artifact-room doc identity before the second snapshot so we can
     // assert the editor's bound fragment was preserved (no remount).
@@ -1403,7 +1466,7 @@ describe("createOpenEpicStore", () => {
 
     // Local replica must still hold the offline edit AND the new server
     // map - the snapshot was merged, not replaced.
-    const fragmentAfter = opened.store.getState().getArtifactFragment("art-1");
+    const fragmentAfter = leasedFragment(opened, "art-1");
     expect(fragmentAfter).not.toBeNull();
     if (fragmentAfter === null) throw new Error("missing fragment after");
     expect(fragmentAfter.doc).toBe(docBefore);
@@ -1451,7 +1514,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1508,7 +1571,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const docBefore = fragment.doc;
     expect(docBefore).not.toBeNull();
@@ -1540,9 +1603,7 @@ describe("createOpenEpicStore", () => {
     expect(handle().artifactRoomApplied.length).toBe(0);
     // …and must NOT remount the artifact-room doc while the local replica still
     // holds dirty offline edits.
-    const fragmentAfterSnapshot = opened.store
-      .getState()
-      .getArtifactFragment("art-1");
+    const fragmentAfterSnapshot = leasedFragment(opened, "art-1");
     expect(fragmentAfterSnapshot).not.toBeNull();
     if (fragmentAfterSnapshot === null)
       throw new Error("missing fragment after snapshot");
@@ -1613,7 +1674,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1683,7 +1744,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1745,7 +1806,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1816,7 +1877,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1869,7 +1930,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -1913,7 +1974,7 @@ describe("createOpenEpicStore", () => {
 
     // Local replica content is still consistent (the ack apply is a
     // no-op under Yjs CRDT semantics).
-    const localFragment = opened.store.getState().getArtifactFragment("art-1");
+    const localFragment = leasedFragment(opened, "art-1");
     expect(localFragment).not.toBeNull();
     if (localFragment === null) throw new Error("missing fragment after ack");
     const localFragmentDoc = localFragment.doc;
@@ -1960,7 +2021,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragmentBefore = opened.store.getState().getArtifactFragment("art-1");
+    const fragmentBefore = leasedFragment(opened, "art-1");
     if (fragmentBefore === null) throw new Error("missing fragment");
     const fragmentBeforeDoc = fragmentBefore.doc;
     if (fragmentBeforeDoc === null)
@@ -1973,7 +2034,7 @@ describe("createOpenEpicStore", () => {
     });
     expect(handle().artifactRoomApplied.length).toBe(1);
 
-    const fragmentAfter = opened.store.getState().getArtifactFragment("art-1");
+    const fragmentAfter = leasedFragment(opened, "art-1");
     expect(fragmentAfter).toBe(fragmentBefore);
 
     opened.dispose();
@@ -2003,7 +2064,7 @@ describe("createOpenEpicStore", () => {
       stateVectorBase64(seedArtifactRoomDoc),
     );
 
-    const fragment = opened.store.getState().getArtifactFragment("art-1");
+    const fragment = leasedFragment(opened, "art-1");
     if (fragment === null) throw new Error("missing fragment");
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -2501,6 +2562,455 @@ describe("createOpenEpicStore", () => {
       expect(state.hasFreshCloudSyncStatus).toBe(false);
       expect(state.hasConnectedOnce).toBe(false);
       expect(state.connectionStatus).toBe("connecting");
+
+      opened.dispose();
+    });
+  });
+
+  // ── Artifact-room materialization leases ────────────────────────────────
+  //
+  // A Y.Doc retains one `Item` struct per edit for its whole lifetime, so a
+  // room an agent has rewritten repeatedly is far larger materialized than
+  // encoded. These tests pin the contract that keeps that cost proportional
+  // to what is actually on screen: rooms arrive cold, a lease materializes
+  // one, and losing the lease eventually gives the memory back - but never
+  // while the replica still holds edits the host has not acknowledged.
+  describe("artifact-room materialization leases", () => {
+    /** Mirrors `MAX_HOT_ARTIFACT_ROOMS` in the store, so the cap test scales
+     * with it instead of hard-coding a room count. */
+    const MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS = 32;
+
+    function openWithReadyRoom(
+      epicId: string,
+      bodyText: string,
+    ): {
+      readonly opened: OpenEpicStoreHandle;
+      readonly handle: () => FakeStreamHandle;
+    } {
+      const { factory, handle } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId,
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+      const donor = new Y.Doc();
+      seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+      handle().callbacks.onConnectionStatus("open", null);
+      handle().callbacks.onSnapshot(
+        buildMeta("editor", null),
+        Y.encodeStateAsUpdate(donor),
+      );
+      const artifactRoomDoc = new Y.Doc();
+      const seeded = artifactRoomDoc.getXmlFragment("artifact-body:art-1");
+      const paragraph = new Y.XmlElement("paragraph");
+      paragraph.insert(0, [new Y.XmlText(bodyText)]);
+      seeded.insert(0, [paragraph]);
+      handle().callbacks.onArtifactRoomSnapshot(
+        "artifact-room-0",
+        Y.encodeStateAsUpdate(artifactRoomDoc),
+        stateVectorBase64(artifactRoomDoc),
+      );
+      return { opened, handle };
+    }
+
+    it("reports a snapshotted room ready without materializing a doc for it", () => {
+      const { opened } = openWithReadyRoom("epic-lease-cold", "cold body");
+
+      // Ready is about the host having the room open, not about this renderer
+      // holding a replica - the tile needs the former to stop showing its
+      // unavailable placeholder.
+      expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+        "ready",
+      );
+      // Snapshotting a room nobody is looking at must not build a doc for
+      // it. Checked through the seam: reading the fragment is what
+      // materializes a room, so asserting on the read would destroy the
+      // very property under test.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const release = opened.store.getState().acquireArtifactBodyLease("art-1");
+      const fragment = opened.store.getState().getArtifactFragment("art-1");
+      expect(fragment).not.toBeNull();
+      expect(fragment?.toJSON()).toContain("cold body");
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual(["artifact-room-0"]);
+
+      release();
+      opened.dispose();
+    });
+
+    it("replays updates that arrived while a room was cold", () => {
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = openWithReadyRoom(
+          "epic-lease-cold-updates",
+          "first",
+        );
+
+        // Mirror the room into a donor so we can produce the exact update
+        // bytes the host would send for an appended paragraph.
+        const donorRoom = new Y.Doc();
+        const leaseForBytes = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        const liveFragment = opened.store
+          .getState()
+          .getArtifactFragment("art-1");
+        if (liveFragment === null) throw new Error("missing fragment");
+        const liveDoc = liveFragment.doc;
+        if (liveDoc === null) throw new Error("missing fragment doc");
+        Y.applyUpdate(donorRoom, Y.encodeStateAsUpdate(liveDoc));
+
+        // Let the room cool before the update lands, so the frame has to take
+        // the cold path.
+        leaseForBytes();
+        vi.advanceTimersByTime(61_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        const before = Y.encodeStateVector(donorRoom);
+        const donorFragment = donorRoom.getXmlFragment("artifact-body:art-1");
+        const appended = new Y.XmlElement("paragraph");
+        appended.insert(0, [new Y.XmlText("second")]);
+        donorFragment.insert(donorFragment.length, [appended]);
+        const updateBytes = Y.encodeStateAsUpdate(donorRoom, before);
+
+        handle().callbacks.onArtifactRoomUpdate(
+          "artifact-room-0",
+          updateBytes,
+          stateVectorBase64(donorRoom),
+        );
+
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        const rematerialized = opened.store
+          .getState()
+          .getArtifactFragment("art-1");
+        expect(rematerialized?.toJSON()).toContain("first");
+        expect(rematerialized?.toJSON()).toContain("second");
+
+        release();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("demotes a room once its last lease is released and the linger window elapses", () => {
+      vi.useFakeTimers();
+      try {
+        const { opened } = openWithReadyRoom("epic-lease-linger", "lingering");
+
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        expect(
+          opened.store.getState().getArtifactFragment("art-1"),
+        ).not.toBeNull();
+
+        release();
+        // Still hot through the linger window: a tab switch that remounts the
+        // tile must not pay to re-materialize the body.
+        vi.advanceTimersByTime(59_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        vi.advanceTimersByTime(2_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        // …and the content survives the round trip through encoded bytes.
+        const reacquired = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        expect(
+          opened.store.getState().getArtifactFragment("art-1")?.toJSON(),
+        ).toContain("lingering");
+        reacquired();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps a room materialized while it holds edits the host has not acknowledged", () => {
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = openWithReadyRoom(
+          "epic-lease-dirty",
+          "dirty body",
+        );
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        const fragment = opened.store.getState().getArtifactFragment("art-1");
+        if (fragment === null) throw new Error("missing fragment");
+        const docBefore = fragment.doc;
+
+        // Drop the transport, then edit: the update has nowhere to go and is
+        // queued on the replica.
+        handle().callbacks.onConnectionStatus("closed", null);
+        const edited = new Y.XmlElement("paragraph");
+        edited.insert(0, [new Y.XmlText("offline edit")]);
+        fragment.insert(fragment.length, [edited]);
+        expect(opened.store.getState().isDirty).toBe(true);
+
+        release();
+        vi.advanceTimersByTime(10 * 60_000);
+
+        // Cooling here would encode the replica down and drop the queued
+        // update with it - the edit would be lost with no outbound path.
+        const stillLive = opened.store.getState().getArtifactFragment("art-1");
+        expect(stillLive).not.toBeNull();
+        expect(stillLive?.doc).toBe(docBefore);
+        expect(stillLive?.toJSON()).toContain("offline edit");
+
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves the fragment accessor pure - reading never materializes", () => {
+      // These accessors run inside Zustand selectors. Materializing there let
+      // an unrelated store update extend a room's lifetime, and let cap
+      // enforcement destroy an unpinned `Y.Doc` while a component rendered
+      // earlier in the same pass still held its fragment. Materialization
+      // belongs to the lease path.
+      vi.useFakeTimers();
+      try {
+        const { opened } = openWithReadyRoom("epic-pure-read", "read me");
+
+        expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+        expect(
+          opened.store.getState().getArtifactBodyAwareness("art-1"),
+        ).toBeNull();
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        // Repeated reads must not touch cooldown or LRU state either.
+        vi.advanceTimersByTime(120_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        expect(
+          opened.store.getState().getArtifactFragment("art-1")?.toJSON(),
+        ).toContain("read me");
+
+        release();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never hands out a fragment for a room that is ready but unseeded", () => {
+      // `artifactRoomState` reports `ready` on first observation and on every
+      // recovery transition, independently of `artifactRoomSnapshot`, so there
+      // is a window where the room is ready with no bytes anywhere. Handing
+      // back a live-but-empty fragment there reads as a real, empty body:
+      // export skips its "still loading" guard and writes an empty file.
+      const { factory, handle } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-lease-unseeded",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+      const donor = new Y.Doc();
+      seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+      handle().callbacks.onConnectionStatus("open", null);
+      handle().callbacks.onSnapshot(
+        buildMeta("editor", null),
+        Y.encodeStateAsUpdate(donor),
+      );
+
+      handle().callbacks.onArtifactRoomState("artifact-room-0", "ready");
+      expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+        "ready",
+      );
+
+      expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+      expect(
+        opened.store.getState().getArtifactBodyAwareness("art-1"),
+      ).toBeNull();
+      // Taking a lease must not conjure one either.
+      opened.store.getState().acquireArtifactBodyLease("art-1");
+      expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      opened.dispose();
+    });
+
+    it("re-arms the linger when discarding unsynced edits clears a room's dirty pin", () => {
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = openWithReadyRoom(
+          "epic-lease-discard",
+          "discard me",
+        );
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        const fragment = opened.store.getState().getArtifactFragment("art-1");
+        if (fragment === null) throw new Error("missing fragment");
+
+        handle().callbacks.onConnectionStatus("closed", null);
+        const edited = new Y.XmlElement("paragraph");
+        edited.insert(0, [new Y.XmlText("offline edit")]);
+        fragment.insert(fragment.length, [edited]);
+        release();
+
+        // Dirty, so the linger correctly refuses to cool it.
+        vi.advanceTimersByTime(10 * 60_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        // Discarding removes the dirty pin. Nothing else re-arms the timer for
+        // this room, so without a re-arm here the rooms a user actually edited
+        // - the ones holding the most Yjs structs - stay hot forever.
+        opened.store.getState().discardUnsyncedEdits();
+        vi.advanceTimersByTime(61_000);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("replays presence that arrived while a room was cold", async () => {
+      // A room the local user has never opened has no `Awareness` instance, so
+      // inbound presence frames have nowhere to land. Dropping them left a
+      // collaborator already sitting in the body invisible until their next
+      // renewal (y-protocols refreshes local state every outdatedTimeout/2).
+      const { Awareness: PeerAwareness, encodeAwarenessUpdate } =
+        await import("y-protocols/awareness");
+      const { opened, handle } = openWithReadyRoom(
+        "epic-cold-presence",
+        "shared body",
+      );
+      // Cold: snapshotted, never leased.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const peerDoc = new Y.Doc();
+      const peer = new PeerAwareness(peerDoc);
+      peer.setLocalState({ userName: "Peer" });
+      handle().callbacks.onArtifactRoomAwareness(
+        "artifact-room-0",
+        encodeAwarenessUpdate(peer, [peer.clientID]),
+      );
+      // Still cold - presence must not be what materializes a room.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const release = opened.store.getState().acquireArtifactBodyLease("art-1");
+      const awareness = opened.store
+        .getState()
+        .getArtifactBodyAwareness("art-1");
+      if (awareness === null) throw new Error("missing awareness");
+
+      const seen = Array.from(awareness.getStates().entries()).filter(
+        ([clientId]) => clientId !== awareness.clientID,
+      );
+      expect(seen).toHaveLength(1);
+      expect(seen[0][1]).toMatchObject({ userName: "Peer" });
+
+      release();
+      peer.destroy();
+      peerDoc.destroy();
+      opened.dispose();
+    });
+
+    it("keeps a room hot while a remote collaborator is present in it", async () => {
+      const { Awareness: PeerAwareness, encodeAwarenessUpdate } =
+        await import("y-protocols/awareness");
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = openWithReadyRoom(
+          "epic-lease-presence",
+          "shared body",
+        );
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        const awareness = opened.store
+          .getState()
+          .getArtifactBodyAwareness("art-1");
+        if (awareness === null) throw new Error("missing awareness");
+
+        // A peer announces itself into the room.
+        const peerDoc = new Y.Doc();
+        const peer = new PeerAwareness(peerDoc);
+        peer.setLocalState({ userName: "Peer" });
+        handle().callbacks.onArtifactRoomAwareness(
+          "artifact-room-0",
+          encodeAwarenessUpdate(peer, [peer.clientID]),
+        );
+
+        release();
+        vi.advanceTimersByTime(10 * 60_000);
+        // Cooling would destroy this room's Awareness, and inbound awareness
+        // frames are dropped while cold with no way to ask for a resync - the
+        // peer's caret and avatar would simply vanish until they moved again.
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        peer.destroy();
+        peerDoc.destroy();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("evicts the least recently leased room once more rooms are hot than the cap", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-lease-cap",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+      const roomCount = MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS + 1;
+      const donor = new Y.Doc();
+      for (let index = 0; index < roomCount; index += 1) {
+        seedRootArtifactWithArtifactRoom(
+          donor,
+          `art-${index}`,
+          `artifact-room-${index}`,
+        );
+      }
+      handle().callbacks.onConnectionStatus("open", null);
+      handle().callbacks.onSnapshot(
+        buildMeta("editor", null),
+        Y.encodeStateAsUpdate(donor),
+      );
+      for (let index = 0; index < roomCount; index += 1) {
+        const roomDoc = new Y.Doc();
+        roomDoc.getXmlFragment(`artifact-body:art-${index}`).insert(0, []);
+        handle().callbacks.onArtifactRoomSnapshot(
+          `artifact-room-${index}`,
+          Y.encodeStateAsUpdate(roomDoc),
+          stateVectorBase64(roomDoc),
+        );
+      }
+
+      // Open and close each body in order. Every release only arms the linger
+      // timer, so without the cap every one of them would stay materialized.
+      for (let index = 0; index < roomCount; index += 1) {
+        opened.store.getState().acquireArtifactBodyLease(`art-${index}`)();
+      }
+
+      // The cap holds, and it evicted the least recently leased room: the
+      // oldest is cold, the newest and its predecessor are not.
+      const hot = opened.hotArtifactRoomIdsForTests();
+      expect(hot).toHaveLength(MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS);
+      expect(hot).not.toContain("artifact-room-0");
+      expect(hot).toContain(`artifact-room-${roomCount - 1}`);
+      expect(hot).toContain("artifact-room-1");
 
       opened.dispose();
     });

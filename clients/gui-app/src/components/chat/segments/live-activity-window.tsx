@@ -47,9 +47,8 @@ interface LiveActivityWindowProps {
  * Two things it adds:
  *
  * 1. Gesture containment. The transcript is a LegendList whose scroll policy
- *    reads any real wheel/touch/pointer gesture as intent to leave the live
- *    edge - `chatWheelShouldCancelLiveFollow` returns true for EVERY upward
- *    delta - and drops the reader into `free-scrolling` with a jump-to-latest
+ *    reads wheel/touch/pointer gestures as reader intent at the live edge and
+ *    drops an upward departure into `free-scrolling` with a jump-to-latest
  *    pill. Looking back two rows in here must not trigger that, so the gesture
  *    is stopped at this element. `overscroll-contain` alone is not enough: it
  *    governs scroll CHAINING, not event propagation, and the transcript's
@@ -88,9 +87,9 @@ export function LiveActivityWindow(props: LiveActivityWindowProps) {
     pinnedRef.current = true;
 
     // NATIVE listeners, on this element, and deliberately NOT React's
-    // `onWheel`/`onTouchMove`. The transcript attaches its own `wheel` and
-    // `touchmove` listeners directly to the LegendList scroll node
-    // (`chat-messages.tsx`), which is a DESCENDANT of React's root container.
+    // `onWheel`/`onTouchMove`. The follow latch attaches its own `wheel` and
+    // `touchmove` listeners directly to the LegendList scroll node, which is
+    // a DESCENDANT of React's root container.
     // Native bubbling therefore reaches that listener before React dispatches
     // any synthetic event at the root, so `stopPropagation()` on a synthetic
     // event would run long after the damage was done.

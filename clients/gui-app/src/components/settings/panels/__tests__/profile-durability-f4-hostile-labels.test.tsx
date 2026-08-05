@@ -1,5 +1,4 @@
 import "../../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -22,40 +21,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the hostile-labeled row without fighting Radix's pointerdown-based open
 // gesture in jsdom (mirrors the established mock in
 // worktrees-settings-panel.test / folder-controls.test).
-vi.mock("@/components/ui/dropdown-menu", () => {
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
-  return {
-    DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
-    DropdownMenuItem: (props: {
-      readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
-      readonly "aria-label": string | undefined;
-      readonly "aria-current": "true" | undefined;
-      readonly className: string | undefined;
-    }): ReactNode => (
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={props["aria-label"]}
-        aria-current={props["aria-current"]}
-        className={props.className}
-        onClick={props.onSelect}
-      >
-        {props.children}
-      </button>
-    ),
-    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
-    DropdownMenuShortcut: (props: {
-      readonly children: ReactNode;
-      readonly "data-testid": string | undefined;
-    }): ReactNode => (
-      <span data-testid={props["data-testid"]}>{props.children}</span>
-    ),
-  };
-});
+vi.mock("@/components/ui/dropdown-menu", async () => ({
+  ...(await import("./dropdown-menu-passthrough-mock")),
+}));
 
 const providerMocks = vi.hoisted(() => ({
   listResult: {
@@ -259,8 +227,8 @@ function renderProvidersSettingsPanel() {
       </TooltipProvider>
     </QueryClientProvider>,
   );
-  // Profiles render on the "Profiles & Limits" tab, not General. Radix Tabs
-  // activate on mouseDown, not click.
+  // Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
+  // tab. Radix Tabs activate on mouseDown, not click.
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Profiles & Limits" }));
   return view;
 }
