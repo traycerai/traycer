@@ -487,7 +487,10 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
-  if (err.code === "E_INVALID_ARGUMENT") {
+  if (
+    err.code === "E_INVALID_ARGUMENT" ||
+    err.code === "MESSAGE_TOO_LARGE"
+  ) {
     return cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `traycer: ${err.message}`,

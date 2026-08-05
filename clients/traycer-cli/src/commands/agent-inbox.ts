@@ -7,6 +7,7 @@ import {
 } from "../internal/host-rpc";
 import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
 import type { CommandFn } from "../runner/runner";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 
 /**
  * `traycer agent inbox` - print the calling agent's recently-delivered
@@ -83,9 +84,13 @@ function parseCursor(value: string | null): {
     createdAt < 0 ||
     eventId.length === 0
   ) {
-    throw new Error(
-      "--after must use the createdAt:eventId cursor returned by the prior inbox page",
-    );
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "traycer: --after must use the createdAt:eventId cursor returned by the prior inbox page",
+      details: null,
+      exitCode: 1,
+    });
   }
   return { createdAt, eventId };
 }
