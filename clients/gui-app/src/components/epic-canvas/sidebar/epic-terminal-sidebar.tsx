@@ -25,10 +25,7 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import type {
-  CanonicalTerminalSessionInfo,
-  CanonicalTerminalSessionInfoWithCurrentCwd,
-} from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -70,7 +67,7 @@ import { useHostClient } from "@/lib/host";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
   deriveTitleSourceFromSessionTitle,
-  terminalSessionTitle,
+  terminalSessionLabel,
 } from "@/lib/terminals/terminal-title";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
@@ -335,7 +332,7 @@ function TerminalRow(props: TerminalRowProps) {
     (state) => state.showNavigatorResourceStats,
   );
 
-  const label = deriveTerminalLabel(session);
+  const label = terminalSessionLabel(session);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -574,17 +571,6 @@ function terminalRowMenuEntries(
   ];
 }
 
-function deriveTerminalLabel(
-  session:
-    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
-): string {
-  return terminalSessionTitle({
-    title: session.title,
-    activeProcessName: session.activeProcessName,
-    currentCwd: "currentCwd" in session ? session.currentCwd : session.cwd,
-  });
-}
-
 function makeTerminalRef(
   session: CanonicalTerminalSessionInfo,
   hostId: string,
@@ -603,7 +589,7 @@ function makeTerminalRef(
     id: session.sessionId,
     instanceId,
     type: "terminal",
-    name: deriveTerminalLabel(session),
+    name: terminalSessionLabel(session),
     titleSource: deriveTitleSourceFromSessionTitle(session.title),
     hostId,
     cwd: session.cwd,

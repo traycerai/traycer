@@ -506,6 +506,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
         expandedIds,
         tree,
         treeFilter: ARTIFACTS_TREE_FILTER,
+        emitFilter: ARTIFACTS_TREE_FILTER,
         visibleIds,
         comparator,
       }),

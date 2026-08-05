@@ -10,7 +10,7 @@ import type { MentionPathTree } from "@/lib/path";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
-  "epic" | "chat" | "terminal-agent" | EpicArtifactKind | "user";
+  "epic" | "chat" | "terminal-agent" | "terminal" | EpicArtifactKind | "user";
 export type MentionContextType =
   PathKind | "git" | "worktree" | EntityMentionContextType;
 
@@ -78,8 +78,33 @@ export interface EpicTerminalAgentMentionEntry extends EpicAgentMentionEntryBase
 export type EpicAgentMentionEntry =
   EpicChatMentionEntry | EpicTerminalAgentMentionEntry;
 
+/**
+ * A plain interactive terminal in the open Task - the shell itself, not an
+ * Agent reached through one. Deliberately NOT an `EpicAgentMentionEntry` arm:
+ * a coding agent can only READ a terminal (it has no inbox), so it carries
+ * none of the Agent interface/delivery metadata and lists under its own
+ * category.
+ *
+ * Sourced from the same host `terminal.list` rows the Task's Terminals sidebar
+ * renders, so the picker and that panel never disagree about what exists.
+ */
+export interface EpicTerminalMentionEntry {
+  readonly kind: "epic-terminal";
+  readonly id: string;
+  readonly token: string;
+  readonly epicId: string;
+  readonly terminalId: string;
+  /** Terminal title, resolved exactly as the sidebar row resolves it. */
+  readonly label: string;
+  readonly description: string;
+  readonly cwd: string;
+  /** Session start time - terminals carry no separate "updated" clock. */
+  readonly updatedAt: number;
+}
+
 export type EpicMentionEntry = EpicMentionSuggestion | EpicAgentMentionEntry;
-export type MentionSuggestionEntry = WorkspaceEntry | EpicMentionEntry;
+export type MentionSuggestionEntry =
+  WorkspaceEntry | EpicMentionEntry | EpicTerminalMentionEntry;
 
 export type ImageAttachment = {
   kind: "image";
@@ -154,6 +179,8 @@ export type EntityMentionAttachment = {
   artifactType: EpicArtifactKind | null;
   chatId: string | null;
   terminalAgentId: string | null;
+  /** Session id of a plain terminal mention; null for every other entity. */
+  terminalId: string | null;
   status: string | number | null;
 };
 

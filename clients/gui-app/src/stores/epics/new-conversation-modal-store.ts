@@ -55,6 +55,12 @@ interface NewConversationModalStore {
     epicId: string,
     selection: { readonly from: number; readonly to: number },
   ) => void;
+  /**
+   * Drops a remembered caret, for a writer that appended to the END of the
+   * draft and wants the composer's `autofocus: "end"` to put the caret after
+   * what it added rather than restoring wherever the user last was.
+   */
+  readonly clearSelection: (epicId: string) => void;
   readonly setSettings: (
     epicId: string,
     settings: ChatRunSettings | null,
@@ -120,6 +126,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       set((state) => ({
         draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
           selection,
+        }),
+      })),
+    clearSelection: (epicId) =>
+      set((state) => ({
+        draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
+          selection: null,
         }),
       })),
     setSettings: (epicId, settings) =>

@@ -1,5 +1,13 @@
 import { useStore } from "zustand";
-import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { Terminal } from "@xterm/xterm";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
@@ -20,6 +28,7 @@ import {
   useTerminalCrashNotification,
 } from "@/hooks/terminal/use-terminal-crash-notification";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
   TerminalDataWriter,
@@ -39,6 +48,9 @@ import {
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
+import { TerminalQuoteOverlay } from "./terminal-quote/terminal-quote-overlay";
+import { useTerminalFindSessionRow } from "@/hooks/terminal/use-terminal-display-title";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 
 export interface TerminalTileProps {
   readonly node: EpicTerminalRef;
@@ -353,6 +365,8 @@ function TerminalTileLive(
   return (
     <TerminalLive
       handle={bootstrap.handle}
+      epicId={epicId}
+      fallbackTitle={props.node.name}
       instanceId={instanceId}
       viewTabId={props.viewTabId}
       tileId={props.tileId}
@@ -375,6 +389,9 @@ function TerminalTileLive(
 
 interface TerminalLiveProps {
   readonly handle: TerminalSessionStoreHandle;
+  readonly epicId: string;
+  /** Tile-ref name, used until the host's live title resolves. */
+  readonly fallbackTitle: string;
   readonly instanceId: string;
   readonly viewTabId: string;
   readonly tileId: string;
@@ -404,6 +421,26 @@ interface TerminalLiveProps {
 
 function TerminalLive(props: TerminalLiveProps) {
   const { handle } = props;
+  // The live xterm engine, published by the host once it has one. The quote
+  // control reads xterm's own selection and buffer coordinates, which the
+  // session store does not carry.
+  const [term, setTerm] = useState<Terminal | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const hostId = useTabHostId();
+  const hostClient = useTabHostClient();
+  const sessionRow = useTerminalFindSessionRow({
+    client: hostClient,
+    epicId: props.epicId,
+    sessionId: handle.sessionId,
+  });
+  const liveTitle =
+    sessionRow === null
+      ? null
+      : terminalSessionTitle({
+          title: sessionRow.title,
+          activeProcessName: sessionRow.activeProcessName,
+          currentCwd: sessionRow.currentCwd,
+        });
   const status = useStore(handle.store, (s) => s.status);
   const exitCode = useStore(handle.store, (s) => s.exitCode);
   const exitReason = useStore(handle.store, (s) => s.exitReason);
@@ -517,7 +554,7 @@ function TerminalLive(props: TerminalLiveProps) {
           combined with `flex-1 min-h-0` it gets a definite box from the
           flex column ancestor without forcing children to chase a fragile
           percentage-height chain. */}
-      <div className="relative min-h-0 flex-1">
+      <div ref={paneRef} className="relative min-h-0 flex-1">
         <Suspense fallback={<TerminalLoadingSkeleton />}>
           <TerminalXtermHost
             sessionId={handle.sessionId}
@@ -545,8 +582,19 @@ function TerminalLive(props: TerminalLiveProps) {
             // the lingering handle is finally evicted; only an exited session
             // tears down eagerly.
             keepAlive={status !== "exited"}
+            onTerminalReady={setTerm}
           />
         </Suspense>
+        <TerminalQuoteOverlay
+          epicId={props.epicId}
+          viewTabId={props.viewTabId}
+          terminalId={handle.sessionId}
+          terminalHostId={hostId}
+          terminalTitle={liveTitle ?? props.fallbackTitle}
+          terminalCwd={sessionRow?.cwd ?? null}
+          term={term}
+          paneRef={paneRef}
+        />
         {overlayState !== null ? (
           <TerminalConnectionOverlay
             state={overlayState}
