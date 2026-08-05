@@ -42,6 +42,7 @@ export interface CommGraphDetailPanelProps {
   readonly epicId: string;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly emptyLabel: string;
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -60,6 +61,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
     actions,
     agentNames,
     ariaLabel,
+    canOpenAgentForEvent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -130,6 +132,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
               epicId={epicId}
               agentNames={agentNames}
               testIdPrefix="comm-graph-detail"
+              canOpenAgent={canOpenAgentForEvent(event)}
               canJump={canJump(event)}
               onJump={onJump}
               canJumpToSender={canJumpToSender(event)}

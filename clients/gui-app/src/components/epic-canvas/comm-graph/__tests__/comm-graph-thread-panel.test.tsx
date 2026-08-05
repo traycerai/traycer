@@ -51,11 +51,13 @@ interface PanelHandles {
 
 /** Which per-kind jump capabilities the rendered panel advertises. */
 interface PanelCapabilities {
+  readonly plainOpen: boolean;
   readonly senderJump: boolean;
   readonly createdJump: boolean;
 }
 
 const NO_EXTRA_JUMPS: PanelCapabilities = {
+  plainOpen: true,
   senderJump: false,
   createdJump: false,
 };
@@ -95,6 +97,7 @@ function renderPanelWithCapabilities(
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        canOpenAgentForEvent={() => capabilities.plainOpen}
         canJump={() => canJump}
         onJump={onJump}
         canJumpToSender={(event) =>
@@ -131,6 +134,7 @@ function renderPanel(events: ReadonlyArray<CommGraphEvent>): () => void {
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        canOpenAgentForEvent={() => true}
         canJump={() => false}
         onJump={() => undefined}
         canJumpToSender={() => false}
@@ -513,6 +517,19 @@ describe("CommGraphThreadPanel heading links", () => {
     expect(handles.onJump).not.toHaveBeenCalled();
   });
 
+  it("does not plain-open an endpoint when the event's cloud origin is offline", async () => {
+    const handles = renderPanelWithCapabilities(
+      [event({ id: 1, timestamp: 100 })],
+      false,
+      { ...NO_EXTRA_JUMPS, plainOpen: false },
+    );
+
+    await screen.findByTestId("comm-graph-detail-row-host-a-1");
+    expect(screen.queryByTestId(`${ROW}-sender`)).toBeNull();
+    expect(screen.queryByTestId(`${ROW}-receiver`)).toBeNull();
+    expect(handles.onOpenAgentId).not.toHaveBeenCalled();
+  });
+
   it("names both endpoints accessibly, and says which one scrolls", async () => {
     renderPanelWithHandles(
       [event({ id: 1, timestamp: 100, ...ANCHORED })],
@@ -575,7 +592,7 @@ describe("CommGraphThreadPanel heading links", () => {
         }),
       ],
       true,
-      { senderJump: false, createdJump: true },
+      { ...NO_EXTRA_JUMPS, createdJump: true },
     );
 
     // The created agent (arrow's receiver) lands at its transcript's start.

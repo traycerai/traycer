@@ -40,6 +40,8 @@ import {
 } from "@/lib/comm-graph/comm-graph-jump";
 
 export interface CommGraphJump {
+  /** Whether this event's owning host is currently reachable. */
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly jump: (event: CommGraphEvent) => void;
   /**
@@ -235,6 +237,7 @@ export function useCommGraphJump(
   );
 
   return {
+    canOpenAgentForEvent: isOriginAvailable,
     canJump,
     jump,
     canJumpToSender,
