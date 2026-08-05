@@ -125,20 +125,24 @@ async function runAndCapture(
   // the vitest process itself exit non-zero with every test green.
   const priorExitCode = process.exitCode;
   process.exitCode = undefined;
-  let exitCode = 0;
   try {
     await fn();
-    exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
   } catch (err) {
-    // Still honoured: the drain watchdog force-exits, and any path reaching
-    // `process.exit` directly must keep reporting its code here.
+    process.exitCode = priorExitCode;
     if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-      exitCode = Number.parseInt(err.message.replace("__test_exit_", ""), 10);
-    } else {
-      process.exitCode = priorExitCode;
-      throw err;
+      // Deliberately fatal rather than translated. This harness USED to report
+      // the thrown code as the run's exit code, which meant every
+      // `expect(out.exitCode)` below passed under either implementation - so
+      // none of them was evidence for int#4840's drain fix. Reaching
+      // `process.exit` is now the failure, because on win32 that is the
+      // teardown abort coming back.
+      throw new Error(
+        `${err.message.replace("__test_exit_", "process.exit(")}) was called: the runner must record process.exitCode and let the loop drain, never exit abruptly`,
+      );
     }
+    throw err;
   }
+  const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
   process.exitCode = priorExitCode;
   const stdout = joined(stdoutChunks);
   const stdoutLines = stdout.split("\n").filter((l) => l.length > 0);
@@ -408,14 +412,16 @@ describe("buildConfigShellSetCommand conflict-detection", () => {
         { from: "user" },
       );
     } catch (err) {
-      // Tolerated, not required: the runner now records the failure on
-      // `process.exitCode` and returns normally, so this usually does not
-      // throw at all. Only a force-exit path still would.
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        // expected - a force-exit path was reached
-      } else {
-        throw err;
+        // Not tolerated any more: the runner records the failure on
+        // `process.exitCode` and returns normally. A `process.exit` here is
+        // the win32 teardown abort's precondition, so accepting it would let
+        // this case pass against the very implementation it exists to reject.
+        throw new Error(
+          `${err.message.replace("__test_exit_", "process.exit(")}) was called during a --clear-args parse failure`,
+        );
       }
+      throw err;
     }
     const ndjson = joined(stdoutChunks)
       .split("\n")

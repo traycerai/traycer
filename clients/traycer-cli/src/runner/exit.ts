@@ -1,10 +1,13 @@
 import { writeSync } from "node:fs";
 import * as Sentry from "@sentry/node";
 import { getGlobalDispatcher } from "undici";
+import { destroySentryTransportRequests } from "../sentry-transport";
 import { flushStdio } from "./std-write";
 
-// How the CLI ends. Every exit path routes through `finishAndExit` instead of
-// calling `process.exit()` itself.
+// How the CLI ends. Every command exit routes through `finishAndExit` instead
+// of calling `process.exit()` itself. (One deliberate exception: the host
+// bootstrap's injected `exit` dependency in commands/host-start.ts, which
+// terminates a process whose whole job was to hand off to a detached child.)
 //
 // Why: on win32 the SEA aborted during exit teardown AFTER completing its work
 // (int#4840; field OSS #955 and #995, both 1.1.9):
@@ -23,48 +26,74 @@ import { flushStdio } from "./std-write";
 // order the assertion is designed to permit. The exit code travels via
 // `process.exitCode`, so the shell contract is unchanged.
 //
-// MEASURED, so the obvious objection is answered up front: on Node 24 neither
-// `fetch`'s default dispatcher nor an explicitly constructed undici `Agent`
-// holds the loop open - a process doing a real registry fetch exits within
-// ~2ms of the response landing. Draining does NOT strand the CLI behind a
-// keep-alive timeout. The watchdog below exists for the case we have not
-// thought of, not for the network.
+// THE ORDER BELOW IS THE FIX, not an implementation detail. A cold review of
+// the first version found the watchdog armed AFTER the teardown awaits, so the
+// two steps most likely to hang were the two steps the backstop did not cover.
+// The code is recorded and the watchdog armed BEFORE anything that can block,
+// and every blocking step carries its own bound underneath it. An unbounded
+// await here does not degrade to a slow exit; it degrades to a CLI that never
+// answers its caller at all.
 
-// Bounded backstop for a handle that never lets go. Deliberately far below the
-// desktop wrapper's 45s `CLI_JSON_TIMEOUT_MS`, so a wedged CLI still answers
-// its caller rather than being killed by it.
-const DRAIN_WATCHDOG_MS = 5_000;
+// Total backstop for the whole terminator. Must exceed the sum of the bounds
+// below it (10s stdio + 2s Sentry + 1s dispatcher = 13s), or those bounds are
+// unreachable and only this one ever fires. Still far below the desktop
+// wrapper's 45s `CLI_JSON_TIMEOUT_MS`, so a wedged CLI answers its caller
+// rather than being killed by it.
+const DRAIN_WATCHDOG_MS = 15_000;
 
 // Same budget the previous inline `Sentry.flush(2000)` calls used.
 const SENTRY_CLOSE_TIMEOUT_MS = 2_000;
 
+// Graceful first, then forced. `close()` waits for running requests with no
+// timeout of its own, so it can outlive the process it is trying to end.
+const DISPATCHER_CLOSE_TIMEOUT_MS = 1_000;
+
+// The code the process will exit with. Not read back off `process.exitCode`:
+// anything else in the process may write that, and arbitration here has to be
+// over the codes THIS module was actually given.
+let recordedExitCode: number | null = null;
+let watchdogTimer: NodeJS.Timeout | null = null;
+let networkTeardown: Promise<void> | null = null;
+
 /**
- * Finish the process: flush output, shut down what we own, then let the event
- * loop end naturally with `exitCode` recorded.
+ * Finish the process: record the code, arm the backstop, flush output, shut
+ * down what we own, then let the event loop end naturally.
  *
  * Callers should `return` immediately after awaiting this - it does not stop
  * execution the way `process.exit()` did.
  */
 export async function finishAndExit(exitCode: number): Promise<void> {
-  // FIRST, and still load-bearing: `process.stdout.write` is async on a pipe,
-  // and a terminal NDJSON line over 64 KiB is otherwise truncated. This is a
+  // BOTH of these before the first `await`. See the ordering note above.
+  recordExitCode(exitCode);
+  armDrainWatchdog();
+
+  // Still load-bearing: `process.stdout.write` is async on a pipe, and a
+  // terminal NDJSON line over 64 KiB is otherwise truncated. This is a
   // different bug from the teardown abort and its fix stays exactly as it was.
+  // Re-run per call - a second caller may have written more output.
   // See std-write.ts.
   await flushStdio();
 
-  // `close()` rather than `flush()`: flush drains the queue but leaves the
-  // client and its transport running, which is precisely the kind of live
-  // machinery the teardown then races. Close before the dispatcher below -
-  // sending the last event needs the network.
-  await quietly(() => Sentry.close(SENTRY_CLOSE_TIMEOUT_MS));
+  // Once per process: the clients are shared, and closing them twice would at
+  // best be wasted work on a process that is already ending.
+  networkTeardown ??= closeNetworkClients();
+  await networkTeardown;
+}
 
-  // Retire pooled keep-alive sockets deliberately instead of leaving them to
-  // teardown. Not required to avoid a hang (see the measurement above); it
-  // removes one of the two named suspects from the exit window.
-  await quietly(() => getGlobalDispatcher().close());
-
-  process.exitCode = exitCode;
-  armDrainWatchdog(exitCode);
+/**
+ * Arbitrate between codes when more than one path finishes the process.
+ *
+ * Monotonic towards failure: the first non-zero code sticks. The process-fatal
+ * handler (`exitAfterUnhandledFailure`) fire-and-forgets `finishAndExit(1)`
+ * and draining lets the interrupted command keep running, so without this a
+ * command that went on to emit an `ok` result would overwrite the fatal 1 with
+ * a 0 and report success for a process that failed.
+ */
+function recordExitCode(exitCode: number): void {
+  if (recordedExitCode === null || (recordedExitCode === 0 && exitCode !== 0)) {
+    recordedExitCode = exitCode;
+  }
+  process.exitCode = recordedExitCode;
 }
 
 /**
@@ -74,9 +103,17 @@ export async function finishAndExit(exitCode: number): Promise<void> {
  * timer cannot hold the loop open by itself, so on the normal path the process
  * exits before it ever fires. It only fires when something ELSE is holding the
  * loop - exactly the case it exists for.
+ *
+ * Armed at most once. Two watchdogs for one process would mean two racing
+ * `process.exit` calls, and the second could report a code the first had
+ * already superseded.
  */
-function armDrainWatchdog(exitCode: number): void {
+function armDrainWatchdog(): void {
+  if (watchdogTimer !== null) return;
   const timer = setTimeout(() => {
+    // Read the code at FIRE time, not at arm time: a later `finishAndExit` may
+    // legitimately have upgraded it.
+    const code = recordedExitCode ?? 0;
     // Self-reporting on purpose: reaching here means the drain did not work,
     // and this line is the only evidence a field report would carry. Written
     // with `writeSync` because the tracked async writers cannot be trusted to
@@ -84,14 +121,73 @@ function armDrainWatchdog(exitCode: number): void {
     try {
       writeSync(
         2,
-        `traycer: exit stalled ${DRAIN_WATCHDOG_MS}ms after completion; forcing exit ${exitCode}\n`,
+        `traycer: exit stalled ${DRAIN_WATCHDOG_MS}ms after completion; forcing exit ${code}\n`,
       );
     } catch {
       // A closed or broken stderr must not turn a forced exit into a throw.
     }
-    process.exit(exitCode);
+    process.exit(code);
   }, DRAIN_WATCHDOG_MS);
   timer.unref();
+  watchdogTimer = timer;
+}
+
+/**
+ * Retire the two network clients that outlive a finished command.
+ *
+ * Each step is individually bounded, and each falls back to a forced release
+ * rather than an unbounded wait - a teardown step that can hang forever turns
+ * "let the loop drain" into "never exit".
+ */
+async function closeNetworkClients(): Promise<void> {
+  // `close()` rather than `flush()`: flush drains the queue but leaves the
+  // client enabled. Neither, however, retires the transport's SOCKETS - in
+  // Sentry 10.x `close` is `flush` plus `enabled = false`, and its request
+  // path installs no timeout. So bound the flush, then destroy whatever is
+  // still in flight. See sentry-transport.ts for the measurement.
+  await bounded(
+    quietly(() => Sentry.close(SENTRY_CLOSE_TIMEOUT_MS)),
+    SENTRY_CLOSE_TIMEOUT_MS,
+  );
+  // Silent by design: a destroyed request means one telemetry envelope was
+  // lost because the DSN endpoint was not answering. That is not the user's
+  // problem and not worth a line on their stderr - and the alternative,
+  // waiting for it, is the hang this whole module exists to prevent.
+  destroySentryTransportRequests();
+
+  // Retire pooled keep-alive sockets deliberately instead of leaving them to
+  // teardown. `Agent.close()` waits for RUNNING requests and has no timeout of
+  // its own, so a stalled response body (a CDN that sends 503 headers and then
+  // goes quiet) would park here indefinitely.
+  const dispatcher = getGlobalDispatcher();
+  const closed = await bounded(
+    quietly(() => dispatcher.close()),
+    DISPATCHER_CLOSE_TIMEOUT_MS,
+  );
+  if (!closed) {
+    // `destroy()` aborts in-flight requests instead of waiting them out.
+    await bounded(
+      quietly(() => dispatcher.destroy()),
+      DISPATCHER_CLOSE_TIMEOUT_MS,
+    );
+  }
+}
+
+/**
+ * Await `work`, giving up after `timeoutMs`.
+ *
+ * Resolves `true` if the work settled in time and `false` if the bound
+ * expired, so the caller can escalate to a forced shutdown. The timer is
+ * cleared on the normal path so it cannot itself hold the loop open.
+ */
+function bounded(work: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    void work.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 /**

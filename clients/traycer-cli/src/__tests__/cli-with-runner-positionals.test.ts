@@ -150,7 +150,12 @@ describe("traycer host install - --release / --from handling", () => {
       await program.parseAsync(argv as string[], { from: "user" });
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        return;
+        // Was a silent `return`. The runner records `process.exitCode` and
+        // drains (int#4840), so nothing here should reach `process.exit` -
+        // swallowing it would hide exactly the regression that matters.
+        throw new Error(
+          `${err.message.replace("__test_exit_", "process.exit(")}) was called while parsing ${argv.join(" ")}`,
+        );
       }
       throw err;
     }
