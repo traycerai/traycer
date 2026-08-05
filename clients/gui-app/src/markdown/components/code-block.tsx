@@ -2,8 +2,8 @@ import { Check, Copy } from "lucide-react";
 import { useCallback, type ReactNode } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { cn } from "@/lib/utils";
+import { useIsMarkdownStreaming } from "@tailmark/react";
 import { useShikiHighlighter } from "../shiki-highlighter";
-import { useIsMarkdownStreaming } from "../shiki-streaming-context";
 import { useThrottledCodeHighlight } from "../use-throttled-code-highlight";
 import { extractText } from "./extract-react-node-text";
 
