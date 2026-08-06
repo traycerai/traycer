@@ -120,6 +120,13 @@ directly above a destructive button) and Agent selection (floating above the
 editor). They differed in width, placement and scoping mechanism while doing
 one job.
 
+All four are gone. Where one stood, the panel now renders `HostScopeLine` - an
+inert readout naming the scoped host, deliberately accent-free and without a
+chevron, so it reads as a fact rather than a control. `settings-host-select.tsx`
+and `use-settings-host-scope.ts` are deleted; `useHostScope` is the only host
+scope in Settings. `settings-host-labels.ts` survives solely for the composer's
+`host-workspace-selector`.
+
 **Two host relationships, kept apart by grammar.** Merging them is the defect
 the whole surface guards against:
 

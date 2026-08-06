@@ -3,6 +3,7 @@
 // easy assertions on the Filter/Sort menus). This file keeps the REAL primitive
 // so row-utility menu mounting and keyboard access are tested against Radix.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -80,9 +81,7 @@ function renderSingleRow(
         onVisiblePathsChange={() => {}}
         taskTitlesByEpicId={new Map()}
         toolbarProps={{
-          hosts: [],
-          value: null,
-          onChange: () => {},
+          scope: hostScopeFixture({}),
           onRefresh: () => Promise.resolve(),
           refreshing: false,
           canRefresh: true,

@@ -61,7 +61,6 @@ import {
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   buildTaskMergeRollups,
   taskMergeRollupEqual,
@@ -79,13 +78,6 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -107,10 +99,14 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useHostClientFor } from "@/hooks/host/use-host-client-for";
+import {
+  HostScopeLine,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -130,7 +126,6 @@ import {
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
-import { settingsHostOptionLabel } from "./settings-host-labels";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import {
   navigateToTabIntent,
@@ -230,27 +225,16 @@ function useObservedHeight(): {
  * owning chat/agent was deleted still appear) and lets the user delete ones
  * they no longer need.
  *
- * The selected host is reached through transient per-host clients
- * (`useHostClientFor` for listing, `useHostStreamClientFor` for the
- * streamed delete), so picking a host here never swaps the app-wide active
- * host or reloads the Epic list - and never affects the branch-prefix
- * default above, which is not host-scoped. The host picker + a refresh
- * control sit in a toolbar directly above the worktree cards.
+ * The scoped host comes from the ONE picker in the sidebar (`useHostScope`),
+ * which reaches a non-active host through a transient client, so viewing
+ * another host's worktrees never swaps the app-wide active host or reloads the
+ * Epic list - and never affects the branch-prefix default above, which is not
+ * host-scoped. This panel used to carry its own host `<Select>` in the
+ * toolbar; that slot now holds an inert readout naming the scoped host, with
+ * the refresh control beside it.
  */
 export function WorktreesSettingsPanel(): ReactNode {
-  const activeHostId = useReactiveActiveHostId();
-  const hostsQuery = useHostDirectoryList();
-  const hosts = useMemo(() => hostsQuery.data ?? [], [hostsQuery.data]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Default to the active host until the user picks another.
-  const effectiveId = selectedId ?? activeHostId;
-  // Resolve the entry from the (referentially stable) directory data so the
-  // transient clients memoize per host rather than rebuilding each render.
-  const selectedEntry = useMemo(
-    () => hosts.find((entry) => entry.hostId === effectiveId) ?? null,
-    [hosts, effectiveId],
-  );
-  const client = useHostClientFor(selectedEntry);
+  const scope = useHostScope();
   // One-shot `worktree.deleteByPath` stream transport: it survives the panel
   // unmounting (a backgrounded delete keeps its socket) but wires no proactive
   // reconnect and no auth revalidation, so an OS wake / host respawn does not
@@ -275,12 +259,10 @@ export function WorktreesSettingsPanel(): ReactNode {
         <WorktreeBranchPrefixSection />
         <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
           <WorktreesBody
-            client={client}
+            client={scope.client}
             openStreamTransport={openStreamTransport}
-            hostId={effectiveId}
-            hosts={hosts}
-            value={effectiveId}
-            onChange={setSelectedId}
+            hostId={scope.hostId}
+            scope={scope}
           />
         </div>
       </div>
@@ -289,9 +271,7 @@ export function WorktreesSettingsPanel(): ReactNode {
 }
 
 function WorktreesToolbar(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
+  readonly scope: HostScope;
   readonly onRefresh: () => Promise<unknown>;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
@@ -302,13 +282,11 @@ function WorktreesToolbar(props: {
   const {
     canRefresh,
     filterControls,
-    hosts,
     lastUpdatedAt,
-    onChange,
     onRefresh,
     refreshing,
+    scope,
     selectionControls,
-    value,
   } = props;
   const refreshWorktrees = useCallback(async () => {
     await onRefresh();
@@ -322,7 +300,7 @@ function WorktreesToolbar(props: {
   return (
     <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       <div className="flex items-center justify-between gap-2">
-        <HostSelect hosts={hosts} value={value} onChange={onChange} />
+        <HostScopeLine scope={scope} className={undefined} />
         <div
           className="flex shrink-0 items-center gap-2"
           data-testid="worktrees-toolbar-actions"
@@ -547,48 +525,13 @@ function WorktreeSortMenu(props: {
   );
 }
 
-/**
- * Host picker - visible so the user always knows which host they're managing,
- * but deliberately lower-emphasis than the search/filter/sort/refresh cluster:
- * no border or filled background at rest, muted text, only gaining contrast on
- * hover/open. It stays a real `Select` (keyboard-reachable, same interaction
- * model), just styled to read as ambient context rather than a primary action.
- */
-function HostSelect(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
-}): ReactNode {
-  return (
-    <Select value={props.value ?? undefined} onValueChange={props.onChange}>
-      <SelectTrigger
-        size="sm"
-        aria-label="Select a host"
-        data-testid="worktrees-host-select"
-        className="w-[min(60vw,15rem)] border-transparent bg-transparent px-2 text-muted-foreground shadow-none hover:bg-accent/40 hover:text-foreground data-[state=open]:bg-accent/40 data-[state=open]:text-foreground dark:bg-transparent dark:hover:bg-accent/40"
-      >
-        <SelectValue placeholder="Select a host" />
-      </SelectTrigger>
-      <SelectContent>
-        {props.hosts.map((host) => (
-          <SelectItem key={host.hostId} value={host.hostId}>
-            {settingsHostOptionLabel(host)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string | null;
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
+  readonly scope: HostScope;
 }): ReactNode {
-  const { client, openStreamTransport, hostId, hosts, value, onChange } = props;
+  const { client, openStreamTransport, hostId, scope } = props;
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
@@ -611,9 +554,7 @@ function WorktreesBody(props: {
   const canRefresh = reachable && client !== null;
   const onRefresh = useCallback(() => listing.refresh(), [listing]);
   const toolbarProps = {
-    hosts,
-    value,
-    onChange,
+    scope,
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
     // A cold fleet enriches for tens of seconds; gating on that stranded the
@@ -699,7 +640,7 @@ function WorktreesBody(props: {
     );
   }
 
-  const showStandaloneToolbar = hosts.length > 0 && !listOwnsToolbar;
+  const showStandaloneToolbar = scope.hosts.length > 0 && !listOwnsToolbar;
 
   return (
     <div className="flex h-full flex-col">
@@ -867,9 +808,7 @@ export function WorktreesList(props: {
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
-    readonly hosts: readonly HostDirectoryEntry[];
-    readonly value: string | null;
-    readonly onChange: (hostId: string) => void;
+    readonly scope: HostScope;
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;

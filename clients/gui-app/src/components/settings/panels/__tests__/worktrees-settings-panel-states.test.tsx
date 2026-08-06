@@ -63,6 +63,29 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => state.reachability,
 }));
 
+// The panel now takes its host from the ONE sidebar picker rather than its own
+// dropdown, so the scope hook is what drives these states. Derived from the
+// same `state` the other host mocks use, so each test still sets one field.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture, hostScopeOptionFixture } = await import(
+    "@/components/settings/host-scope/host-scope-fixture"
+  );
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        host:
+          state.activeHostId === null
+            ? null
+            : hostScopeOptionFixture({
+                hostId: state.activeHostId,
+                name: state.reachability.hostLabel,
+              }),
+        client: state.client,
+      }),
+    isHostScopeUsable: () => true,
+  };
+});
+
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => state.client,
 }));
@@ -380,7 +403,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     });
   });
 
-  it("renders the host select alongside the full toolbar once the list is populated", async () => {
+  it("renders the scoped-host readout alongside the full toolbar once the list is populated", async () => {
     state.hosts = [
       host({ hostId: "host-a", label: "Host A" }),
       host({ hostId: "host-b", label: "Host B" }),
@@ -424,7 +447,10 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     await waitFor(() => {
       screen.getByText("feat-clean");
     });
-    screen.getByTestId("worktrees-host-select");
+    // The toolbar names the scoped host but no longer PICKS it: the one
+    // picker lives in the sidebar, so this slot is an inert readout.
+    screen.getByTestId("host-scope-line");
+    expect(screen.queryByTestId("worktrees-host-select")).toBeNull();
     screen.getByPlaceholderText("Search repo, branch, path, PR, or Task");
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
@@ -436,7 +462,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     expect(
       documentPosition(
         screen.getByRole("textbox", { name: "Branch prefix" }),
-        screen.getByTestId("worktrees-host-select"),
+        screen.getByTestId("host-scope-line"),
       ),
     ).toBe("before");
   });

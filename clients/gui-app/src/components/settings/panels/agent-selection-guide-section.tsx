@@ -18,11 +18,14 @@ import { useAgentSelectionGuideGlobalQuery } from "@/hooks/agent/use-agent-selec
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
-import { SettingsHostSelect } from "./settings-host-select";
 import {
-  useSettingsHostScope,
-  type SettingsHostScopeStatus,
-} from "./use-settings-host-scope";
+  HostScopeGate,
+  HostScopeLine,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -102,39 +105,18 @@ function agentsGuideEditorReducer(
 }
 
 export function AgentSelectionGuideSection() {
-  const scope = useSettingsHostScope();
+  const scope = useHostScope();
   const realBinding = useHostBinding();
-  const hostPicker =
-    scope.hosts.length > 0 ? (
-      <SettingsHostSelect
-        hosts={scope.hosts}
-        value={scope.effectiveId}
-        onChange={scope.setSelectedId}
-        ariaLabel="Agent instructions host"
-      />
-    ) : (
-      <span className="text-ui-xs text-muted-foreground">
-        Host: {scope.hostLabel}
-      </span>
-    );
 
-  // Only a fully-resolved override re-provides the scoped client - a
-  // still-connecting or vanished override falls through to
-  // `AgentSelectionGuideSectionInner`'s own status branches instead of
-  // silently reading/writing through the ambient active-host client.
+  // Only a fully-resolved scope re-provides the client — a still-connecting or
+  // vanished pick falls through to `HostScopeGate` instead of silently
+  // reading/writing through the ambient active-host client.
   const scopedBinding =
     scope.status === "ready" && realBinding !== null && scope.client !== null
       ? { ...realBinding, hostClient: scope.client }
       : null;
 
-  const inner = (
-    <AgentSelectionGuideSectionInner
-      hostId={scope.effectiveId}
-      hostLabel={scope.hostLabel}
-      status={scope.status}
-      hostPicker={hostPicker}
-    />
-  );
+  const inner = <AgentSelectionGuideSectionInner scope={scope} />;
   if (scopedBinding === null) return inner;
   return (
     <HostRuntimeContext.Provider value={scopedBinding}>
@@ -143,40 +125,21 @@ export function AgentSelectionGuideSection() {
   );
 }
 
-function AgentSelectionGuideSectionInner(props: {
-  readonly hostId: string | null;
-  readonly hostLabel: string;
-  readonly status: SettingsHostScopeStatus;
-  readonly hostPicker: ReactNode;
-}) {
-  const { hostId, hostLabel, status, hostPicker } = props;
-  // Device-scoped file: remount the editor with fresh content whenever the
-  // selected host changes so one machine's edits never carry to another.
-  // The query itself always runs (against whatever client the ambient
-  // context currently provides) - only its result is trusted below, and only
-  // once `status` confirms that client is actually the picked host's.
+function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
+  const { scope } = props;
+  // Host-scoped file: remount the editor with fresh content whenever the
+  // scoped host changes so one host's edits never carry to another. The query
+  // itself always runs (against whatever client the ambient context currently
+  // provides) — only its result is trusted below, and only once the gate has
+  // confirmed that client is actually the scoped host's.
   const query = useAgentSelectionGuideGlobalQuery();
 
-  let panelContent: ReactNode;
-  if (status === "unavailable") {
-    panelContent = (
-      <AgentSelectionGuideMessage hostPicker={hostPicker}>
+  let body: ReactNode;
+  if (query.isError) {
+    body = (
+      <AgentSelectionGuideMessage>
         <div className="text-ui-sm text-muted-foreground">
-          {hostLabel} is no longer available. Pick a different host above.
-        </div>
-      </AgentSelectionGuideMessage>
-    );
-  } else if (status === "connecting") {
-    panelContent = (
-      <AgentSelectionGuideMessage hostPicker={hostPicker}>
-        <EditorSkeleton />
-      </AgentSelectionGuideMessage>
-    );
-  } else if (query.isError) {
-    panelContent = (
-      <AgentSelectionGuideMessage hostPicker={hostPicker}>
-        <div className="text-ui-sm text-muted-foreground">
-          Couldn't load agent instructions for this host.
+          Couldn&apos;t load agent instructions for this host.
           <ReportIssueAction
             context={createReportIssueContext({
               title: "Couldn't load agent instructions",
@@ -191,46 +154,50 @@ function AgentSelectionGuideSectionInner(props: {
       </AgentSelectionGuideMessage>
     );
   } else if (query.data === undefined) {
-    panelContent = (
-      <AgentSelectionGuideMessage hostPicker={hostPicker}>
+    body = (
+      <AgentSelectionGuideMessage>
         <EditorSkeleton />
       </AgentSelectionGuideMessage>
     );
   } else {
-    panelContent = (
-      <>
-        <AgentSelectionGuideHostPicker hostPicker={hostPicker} />
-        <AgentsGuideEditor
-          key={hostId}
-          hostLabel={hostLabel}
-          initialContent={query.data.content}
-          generatedDefaultContent={query.data.generatedDefaultContent}
-        />
-      </>
+    // No heading here: `AgentSelectionGuideEditorSurface` renders the title and
+    // description itself. Adding one above it printed both, twice over.
+    body = (
+      <AgentsGuideEditor
+        key={scope.hostId}
+        hostLabel={scope.hostLabel}
+        initialContent={query.data.content}
+        generatedDefaultContent={query.data.generatedDefaultContent}
+      />
     );
   }
 
-  return <div className="h-full min-h-0 p-5">{panelContent}</div>;
-}
-
-function AgentSelectionGuideHostPicker(props: {
-  readonly hostPicker: ReactNode;
-}) {
-  if (props.hostPicker === null) return null;
   return (
-    <div className="mb-3 flex justify-end">
-      <div className="flex items-center gap-2">
-        <span className="text-ui-xs text-muted-foreground">Host</span>
-        {props.hostPicker}
-      </div>
+    <div className="h-full min-h-0 p-5">
+      <section className="flex h-full min-h-0 flex-col">
+        {/* The dropdown that used to sit here is gone: this file is per-host,
+            but the control that says WHICH host is the one picker in the
+            sidebar. What remains is the inert readout naming it. */}
+        <div className="mb-3 flex justify-end">
+          <HostScopeLine scope={scope} className={undefined} />
+        </div>
+        <HostScopeGate
+          scope={scope}
+          skeleton={
+            <AgentSelectionGuideMessage>
+              <EditorSkeleton />
+            </AgentSelectionGuideMessage>
+          }
+        >
+          {body}
+        </HostScopeGate>
+      </section>
     </div>
   );
 }
 
-function AgentSelectionGuideMessage(props: {
-  readonly children: ReactNode;
-  readonly hostPicker: ReactNode;
-}) {
+/** Heading + description for the states that render no editor surface. */
+function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
   return (
     <section
       aria-labelledby="agent-selection-guide-heading"
@@ -247,7 +214,6 @@ function AgentSelectionGuideMessage(props: {
           {AGENT_SELECTION_GUIDE_DESCRIPTION}
         </p>
       </div>
-      <AgentSelectionGuideHostPicker hostPicker={props.hostPicker} />
       {props.children}
     </section>
   );
