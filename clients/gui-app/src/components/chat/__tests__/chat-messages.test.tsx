@@ -5105,12 +5105,10 @@ describe("ChatMessages scroll policy", () => {
 
     it("a bottom-following reader returns to the newest true bottom after hidden growth", async () => {
       // Fixup (callback-synchronous-follow): the follow latch's permission
-      // is updated by a real native `scroll` event on the scroll node - the
-      // manual `scrollTop = 0` write below needs the shim's synthetic-event
-      // dispatch enabled, matching what a real browser does for any
-      // scrollTop change (verified live against the real library), so the
-      // latch correctly learns the reader detached before the visibility
-      // toggle below.
+      // is updated by publishing wheel intent plus the resulting native
+      // `scroll` event. The manual `scrollTop = 0` write below needs the shim's
+      // synthetic-event dispatch enabled, matching what a real browser does,
+      // so the latch learns the reader detached before the visibility toggle.
       enableLegendListBrowserScrollEvents();
       const messages = makeCompletedTranscript(24);
       const key = `t-visibility-following-end-${Math.random().toString(36).slice(2)}`;
@@ -5125,6 +5123,9 @@ describe("ChatMessages scroll policy", () => {
       assertTrueBottomGeometry();
 
       act(() => {
+        getScrollNode().dispatchEvent(
+          new WheelEvent("wheel", { deltaY: -120 }),
+        );
         getScrollNode().scrollTop = 0;
       });
       rerenderWith({ visible: false });

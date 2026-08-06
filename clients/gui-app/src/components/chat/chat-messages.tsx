@@ -99,6 +99,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 
 interface ChatMessagesProps {
@@ -1096,15 +1097,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     setTimelineMode("following-end", true);
   }, [resolveSuppressedEndLanding, setTimelineMode]);
 
-  // Decision #6: ANY pointerdown in the transcript - expanding a card,
-  // Decision #6/#5/#7: any real reader input (pointerdown, keyboard) freezes
-  // an in-flight native smooth-scroll and re-syncs mode/`isAtEndRef` against
-  // the actual physical position - an optimistic `following-end` set ahead of
-  // a still-animating scroll (e.g. the pill's own `scrollToEnd`) must not be
-  // trusted once that animation is cancelled mid-flight. The subsequent real
-  // scroll event (if any) is what actually determines follow via
-  // latch report; this only corrects the ownership bookkeeping for an
-  // operation a real gesture just superseded.
+  // Decision #6/#5/#7: reader input freezes an in-flight native smooth-scroll
+  // and re-syncs ownership against the actual physical position. Transcript
+  // pointerdown is a preflight because a disclosure click can resize content
+  // without publishing a reading position; wheel/touch/keyboard and scrollbar
+  // input publish, so their subsequent scroll report may detach the latch.
   const handleTimelineReaderGesture = useCallback(
     ({
       freezeInFlightScroll,
@@ -1166,17 +1163,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [handleTimelineReaderGesture],
   );
-  const handleTranscriptPointerDown = useCallback((): void => {
-    // Inline artifact/A2A navigation starts with pointerdown and can unmount
-    // this tile before a later passive scroll snapshot runs. Capture the
-    // exact source viewport synchronously, before cancellation changes mode.
-    persistCurrentScrollRef.current();
-    cancelTimelineLiveFollowForUserNavigation({
-      direction: "indeterminate",
-      freezeInFlightScroll: true,
-      publishesReaderPosition: false,
-    });
-  }, [cancelTimelineLiveFollowForUserNavigation]);
+  const handleTranscriptPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      // Inline artifact/A2A navigation starts with pointerdown and can unmount
+      // this tile before a later passive scroll snapshot runs. Capture the
+      // exact source viewport synchronously, before cancellation changes mode.
+      persistCurrentScrollRef.current();
+      const scrollNode = chatTimelineRef.current?.getScrollableNode();
+      // A disclosure/card click is only a correction-cancelling preflight: its
+      // ensuing ResizeObserver/MVCP movement is layout-owned and must not
+      // detach follow. Pointer input targeting the scroll node itself is the
+      // scrollbar interaction shape; it publishes the ensuing scroll position.
+      const publishesReaderPosition = event.target === scrollNode;
+      cancelTimelineLiveFollowForUserNavigation({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition,
+      });
+    },
+    [cancelTimelineLiveFollowForUserNavigation],
+  );
 
   // ChatTimeline unmounts LegendList entirely for an empty transcript
   // (ChatEmptyState instead), so this - not just `messages` identity - is
@@ -1708,10 +1714,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   // Explicit navigation (find/minimap/deep-link/restoration) is programmatic,
-  // not a gesture. It never itself grants or removes follow - a landing at
-  // the strict bottom resumes follow the same way any other scroll reaching
-  // the edge does, via the latch's ordinary strict-end report the settled
-  // scroll produces; a landing away from it simply stays free-scrolling.
+  // not a gesture. It declares a free-scrolling destination before moving;
+  // a landing at the strict bottom resumes follow through the latch's ordinary
+  // strict-end report. Bare scrollTop direction is never used as intent
+  // because MVCP and layout compensation produce the same browser signal.
   //
   // Ticket 10: settle/re-issue against the CURRENT geometry - an ANIMATED
   // long jump targets ESTIMATED heights; no mid-flight retargeting in the
@@ -1722,6 +1728,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
       if (!list) return;
+      followLatchRef.current?.beginOwnedFreeNavigation();
       const imperativeScrollGeneration = beginImperativeScrollOperation(
         location.animated,
       );
