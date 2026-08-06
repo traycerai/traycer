@@ -873,11 +873,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const resolvePendingRestoreEndLandingRef = useRef<(() => boolean) | null>(
     null,
   );
-  const isFollowCorrectionSuppressed = useCallback(
-    (): boolean => pendingHydrationRestoreAnchorIdRef.current !== null,
-    [],
-  );
-
   const chatTimelineRef = useRef<LegendListRef | null>(null);
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
@@ -1007,6 +1002,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // intermediate mount can unmount while Legend List is still unmeasured.
   const restorePersistencePendingRef = useRef(
     savedRestoreRequiresPersistenceGate(rawSavedTabState),
+  );
+  // A restored free-reading chat can briefly report measurable strict-bottom
+  // geometry when a hidden task canvas becomes visible, before LegendList has
+  // reinflated its rows and applied the saved anchor. Maintenance callbacks in
+  // that window are bootstrap layout, not evidence that the reader returned to
+  // the tail. Keep follow reconciliation suppressed until the saved landing is
+  // validated, as well as during the narrower partial-hydration transaction.
+  const isFollowCorrectionSuppressed = useCallback(
+    (): boolean =>
+      restorePersistencePendingRef.current ||
+      pendingHydrationRestoreAnchorIdRef.current !== null,
+    [],
   );
   // Fixup (fix-top-level-task-tab-scroll-restoration): continuously mirrors
   // the last KNOWN-COHERENT scroll snapshot while the DOM is genuinely
@@ -2102,6 +2109,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
     if (replay.anchorMessageId === null) return;
+    // Re-arm the same persistence/correction gate used by mount-time restore.
+    // A top-level task canvas is kept mounted, so showing it again can deliver
+    // ResizeObserver maintenance while LegendList still exposes its temporary
+    // zero/incomplete geometry. Without this gate that transient strict edge
+    // can reacquire follow before the saved anchor is replayed, permanently
+    // replacing the reading position with `following-end`.
+    restorePersistencePendingRef.current = true;
     restorePersistedTimelineLocation(replay.anchorMessageId, replay.offset, {
       isAborted: () => false,
       onValidated: () => undefined,
