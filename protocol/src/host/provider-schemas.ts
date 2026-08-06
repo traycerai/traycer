@@ -943,9 +943,18 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
- * `providers.list@3.1` request. Optional `native` list/discover query folds
- * the unreleased mcp/plugins/skills list verbs onto this carrier. Classic
- * callers omit it (upgrade defaults to null).
+ * Live `providers.list@7.0` request. Optional `native` list/discover query
+ * folds the mcp/plugins/skills list verbs onto this carrier. Callers on any
+ * earlier line predate it, so the v6.0 -> v7.0 upgrade fills `native: null`
+ * ("classic caller, no native query").
+ *
+ * `native` rides v7.0 ALONE. It was authored against the live request object
+ * while v6.0 was still unreleased, which silently grew the already-shipped
+ * v4.0/v5.0/v6.0 request lines too; `host-v1.1.10` then froze those three
+ * lines without it, because the commit that added it was not in the release
+ * cherry-pick. Every line below v7.0 is pinned to
+ * `providersListRequestSchemaBeforeV70` for that reason - do not point a
+ * released line back at this schema.
  */
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
@@ -953,12 +962,17 @@ export const providersListRequestSchema = z.object({
 });
 export type ProvidersListRequest = z.infer<typeof providersListRequestSchema>;
 
-/** Frozen `providers.list@3.0` request (no native field). */
-export const providersListRequestSchemaV30 = z.object({
+/**
+ * Frozen request shape for every released `providers.list` line before v7.0
+ * (v1.0 through v6.0 all shipped exactly this). Hand-pinned rather than
+ * derived from the live schema via `.omit()` so a future request field cannot
+ * leak into a shipped line the way `native` did.
+ */
+export const providersListRequestSchemaBeforeV70 = z.object({
   forceAuthRefresh: z.boolean().optional(),
 });
-export type ProvidersListRequestV30 = z.infer<
-  typeof providersListRequestSchemaV30
+export type ProvidersListRequestBeforeV70 = z.infer<
+  typeof providersListRequestSchemaBeforeV70
 >;
 
 /**
