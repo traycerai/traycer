@@ -19,7 +19,16 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
 
 // Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
 function selectTab(name: string): void {
@@ -586,6 +595,30 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
+const hostScopeMocks: {
+  client: null;
+  setHostId: Mock<(hostId: string) => void>;
+  hostId: string;
+} = vi.hoisted(() => ({
+  client: null,
+  setHostId: vi.fn<(hostId: string) => void>(),
+  hostId: "host-a",
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        setHostId: hostScopeMocks.setHostId,
+        hostId: hostScopeMocks.hostId,
+      }),
+  };
+});
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
@@ -1117,6 +1150,8 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    hostScopeMocks.setHostId.mockClear();
+    hostScopeMocks.hostId = "host-a";
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1139,6 +1174,177 @@ describe("<ProvidersSettingsPanel />", () => {
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
+  });
+
+  it("applies a re-auth deep link's host even though the rail clears the intent on mount", () => {
+    // The rail is a DESCENDANT of the panel and clears the whole focus intent
+    // — host half included — in its own mount effect. React runs child passive
+    // effects before the parent's, so a parent that read the store in an
+    // effect saw an already-emptied store whenever the rail mounted in the
+    // same commit, which is exactly what cached provider data produces. The
+    // deep link then silently consumed its provider/profile intent against
+    // whichever host was already on screen.
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).toHaveBeenCalledWith(
+      "host-that-needs-reauth",
+    );
+    // Consumed exactly once: the host half is cleared at the point of use, so
+    // a later visit does not yank the scope back to a host the user has since
+    // navigated away from.
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
+  });
+
+  it("refuses a profile intent whose target host is not the one on screen", () => {
+    // The target was unreachable or plan-gated, so its rail never mounted and
+    // the harness/profile/sign-in halves stayed armed. Splitting the host half
+    // off (so an unreachable target could not re-yank the scope forever) threw
+    // away WHICH host they belonged to — and the next reachable host the user
+    // picked consumed them, in the worst case starting an automatic sign-in
+    // there. The retained target is what makes the remainder refusable.
+    useProvidersFocusStore.setState({
+      focusHarnessId: "cursor",
+      focusHostId: null,
+      focusTargetHostId: "host-that-needs-reauth",
+      focusProfileId: "profile-1",
+      startSignIn: true,
+    });
+    hostScopeMocks.hostId = "some-other-host";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Not consumed here: the pane stays on the rail's first provider rather
+    // than opening the deep link's target on the wrong machine.
+    expect(
+      screen
+        .getByRole("tab", { name: "CLI & Args" })
+        .getAttribute("data-state"),
+    ).toBe("active");
+    expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
+    // ...and it is cancelled rather than left armed for the next host.
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusProfileId).toBeNull();
+    expect(useProvidersFocusStore.getState().startSignIn).toBe(false);
+  });
+
+  it("leaves the scope alone when no deep link armed a host", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+  });
+
+  it("switches the scope BEFORE any child can consume the rest of the intent", () => {
+    // Capturing the host half before children mount was necessary but not
+    // sufficient: the rail consumes (and clears) the provider/profile half in
+    // its own mount effect, and child passive effects run before the parent's.
+    // So when the rail mounted in the same commit — cached data — it consumed
+    // the intent against the OLD host, in the worst case starting a re-auth
+    // sign-in there, one commit before the scope moved. The panel now holds
+    // its subtree until the switch has landed, so the rail's first mount is
+    // already scoped to the deep-linked host. This asserts the ORDER, which is
+    // the actual contract the two narrower fixes missed.
+    const order: string[] = [];
+    hostScopeMocks.setHostId.mockImplementation(() => {
+      order.push("scope-switched");
+    });
+    // The suite's beforeEach only mockClear()s this spy, which keeps the
+    // implementation — drop it here so it cannot leak into later tests.
+    onTestFinished(() => {
+      hostScopeMocks.setHostId.mockReset();
+    });
+    const unsubscribe = useProvidersFocusStore.subscribe((state, prev) => {
+      if (prev.focusProfileId !== null && state.focusProfileId === null) {
+        order.push("intent-consumed");
+      }
+    });
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    unsubscribe();
+
+    const switched = order.indexOf("scope-switched");
+    expect(switched).not.toBe(-1);
+    // Whether or not the rail consumed the intent during this render, nothing
+    // may have consumed it BEFORE the switch.
+    const consumed = order.indexOf("intent-consumed");
+    if (consumed !== -1) {
+      expect(switched).toBeLessThan(consumed);
+    }
+  });
+
+  it("applies a deep link armed AFTER mount — the keep-alive case", async () => {
+    // The top-level keep-alive host retains this panel while its tab is
+    // hidden, so a re-auth banner click arms the intent against an
+    // already-mounted panel: there is no fresh mount to capture it. A
+    // mount-time snapshot stayed stale, pending never rose, and Sign in
+    // appeared to do nothing while the intent waited to fire against
+    // whichever host a later remount happened to select.
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+
+    act(() => {
+      useProvidersFocusStore.getState().setProfileFocus({
+        harnessId: "opencode",
+        hostId: "host-armed-late",
+        profileId: "profile-1",
+        startSignIn: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(hostScopeMocks.setHostId).toHaveBeenCalledWith("host-armed-late");
+    });
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
   });
 
   it("gates the provider-list-error report action on capability and never forwards the raw host error", () => {
@@ -1629,14 +1835,29 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
-  it("renders the host picker in the header (like Worktrees)", () => {
+  // The panel used to carry its own host `Select` in the header - one of four
+  // near-identical dropdowns doing one job - and then, briefly, an inert
+  // readout of the scoped host. Both are gone: the sidebar owns the scope.
+  //
+  // Asserting on the host NAME, not on a testid. An earlier version of this
+  // test checked that `host-scope-line` was absent, which is unfalsifiable -
+  // that testid exists nowhere in the codebase, so the assertion passes no
+  // matter what the panel renders. The name is the thing that must not
+  // reappear, and the fixture puts it on screen the moment anything prints it.
+  it("names no host and offers no host picker, leaving both to the sidebar", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("combobox", { name: "Host" })).toBeDefined();
+    expect(screen.queryByText("host-a")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Host" })).toBeNull();
+    // The controls the header DOES own still render - so this test fails if
+    // the fix that moved them inside the gate ever drops them entirely.
+    expect(
+      screen.getByRole("button", { name: "Refresh providers" }),
+    ).toBeDefined();
   });
 
   it("blocks disabling the last enabled provider", () => {
@@ -4491,6 +4712,10 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "work-profile",
       startSignIn: true,
     });
+    // The scope mock's `setHostId` is inert, so model the applied switch: the
+    // rail consumes a profile intent only when the host on screen IS the
+    // intent's target (the foreign-host case is covered separately).
+    hostScopeMocks.hostId = "local";
 
     render(
       <TooltipProvider>

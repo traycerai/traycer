@@ -69,6 +69,154 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
   multi-card gaps. Out of scope: the Worktrees toolbar/list rows, which stay
   unchanged regardless of density.
 
+## Scope: the organising idea
+
+Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
+load-bearing rather than cosmetic.
+
+- **Application** - General, Appearance, Keybindings.
+- **Account** - Sessions.
+- **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
+  Everything under it - Overview, Providers, Worktrees, Notifications, Agent
+  selection, Shell, Diagnostics - is scoped by that one selection.
+
+Application and Account lead because they are short, fixed and never re-shaped;
+the host group goes last because it is the only one whose contents depend on a
+selection.
+
+**Scope is not a level.** Settings already spends its nesting budget inside
+Providers, which is a rail plus a per-provider tab bar - so the sidebar gets
+exactly one level and the host cannot become another one. Earlier attempts that
+made the host a tier (tabs across the content, an accordion of host cards in
+the rail) all pushed the deepest page four levels down. The picker is
+navigation only.
+
+**One place per host verb.** There is no Hosts page. A separate collection page
+looks harmless but is a second lifecycle surface the moment it can change an
+update policy, which is exactly what the old "My Hosts" list did - so adding,
+comparing and updating hosts all resolve to: the picker lists them, the `+`
+footer adds one, and everything else about a host lives on that host's Overview
+(`host-scope/host-registry-updates.tsx` holds the registry half of Updates,
+beside the local controller's own region in the SAME card).
+
+**The picker inherits the composer's row anatomy**
+(`components/home/host-workspace-selector/host-section.tsx`): kind glyph, name,
+status dot, check. Two pickers over one concept must not each invent a
+vocabulary. Search appears from six hosts up; below that it is one more thing
+to skip past.
+
+`requiresLocalHost` (Shell, Diagnostics) marks a TRANSPORT limit, never a scope
+one: shell config and `hostLogLevel` are fields of the selected host's own
+config, but this client reads them through the local CLI bridge. Those sections
+stay in the host group and render `RequiresLocalHostNotice` for a remote host,
+rather than showing this computer's values under another host's name. An
+earlier pass let the missing RPC exile them into the App group, which put the
+surface right back to "memorise the exceptions".
+
+This replaced a flat list in which "Appearance" (this app), "Sessions" (your
+account) and "Providers" (one specific host) were indistinguishable peers,
+and in which FOUR sections had each grown their own host `<Select>`: Providers
+(header), Worktrees (toolbar), General -> File Edit Snapshots (a settings row,
+directly above a destructive button) and Agent selection (floating above the
+editor). They differed in width, placement and scoping mechanism while doing
+one job.
+
+All four are gone, and nothing replaced them: a panel states NOTHING about which
+host it is scoped to. An interim pass put an inert `HostScopeLine` readout where
+each dropdown had been, on the theory that content owes the reader the host name
+at the point of use. It does not - the sidebar picker already carries the name,
+the health dot and the "Viewing -" note, and the readout was that same fact
+printed a second time in four places, which is the duplication this surface
+exists to remove. So panels carry only the controls they own.
+
+One caveat, stated because an earlier draft of this file got it wrong: the
+picker is NOT permanently on screen. The rail is a single `overflow-y-auto`
+`<aside>`, so at a short viewport the host group can scroll out of view like
+anything else in it. The argument for removing the readout is
+non-duplication, not permanent visibility. `settings-host-select.tsx` and `use-settings-host-scope.ts`
+are deleted; `useHostScope` is the only host scope in Settings.
+`settings-host-labels.ts` survives solely for the composer's
+`host-workspace-selector`.
+
+**Two host relationships, kept apart by grammar.** Merging them is the defect
+the whole surface guards against:
+
+- **Viewing** (`stores/settings/settings-host-scope-store.ts`) - which host
+  Settings is administering. Free, reversible, no effect outside Settings.
+  Renders as neutral chrome; never accent-coloured.
+- **Active for this window** (`HostDirectoryService.selectById`, read through
+  `useReactiveActiveHostId`) - which host this window talks to for ambient
+  work: notification indicators, the bell, rate limits, the resource monitor,
+  and where newly started work lands. Changed ONLY by a labelled verb that
+  states its consequence ("Use this host in this window"), never as a
+  dropdown side effect. Always wears the accent.
+
+`useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
+host-scoped panel reads. Its status enum is the safety contract, because three
+of its states look identical if you only check `client !== null`:
+
+| Status        | `client` | The panel must                                                                                          |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `following`   | ambient  | render normally - the ambient client IS the scoped host's                                               |
+| `connecting`  | `null`   | render its loading shape, NEVER the ambient client's data                                               |
+| `unreachable` | `null`   | say so - terminal, not pending; never a spinner that cannot resolve                                     |
+| `vanished`    | `null`   | say the host was deregistered and offer a way back - it must NOT silently re-resolve to the active host |
+| `ready`       | scoped   | render normally                                                                                         |
+
+The invariant every consumer owes: **a visible host name must always match the
+client used by every read, stream and mutation beneath it.** Because the only
+visible host name is the sidebar's, that reduces to one rule: a panel must
+neither render content NOR issue a host read while the scope has no client
+behind it.
+
+Two mechanisms, and the split matters:
+
+- `HostScopeGate` (`host-scope/host-scope-gate.tsx`) decides what is
+  **rendered**. It guards its CHILDREN and nothing else - a control passed as a
+  sibling prop (`headerAction`) is outside it, which is how Providers' Refresh
+  button once re-probed the ambient host while the page named another.
+- `isHostScopeUsable(status)` decides what is **mounted**. A query hook under a
+  non-usable scope still fires and caches its answer no matter what the gate
+  renders, so panels that own host reads check this before mounting them.
+
+Every section in the `host` group mounts the gate. Shell and Diagnostics wrap
+their host-tied bodies in it whole (Diagnostics keeps its app-scoped rows -
+the desktop log level and the memory capture - outside, since their subject
+never changes with the scope). Overview is the exception that proves the rule:
+most of its body never touches the scoped host's RPC - the local service
+console runs over the CLI bridge and is the RECOVERY surface, and the Updates
+card writes through the account API - so it mounts the whole-panel gate only
+for the unresolved and `vanished` cases, renders its body for `connecting` and
+`unreachable`, and the RPC-backed rows gate themselves inside
+`HostDangerZone`. The reason is the same one that motivates the gate: a `null`
+scoped host that defaulted to "local" once put this computer's service console
+under a host that no longer exists.
+
+**One host model.** The app carries two host lists that need not agree - the
+runtime directory (what this client can dial; it alone knows `websocketUrl`)
+and the cloud registry (what the account owns; it alone knows presence leases,
+platform, update state). Every old picker was built on exactly one of them and
+was therefore blind to a real class of host. `buildHostScopeOptions`
+(`host-scope/host-scope-model.ts`) is their UNION keyed by `hostId`, recording
+`connectable` / `registered` so a row present in only one list renders honestly
+instead of being dropped or faked. NOTE: `HostDirectoryEntry.kind` is
+`local|remote|mock` while `HostListItem.kind` is `personal|sandbox` - same
+field name, disjoint values. The merged model deliberately exposes neither
+directly.
+
+**One health vocabulary.** `deriveHostHealth` (`host-scope/host-health.ts`)
+replaced two disjoint dialects that described the same machine: the
+registry-backed presence words and the local service words ("Running" /
+"Stopped" / "Not installed"). It keeps a coarse `state` a person acts on plus a
+`detail` fragment carrying the nuance the old design spent a row of pills on.
+`stopped` and `not-installed` stay distinct from `offline` because they are the
+two a person can act on; for the local machine the live service snapshot
+outranks the cloud lease. It DELEGATES to `deriveHostPresence`
+(`panels/my-hosts-model.ts`) rather than re-deriving it - that function's
+invariants (no green dot without live evidence; live-session evidence outranks
+the lease; an expired lease under degraded presence reads "unknown", never a
+false "Offline") are tested and load-bearing.
+
 ## Sections
 
 - `General` App behavior, agent activity, and local data controls, divided
@@ -94,13 +242,17 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
     (retry moving local SQLite tasks/epics to cloud - stays out of
     Diagnostics, which is support capture, not user data recovery).
   - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
-"danger"`, `data-testid="settings-danger-zone"`, kept last): File Edit
-    Snapshots (local pre-edit snapshot storage, size + clear), Local app
-    state (reset tabs/layout/drafts/settings/view prefs + reload), Remove
-    Traycer (conditional on `hostManagement`; becomes "Traycer removed / Quit
-    Traycer" after removal). The zone's distinct restrained-red card/label
-    tone is unchanged from before the reorg, just carried by the shared
-    group component instead of bespoke markup.
+"danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
+    only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
+    destructive action here that is genuinely about this APP rather than about
+    a host. File Edit Snapshots and Remove Traycer both moved to
+    `host-scope/host-danger-zone.tsx` on the scoped host's own Overview: each
+    acts on ONE host's data, and a host-scoped destructive row sitting on an
+    app-wide page is how a snapshot wipe could be aimed at a host the page
+    never named. Their arm-time target capture lives there too. The zone's
+    distinct restrained-red card/label tone is unchanged from before the
+    reorg, just carried by the shared group component instead of bespoke
+    markup.
 - `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
   specialized in one column: **Theme**, **Interface**, **Typography**,
   **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
@@ -230,11 +382,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   `providers.addCustomPath` / `providers.removeCustomPath` /
   `providers.setEnabled` / `providers.detectVersion` /
   `providers.setEnvOverride` / `providers.deleteEnvOverride`) through
-  `useHostQuery` / `useHostScopedMutation`. A header host picker (shown
-  only with more than one host) scopes the whole pane to the selected host
-  by re-providing the runtime client for the panel subtree (transient
-  `useHostClientFor`, the Worktrees pattern); the default is the active
-  host. Selection + custom paths + enabled flag + per-provider env persist
+  `useHostQuery` / `useHostScopedMutation`. The pane carries NO host picker of
+  its own: the sidebar switcher scopes it, and the panel re-provides the
+  runtime client for its subtree from `useHostScope` (transient
+  `useHostClientFor`) only once the scope is `ready`. The list query and the
+  Refresh control sit INSIDE `HostScopeGate` rather than in the panel header,
+  because the header renders outside the gate and reached the ambient host
+  there. Selection + custom paths + enabled flag + per-provider env persist
   host-side in `~/.traycer/host/config/provider-overrides.json` (per-device
   == per-host). Disabling a provider marks it unavailable in the new-agent
   picker. `providers.list` is cached for 15 min
@@ -636,7 +790,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   (`settings-related-panels-core-flows` artifact) replaced the old one-column
   severity×channel matrix with a compact policy card, and gave the hooks
   manager below it the remaining height.
-  - **`"In-app notifications · Current host"`**: three rows, one per severity
+  - **`"In-app notifications"`** (the `· Current host` qualifier is gone - the
+    sidebar names the host now, and the old suffix qualified the one fact the
+    screen refused to resolve): three rows, one per severity
     - `Needs action`, `Failure`, `Done` (`info` has no row) - each a single
       `Switch` gating durable host-row creation before anything reaches the bell
       feed, unread count, tab indicators, or notification hooks. Collaboration
@@ -684,9 +840,11 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   footer, no Save button. A **Revert to default** button (disabled while the
   content already equals the provider-based default) calls
   `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
-  The editor has its own host selector; it reaches non-active hosts with a
-  transient `useHostClientFor` context override and remounts when that local
-  selection changes so one device's file never carries into another. Backed by
+  The editor has NO host selector of its own - the sidebar switcher scopes it.
+  It reaches non-active hosts with a transient `useHostClientFor` context
+  override and remounts on `scope.hostId` so one host's file never carries into
+  another; the whole subtree stays unmounted until `isHostScopeUsable`, so the
+  guide query cannot fire against the ambient host. Backed by
   `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
   `agent.selectionGuide.setGlobal`, and
   `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
@@ -703,7 +861,10 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   Environment-variable overrides ARE merged into the host process env at
   `traycer host start` and therefore take effect on the host's next restart.
   Backed by the `traycer config shell` / `traycer config env` CLI through
-  `IRunnerHost.traycerCli`. Hidden on shells without a CLI (mobile, web).
+  `IRunnerHost.traycerCli`. On shells without a CLI (mobile, web) the panel
+  says so rather than hiding; on a remote scoped host it renders
+  `RequiresLocalHostNotice`, and on an unresolved scope it renders the gate -
+  never this computer's values under another host's name.
   - **Flags belong to a shell, not the panel.** Each program carries its own
     startup flags: `shell.entries` is a list of `{ path, args }` launch specs,
     and `shell.path`/`shell.args` are the selected command MATERIALISED for an
@@ -918,9 +1079,10 @@ aria-live="polite"` carrying the equivalent text for
   - **Worktree inventory.** Host-wide management of the git worktrees Traycer
     creates under `~/.traycer/worktrees/`, presented as a calm
     inspection-and-cleanup list, not a delete console - own bordered card,
-    no heading above it. A host selector
-    (default = active host, gated on `useHostReachability`, demoted to quiet
-    toolbar chrome rather than a dominant control) drives a disk-truth list -
+    no heading above it. The sidebar switcher scopes it - the toolbar holds no
+    host control and no host readout - and the SCOPE's verdict outranks
+    `useHostReachability`, which is the tab-binding check and can call a host
+    reachable that this scope cannot dial. A disk-truth list -
     so orphaned worktrees whose owning agent was deleted still appear -
     grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`)
     that stay visually secondary to row status. The selected host is reached
@@ -1008,16 +1170,20 @@ aria-live="polite"` carrying the equivalent text for
     aggregate merge progress across every worktree it owns - deliberately
     plain muted text, not a colored badge, so it never competes with or is
     mistaken for the row's own tier pill.
-- `Host` Cross-device **My Hosts** plus a clearly labeled **This machine**
-  section for the native-packaging flow; the local rows act only on the host
-  service running on this machine. That local surface is now
-  an operational console (`settings-related-panels-core-flows` artifact): a
-  self-identifying **summary card** (`host-settings-summary-card.tsx`) leads
-  the page with no external "Overview" label, followed by one quiet
-  **Installation** group. This replaced the old three top-level rows (Status /
-  Actions / Updates, `host-settings-status-row.tsx` /
+- `Host` **Overview**: one page about ONE host - the scoped one. The
+  cross-device **My Hosts** list and the separate **This machine** section are
+  both gone; the sidebar switcher is the collection, and every lifecycle verb
+  lives on the Overview of the host it describes. A self-identifying **summary
+  card** (`host-settings-summary-card.tsx`) leads, then a single **Updates**
+  card holding BOTH mechanisms (the local controller's check/apply via
+  `HostUpdateRegion`, and the account registry's auto-update policy,
+  version pin and drain-gate force via `host-scope/host-registry-updates.tsx`),
+  then **Installation**, then the **Danger zone**. This replaced the old three
+  top-level rows (Status / Actions / Updates, `host-settings-status-row.tsx` /
   `-actions-row.tsx` / `-updates-row.tsx`, all deleted); status derivation and
   the CLI-backed `hostManagement` facet underneath are unchanged.
+  `HostRegistryUpdates` is keyed by `hostId` and its controls capture their
+  target when armed, so a scope change cannot re-point an open confirmation.
   - **Summary card.** One bordered card holding, top to bottom: an optional
     install/restart/update progress banner and a terminal-outcome banner
     (retry/dismiss) so in-flight or failed operations render inside the card

@@ -27,6 +27,9 @@ import type {
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("sonner", () => ({
@@ -37,9 +40,36 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+  hostId: string;
+  extra: Partial<HostScope>;
+} = vi.hoisted(() => ({
+  client: null,
+  hostId: "host-a",
+  extra: {},
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        hostId: hostScopeMocks.hostId,
+        ...hostScopeMocks.extra,
+      }),
+  };
+});
 
 afterEach(() => {
   cleanup();
+  hostScopeMocks.client = null;
+  hostScopeMocks.hostId = "host-a";
+  hostScopeMocks.extra = {};
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.info).mockClear();
@@ -47,19 +77,21 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> - mutation flows", () => {
-  it("labels lifecycle management as applying to this machine", async () => {
+  // The page is now titled for whichever machine the sidebar has scoped, and
+  // the local service console renders only when that machine is this device.
+  // The old "This machine" heading existed to separate the local card from a
+  // "My Hosts" list that ALSO contained the local machine; the duplication it
+  // was disambiguating is gone, so the heading went with it.
+  it("titles the page for the scoped machine and keeps the local service console", async () => {
     const { management } = makeManagement({});
 
     renderPanel(makeHost(management, makeLocalHostSnapshot()));
 
-    expect(
-      await screen.findByRole("heading", { name: "This machine" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Install, update, restart, register, deregister, and rename the Traycer host service running on this machine.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByTestId("settings-host-identity")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "This machine" })).toBeNull();
+    // The machine is the subject of the page, so it must not also appear in
+    // the "other machines" strip below it.
+    expect(screen.queryByTestId("other-machines-row-host-a")).toBeNull();
   });
 
   it("opens a confirmation dialog before restarting the host", async () => {
@@ -83,6 +115,69 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+  });
+
+  it("keeps the install console reachable on a fresh install with no hosts anywhere", async () => {
+    // First run: no local host id yet, so the union has no row at all and the
+    // scope resolves to NOTHING. The old branch rendered only the "No hosts
+    // yet" notice — while the CLI bridge sat right here reporting
+    // not-installed. Install must not hide behind a host list that can only
+    // become non-empty by installing.
+    hostScopeMocks.extra = {
+      host: null,
+      hosts: [],
+      hostId: null,
+      vanishedHostId: null,
+      isLoading: false,
+      listsFailed: false,
+      status: "unreachable",
+    };
+    const { management } = makeManagement({
+      installedRecord: vi.fn(() => Promise.resolve(null)),
+    });
+    renderPanel(makeHost(management, null));
+
+    const install = await waitForButton("Install host");
+    expect(install.getAttribute("data-variant")).toBe("default");
+    expect(screen.queryByTestId("host-scope-empty")).toBeNull();
+  });
+
+  it("disarms an open restart confirmation when the scoped host changes", async () => {
+    // The dialogs live outside the local-console conditional, so without the
+    // scope-keyed remount a host switch left this confirmation mounted and
+    // armed at the LOCAL bridge while the page described another machine —
+    // confirming it restarted a host that was no longer the dialog's visible
+    // subject.
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const { management } = makeManagement({ restartHost });
+    const host = makeHost(management, makeLocalHostSnapshot());
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    // Fresh elements per render: reusing one element tree lets React bail out
+    // on referentially identical children, and the panel would never re-read
+    // the changed scope.
+    const makeUi = () => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={host}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+    const view = render(makeUi());
+
+    fireEvent.click(await waitForButton("Restart"));
+    expect(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).toBeTruthy();
+
+    hostScopeMocks.hostId = "host-b";
+    view.rerender(makeUi());
+
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(restartHost).not.toHaveBeenCalled();
   });
 
   // Field RCA 2026-07-28: a busy host denying the restart surfaced as a

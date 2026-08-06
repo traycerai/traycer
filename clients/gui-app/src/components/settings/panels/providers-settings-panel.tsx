@@ -9,30 +9,27 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
-import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostClient } from "@/lib/host";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useRelativeTimestamp } from "@/lib/relative-time";
@@ -44,7 +41,6 @@ import {
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
-import { settingsHostOptionLabel } from "./settings-host-labels";
 import { ProviderMcpTab } from "./provider-mcp-tab";
 import { ProviderPluginsTab } from "./provider-plugins-tab";
 import { ProviderSkillsTab } from "./provider-skills-tab";
@@ -255,50 +251,79 @@ function ProviderCheckedTimestamp({
 }
 
 export function ProvidersSettingsPanel() {
-  const activeHostId = useReactiveActiveHostId();
-  const hostsQuery = useHostDirectoryList();
-  const hosts = useMemo(() => hostsQuery.data ?? [], [hostsQuery.data]);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    () => useProvidersFocusStore.getState().focusHostId,
-  );
-  const effectiveId = selectedId ?? activeHostId;
-  // Reach a non-active host through a transient client (the Worktrees
-  // pattern) so picking one never rebinds the app-wide active host. Null when
-  // the active host is selected - the inherited runtime context already
-  // targets it, so no override client is built.
-  const targetEntry = useMemo(() => {
-    if (effectiveId === null || effectiveId === activeHostId) return null;
-    return hosts.find((entry) => entry.hostId === effectiveId) ?? null;
-  }, [hosts, effectiveId, activeHostId]);
-  const selectedEntry = useMemo(() => {
-    if (effectiveId === null) return null;
-    return hosts.find((entry) => entry.hostId === effectiveId) ?? null;
-  }, [hosts, effectiveId]);
-  const isSelectedHostLocal = selectedEntry?.kind === "local";
-  const transientClient = useHostClientFor(targetEntry);
+  const scope = useHostScope();
+  const setHostId = scope.setHostId;
+  // A deep link that already knows which machine needs attention — the
+  // composer's provider re-auth banner knows exactly whose profile expired —
+  // hands its host to the SHARED scope rather than to a picker private to
+  // this panel.
+  //
+  // Cleared HERE, at the point of use. It used to be cleared only inside the
+  // provider rail, which is host-scoped and therefore never rendered when the
+  // deep-linked host was unreachable — so the intent survived, and every later
+  // visit to Providers yanked the scope back to a host the user had already
+  // moved on from.
+  //
+  // READ LIVE from the store — never captured at mount, which is the part
+  // each narrower fix got wrong in turn. Two constraints meet here:
+  //
+  //   - NOTHING BELOW MOUNTS until the switch has landed. The rail is a
+  //     descendant, its mount effect consumes and clears the provider/profile
+  //     half of the intent, and child passive effects run BEFORE the
+  //     parent's — so children mounted for host A would consume the intent
+  //     there (in the worst case starting a re-auth sign-in against A) one
+  //     commit before the scope could move to B. The hold below removes that
+  //     race rather than trying to outrun it.
+  //   - The panel OUTLIVES its mount. The top-level keep-alive host retains
+  //     this component while its tab is hidden, so a re-auth banner click
+  //     that arms a new intent finds no fresh mount to capture it — a
+  //     mount-time snapshot stayed stale, `pending` never rose, and the Sign
+  //     in action appeared to do nothing. Deriving pending from the live
+  //     subscription reacts to every newly armed intent, whenever it arms.
+  //
+  // Applying the intent clears `focusHostId`, this subscription re-renders,
+  // and the hold releases — no setState inside the effect.
+  const liveFocusHostId = useProvidersFocusStore((s) => s.focusHostId);
+  const deepLinkPending = liveFocusHostId !== null;
+  useEffect(() => {
+    if (liveFocusHostId === null) return;
+    setHostId(liveFocusHostId);
+    useProvidersFocusStore.getState().clearFocusHostId();
+  }, [liveFocusHostId, setHostId]);
+
   const realBinding = useHostBinding();
   // Scope the whole panel (list + refresh + every provider mutation) to the
   // selected host by re-providing the runtime client for this subtree; the
   // provider hooks all read `useHostClient()`, so none need a client prop.
+  // Only a genuinely resolved override re-provides — `connecting`,
+  // `unreachable` and `vanished` all leave `client` null and fall through to
+  // the gate below, which is what stops one host's providers rendering under
+  // another host's name.
   const scopedBinding = useMemo(() => {
-    if (transientClient === null || realBinding === null) return null;
-    return { ...realBinding, hostClient: transientClient };
-  }, [transientClient, realBinding]);
+    if (scope.status !== "ready" || scope.client === null) return null;
+    if (realBinding === null) return null;
+    return { ...realBinding, hostClient: scope.client };
+  }, [scope.status, scope.client, realBinding]);
 
-  const hostPicker =
-    hosts.length > 0 ? (
-      <ProvidersHostSelect
-        hosts={hosts}
-        value={effectiveId}
-        onChange={setSelectedId}
+  // The hold that makes the deep link atomic: one frame of placeholder while
+  // the effect above moves the scope. Children — including the rail that
+  // consumes the rest of the intent — first mount already pointed at the
+  // deep-linked host.
+  if (deepLinkPending) {
+    return (
+      <div
+        className="flex-1"
+        data-testid="providers-deep-link-pending"
+        aria-hidden
       />
-    ) : null;
+    );
+  }
 
   const inner = (
     <ProvidersSettingsPanelInner
-      hostPicker={hostPicker}
-      hostId={effectiveId}
-      isSelectedHostLocal={isSelectedHostLocal}
+      scope={scope}
+      hostId={scope.hostId}
+      isSelectedHostLocal={scope.host?.isLocalMachine ?? false}
     />
   );
   if (scopedBinding === null) return inner;
@@ -309,40 +334,64 @@ export function ProvidersSettingsPanel() {
   );
 }
 
-function ProvidersHostSelect(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
-}): ReactNode {
-  return (
-    <Select value={props.value ?? undefined} onValueChange={props.onChange}>
-      <SelectTrigger
-        size="sm"
-        aria-label="Host"
-        className="w-[min(40vw,12rem)]"
-      >
-        <SelectValue placeholder="Select a host" />
-      </SelectTrigger>
-      <SelectContent>
-        {props.hosts.map((host) => (
-          <SelectItem key={host.hostId} value={host.hostId}>
-            {settingsHostOptionLabel(host)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 function ProvidersSettingsPanelInner({
-  hostPicker,
+  scope,
   hostId,
   isSelectedHostLocal,
 }: {
-  readonly hostPicker: ReactNode;
+  readonly scope: HostScope;
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
+  return (
+    <SettingsPanelShell
+      title="Providers"
+      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
+      fillHeight
+      bodyClassName="max-h-[min(85vh,52rem)]"
+      // No host readout here — the sidebar states the scoped host one row
+      // above and repeating it was the same fact printed twice.
+      //
+      // And no provider CONTROLS here either, which is the load-bearing half.
+      // `headerAction` renders as a SIBLING of the gate below, not a child, so
+      // anything mounted here escapes it: with a non-ready scope the runtime
+      // context is not re-provided, `useHostClient()` resolves to the ambient
+      // host, and "Refresh" re-probed and rewrote THAT host's provider list
+      // while the page named a different one. The gate only guards what it
+      // wraps, so the controls moved inside it.
+      headerAction={undefined}
+    >
+      <HostScopeGate
+        scope={scope}
+        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+      >
+        <ProvidersScopedContent
+          hostId={hostId}
+          isSelectedHostLocal={isSelectedHostLocal}
+        />
+      </HostScopeGate>
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * Everything that talks to the scoped host, mounted only once the gate has
+ * proven there is a client behind the name.
+ *
+ * The list query and the Refresh control live HERE rather than in the panel
+ * header for one reason: the header is outside the gate. Mounted there, these
+ * hooks resolved against the ambient host whenever the scope was not ready —
+ * so "Refresh" re-probed provider auth and rewrote the cached provider list of
+ * a host the page was not showing. Being a child of the gate is what makes
+ * them unable to do that.
+ */
+function ProvidersScopedContent({
+  hostId,
+  isSelectedHostLocal,
+}: {
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
+}): ReactNode {
   const query = useProvidersList({ enabled: true, subscribed: true });
   const providers = query.data?.providers ?? [];
   const checkingProviders =
@@ -350,32 +399,26 @@ function ProvidersSettingsPanelInner({
   const checkedAt = latestProviderCheckedAt(providers);
   const refreshProviders = useRefreshProviders();
   return (
-    <SettingsPanelShell
-      title="Providers"
-      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
-      fillHeight
-      bodyClassName="max-h-[min(85vh,52rem)]"
-      headerAction={
-        <div className="flex items-center gap-2">
-          <ProviderLastChecked
-            checkedAt={checkedAt}
-            checking={checkingProviders}
-          />
-          <RefreshIconButton
-            onRefresh={refreshProviders}
-            label="Refresh providers"
-            refreshing={checkingProviders}
-          />
-          {hostPicker}
-        </div>
-      }
-    >
-      <ProvidersPanelBody
-        query={query}
-        hostId={hostId}
-        isSelectedHostLocal={isSelectedHostLocal}
-      />
-    </SettingsPanelShell>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-end gap-2 px-5 pb-2">
+        <ProviderLastChecked
+          checkedAt={checkedAt}
+          checking={checkingProviders}
+        />
+        <RefreshIconButton
+          onRefresh={refreshProviders}
+          label="Refresh providers"
+          refreshing={checkingProviders}
+        />
+      </div>
+      <div className="min-h-0 flex-1">
+        <ProvidersPanelBody
+          query={query}
+          hostId={hostId}
+          isSelectedHostLocal={isSelectedHostLocal}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -443,6 +486,18 @@ function ProvidersRailLayout({
   );
   const [initialFocus, setInitialFocus] = useState(() => {
     const focus = useProvidersFocusStore.getState();
+    // The intent is consumed only by the rail of the host it NAMES. A profile
+    // deep link whose target is unreachable or plan-gated never mounts a rail
+    // there, so the harness / profile / sign-in halves stay armed; without
+    // this check the next reachable host the user picked consumed them and
+    // could start an automatic sign-in on that machine whenever the same
+    // profile id existed. `null` target = "no host in particular".
+    if (
+      focus.focusTargetHostId !== null &&
+      focus.focusTargetHostId !== hostId
+    ) {
+      return { harnessId: null, profileId: null, startSignIn: false };
+    }
     return {
       harnessId: focus.focusHarnessId,
       profileId: focus.focusProfileId,

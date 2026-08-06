@@ -3,6 +3,7 @@ import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
 function ContextMenu({
   ...props
@@ -28,7 +29,10 @@ function ContextMenuContent({
   // The close-autofocus half lives in `usePaneAwareContentGuard`.
   const { paneFocused, handleCloseAutoFocus } =
     usePaneAwareContentGuard(onCloseAutoFocus);
-  if (!paneFocused) return null;
+  // Concealed region (see `portal-concealment-context`): un-present with the
+  // region, exactly like the pane case above.
+  const concealed = usePortalConcealed();
+  if (!paneFocused || concealed) return null;
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
