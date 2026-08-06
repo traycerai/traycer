@@ -190,8 +190,7 @@ function ProviderSkillsTabBody({
         <div className="min-w-0">
           <div className="text-ui-sm font-medium text-foreground">Skills</div>
           <p className="text-ui-xs text-muted-foreground">
-            Folders of instructions the agent loads when the work matches, or
-            you invoke with / in chat.
+            Invoked by the agent when relevant, or manually with / in chat.
           </p>
         </div>
         <SkillEntryButtons

@@ -12,7 +12,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
@@ -114,19 +119,6 @@ export function ProviderSkillComposerDialog(props: {
             agent loads one on its own when the work matches, or you can invoke
             it directly with <code>/name</code> in chat.
           </DialogDescription>
-          {tabs.length > 0 ? (
-            <Tabs
-              value={tab}
-              onValueChange={(next) => {
-                setTab(next === "import" ? "import" : "write");
-              }}
-            >
-              <TabsList>
-                <TabsTrigger value="write">Write a new one</TabsTrigger>
-                <TabsTrigger value="import">Import an existing one</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          ) : null}
         </DialogHeader>
 
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4">
@@ -136,26 +128,32 @@ export function ProviderSkillComposerDialog(props: {
             </div>
           )}
 
-          {tab === "write" ? (
-            <WriteFields
-              name={name}
-              setName={setName}
-              nameError={nameError}
-              description={description}
-              setDescription={setDescription}
-              body={body}
-              setBody={setBody}
-              showPreview={showPreview}
-              setShowPreview={setShowPreview}
-              disabled={props.pending}
-            />
-          ) : (
-            <ImportFields
-              source={source}
-              setSource={setSource}
-              disabled={props.pending}
-            />
-          )}
+          <ComposerFields
+            tabs={tabs}
+            tab={tab}
+            setTab={setTab}
+            write={
+              <WriteFields
+                name={name}
+                setName={setName}
+                nameError={nameError}
+                description={description}
+                setDescription={setDescription}
+                body={body}
+                setBody={setBody}
+                showPreview={showPreview}
+                setShowPreview={setShowPreview}
+                disabled={props.pending}
+              />
+            }
+            importFields={
+              <ImportFields
+                source={source}
+                setSource={setSource}
+                disabled={props.pending}
+              />
+            }
+          />
 
           <SkillScopeFieldset
             providerLabel={props.providerLabel}
@@ -205,6 +203,50 @@ export function ProviderSkillComposerDialog(props: {
 
 function titleForSingleTab(tab: SkillComposerTab): string {
   return tab === "write" ? "Write a new skill" : "Import a skill";
+}
+
+/**
+ * The two field sets, under a tab strip when there is a choice to make.
+ *
+ * A provider offering only one path gets the fields bare rather than a
+ * one-tab strip that looks like a control but selects nothing. The tabbed arm
+ * renders real `TabsContent` panels — a `TabsTrigger` with no panel to own
+ * points `aria-controls` at an element that does not exist.
+ */
+function ComposerFields({
+  tabs,
+  tab,
+  setTab,
+  write,
+  importFields,
+}: {
+  readonly tabs: readonly SkillComposerTab[];
+  readonly tab: SkillComposerTab;
+  readonly setTab: (tab: SkillComposerTab) => void;
+  readonly write: ReactNode;
+  readonly importFields: ReactNode;
+}): ReactNode {
+  if (tabs.length === 0) return tab === "write" ? write : importFields;
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(next) => {
+        setTab(next === "import" ? "import" : "write");
+      }}
+      className="gap-4"
+    >
+      <TabsList>
+        <TabsTrigger value="write">Write a new one</TabsTrigger>
+        <TabsTrigger value="import">Import an existing one</TabsTrigger>
+      </TabsList>
+      <TabsContent value="write" className="flex flex-col gap-4">
+        {write}
+      </TabsContent>
+      <TabsContent value="import" className="flex flex-col gap-4">
+        {importFields}
+      </TabsContent>
+    </Tabs>
+  );
 }
 
 function WriteFields({
