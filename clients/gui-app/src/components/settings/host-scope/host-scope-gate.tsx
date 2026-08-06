@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { cn } from "@/lib/utils";
 
@@ -171,21 +172,34 @@ function UnreachableNotice(props: {
 /**
  * Its own component so `useRunnerHost` mounts only in the plan-restricted
  * branch — the gate itself stays renderable without the runner provider.
+ *
+ * The open goes through `useRunnerOpenExternalLink` rather than the bridge
+ * directly: the mutation owns the query key and the runner-error mapping, so
+ * a shell that cannot open links says so instead of failing silently.
  */
 function PlanRestrictedUpgradeAction(): ReactNode {
   const runnerHost = useRunnerHost();
+  const openExternalLink = useRunnerOpenExternalLink();
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
+      disabled={openExternalLink.isPending}
       onClick={() => {
-        void runnerHost.openExternalLink(
+        openExternalLink.mutate(
           resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
         );
       }}
       data-testid="host-scope-plan-upgrade"
     >
+      {openExternalLink.isPending ? (
+        <AgentSpinningDots
+          className="text-current"
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
       Upgrade plan
     </Button>
   );

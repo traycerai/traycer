@@ -105,7 +105,9 @@ describe("<HostSwitcher /> empty vs failed", () => {
     expect(
       screen.queryByTestId("settings-host-switcher-lists-failed"),
     ).toBeNull();
-    expect(screen.getByTestId("settings-host-switcher")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Settings host: none selected" }),
+    ).not.toBeNull();
   });
 
   it("surfaces a partial failure inside the popover while hosts are in hand", () => {
@@ -127,7 +129,9 @@ describe("<HostSwitcher /> empty vs failed", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Settings host: none selected" }),
+    );
     expect(
       screen.getByTestId("settings-host-switcher-partial-failure"),
     ).not.toBeNull();
@@ -161,7 +165,9 @@ describe("<HostSwitcher /> empty vs failed", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Settings host: none selected" }),
+    );
     expect(screen.getByText("requires upgrade")).not.toBeNull();
     expect(screen.queryByText("unreachable")).toBeNull();
   });

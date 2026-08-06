@@ -67,6 +67,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 
 afterEach(() => {
   cleanup();
+  hostScopeMocks.client = null;
   hostScopeMocks.hostId = "host-a";
   hostScopeMocks.extra = {};
   vi.mocked(toast.success).mockClear();

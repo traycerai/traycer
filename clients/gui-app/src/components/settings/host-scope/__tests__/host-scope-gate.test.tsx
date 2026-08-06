@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
@@ -34,7 +41,7 @@ describe("<HostScopeGate /> empty and failed states", () => {
     expect(screen.queryByTestId("skeleton")).toBeNull();
   });
 
-  it("names the plan gate and offers Upgrade instead of claiming unreachable", () => {
+  it("names the plan gate and offers Upgrade instead of claiming unreachable", async () => {
     // A plan-gated route is a billing fact: the host works on its own
     // machine and the server refuses the attach. Rendering it through the
     // generic unreachable notice sent people debugging connectivity over a
@@ -48,24 +55,29 @@ describe("<HostScopeGate /> empty and failed states", () => {
       hasLocalHost: undefined,
       traycerCli: undefined,
     });
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
     render(
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <HostScopeGate
-          scope={hostScopeFixture({
-            host: hostScopeOptionFixture({
-              hostId: "host-b",
-              name: "Office Linux",
-              isLocalMachine: false,
-              connectable: false,
-              planRestricted: true,
-            }),
-            status: "unreachable",
-          })}
-          skeleton={<div data-testid="skeleton" />}
-        >
-          <div data-testid="body" />
-        </HostScopeGate>
-      </RunnerHostProvider>,
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <HostScopeGate
+            scope={hostScopeFixture({
+              host: hostScopeOptionFixture({
+                hostId: "host-b",
+                name: "Office Linux",
+                isLocalMachine: false,
+                connectable: false,
+                planRestricted: true,
+              }),
+              status: "unreachable",
+            })}
+            skeleton={<div data-testid="skeleton" />}
+          >
+            <div data-testid="body" />
+          </HostScopeGate>
+        </RunnerHostProvider>
+      </QueryClientProvider>,
     );
 
     expect(screen.getByTestId("host-scope-plan-restricted")).not.toBeNull();
@@ -73,7 +85,9 @@ describe("<HostScopeGate /> empty and failed states", () => {
     expect(screen.queryByTestId("body")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
-    expect(runnerHost.openedExternalLinks.length).toBe(1);
+    await waitFor(() => {
+      expect(runnerHost.openedExternalLinks.length).toBe(1);
+    });
   });
 
   it("renders the skeleton, not the body, while the scope is connecting", () => {
