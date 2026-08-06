@@ -250,7 +250,7 @@ function TypedProbe() {
   const [value, setValue] = useState("");
   return (
     <input
-      data-testid="probe-input"
+      aria-label="Typed probe"
       value={value}
       onChange={(event) => setValue(event.target.value)}
     />
@@ -265,7 +265,7 @@ function EffectProbe(props: { readonly log: string[] }) {
       log.push("cleanup");
     };
   }, [log]);
-  return <div data-testid="effect-probe" />;
+  return <div />;
 }
 
 /**
@@ -296,27 +296,36 @@ describe("<HostScopeGate /> concealment and preservation", () => {
 
   it("preserves typed state across a same-host unreachable flip", () => {
     const { rerender } = render(gateAt("ready", <TypedProbe />, "host-a"));
-    fireEvent.change(screen.getByTestId("probe-input"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Typed probe" }), {
       target: { value: "typed mid-flap" },
     });
 
     rerender(gateAt("unreachable", <TypedProbe />, "host-a"));
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    // No role query can address the concealed probe — `display: none` drops
+    // it from the accessibility tree and empties its accessible name — which
+    // is itself the concealment working. The value query is the Testing
+    // Library query that still reaches it.
     expectHiddenFromView(screen.queryByDisplayValue("typed mid-flap"));
 
     rerender(gateAt("ready", <TypedProbe />, "host-a"));
-    const restored = screen.getByDisplayValue("typed mid-flap");
+    const restored = screen.getByRole("textbox", { name: "Typed probe" });
+    expect(restored instanceof HTMLInputElement ? restored.value : null).toBe(
+      "typed mid-flap",
+    );
     expect(isConcealed(restored)).toBe(false);
   });
 
   it("destroys children state when the scope moves to another host", () => {
     const { rerender } = render(gateAt("ready", <TypedProbe />, "host-a"));
-    fireEvent.change(screen.getByTestId("probe-input"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Typed probe" }), {
       target: { value: "belongs to host-a" },
     });
 
     rerender(gateAt("ready", <TypedProbe />, "host-b"));
-    expect(screen.queryByDisplayValue("belongs to host-a")).toBeNull();
+    // The remounted probe is FRESH — present, but with host-a's typing gone.
+    const fresh = screen.getByRole("textbox", { name: "Typed probe" });
+    expect(fresh instanceof HTMLInputElement ? fresh.value : null).toBe("");
   });
 
   it("tears children effects down while concealed and remounts them on return", () => {
