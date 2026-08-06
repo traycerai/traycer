@@ -65,16 +65,22 @@ describe("writeStopIntent", () => {
     expect(Number.isNaN(Date.parse(intent?.requestedAt ?? ""))).toBe(false);
   });
 
-  it("never throws when the destination cannot be written", async () => {
-    // A stop that cannot record its intent must still stop. Point the path at
-    // a location whose parent is a FILE, so the atomic write's mkdir fails.
+  it("reports failure instead of throwing when the destination cannot be written", async () => {
+    // Point the path at a location whose parent is a FILE, so the atomic
+    // write's mkdir fails.
     const blocker = join(dir, "blocker");
     await writeFile(blocker, "not a directory", "utf8");
     mocks.hostHome.current = join(blocker, "nested");
 
-    await expect(
-      writeStopIntent("production", "stop"),
-    ).resolves.toBeUndefined();
+    // Not a throw - the caller decides what an unrecorded intent means, and
+    // that answer is platform-dependent. But it must not read as success:
+    // on win32 this record is the only thing that stops the supervisor
+    // relaunching the host the caller is about to kill.
+    await expect(writeStopIntent("production", "stop")).resolves.toBe(false);
+  });
+
+  it("reports success when the record lands", async () => {
+    await expect(writeStopIntent("production", "stop")).resolves.toBe(true);
   });
 });
 

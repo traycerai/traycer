@@ -647,10 +647,13 @@ export async function runHostStart(
    * explicitly allowed to RETURN (that is why the dependency is typed `void`),
    * and every such call leaves three listeners on `process` behind.
    */
-  const exitSupervisor = (code: number): void => {
+  const releaseShutdownHandlers = (): void => {
     for (const { sig, handler } of shutdownHandlers) {
       process.off(sig, handler);
     }
+  };
+  const exitSupervisor = (code: number): void => {
+    releaseShutdownHandlers();
     return deps.exit(code);
   };
 
@@ -809,6 +812,10 @@ export async function runHostStart(
         deps,
         environment: opts.environment,
       });
+      // Leaving by `throw` is still leaving. A caller that catches this keeps
+      // a stale handler set, and every stale handler goes on mutating the
+      // `shuttingDown` of the run that installed it.
+      releaseShutdownHandlers();
       throw err;
     }
 

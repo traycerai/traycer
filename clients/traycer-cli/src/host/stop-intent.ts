@@ -63,14 +63,23 @@ const STOP_INTENT_REASONS: ReadonlySet<string> = new Set<StopIntentReason>([
  * check - it would already have relaunched by then. This lands first, which is
  * what makes the check race-free.
  *
- * Never throws. A stop that cannot write its intent still has to stop; the
- * worst case is one unwanted relaunch, which the supervisor's own budget and
- * incumbent re-check then contain.
+ * Never throws, but REPORTS whether the record landed, and the caller has to
+ * care on Windows.
+ *
+ * An earlier version of this comment claimed a failed write was harmless
+ * because "the worst case is one unwanted relaunch, which the supervisor's own
+ * budget and incumbent re-check then contain". That is false, and the
+ * containment argument is what made it sound safe. If the write fails on
+ * win32, `/End` and `taskkill` still run, the orphaned supervisor is never
+ * signalled and sees no intent, so it reads the killed child's nonzero exit as
+ * a crash and relaunches. A replacement that then stays healthy resets the
+ * budget and IS the incumbent - so neither mechanism stops it, and `host stop`
+ * has reported success while the host is still running.
  */
 export async function writeStopIntent(
   environment: Environment | undefined,
   reason: StopIntentReason,
-): Promise<void> {
+): Promise<boolean> {
   const intent: StopIntent = {
     v: 1,
     requestedAt: new Date().toISOString(),
@@ -79,8 +88,11 @@ export async function writeStopIntent(
   };
   try {
     await writeJsonAtomically(hostStopIntentPath(environment), intent);
+    return true;
   } catch {
-    // Best effort by design - see the doc comment.
+    // Never throws: the caller decides what an unrecorded intent means, and
+    // that answer is platform-dependent (see `withStopIntent`).
+    return false;
   }
 }
 

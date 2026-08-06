@@ -57,6 +57,14 @@ export const CLI_ERROR_CODES = {
   HOST_BUNDLE_MISSING: "E_HOST_BUNDLE_MISSING",
   HOST_SHELL_MISSING: "E_HOST_SHELL_MISSING",
   HOST_SPAWN_FAILED: "E_HOST_SPAWN_FAILED",
+  // A stop/restart/uninstall could not record its intent on disk, on a
+  // platform where that record is the ONLY thing telling the host supervisor
+  // the death was deliberate (win32: `schtasks /End` never signals the
+  // orphaned supervisor). The operation is REFUSED rather than performed,
+  // because performing it would kill a host the supervisor then relaunches
+  // while the command reports success. Retryable once the directory is
+  // writable.
+  HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
 
   // --- Host install + registry (NP-2 / NP-4) ---
   HOST_NOT_INSTALLED: "E_HOST_NOT_INSTALLED",

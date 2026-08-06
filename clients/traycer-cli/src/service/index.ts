@@ -213,6 +213,36 @@ export function formatServiceLifecycleWarning(
  * systemd kill it outright. Uniform is cheaper than conditional, and it keeps
  * the mechanism exercisable on any developer's machine.
  */
+/**
+ * Record the intent, and refuse the stop if the record did not land AND this
+ * platform depends on it.
+ *
+ * On POSIX the sentinel is belt-and-braces: launchd and systemd signal the
+ * supervisor directly, so it latches `shuttingDown` and never relaunches. A
+ * failed write there costs nothing.
+ *
+ * On win32 it is the ONLY channel - `schtasks /End` never signals the
+ * orphaned supervisor. Proceeding with an unwritten intent means the kill
+ * lands, the supervisor reads a nonzero exit as a crash, and it relaunches a
+ * host the user asked to stop, while `host stop` reports success. Failing
+ * loudly is the honest outcome: the stop genuinely could not be guaranteed,
+ * and it is retryable.
+ */
+async function announceStop(
+  environment: ServiceLabel["environment"],
+  reason: "stop" | "restart" | "uninstall",
+): Promise<void> {
+  const persisted = await writeStopIntent(environment, reason);
+  if (persisted || osPlatform() !== "win32") return;
+  throw cliError({
+    code: CLI_ERROR_CODES.HOST_STOP_INTENT_UNWRITABLE,
+    message:
+      "could not record the stop request, and on Windows that record is the only thing that stops the supervisor bringing the host back. The host has NOT been stopped. Check that the Traycer host directory is writable, then try again.",
+    details: { environment, reason },
+    exitCode: 1,
+  });
+}
+
 export function withStopIntent(
   controller: ServiceController,
 ): ServiceController {
@@ -229,7 +259,7 @@ export function withStopIntent(
     // would then suppress that live host's crash recovery for the whole
     // freshness window - a refused restart ending in a hostless machine.
     stop: async (label) => {
-      await writeStopIntent(label.environment, "stop");
+      await announceStop(label.environment, "stop");
       try {
         return await controller.stop(label);
       } catch (error) {
@@ -238,7 +268,7 @@ export function withStopIntent(
       }
     },
     stopForRestart: async (label) => {
-      await writeStopIntent(label.environment, "restart");
+      await announceStop(label.environment, "restart");
       try {
         return await controller.stopForRestart(label);
       } catch (error) {
@@ -247,7 +277,7 @@ export function withStopIntent(
       }
     },
     uninstall: async (options) => {
-      await writeStopIntent(options.label.environment, "uninstall");
+      await announceStop(options.label.environment, "uninstall");
       try {
         return await controller.uninstall(options);
       } catch (error) {

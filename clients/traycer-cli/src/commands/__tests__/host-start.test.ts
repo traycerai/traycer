@@ -1733,6 +1733,31 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(term.recorded.exited).toBe(128 + osConstants.signals.SIGTERM);
   });
 
+  it("releases the signal handlers when it leaves by throwing", async () => {
+    // Leaving by `throw` is still leaving. `exitSupervisor` covers the return
+    // paths, but an unexpected target-resolution error rethrows - and a caller
+    // that catches it would keep a stale handler set, each handler still
+    // mutating the `shuttingDown` of the run that installed it.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const before = process.listenerCount("SIGTERM");
+
+    await expect(
+      runHostStart(
+        { environment: "production", cwd: null },
+        {
+          ...deps,
+          maxRelaunches: 1,
+          readInstallRecord: async () => {
+            throw new Error("disk on fire");
+          },
+        },
+      ),
+    ).rejects.toThrow("disk on fire");
+
+    expect(process.listenerCount("SIGTERM") - before).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
   it("abandons the backoff the moment a shutdown signal arrives", async () => {
     // Re-checking the latch AFTER the wait is not enough. On a CLI-owned macOS
     // host a `host restart` during a 30-60s backoff sends `launchctl kill

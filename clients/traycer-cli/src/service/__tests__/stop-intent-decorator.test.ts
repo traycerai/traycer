@@ -17,16 +17,24 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   writes: [] as string[],
   clears: [] as string[],
+  persisted: true,
+  platform: "darwin" as NodeJS.Platform,
 }));
 
 vi.mock("../../host/stop-intent", () => ({
   writeStopIntent: async (_environment: string, reason: string) => {
     mocks.writes.push(reason);
+    return mocks.persisted;
   },
   clearStopIntent: async (environment: string) => {
     mocks.clears.push(environment);
   },
 }));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, platform: () => mocks.platform };
+});
 
 const { withStopIntent } = await import("../index");
 
@@ -57,6 +65,8 @@ function baseController(overrides: Partial<Controller>): Controller {
 beforeEach(() => {
   mocks.writes.length = 0;
   mocks.clears.length = 0;
+  mocks.persisted = true;
+  mocks.platform = "darwin";
 });
 
 describe("withStopIntent", () => {
@@ -116,6 +126,50 @@ describe("withStopIntent", () => {
 
     expect(mocks.writes).toEqual(["uninstall"]);
     expect(mocks.clears).toEqual(["production"]);
+  });
+
+  it("refuses the stop on win32 when the intent could not be recorded", async () => {
+    // On win32 the sentinel is the ONLY channel - `schtasks /End` never
+    // signals the orphaned supervisor. Killing the host with no record means
+    // the supervisor reads a nonzero exit as a crash and brings it back, while
+    // `host stop` reports success. Refusing is the honest outcome.
+    mocks.platform = "win32";
+    mocks.persisted = false;
+    let stopped = false;
+    const controller = withStopIntent(
+      baseController({
+        stop: async () => {
+          stopped = true;
+        },
+      }),
+    );
+
+    await expect(controller.stop(label)).rejects.toThrow(
+      /could not record the stop request/,
+    );
+    // The kill must NOT have happened: a host that comes back is worse than a
+    // stop that says it failed.
+    expect(stopped).toBe(false);
+  });
+
+  it("proceeds on POSIX when the intent could not be recorded", async () => {
+    // There launchd/systemd signal the supervisor directly, so it latches
+    // `shuttingDown` and never relaunches. The sentinel is belt-and-braces and
+    // a failed write costs nothing - failing the stop would be a regression.
+    mocks.platform = "darwin";
+    mocks.persisted = false;
+    let stopped = false;
+    const controller = withStopIntent(
+      baseController({
+        stop: async () => {
+          stopped = true;
+        },
+      }),
+    );
+
+    await controller.stop(label);
+
+    expect(stopped).toBe(true);
   });
 
   it("clears the intent after a start, succeed or fail", async () => {
