@@ -3412,3 +3412,56 @@ describe("runHostStart - a marker write must never cost the host", () => {
     expect(recorded.exited).toBe(0);
   });
 });
+
+describe("runHostStart - per-attempt setup failures stay inside the budget", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("spends an attempt and retries when opening the log fd fails mid-ladder", async () => {
+    // `openLogFd` is an `fs.open`, and a Windows scanner holding the file or a
+    // momentary EACCES is not a statement about whether the host can run. It
+    // used to reject straight out of `runHostStart`: the entrypoint turned that
+    // into exit 1, and the Scheduled Task does not answer exit 1 with a fresh
+    // supervisor - so a transient filesystem error ended the ladder and left
+    // the machine hostless, mid-recovery from a crash the loop had already
+    // decided to fix.
+    //
+    // It is NOT diagnostics, so swallowing it would be wrong too: the attempt
+    // genuinely cannot proceed. The right answer is the policy target
+    // resolution and spawn already had - cost an attempt, then retry.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 7, signal: null },
+      { code: 0, signal: null },
+    ]);
+    let opens = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            openLogFd: async () => {
+              opens += 1;
+              if (opens === 2) {
+                throw new Error("EACCES: host.log momentarily unopenable");
+              }
+              return 42;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // Attempt 1 spawned and crashed, attempt 2 died in setup and cost a slot,
+    // attempt 3 spawned and exited cleanly.
+    expect(opens).toBe(3);
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+    // The failed attempt still left a paired terminal marker behind.
+    expect(recorded.markers.some((m) => m.phase === "failed-to-spawn")).toBe(
+      true,
+    );
+  });
+});

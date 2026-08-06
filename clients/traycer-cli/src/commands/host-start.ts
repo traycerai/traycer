@@ -912,68 +912,160 @@ export async function runHostStart(
       hasCwdOverride: opts.cwd !== null,
     });
 
-    const envOverrides = await deps.readEnvOverrides();
-    logger.debug("Host supervisor loaded env overrides", {
-      environment: opts.environment,
-      overrideCount: Object.keys(envOverrides).length,
-    });
-    const env: NodeJS.ProcessEnv = {
-      ...applyEnvOverrides(process.env, envOverrides),
-      TERM_PROGRAM: "traycer",
-    };
-    // Cap the host's V8 young generation at creation time on EVERY platform.
-    // This is the single cross-platform host launch path, so applying it here
-    // gives Linux (systemd) and Windows (schtasks, which cannot set env vars in
-    // its task XML) the same cap macOS gets from its LaunchAgent plist. The helper
-    // dedups when the inherited env already carries it (the macOS plist case).
-    env.NODE_OPTIONS = withHostNodeOptions(env.NODE_OPTIONS);
-    // The host resolves its slot from its own `config.environment` (baked
-    // per build) - the supervisor passes no environment arg or env. It also
-    // computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the
-    // bundled `traycer` is symlinked) and puts it on PATH, so no `traycer` path
-    // needs to be handed down here.
+    // Per-attempt setup, guarded as a UNIT.
+    //
+    // Every await below can fail for reasons that say nothing about whether the
+    // host can run: `readEnvOverrides` and `rotateLog` touch files another
+    // process may hold open, and `openLogFd` is an `fs.open` a Windows scanner
+    // or a momentary EACCES can refuse. Awaited unguarded, any of them rejected
+    // straight out of the relaunch loop; the entrypoint turned that into exit 1,
+    // and exit 1 is what the Scheduled Task does NOT answer with a fresh
+    // supervisor. A transient filesystem error could leave the machine hostless
+    // - the outcome this loop exists to prevent.
+    //
+    // These are not diagnostics, so the best-effort treatment the marker writes
+    // get would be wrong here: the attempt genuinely cannot proceed without
+    // them. What they need is the policy target resolution and spawn already
+    // have - spend an attempt from the bounded budget and retry, while a first
+    // attempt with someone waiting on the answer still reports immediately.
+    let env: NodeJS.ProcessEnv;
+    let crashReportsDirPath: string;
+    let preexistingReportNames: Set<string>;
+    let logFd: number;
+    try {
+      const envOverrides = await deps.readEnvOverrides();
+      logger.debug("Host supervisor loaded env overrides", {
+        environment: opts.environment,
+        overrideCount: Object.keys(envOverrides).length,
+      });
+      env = {
+        ...applyEnvOverrides(process.env, envOverrides),
+        TERM_PROGRAM: "traycer",
+      };
+      // Cap the host's V8 young generation at creation time on EVERY platform.
+      // This is the single cross-platform host launch path, so applying it here
+      // gives Linux (systemd) and Windows (schtasks, which cannot set env vars in
+      // its task XML) the same cap macOS gets from its LaunchAgent plist. The helper
+      // dedups when the inherited env already carries it (the macOS plist case).
+      env.NODE_OPTIONS = withHostNodeOptions(env.NODE_OPTIONS);
+      // The host resolves its slot from its own `config.environment` (baked
+      // per build) - the supervisor passes no environment arg or env. It also
+      // computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the
+      // bundled `traycer` is symlinked) and puts it on PATH, so no `traycer` path
+      // needs to be handed down here.
 
-    // Bound the log before anything appends to this run. Nothing truncates
-    // `host.log` - every writer appends - so a start is the only safe moment to
-    // roll it: the fd opened below lives for the child's whole lifetime and would
-    // follow the file across a rename, splitting one session across two files.
-    // Under the cap this is a no-op, so consecutive starts still share one log.
-    const rotation = await deps.rotateLog(opts.environment);
-    logger.debug("Host supervisor checked log rotation", {
-      environment: opts.environment,
-      rotation,
-    });
+      // Bound the log before anything appends to this run. Nothing truncates
+      // `host.log` - every writer appends - so a start is the only safe moment to
+      // roll it: the fd opened below lives for the child's whole lifetime and would
+      // follow the file across a rename, splitting one session across two files.
+      // Under the cap this is a no-op, so consecutive starts still share one log.
+      const rotation = await deps.rotateLog(opts.environment);
+      logger.debug("Host supervisor checked log rotation", {
+        environment: opts.environment,
+        rotation,
+      });
 
-    // Create + prune the diagnostic-report destination BEFORE the spawn: the
-    // relative `--report-directory=crash-reports` in NODE_OPTIONS resolves
-    // against the child cwd, and a crash before the host's own runtime arming
-    // must still have somewhere to land. Never throws.
-    const crashReportsDirPath = crashReportsDirFor(target.cwd);
-    const preexistingReportNames = new Set(
-      await deps.prepareCrashReportsDir(crashReportsDirPath),
-    );
+      // Create + prune the diagnostic-report destination BEFORE the spawn: the
+      // relative `--report-directory=crash-reports` in NODE_OPTIONS resolves
+      // against the child cwd, and a crash before the host's own runtime arming
+      // must still have somewhere to land. Never throws.
+      crashReportsDirPath = crashReportsDirFor(target.cwd);
+      preexistingReportNames = new Set(
+        await deps.prepareCrashReportsDir(crashReportsDirPath),
+      );
 
-    await writeMarkerBestEffort(
-      deps,
-      logger,
-      opts.environment,
-      "starting",
-      markerFields(
+      await writeMarkerBestEffort(
+        deps,
+        logger,
+        opts.environment,
+        "starting",
+        markerFields(
+          attemptId,
+          supervisorPid,
+          {
+            shell: undefined,
+            args: target.args,
+            bundle: target.executable,
+            exitCode: undefined,
+            signal: undefined,
+            error: undefined,
+          },
+          null,
+        ),
+      );
+
+      logFd = await deps.openLogFd(opts.environment);
+    } catch (err) {
+      const failure = errorFromUnknown(err);
+      logger.warn("Host supervisor attempt setup failed", {
+        environment: opts.environment,
+        attemptId,
+        errorName: failure.name,
+        errorMessage: failure.message,
+      });
+      // Evidence first, for the same reason the target-resolution path writes
+      // one: this attempt may already have written `starting`, and
+      // `spawn-evidence.ts` pairs that against a terminal marker. An attempt
+      // that died in setup must not read as one still in progress.
+      await writeMarkerBestEffort(
+        deps,
+        logger,
+        opts.environment,
+        "failed-to-spawn",
+        markerFields(
+          attemptId,
+          supervisorPid,
+          {
+            shell: undefined,
+            args: undefined,
+            bundle: target.executable,
+            exitCode: undefined,
+            signal: undefined,
+            error:
+              err instanceof CliError
+                ? `${err.code}: ${err.message}`
+                : failure.message,
+          },
+          null,
+        ),
+      );
+      if (!isFirstAttempt || serviceStarted) {
+        const decision = await decideRelaunch({
+          deps,
+          logger,
+          environment: opts.environment,
+          reason: "attempt-setup-failed",
+          consecutiveRelaunches,
+          isShuttingDown: () => shuttingDown,
+          supervisorStartedAtMs,
+          shutdownRequested,
+        });
+        if (decision.kind === "relaunch") {
+          consecutiveRelaunches = decision.consecutiveRelaunches;
+          continue;
+        }
+        // See `RelaunchStopCause`: a nonzero code here would be read as a crash
+        // and answered with a fresh supervisor, undoing the stop just honoured.
+        if (decision.cause === "stop-requested") return exitSupervisor(0);
+        return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
+      }
+      // First attempt with someone waiting: report now rather than after the
+      // full ladder, and settle any probe that was attested against it.
+      await writeProbeTerminalIfAttested({
+        context: attemptProbeContext,
         attemptId,
         supervisorPid,
-        {
-          shell: undefined,
-          args: target.args,
-          bundle: target.executable,
-          exitCode: undefined,
-          signal: undefined,
-          error: undefined,
-        },
-        null,
-      ),
-    );
-
-    const logFd = await deps.openLogFd(opts.environment);
+        reason: "attempt-setup-failed",
+        deps,
+        environment: opts.environment,
+      });
+      deps.onError(
+        err instanceof CliError
+          ? `traycer host start: ${err.code}: ${err.message}`
+          : `traycer host start: ${failure.message}`,
+      );
+      return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
+    }
     // `--layer0-status-fd` is the AUTHORIZATION for the framed Layer-0 status
     // transport, not a hint about it: the host writes a status frame only when
     // this supervisor names the descriptor, and is a hard no-op otherwise. It
