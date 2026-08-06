@@ -33,6 +33,12 @@ import {
  *   - `unreachable` — the picked host exists but this client has no route to
  *     it (registry-only row, or a directory entry with no websocket URL).
  *     `client` is `null`, permanently, until something changes.
+ *   - `vanished` — the picked host left the directory entirely: deregistered,
+ *     or signed out from. `host` is `null` and the caller must say so and
+ *     offer a way back. It deliberately does NOT auto-reset to the active
+ *     host: silently re-pointing an administration surface at a different
+ *     machine is the precise failure this whole redesign exists to remove, and
+ *     it is worst here — the moment a destructive dialog is open.
  *   - `ready` — the picked host resolved to a live client of its own.
  *
  * The invariant every consumer owes: **a visible host name must always match
@@ -43,15 +49,20 @@ export type HostScopeStatus =
   | "following"
   | "connecting"
   | "unreachable"
+  | "vanished"
   | "ready";
 
 export interface HostScope {
   /** Every host this account owns or this client can dial, merged and sorted. */
   readonly hosts: readonly HostScopeOption[];
-  /** The host being administered. `null` only when there are no hosts at all. */
+  /** The host being administered. `null` when there are no hosts, or `vanished`. */
   readonly host: HostScopeOption | null;
   readonly hostId: string | null;
   readonly hostLabel: string;
+  /** The id that was picked but is no longer listed — only when `vanished`. */
+  readonly vanishedHostId: string | null;
+  /** Drop an explicit pick and follow the active host again. */
+  readonly returnToActive: () => void;
   /** The app-wide active host — where new work lands and the bell reads from. */
   readonly activeHostId: string | null;
   readonly activeHost: HostScopeOption | null;
@@ -118,40 +129,62 @@ export function useHostScope(): HostScope {
     [directory, registry, localHostId, activeHostId, localService, nowMs],
   );
 
-  // Resolution order matters. An explicit pick wins; otherwise follow the
-  // active host; otherwise — and only then — fall back to the first row, so a
-  // window with no active host still administers something instead of
-  // rendering an empty pane the user cannot act on.
-  const resolved = useMemo(() => {
-    const picked = findHostOption(hosts, scopedHostId);
-    if (picked !== null) return picked;
+  // Resolution order matters, and the `vanished` branch is the load-bearing
+  // one. An explicit pick that is no longer in the list must NOT quietly
+  // resolve to the active host: that is a silent retarget of an
+  // administration surface, and it is exactly how a destructive action ends
+  // up aimed at a machine the user never chose. It resolves to nothing, and
+  // the caller is obliged to say so.
+  const resolved = useMemo((): {
+    readonly host: HostScopeOption | null;
+    readonly vanishedHostId: string | null;
+  } => {
+    if (scopedHostId !== null) {
+      const picked = findHostOption(hosts, scopedHostId);
+      if (picked !== null) return { host: picked, vanishedHostId: null };
+      // Still loading the lists is not the same as gone. Withhold the verdict
+      // until there is something to be absent FROM, or the first paint of a
+      // cold Settings would accuse every host of having been deregistered.
+      if (hosts.length === 0) return { host: null, vanishedHostId: null };
+      return { host: null, vanishedHostId: scopedHostId };
+    }
     const active = findHostOption(hosts, activeHostId);
-    if (active !== null) return active;
-    return hosts[0] ?? null;
+    if (active !== null) return { host: active, vanishedHostId: null };
+    // No explicit pick and no active host: administer the first machine
+    // rather than rendering a pane the user cannot act on. This is a default,
+    // not a fallback from a pick — nothing was overridden.
+    return { host: hosts[0] ?? null, vanishedHostId: null };
   }, [hosts, scopedHostId, activeHostId]);
 
-  const isFollowing = resolved !== null && resolved.hostId === activeHostId;
+  const host = resolved.host;
+  const isFollowing =
+    resolved.vanishedHostId === null &&
+    host !== null &&
+    host.hostId === activeHostId;
 
   // Only a genuinely different host needs a transient client; the active host
   // already has the ambient one, and building a second client for it would
   // duplicate its socket for no gain.
   const overrideEntry = useMemo(
-    () => (isFollowing ? null : (resolved?.entry ?? null)),
-    [isFollowing, resolved],
+    () => (isFollowing ? null : (host?.entry ?? null)),
+    [isFollowing, host],
   );
   const overrideClient = useHostClientFor(overrideEntry);
 
   const status = deriveHostScopeStatus({
     isFollowing,
-    host: resolved,
+    host,
+    vanishedHostId: resolved.vanishedHostId,
     overrideClient,
   });
 
   return {
     hosts,
-    host: resolved,
-    hostId: resolved?.hostId ?? null,
-    hostLabel: resolved?.name ?? "No host",
+    host,
+    hostId: host?.hostId ?? null,
+    hostLabel: host?.name ?? resolved.vanishedHostId ?? "No host",
+    vanishedHostId: resolved.vanishedHostId,
+    returnToActive: () => setScopedHostId(null),
     activeHostId,
     activeHost: findHostOption(hosts, activeHostId),
     isViewingActive: isFollowing,
@@ -173,8 +206,10 @@ export function useHostScope(): HostScope {
 function deriveHostScopeStatus(input: {
   readonly isFollowing: boolean;
   readonly host: HostScopeOption | null;
+  readonly vanishedHostId: string | null;
   readonly overrideClient: HostClient<HostRpcRegistry> | null;
 }): HostScopeStatus {
+  if (input.vanishedHostId !== null) return "vanished";
   if (input.isFollowing) return "following";
   if (input.host === null) return "unreachable";
   // No route exists and none is being built — this is terminal, not pending,
