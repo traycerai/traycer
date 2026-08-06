@@ -1148,9 +1148,45 @@ export const createTuiAgentRequestSchema = z.object({
   // establishment still has durable provenance to retry the fork from -
   // the renderer's own prepared-launch stash is cleared on PTY creation,
   // well before that establishment point.
+  // Rides @1.1 alone - see `createTuiAgentRequestSchemaV10` below.
   forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
+
+/**
+ * Frozen `epic.createTuiAgent@1.0` request, exactly as shipped through
+ * `host-v1.1.10`: everything above except `forkSourceHarnessSessionId`.
+ *
+ * That field was authored straight onto the live object while @1.0 was the
+ * only registered version, so it silently grew an already-released contract;
+ * `host-v1.1.10` then froze @1.0 without it, because the commit that added it
+ * was not in the release cherry-pick. It rides @1.1 now.
+ *
+ * Hand-pinned field-for-field rather than derived from the live schema via
+ * `.omit()` - a field added to the live shape must not silently leak back into
+ * this contract, which is the exact failure this freeze exists to prevent.
+ */
+export const createTuiAgentRequestSchemaV10 = z.object({
+  epicId: z.string(),
+  parentId: z.string().nullable(),
+  title: z.string(),
+  harnessId: tuiHarnessIdSchema,
+  harnessSessionId: z.string().nullable().catch(null),
+  terminalAgentArgs: z.string().nullable().default(null).catch(null),
+  terminalShellCommand: z.string().nullable().catch(null),
+  terminalShellArgs: z.array(z.string()).nullable().catch(null),
+  hostId: z.string(),
+  workspaceFolders: z.array(z.string()),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+  model: z.string().nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  tuiAgentId: z.string().nullable().optional(),
+  profileId: z.string().nullable().default(null),
+});
+export type CreateTuiAgentRequestV10 = z.infer<
+  typeof createTuiAgentRequestSchemaV10
+>;
 
 export const createTuiAgentResponseSchema = z.object({
   tuiAgentId: z.string(),

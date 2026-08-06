@@ -18,6 +18,7 @@ import {
   providersDeleteEnvOverrideRequestSchema,
   providersDeleteEnvOverrideResponseSchemaV20,
   providersListRequestSchema,
+  providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -296,9 +297,56 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
   });
 
-  it("upgrades v3.0 requests with native:null", () => {
-    const upgraded = providersListUpgradeV3ToV4.upgradeRequest({});
+  // `native` rides v7.0 ALONE. It was authored against the live request object
+  // while v6.0 was unreleased, so it silently grew the already-shipped
+  // v4.0/v5.0/v6.0 request lines too - and `host-v1.1.10` then froze those
+  // three lines WITHOUT it, because the commit that added it missed the
+  // release cherry-pick. These three tests pin where the carrier is allowed to
+  // exist, so the same drift cannot come back through a "helpful" fill.
+  it("keeps native off every released request line below v7.0", () => {
+    expect(
+      providersListRequestSchemaBeforeV70.parse({
+        forceAuthRefresh: true,
+        native: {
+          kind: "mcp",
+          providerId: "claude-code",
+          scope: "global",
+          workspaceRoot: null,
+        },
+      }),
+    ).not.toHaveProperty("native");
+    expect(providersListRequestSchema.parse({}).native).toBeNull();
+  });
+
+  it("upgrades v3.0 requests as identity (both lines predate native)", () => {
+    const upgraded = providersListUpgradeV3ToV4.upgradeRequest({
+      forceAuthRefresh: true,
+    });
+    expect(upgraded).not.toHaveProperty("native");
+    expect(upgraded.forceAuthRefresh).toBe(true);
+  });
+
+  it("upgrades v6.0 requests with native:null", () => {
+    const upgraded = providersListUpgradeV6ToV7.upgradeRequest({});
     expect(upgraded.native).toBeNull();
+  });
+
+  it("downgrades v7.0 → v6.0 requests by stripping native", () => {
+    const result = providersListDowngradeV7ToV6.downgradeRequest(
+      providersListRequestSchema.parse({
+        forceAuthRefresh: true,
+        native: {
+          kind: "mcp",
+          providerId: "claude-code",
+          scope: "global",
+          workspaceRoot: null,
+        },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).not.toHaveProperty("native");
+    expect(result.value.forceAuthRefresh).toBe(true);
   });
 
   // The adjacent hop, and the one most likely to rot: v6.0 is a RELEASED line
