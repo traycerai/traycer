@@ -427,6 +427,7 @@ function PrReviewThreadHunk(props: {
         banner={null}
         scrollContainerRef={null}
         onScroll={null}
+        fileIdentity={null}
       >
         <DiffContentPrimitive
           patch={hunk.patch}
@@ -437,6 +438,7 @@ function PrReviewThreadHunk(props: {
           lineNumbers={hunk.lineNumbers}
           indicatorStyle="bars"
           fileHeaders={false}
+          isEmptyFile={false}
         />
       </DiffContentFrame>
     </div>

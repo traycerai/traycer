@@ -97,6 +97,14 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));
 
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
+}));
+
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({
     status: "reachable",

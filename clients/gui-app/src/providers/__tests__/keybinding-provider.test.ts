@@ -1,5 +1,7 @@
-import { screen } from "@testing-library/react";
+import { createElement } from "react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryHistory } from "@tanstack/react-router";
 import {
   dispatchAction,
   findActionForChord,
@@ -9,6 +11,7 @@ import {
   resolveLeaderOwner,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
+import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -22,6 +25,9 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { KeybindingProvider } from "@/providers/keybinding-provider";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type {
@@ -695,3 +701,175 @@ function seedEpicTabs(): void {
       .openTabOrder.map((id) => ({ kind: "epic", id })),
   }));
 }
+
+// Builds the lightweight `KeybindingRouterSource` `<KeybindingProvider>`
+// itself takes (distinct from the `KeybindingRouter` seam `dispatchAction`
+// takes above) - just enough for `routerAdapterFor` to read a pathname and
+// hand off a no-op `navigate`. Digit-chord tab switches update
+// `useEpicCanvasStore` directly (see the `dispatchAction`/`fireDigit` tests
+// above), so a real TanStack router isn't needed to observe them.
+function buildProviderRouterSource(
+  initialPathname: string,
+): KeybindingRouterSource {
+  const history = createMemoryHistory({ initialEntries: [initialPathname] });
+  const navigate: KeybindingRouterSource["navigate"] = () => Promise.resolve();
+  return {
+    get state() {
+      return { location: { pathname: history.location.pathname } };
+    },
+    history,
+    navigate,
+  };
+}
+
+// Renders the real `<KeybindingProvider>` (so its actual window `keydown`
+// capture-phase listener is live) and appends a Diffs-shaped boundary -
+// `data-diffs-editor-boundary` wrapping a contenteditable node - directly
+// under `document.body`. Returns the contenteditable so tests can dispatch
+// real, DOM-composed keydown events at it.
+function renderDiffsBoundaryProvider(initialPathname: string): HTMLElement {
+  const router = buildProviderRouterSource(initialPathname);
+  render(createElement(KeybindingProvider, { router, children: null }));
+  const boundary = document.createElement("div");
+  boundary.setAttribute("data-diffs-editor-boundary", "");
+  const editor = document.createElement("div");
+  editor.setAttribute("contenteditable", "true");
+  // jsdom does not compute `isContentEditable` from the attribute - stub the
+  // browser-computed property `isDiffsEditorEvent` actually reads.
+  Object.defineProperty(editor, "isContentEditable", {
+    value: true,
+    configurable: true,
+  });
+  boundary.append(editor);
+  document.body.append(boundary);
+  return editor;
+}
+
+function fireKeyDownOn(
+  target: HTMLElement,
+  init: KeyboardEventInit,
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function seedManyEpicTabs(count: number): ReadonlyArray<string> {
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useTabsStore.setState({
+    stripOrder: [],
+    systemTabs: { history: null, settings: null },
+  });
+  const tabIds = Array.from({ length: count }, (_, index) =>
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(`m${index + 1}`, `Epic ${index + 1}`),
+  );
+  useEpicCanvasStore.getState().setActiveTab(tabIds[0]);
+  useTabsStore.setState((state) => ({
+    ...state,
+    stripOrder: useEpicCanvasStore
+      .getState()
+      .openTabOrder.map((id) => ({ kind: "epic", id })),
+  }));
+  return tabIds;
+}
+
+// Finding: `isDiffsEditorEvent(event)` used to short-circuit `handleKeyDown`
+// unconditionally, so a modified chord (⌘1, a reserved shortcut, ...) typed
+// while focus sat inside a Diffs editor boundary never reached
+// `resolveReservedAction`/`matchDigitAction` at all - even though it was
+// never meant to type a character into the editor. The fix only bypasses to
+// the editor for BARE (unmodified) typing.
+describe("<KeybindingProvider /> inside a Diffs editor boundary", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    __resetTabNavigationControllerForTesting();
+    seedEpicTabs();
+  });
+
+  afterEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+  });
+
+  it("still resolves a modified chord (alt+digit) as a reserved action while focus is inside the editor", () => {
+    const secondTabId = useEpicCanvasStore.getState().openTabOrder[1];
+    const editor = renderDiffsBoundaryProvider("/epics/e1");
+
+    act(() => {
+      fireKeyDownOn(editor, { code: "Digit2", key: "2", altKey: true });
+    });
+
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(secondTabId);
+  });
+
+  it("lets bare typing inside the editor bypass the app's keybinding handling", () => {
+    const firstTabId = useEpicCanvasStore.getState().activeTabId;
+    const editor = renderDiffsBoundaryProvider("/epics/e1");
+
+    let event: KeyboardEvent | undefined;
+    act(() => {
+      event = fireKeyDownOn(editor, { code: "KeyJ", key: "j" });
+    });
+
+    expect(event?.defaultPrevented).toBe(false);
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(firstTabId);
+  });
+
+  it("never reserves Diffs' native undo and redo chords as app actions", () => {
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "app.settings.open": "mod+z",
+        "app.history.open": "mod+shift+z",
+      },
+    });
+    const editor = renderDiffsBoundaryProvider("/epics/e1");
+    const primaryModifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+
+    const undo = fireKeyDownOn(editor, {
+      code: "KeyZ",
+      key: "z",
+      ...primaryModifier,
+    });
+    const redo = fireKeyDownOn(editor, {
+      code: "KeyZ",
+      key: "z",
+      ...primaryModifier,
+      shiftKey: true,
+    });
+
+    expect(undo.defaultPrevented).toBe(false);
+    expect(redo.defaultPrevented).toBe(false);
+  });
+
+  it("does not let entering the editor mid-chord break a multi-digit sequence typed entirely inside it", () => {
+    // Guards the narrower fix over the naive "always reset the pending digit
+    // sequence when isDiffsEditorEvent is true" reading: that would wipe the
+    // sequence armed by the FIRST digit before the second digit (also fired
+    // with focus inside the boundary) ever got to extend it.
+    __resetTabNavigationControllerForTesting();
+    const tabIds = seedManyEpicTabs(12);
+    const editor = renderDiffsBoundaryProvider("/epics/m1");
+
+    act(() => {
+      fireKeyDownOn(editor, { code: "Digit1", key: "1", altKey: true });
+      fireKeyDownOn(editor, { code: "Digit2", key: "2", altKey: true });
+    });
+
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(tabIds[11]);
+  });
+});

@@ -259,6 +259,7 @@ function SnapshotBundleFileSection(props: {
     <DiffBundleFileSectionFrame
       collapsed={collapsed}
       headerRow={headerRow}
+      headerStats={null}
       onOpenFileTile={handleOpenFileTile}
       findFilePath={props.entry.filePath}
       bundleFindFileId={bundleFindFileId}
@@ -368,6 +369,10 @@ function SnapshotBundleFileSectionBody(props: {
       banner={null}
       scrollContainerRef={null}
       onScroll={null}
+      fileIdentity={{
+        findFilePath: props.entry.filePath,
+        bundleFindFileId: props.bundleFindFileId,
+      }}
     >
       <DiffContentPrimitive
         patch={patch}
@@ -378,6 +383,7 @@ function SnapshotBundleFileSectionBody(props: {
         lineNumbers={props.diffViewerPreferences.lineNumbers}
         indicatorStyle={props.diffViewerPreferences.indicatorStyle}
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );

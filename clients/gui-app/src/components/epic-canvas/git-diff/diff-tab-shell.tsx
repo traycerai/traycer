@@ -1,5 +1,8 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { FileDiff } from "lucide-react";
+
+const DiffTabHeaderAccessoryContext = createContext<HTMLElement | null>(null);
 
 interface DiffTabShellProps {
   readonly primaryTitle: string;
@@ -10,40 +13,59 @@ interface DiffTabShellProps {
 }
 
 export function DiffTabShell(props: DiffTabShellProps) {
+  const [headerAccessoryTarget, setHeaderAccessoryTarget] =
+    useState<HTMLElement | null>(null);
+
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-background">
-      <div className="z-10 flex min-h-[clamp(2.5rem,5dvh,3rem)] shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-background px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <FileDiff className="size-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-0">
-            <h2 className="truncate text-ui-sm font-medium">
-              {props.primaryTitle}
-            </h2>
-            {props.secondaryLine !== null ? (
-              <div className="truncate text-ui-xs text-muted-foreground">
-                {props.secondaryLine}
-              </div>
-            ) : null}
-            {props.contextLabel !== null ? (
-              <div className="truncate text-ui-xs text-muted-foreground/80">
-                {props.contextLabel}
-              </div>
-            ) : null}
+    <DiffTabHeaderAccessoryContext.Provider value={headerAccessoryTarget}>
+      <div className="flex h-full min-h-0 w-full flex-col bg-background">
+        <div className="z-10 flex min-h-[clamp(2.5rem,5dvh,3rem)] shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-background px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileDiff className="size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <h2 className="truncate text-ui-sm font-medium">
+                {props.primaryTitle}
+              </h2>
+              {props.secondaryLine !== null ? (
+                <div className="truncate text-ui-xs text-muted-foreground">
+                  {props.secondaryLine}
+                </div>
+              ) : null}
+              {props.contextLabel !== null ? (
+                <div className="truncate text-ui-xs text-muted-foreground/80">
+                  {props.contextLabel}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <div
+              ref={setHeaderAccessoryTarget}
+              className="flex min-w-0 items-center gap-1"
+              data-testid="diff-tab-header-accessory"
+            />
+            {props.toolbar}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">{props.toolbar}</div>
+        {/* Ctrl/Cmd+A selects the diff body, not the whole window (#592). Shared
+            by the git, PR and snapshot diff tiles, so all three opt in here; the
+            title/toolbar header above stays out of the selection. */}
+        <div
+          data-selection-root=""
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
+          {props.children}
+        </div>
       </div>
-      {/* Ctrl/Cmd+A selects the diff body, not the whole window (#592). Shared
-          by the git, PR and snapshot diff tiles, so all three opt in here; the
-          title/toolbar header above stays out of the selection. */}
-      <div
-        data-selection-root=""
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
-      >
-        {props.children}
-      </div>
-    </div>
+    </DiffTabHeaderAccessoryContext.Provider>
   );
+}
+
+export function DiffTabHeaderPortal(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const target = useContext(DiffTabHeaderAccessoryContext);
+  return target === null ? null : createPortal(props.children, target);
 }
 
 export function GitSectionStatsSummary(props: {

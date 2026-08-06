@@ -1,4 +1,9 @@
-import { appendFileSync, mkdirSync, open as openCallback } from "node:fs";
+import {
+  appendFileSync,
+  close as closeCallback,
+  mkdirSync,
+  open as openCallback,
+} from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Environment } from "../runner/environment";
@@ -11,6 +16,7 @@ import {
 // Async open that resolves to a BARE integer fd (the callback `fs.open`
 // contract), not a `FileHandle` - see `openBootstrapLogFd`.
 const openRawFd = promisify(openCallback);
+const closeRawFdImpl = promisify(closeCallback);
 
 // Bootstrap-log line format (contract shared with the host writer):
 //   [<iso-timestamp>] phase=<name> key=value key=value … writer=supervisor
@@ -235,6 +241,21 @@ export async function openBootstrapLogFd(
 ): Promise<number> {
   await ensureHostHomeDir(environment);
   return openRawFd(bootstrapLogPath(environment), "a");
+}
+
+/**
+ * Release a descriptor handed out by {@link openBootstrapLogFd}.
+ *
+ * Never throws: this runs on the supervisor's recovery path, where failing to
+ * close a descriptor is a leak and throwing would be an outage. A double close
+ * (EBADF) is likewise not worth propagating.
+ */
+export async function closeRawFd(fd: number): Promise<void> {
+  try {
+    await closeRawFdImpl(fd);
+  } catch {
+    // Best effort by design - see above.
+  }
 }
 
 const LINE_RE = /^\[([^\]]+)\] phase=(\w[\w-]*)(?:\s+(.*))?$/;

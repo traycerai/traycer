@@ -8,7 +8,13 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 import {
   setWorkspaceFileRevealTarget,
@@ -47,13 +53,26 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => state.readFile,
 }));
 
-vi.mock("@tailmark/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tailmark/react")>();
-  return {
-    ...actual,
-    useThrottledHighlight: () => null,
-  };
-});
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
+  useWorkspaceWriteFile: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark" }),
+}));
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
 import { TabHostProvider } from "../../tab-host-provider";
@@ -135,7 +154,7 @@ afterEach(() => {
 });
 
 describe("<WorkspaceFileTile /> line reveal", () => {
-  it("scrolls to and consumes a line target on a code file", () => {
+  it("scrolls to and consumes a line target on a code file", async () => {
     state.readFile = {
       data: { content: "a\nb\nc\nd\ne", error: null, truncated: false },
       isLoading: false,
@@ -148,11 +167,13 @@ describe("<WorkspaceFileTile /> line reveal", () => {
 
     // The targeted gutter row is scrolled into view and the one-shot target is
     // consumed (G4) so a later remount won't re-scroll a stale line.
-    expect(scrollIntoViewSpy).toHaveBeenCalled();
-    expect(revealEntry(TAB_1, CODE_NODE.id)).toBeUndefined();
+    await waitFor(() => {
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+      expect(revealEntry(TAB_1, CODE_NODE.id)).toBeUndefined();
+    });
   });
 
-  it("does not move a second open preview of the same file in another tab (CL-6)", () => {
+  it("does not move a second open preview of the same file in another tab (CL-6)", async () => {
     state.readFile = {
       data: { content: "a\nb\nc\nd\ne", error: null, truncated: false },
       isLoading: false,
@@ -170,18 +191,22 @@ describe("<WorkspaceFileTile /> line reveal", () => {
 
     // Exactly one tile (TAB_1's) reacts and scrolls; TAB_2's preview is left
     // alone and never had an entry written for it.
-    expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1);
-    expect(revealEntry(TAB_1, CODE_NODE.id)).toBeUndefined();
+    await waitFor(() => {
+      expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1);
+      expect(revealEntry(TAB_1, CODE_NODE.id)).toBeUndefined();
+    });
     expect(revealEntry(TAB_2, CODE_NODE.id)).toBeUndefined();
 
     // A later click scoped to TAB_2 moves only that preview.
     act(() => {
       setWorkspaceFileRevealTarget(TAB_2, CODE_NODE.id, 4, null);
     });
-    expect(scrollIntoViewSpy).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(scrollIntoViewSpy).toHaveBeenCalledTimes(2);
+    });
   });
 
-  it("forces source long enough to scroll a markdown file the user had on preview, then consumes the target and returns to preview", () => {
+  it("forces source long enough to scroll a markdown file the user had on preview, then consumes the target and returns to preview", async () => {
     state.readFile = {
       data: {
         content: "# Heading\n\nbody line\nmore body\nlast line",
@@ -207,12 +232,14 @@ describe("<WorkspaceFileTile /> line reveal", () => {
       setWorkspaceFileRevealTarget(TAB_1, MARKDOWN_NODE.id, 3, null);
     });
 
-    expect(scrollIntoViewSpy).toHaveBeenCalled();
-    expect(revealEntry(TAB_1, MARKDOWN_NODE.id)).toBeUndefined();
-    expect(screen.getByRole("heading", { name: "Heading" })).toBeTruthy();
+    await waitFor(() => {
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+      expect(revealEntry(TAB_1, MARKDOWN_NODE.id)).toBeUndefined();
+      expect(screen.getByRole("heading", { name: "Heading" })).toBeTruthy();
+    });
   });
 
-  it("clamps a line target past end-of-file without throwing and consumes it", () => {
+  it("clamps a line target past end-of-file without throwing and consumes it", async () => {
     state.readFile = {
       data: { content: "a\nb\nc", error: null, truncated: false },
       isLoading: false,
@@ -223,8 +250,10 @@ describe("<WorkspaceFileTile /> line reveal", () => {
 
     expect(() => renderTile(CODE_NODE, TAB_1)).not.toThrow();
 
-    expect(scrollIntoViewSpy).toHaveBeenCalled();
-    expect(revealEntry(TAB_1, CODE_NODE.id)).toBeUndefined();
+    await waitFor(() => {
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+      expect(revealEntry(TAB_1, CODE_NODE.id)).toBeUndefined();
+    });
   });
 
   it("evicts a stranded target when the read settles into an error (CL-5)", () => {

@@ -5,6 +5,7 @@ import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-re
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -30,7 +31,7 @@ export function EpicSessionLifecycleBridge(
   props: EpicSessionLifecycleBridgeProps,
 ): ReactNode {
   const status = useAuthStore((state) => state.status);
-  const email = useAuthStore((state) => state.profile?.email ?? null);
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
     if (transition.kind === "signedOut" || transition.kind === "userSwitched") {
@@ -41,6 +42,10 @@ export function EpicSessionLifecycleBridge(
       // or a pre-create request. Flush/abort them with the outgoing identity;
       // durable drafts remain governed by the existing per-window source.
       draftRuntimeRegistry.teardown();
+      // Retire every Query-bound writer and editor owner with the outgoing
+      // identity. Dirty text remains recoverable in this window's journal,
+      // partitioned by the outgoing immutable auth subject.
+      void fileEditRuntimeRegistry.teardown();
       // Drop the "created this session" markers so a new identity's persisted
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.
@@ -48,7 +53,7 @@ export function EpicSessionLifecycleBridge(
     }
   }, []);
 
-  useAuthIdentityTransition(status, email, onTransition);
+  useAuthIdentityTransition(status, userId, onTransition);
 
   return <>{props.children}</>;
 }
