@@ -155,8 +155,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // surfaces share one cache entry and can never disagree about what exists.
   // A null client is `useTerminalListFor`'s disable switch, so a closed picker
   // (or a composer with no open Task) holds no terminal subscription at all.
+  const terminalsRequested = active && currentEpicId !== null;
   const terminalListQuery = useTerminalListFor(
-    active && currentEpicId !== null ? hostClient : null,
+    terminalsRequested ? hostClient : null,
     { kind: "epic", epicId: currentEpicId ?? "" },
   );
   const terminalSessions = terminalListQuery.data?.sessions;
@@ -427,6 +428,14 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     workspaceError,
     epicRequestCount: epicRequests.length,
     epicError,
+    // The terminal list feeds root-search entries but lives outside the
+    // aggregated loading/fetching flags above (those cover only the
+    // query-driven workspace/epic requests) - so its state gates the
+    // zero-match verdict separately.
+    terminalRequested: terminalsRequested,
+    terminalLoading: terminalListQuery.isLoading,
+    terminalFetching: terminalListQuery.isFetching,
+    terminalError: terminalListQuery.error,
   });
 
   useEffect(() => {
@@ -460,20 +469,31 @@ interface MentionNoMatchVerdictInput {
   readonly workspaceError: Error | null;
   readonly epicRequestCount: number;
   readonly epicError: Error | null;
+  readonly terminalRequested: boolean;
+  readonly terminalLoading: boolean;
+  readonly terminalFetching: boolean;
+  readonly terminalError: Error | null;
 }
 
 /**
  * Whether the open mention picker should close because a fully settled search
  * genuinely matched nothing. A source is "errored" only when it was actually
- * asked for rows this query (request count > 0) — a failed search proves
- * nothing empty, so it blocks this close and only this close.
+ * asked for rows (request count > 0, or the terminal list enabled) — a failed
+ * search proves nothing empty, so it blocks this close and only this close.
+ * The terminal list is folded into the settled/errored aggregates here: its
+ * rows feed root search, so a still-loading or failed terminal query must
+ * hold the menu open exactly like the workspace and epic sources do.
  */
-function mentionNoMatchDismissVerdict(
+export function mentionNoMatchDismissVerdict(
   input: MentionNoMatchVerdictInput,
 ): boolean {
   const sourcesErrored =
     (input.workspaceRequestCount > 0 && input.workspaceError !== null) ||
-    (input.epicRequestCount > 0 && input.epicError !== null);
+    (input.epicRequestCount > 0 && input.epicError !== null) ||
+    (input.terminalRequested && input.terminalError !== null);
+  const terminalPending =
+    input.terminalRequested &&
+    (input.terminalLoading || input.terminalFetching);
   return (
     input.active &&
     shouldCloseMentionForNoMatches({
@@ -481,7 +501,7 @@ function mentionNoMatchDismissVerdict(
       query: input.query,
       debouncedQuery: input.debouncedQuery,
       matchedCount: input.matchedCount,
-      loading: input.loading,
+      loading: input.loading || terminalPending,
       fetching: input.fetching,
       sourcesErrored,
     })
