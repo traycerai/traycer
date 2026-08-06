@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ChevronsUpDown, Check, Plus } from "lucide-react";
+import { ChevronDown, Check, Plus } from "lucide-react";
 import {
   Command,
   CommandEmpty,
@@ -72,7 +72,7 @@ export function HostSwitcher(props: {
   if (selected === null) {
     return (
       <div
-        className="flex w-full items-center gap-2 rounded-md border border-dashed border-border/70 px-2.5 py-2 text-ui-xs text-muted-foreground"
+        className="flex w-full items-center gap-3 px-3 py-2 text-ui-xs text-muted-foreground"
         data-testid="settings-host-switcher-empty"
       >
         {props.isLoading ? "Finding your hosts…" : "No hosts available"}
@@ -88,21 +88,27 @@ export function HostSwitcher(props: {
         // for while withholding the one thing it displays.
         aria-label={`Settings host: ${selected.name}`}
         data-testid="settings-host-switcher"
+        // Shaped like a sidebar row, not a card. A bordered box here read as a
+        // second panel sitting inside the rail; the group rule above already
+        // says where the host tier starts, so this only has to line its dot up
+        // with the section icons beneath it and behave on hover like they do.
         className={cn(
-          "flex w-full items-center gap-2 rounded-lg border border-border/60 bg-card/40 px-2.5 py-2 text-left transition-colors",
-          "hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+          "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors",
+          "hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
         )}
       >
-        <HostPresenceDot
-          tone={selected.health.tone}
-          animate={selected.health.live}
-          className={undefined}
-        />
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          <HostPresenceDot
+            tone={selected.health.tone}
+            animate={selected.health.live}
+            className={undefined}
+          />
+        </span>
         <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
           {selected.name}
         </span>
         {selected.hostId === props.activeHostId ? <ActiveTag /> : null}
-        <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent
         align="start"

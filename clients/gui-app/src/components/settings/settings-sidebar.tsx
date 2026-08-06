@@ -50,8 +50,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   const localHostSelected = scope.host === null || scope.host.isLocalMachine;
   return (
     <aside className="flex w-[clamp(13rem,20vw,17rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 bg-background p-4">
-      {SETTINGS_SECTION_GROUPS.map((group) => (
+      {SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
         <Fragment key={group.id}>
+          {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
           <SettingsSidebarGroupHeader label={group.label} />
           {group.id === "host" ? <SettingsSidebarHostPicker /> : null}
           <div className="flex flex-col gap-0.5">
@@ -82,8 +83,10 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
 function SettingsSidebarHostPicker(): ReactNode {
   const scope = useHostScope();
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
+  // `gap-0.5` matches the section rows below, so the picker reads as the first
+  // row of the tier it heads rather than a control docked above it.
   return (
-    <div className="mb-1.5 flex flex-col gap-1">
+    <div className="flex flex-col gap-0.5">
       <HostSwitcher
         hosts={scope.hosts}
         selected={scope.host}
@@ -123,11 +126,23 @@ function isSectionPathname(
   return pathname === base || pathname.startsWith(`${base}/`);
 }
 
+/**
+ * The tier boundary, drawn edge to edge.
+ *
+ * It bleeds past the rail's padding (`-mx-4`) so it reads as a division OF the
+ * rail rather than a box drawn inside it — which is also why the host picker
+ * below carries no border of its own: one of them has to be the boundary, and
+ * a rule costs nothing to scan past.
+ */
+function SettingsSidebarGroupRule(): ReactNode {
+  return <div aria-hidden className="-mx-4 my-3 border-t border-border/60" />;
+}
+
 function SettingsSidebarGroupHeader(props: {
   readonly label: string;
 }): ReactNode {
   return (
-    <h2 className="mt-4 mb-1 px-3 font-semibold text-ui-xs tracking-wide text-muted-foreground/70 uppercase first:mt-0">
+    <h2 className="mb-1 px-3 font-semibold text-ui-xs tracking-wide text-muted-foreground/70 uppercase">
       {props.label}
     </h2>
   );
