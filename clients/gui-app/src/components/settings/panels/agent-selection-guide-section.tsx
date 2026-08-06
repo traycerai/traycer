@@ -19,7 +19,6 @@ import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
-import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
   type HostScope,
@@ -107,46 +106,50 @@ export function AgentSelectionGuideSection() {
   const realBinding = useHostBinding();
 
   // Only a fully-resolved scope re-provides the client — a still-connecting or
-  // vanished pick falls through to `HostScopeGate` instead of silently
-  // reading/writing through the ambient active-host client.
+  // vanished pick renders under the ambient context, where the gate keeps it
+  // inert instead of letting it read/write through the active-host client.
+  // `following` is usable but needs no re-provision either: the ambient client
+  // already IS the scoped host's, and building a second one would duplicate
+  // its socket for nothing.
   const scopedBinding =
     scope.status === "ready" && realBinding !== null && scope.client !== null
       ? { ...realBinding, hostClient: scope.client }
       : null;
 
-  // Mount, not just render. `AgentSelectionGuideSectionInner` owns the guide
-  // query, and a query hook under a non-usable scope still fires against the
-  // ambient host and caches ITS guide under this section — the gate would hide
-  // the result while the read had already happened. So the whole subtree stays
-  // unmounted until the scope is usable, and the gate speaks for the rest.
-  if (!isHostScopeUsable(scope.status)) {
-    return (
-      <div className="h-full min-h-0 p-5">
-        <section className="flex h-full min-h-0 flex-col">
-          <HostScopeGate
-            scope={scope}
-            skeleton={
-              <AgentSelectionGuideMessage>
-                <EditorSkeleton />
-              </AgentSelectionGuideMessage>
-            }
-          >
-            {null}
-          </HostScopeGate>
-        </section>
-      </div>
-    );
-  }
-
-  const inner = <AgentSelectionGuideSectionInner scope={scope} />;
-  // `following` is usable but needs no re-provision: the ambient client
-  // already IS the scoped host's, and building a second one would duplicate
-  // its socket for nothing.
-  if (scopedBinding === null) return inner;
+  // ONE gate, wrapping everything that talks to the scoped host — including
+  // the guide query, which lives in the content component so it sits INSIDE
+  // the boundary. This section used to also early-return before mounting the
+  // content, because a mounted query hook under a non-usable scope fired
+  // against the ambient host and cached ITS guide here. The gate now holds
+  // non-usable children in a hidden `<Activity>`, which tears subscriptions
+  // down — the query cannot fire — while preserving the editor's state, so a
+  // transient same-host disconnect inside the save debounce no longer
+  // discards what was typed.
+  const content = <AgentSelectionGuideSectionInner scope={scope} />;
   return (
-    <HostRuntimeContext.Provider value={scopedBinding}>
-      {inner}
-    </HostRuntimeContext.Provider>
+    <div className="h-full min-h-0 p-5">
+      <section className="flex h-full min-h-0 flex-col">
+        {/* This file is per-host, but neither the control that says WHICH host
+            nor the readout of it lives here: both are the sidebar's, one row
+            away and always on screen. */}
+        <HostScopeGate
+          scope={scope}
+          skeleton={
+            <AgentSelectionGuideMessage>
+              <EditorSkeleton />
+            </AgentSelectionGuideMessage>
+          }
+        >
+          {scopedBinding === null ? (
+            content
+          ) : (
+            <HostRuntimeContext.Provider value={scopedBinding}>
+              {content}
+            </HostRuntimeContext.Provider>
+          )}
+        </HostScopeGate>
+      </section>
+    </div>
   );
 }
 
@@ -154,9 +157,10 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
   const { scope } = props;
   // Host-scoped file: remount the editor with fresh content whenever the
   // scoped host changes so one host's edits never carry to another. The query
-  // itself always runs (against whatever client the ambient context currently
-  // provides) — only its result is trusted below, and only once the gate has
-  // confirmed that client is actually the scoped host's.
+  // mounts only inside the gate, so while the scope is not usable it is held
+  // unsubscribed (hidden Activity) and cannot fire; once the scope is usable
+  // the context above supplies the scoped client, so the result read here is
+  // the scoped host's.
   const query = useAgentSelectionGuideGlobalQuery();
 
   let body: ReactNode;
@@ -197,25 +201,7 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
     );
   }
 
-  return (
-    <div className="h-full min-h-0 p-5">
-      <section className="flex h-full min-h-0 flex-col">
-        {/* This file is per-host, but neither the control that says WHICH host
-            nor the readout of it lives here: both are the sidebar's, one row
-            away and always on screen. */}
-        <HostScopeGate
-          scope={scope}
-          skeleton={
-            <AgentSelectionGuideMessage>
-              <EditorSkeleton />
-            </AgentSelectionGuideMessage>
-          }
-        >
-          {body}
-        </HostScopeGate>
-      </section>
-    </div>
-  );
+  return body;
 }
 
 /** Heading + description for the states that render no editor surface. */

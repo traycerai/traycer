@@ -27,6 +27,7 @@ import {
   it,
   onTestFinished,
   vi,
+  type Mock,
 } from "vitest";
 
 // Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
@@ -594,9 +595,14 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
-const hostScopeMocks = vi.hoisted(() => ({
+const hostScopeMocks: {
+  client: null;
+  setHostId: Mock<(hostId: string) => void>;
+  hostId: string;
+} = vi.hoisted(() => ({
   client: null,
-  setHostId: vi.fn(),
+  setHostId: vi.fn<(hostId: string) => void>(),
+  hostId: "host-a",
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
@@ -609,6 +615,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       hostScopeFixture({
         client: hostScopeMocks.client,
         setHostId: hostScopeMocks.setHostId,
+        hostId: hostScopeMocks.hostId,
       }),
   };
 });
@@ -1144,6 +1151,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
     hostScopeMocks.setHostId.mockClear();
+    hostScopeMocks.hostId = "host-a";
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1196,6 +1204,60 @@ describe("<ProvidersSettingsPanel />", () => {
     // a later visit does not yank the scope back to a host the user has since
     // navigated away from.
     expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
+  });
+
+  it("refuses a profile intent whose target host is not the one on screen", () => {
+    // The target was unreachable or plan-gated, so its rail never mounted and
+    // the harness/profile/sign-in halves stayed armed. Splitting the host half
+    // off (so an unreachable target could not re-yank the scope forever) threw
+    // away WHICH host they belonged to — and the next reachable host the user
+    // picked consumed them, in the worst case starting an automatic sign-in
+    // there. The retained target is what makes the remainder refusable.
+    useProvidersFocusStore.setState({
+      focusHarnessId: "cursor",
+      focusHostId: null,
+      focusTargetHostId: "host-that-needs-reauth",
+      focusProfileId: "profile-1",
+      startSignIn: true,
+    });
+    hostScopeMocks.hostId = "some-other-host";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Not consumed here: the pane stays on the rail's first provider rather
+    // than opening the deep link's target on the wrong machine.
+    expect(
+      screen
+        .getByRole("tab", { name: "CLI & Args" })
+        .getAttribute("data-state"),
+    ).toBe("active");
+    expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
+    // ...and it is cancelled rather than left armed for the next host.
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusProfileId).toBeNull();
+    expect(useProvidersFocusStore.getState().startSignIn).toBe(false);
   });
 
   it("leaves the scope alone when no deep link armed a host", () => {
@@ -4650,6 +4712,10 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "work-profile",
       startSignIn: true,
     });
+    // The scope mock's `setHostId` is inert, so model the applied switch: the
+    // rail consumes a profile intent only when the host on screen IS the
+    // intent's target (the foreign-host case is covered separately).
+    hostScopeMocks.hostId = "local";
 
     render(
       <TooltipProvider>

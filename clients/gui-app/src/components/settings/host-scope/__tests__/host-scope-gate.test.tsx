@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
@@ -13,7 +14,13 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+
+/** Concealed-or-absent: the gate's claim for children in a non-usable state. */
+function expectHiddenFromView(node: Element | null): void {
+  expect(node === null || isConcealed(node)).toBe(true);
+}
 
 /**
  * The gate is where "no hosts in hand" is turned into a sentence a person
@@ -82,7 +89,7 @@ describe("<HostScopeGate /> empty and failed states", () => {
 
     expect(screen.getByTestId("host-scope-plan-restricted")).not.toBeNull();
     expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
-    expect(screen.queryByTestId("body")).toBeNull();
+    expectHiddenFromView(screen.queryByTestId("body"));
 
     fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
     await waitFor(() => {
@@ -101,7 +108,7 @@ describe("<HostScopeGate /> empty and failed states", () => {
     );
 
     expect(screen.getByTestId("skeleton")).not.toBeNull();
-    expect(screen.queryByTestId("body")).toBeNull();
+    expectHiddenFromView(screen.queryByTestId("body"));
   });
 
   it("offers no return action when the unreachable host is already the active one", async () => {
@@ -138,7 +145,7 @@ describe("<HostScopeGate /> empty and failed states", () => {
     // The explanation still renders — only the dead button is withheld.
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
     expect(screen.queryByTestId("host-scope-return-to-active")).toBeNull();
-    expect(screen.queryByTestId("body")).toBeNull();
+    expectHiddenFromView(screen.queryByTestId("body"));
   });
 
   it("still offers the way back when the unreachable host is not the active one", async () => {
@@ -236,5 +243,95 @@ describe("<HostScopeGate /> empty and failed states", () => {
 
     expect(screen.getByTestId("host-scope-vanished")).not.toBeNull();
     expect(screen.queryByTestId("host-scope-lists-failed")).toBeNull();
+  });
+});
+
+function TypedProbe() {
+  const [value, setValue] = useState("");
+  return (
+    <input
+      data-testid="probe-input"
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+    />
+  );
+}
+
+function EffectProbe(props: { readonly log: string[] }) {
+  const { log } = props;
+  useEffect(() => {
+    log.push("mount");
+    return () => {
+      log.push("cleanup");
+    };
+  }, [log]);
+  return <div data-testid="effect-probe" />;
+}
+
+/**
+ * The gate's preservation contract: a non-usable state conceals children and
+ * tears their side effects down, but their component state is only destroyed
+ * by a REAL host switch — never by a transient same-host flap.
+ */
+describe("<HostScopeGate /> concealment and preservation", () => {
+  afterEach(cleanup);
+
+  function gateAt(
+    status: "ready" | "unreachable",
+    children: ReactNode,
+    hostId: string,
+  ) {
+    return (
+      <HostScopeGate
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({ hostId }),
+          status,
+        })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        {children}
+      </HostScopeGate>
+    );
+  }
+
+  it("preserves typed state across a same-host unreachable flip", () => {
+    const { rerender } = render(gateAt("ready", <TypedProbe />, "host-a"));
+    fireEvent.change(screen.getByTestId("probe-input"), {
+      target: { value: "typed mid-flap" },
+    });
+
+    rerender(gateAt("unreachable", <TypedProbe />, "host-a"));
+    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    expectHiddenFromView(screen.queryByDisplayValue("typed mid-flap"));
+
+    rerender(gateAt("ready", <TypedProbe />, "host-a"));
+    const restored = screen.getByDisplayValue("typed mid-flap");
+    expect(isConcealed(restored)).toBe(false);
+  });
+
+  it("destroys children state when the scope moves to another host", () => {
+    const { rerender } = render(gateAt("ready", <TypedProbe />, "host-a"));
+    fireEvent.change(screen.getByTestId("probe-input"), {
+      target: { value: "belongs to host-a" },
+    });
+
+    rerender(gateAt("ready", <TypedProbe />, "host-b"));
+    expect(screen.queryByDisplayValue("belongs to host-a")).toBeNull();
+  });
+
+  it("tears children effects down while concealed and remounts them on return", () => {
+    // This is the side-effect half of the honest-state claim: a concealed
+    // panel's subscriptions (queries, sockets) are OFF, not merely invisible.
+    const log: string[] = [];
+    const { rerender } = render(
+      gateAt("ready", <EffectProbe log={log} />, "host-a"),
+    );
+    expect(log).toEqual(["mount"]);
+
+    rerender(gateAt("unreachable", <EffectProbe log={log} />, "host-a"));
+    expect(log).toEqual(["mount", "cleanup"]);
+
+    rerender(gateAt("ready", <EffectProbe log={log} />, "host-a"));
+    expect(log).toEqual(["mount", "cleanup", "mount"]);
   });
 });

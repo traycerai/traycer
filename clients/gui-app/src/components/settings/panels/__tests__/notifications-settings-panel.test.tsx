@@ -23,25 +23,38 @@ import {
   NotificationsSettingsPanelForClient,
 } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { useNotificationHookDraftStore } from "@/stores/settings/notification-hook-draft-store";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 const hostScopeMocks: {
   client: HostClient<HostRpcRegistry> | null;
   hostId: string | null;
+  /** `null` uses the fixture's default (`following`). */
+  status: HostScope["status"] | null;
 } = vi.hoisted(() => ({
   client: null,
   hostId: "host-a",
+  status: null,
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
-// mocks at that boundary rather than re-mocking the scope's internals.
+// mocks at that boundary rather than re-mocking the scope's internals. The
+// host OPTION is built from the mock's hostId so `scope.host.hostId` — the
+// gate's remount key — tracks it, not just `scope.hostId`.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } =
-    await import("@/components/settings/host-scope/host-scope-fixture");
+  const { hostScopeFixture, hostScopeOptionFixture } = await import(
+    "@/components/settings/host-scope/host-scope-fixture"
+  );
   return {
     useHostScope: () =>
       hostScopeFixture({
         client: hostScopeMocks.client,
-        hostId: hostScopeMocks.hostId,
+        host:
+          hostScopeMocks.hostId === null
+            ? null
+            : hostScopeOptionFixture({ hostId: hostScopeMocks.hostId }),
+        ...(hostScopeMocks.status === null
+          ? {}
+          : { status: hostScopeMocks.status }),
       }),
   };
 });
@@ -84,7 +97,7 @@ afterEach(() => {
   cleanup();
   hostScopeMocks.hostId = "host-a";
   hostScopeMocks.client = null;
-  useNotificationHookDraftStore.getState().clear();
+  hostScopeMocks.status = null;
 });
 
 describe("<NotificationsSettingsPanel /> severity policy", () => {
@@ -521,12 +534,14 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(screen.getByDisplayValue("Pager")).toBeTruthy();
   });
 
-  // The retention tests render the SCOPE-BOUND panel, not the ForClient
-  // variant the shared harness uses: `NotificationsSettingsPanelForClient`
-  // passes `scope={null}` (its caller owns the gating), so it carries no
-  // hostId and the retention store — which keys drafts to a host — stays
-  // deliberately inert there.
-  function renderScopedPanel(): void {
+  // The flip tests render the SCOPE-BOUND panel, not the ForClient variant
+  // the shared harness uses: `NotificationsSettingsPanelForClient` passes
+  // `scope={null}` (its caller owns the gating), so it never mounts the
+  // `HostScopeGate` whose hidden-`<Activity>` preservation is under test.
+  function renderScopedPanel(): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly rerender: () => void;
+  } {
     const client = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
@@ -550,20 +565,29 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
         mutations: { retry: false },
       },
     });
-    render(
+    // A FRESH element per (re)render: with a referentially identical element
+    // React bails out of the whole subtree and never re-reads the mutated
+    // scope mock, so the flip under test silently would not happen.
+    const makeUi = () => (
       <QueryClientProvider client={queryClient}>
         <NotificationsSettingsPanel />
-      </QueryClientProvider>,
+      </QueryClientProvider>
     );
+    const view = render(makeUi());
+    return {
+      client,
+      rerender: () => {
+        view.rerender(makeUi());
+      },
+    };
   }
 
-  it("retains a typed hook draft across a same-host unmount and restores it", async () => {
-    // The honest-state gate unmounts the hooks section whenever the host
-    // stops being reachable. For a TRANSIENT same-host loss (restart, sleep,
-    // relay blip) the remount must hand back the typed draft — destroying it
-    // is only correct for a real host switch, which the hostId check below
-    // still guarantees.
-    renderScopedPanel();
+  it("preserves a typed hook draft across a transient same-host disconnect", async () => {
+    // The gate holds this section in a hidden `<Activity>` while its host is
+    // unreachable. For a TRANSIENT same-host loss (restart, sleep, relay
+    // blip) the returning panel must still hold the typed draft — destruction
+    // is only correct for a real host switch, covered by the next test.
+    const view = renderScopedPanel();
     await screen.findByTestId("notification-hooks-empty-state");
     const manager = screen.getByTestId("notification-hooks-manager");
     fireEvent.click(
@@ -576,22 +600,31 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
       target: { value: "Typed mid-disconnect" },
     });
 
-    // The gate dropping the section: everything unmounts, and the unmount
-    // parks the open editor in the retention store.
-    cleanup();
-    expect(useNotificationHookDraftStore.getState().retained).not.toBeNull();
+    // The host drops out: same host, no client. The gate reports the outage
+    // instead of the section, and the open dialog — portaled DOM included —
+    // is concealed rather than destroyed, so nothing invisible is actionable.
+    hostScopeMocks.client = null;
+    hostScopeMocks.status = "unreachable";
+    view.rerender();
+    expect(screen.getByTestId("host-scope-unreachable")).toBeTruthy();
+    const concealed = screen.queryByDisplayValue("Typed mid-disconnect");
+    expect(concealed === null || isConcealed(concealed)).toBe(true);
 
-    renderScopedPanel();
+    // The host returns: the dialog is still open and the name still typed.
+    hostScopeMocks.client = view.client;
+    hostScopeMocks.status = null;
+    view.rerender();
     expect(
       await screen.findByRole("heading", { name: "Add hook" }),
     ).toBeTruthy();
     expect(screen.getByDisplayValue("Typed mid-disconnect")).toBeTruthy();
   });
 
-  it("never restores a retained draft onto a different host", async () => {
-    // A draft is armed against one machine's hooks file. The retention that
-    // survives a same-host blip must not follow the user to another host.
-    renderScopedPanel();
+  it("destroys an open draft when the scope moves to a different host", async () => {
+    // A draft is armed against one machine's hooks file. The preservation
+    // that survives a same-host blip must not follow the user to another
+    // host: the host-keyed remount destroys it.
+    const view = renderScopedPanel();
     await screen.findByTestId("notification-hooks-empty-state");
     const manager = screen.getByTestId("notification-hooks-manager");
     fireEvent.click(
@@ -604,12 +637,12 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
       target: { value: "Belongs to host-a" },
     });
 
-    cleanup();
     hostScopeMocks.hostId = "host-b";
+    view.rerender();
 
-    renderScopedPanel();
     await screen.findByTestId("notification-hooks-empty-state");
     expect(screen.queryByRole("heading", { name: "Add hook" })).toBeNull();
+    expect(screen.queryByDisplayValue("Belongs to host-a")).toBeNull();
   });
 
   it("requires confirmation before deleting a hook", async () => {

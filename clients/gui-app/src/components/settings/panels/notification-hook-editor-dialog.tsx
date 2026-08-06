@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { NotificationHookConfig } from "@traycer/protocol/host/notifications/host-notifications";
 import {
   draftProblem,
@@ -34,19 +34,8 @@ export function NotificationHookEditorDialog(props: {
   readonly saving: boolean;
   readonly onCancel: () => void;
   readonly onSave: (hook: NotificationHookConfig) => void;
-  /**
-   * Fires with every edit. The owner keeps the latest draft OUTSIDE this
-   * component so an unmount it cannot see coming — the honest-state gate
-   * dropping the section on a transient disconnect — doesn't discard typed
-   * work.
-   */
-  readonly onDraftChange: (draft: HookDraft) => void;
 }) {
   const [draft, setDraft] = useState(props.initialDraft);
-  const { onDraftChange } = props;
-  useEffect(() => {
-    onDraftChange(draft);
-  }, [draft, onDraftChange]);
   const problem = draftProblem(draft);
   return (
     <Dialog

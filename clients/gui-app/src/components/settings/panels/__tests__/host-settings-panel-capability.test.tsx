@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
@@ -112,13 +113,13 @@ describe("Overview capability split without host management", () => {
     expect(
       screen.getByRole("switch", { name: "Turn on auto-update" }),
     ).not.toBeNull();
-    // ...while the genuinely RPC-dependent ROW stays gated and says why. The
-    // zone itself still renders: its other row (Remove Traycer) runs over the
-    // local CLI bridge, so the gate belongs around the snapshots row, not
-    // around the region.
-    expect(
-      screen.queryByTestId("settings-clear-file-edit-snapshots"),
-    ).toBeNull();
+    // ...while the genuinely RPC-dependent ROW stays gated — concealed (the
+    // gate preserves it hidden through the outage) or absent — and the gate
+    // says why. The zone itself still renders: its other row (Remove Traycer)
+    // runs over the local CLI bridge, so the gate belongs around the
+    // snapshots row, not around the region.
+    const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
+    expect(clearRow === null || isConcealed(clearRow)).toBe(true);
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
   });
 

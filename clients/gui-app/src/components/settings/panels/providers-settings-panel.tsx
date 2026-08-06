@@ -486,6 +486,18 @@ function ProvidersRailLayout({
   );
   const [initialFocus, setInitialFocus] = useState(() => {
     const focus = useProvidersFocusStore.getState();
+    // The intent is consumed only by the rail of the host it NAMES. A profile
+    // deep link whose target is unreachable or plan-gated never mounts a rail
+    // there, so the harness / profile / sign-in halves stay armed; without
+    // this check the next reachable host the user picked consumed them and
+    // could start an automatic sign-in on that machine whenever the same
+    // profile id existed. `null` target = "no host in particular".
+    if (
+      focus.focusTargetHostId !== null &&
+      focus.focusTargetHostId !== hostId
+    ) {
+      return { harnessId: null, profileId: null, startSignIn: false };
+    }
     return {
       harnessId: focus.focusHarnessId,
       profileId: focus.focusProfileId,

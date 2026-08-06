@@ -168,7 +168,6 @@ function NotificationsSettingsPanelContent(props: {
           statusQuery={props.hooksStatusQuery}
           testHook={props.testHook}
           saveHooks={props.saveHooks}
-          hostId={scope?.hostId ?? null}
         />
       </div>
     </div>

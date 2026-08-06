@@ -24,6 +24,7 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 
 /**
  * `general-settings-panel.test.tsx` used to carry the ONLY test that enforced
@@ -177,13 +178,16 @@ describe("HostDangerZone", () => {
       />,
     );
 
-    expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
-    // ...while the genuinely RPC-backed row stays gated, mounts no read, and
-    // says why it is missing instead of just disappearing.
-    expect(
-      screen.queryByTestId("settings-clear-file-edit-snapshots"),
-    ).toBeNull();
-    expect(capturedQueryClients).toHaveLength(0);
+    const removeRow = screen.getByTestId("settings-remove-traycer");
+    expect(isConcealed(removeRow)).toBe(false);
+    // ...while the genuinely RPC-backed row stays behind the gate — concealed
+    // (the gate preserves it hidden through the outage) or absent — and the
+    // gate says why instead of the region just disappearing. Query hooks may
+    // render under the concealed row, but every one of them sees a NULL
+    // client: nothing here can reach the previously-active host.
+    const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
+    expect(clearRow === null || isConcealed(clearRow)).toBe(true);
+    expect(capturedQueryClients.every((client) => client === null)).toBe(true);
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
   });
 
@@ -202,13 +206,12 @@ describe("HostDangerZone", () => {
       />,
     );
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
-    expect(
-      screen.queryByTestId("settings-clear-file-edit-snapshots"),
-    ).toBeNull();
+    const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
+    expect(clearRow === null || isConcealed(clearRow)).toBe(true);
     expect(screen.queryByTestId("settings-remove-traycer")).toBeNull();
   });
 
-  it("refuses to clear when the scope moves to another host after arming", () => {
+  it("destroys the armed confirmation when the scope moves to another host", () => {
     const scopeB = hostScopeFixture({
       host: remoteHost("host-b"),
       status: "ready",
@@ -218,6 +221,7 @@ describe("HostDangerZone", () => {
 
     // Arm against host-b.
     fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
+    expect(screen.getByRole("dialog")).not.toBeNull();
 
     // The scope moves underneath the open dialog — another window changed the
     // active host, or the sidebar picked a different one.
@@ -231,17 +235,10 @@ describe("HostDangerZone", () => {
       />,
     );
 
-    // The dialog's confirm shares its accessible name with the row's trigger,
-    // so the click is scoped to the dialog rather than relying on the modal
-    // marking the page behind it aria-hidden.
-    fireEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: "Clear snapshots",
-      }),
-    );
-
-    // Refused, not retargeted. Retargeting would wipe host-c's snapshots on a
-    // confirmation the user gave about host-b.
+    // Destroyed, not retargeted: the gate keys this subtree by host, so the
+    // switch unmounts the dialog with everything else. A confirmation the
+    // user gave about host-b cannot be re-aimed to wipe host-c's snapshots.
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(mutateSpy).not.toHaveBeenCalled();
   });
 

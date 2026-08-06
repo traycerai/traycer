@@ -1,22 +1,41 @@
-import type { ReactNode } from "react";
+import { Activity, memo, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
 
 /**
- * The honest-state gate for a host-scoped panel.
+ * The honest-state gate for a host-scoped panel. Its contract has two planes,
+ * and keeping them distinct is the whole design:
  *
- * Every host-scoped section renders its body through this. The point is not
- * decoration — it is that three of the scope's states (`connecting`,
- * `unreachable`, `vanished`) MUST NOT render panel content, because there is
- * no client behind the host name at the top of the screen. Leaving that
- * decision to each panel is how the old surface ended up showing one host's
- * providers under another host's label.
+ * **Visibility and side-effects.** Three of the scope's states (`connecting`,
+ * `unreachable`, `vanished`) MUST NOT show panel content or let it act,
+ * because there is no client behind the host name at the top of the screen.
+ * Leaving that decision to each panel is how the old surface ended up showing
+ * one host's providers under another host's label. When the scope is not
+ * usable this renders the state's notice, and the children are held inside a
+ * hidden `<Activity>`: React tears their effects and subscriptions down, so a
+ * query hook under the dead scope cannot fire — the same guarantee a full
+ * unmount gave, without the cost below.
+ *
+ * **Component state.** A full unmount also destroyed every draft a panel held
+ * — a hook being written, a pasted API key, an open dialog — on any TRANSIENT
+ * same-host disconnect (host restart, sleep, relay blip). That produced a
+ * review-round-per-editor stream of per-surface retention stores; the hidden
+ * `<Activity>` retires the whole class, because React preserves the subtree's
+ * state while it is hidden. The Activity is keyed by the host, so a REAL host
+ * switch still discards everything: a draft belongs to one machine's files
+ * and must never be re-pointed at another.
+ *
+ * `vanished` and the no-host states render the notice alone — there the host
+ * is gone (or never resolved), so there is nothing a preserved draft could
+ * honestly belong to.
  *
  * The scope's control lives in the sidebar, once. This renders no picker: it
  * is a readout plus, where a state is recoverable, the one action that
@@ -96,16 +115,54 @@ export function HostScopeGate(props: {
     );
   }
 
+  const usable = isHostScopeUsable(scope.status);
+  let notice: ReactNode = null;
   if (scope.status === "unreachable") {
-    return <UnreachableNotice scope={scope} host={scope.host} />;
+    notice = <UnreachableNotice scope={scope} host={scope.host} />;
+  } else if (scope.status === "connecting") {
+    notice = <>{props.skeleton}</>;
   }
 
-  if (scope.status === "connecting") {
-    return <>{props.skeleton}</>;
-  }
-
-  return <>{props.children}</>;
+  return (
+    <>
+      {notice}
+      <Activity key={scope.host.hostId} mode={usable ? "visible" : "hidden"}>
+        {/* The provider sits INSIDE the Activity but OUTSIDE the freeze:
+            context, unlike props, must keep flowing while the subtree is
+            frozen, so portal surfaces learn they are concealed (their DOM
+            escapes the Activity's own styling — see the context's docs). */}
+        <PortalConcealmentProvider value={!usable}>
+          <FrozenWhileConcealed usable={usable}>
+            {props.children}
+          </FrozenWhileConcealed>
+        </PortalConcealmentProvider>
+      </Activity>
+    </>
+  );
 }
+
+/**
+ * Holds the concealed subtree on its LAST USABLE render.
+ *
+ * Hiding alone is not enough: a hidden `<Activity>` still re-renders its
+ * children when the panel above re-renders, and panels derive their tree
+ * shape from client-bound queries. The moment the scope loses its client
+ * those queries read as empty, the panel switches to its "unavailable"
+ * branch, and the stateful editor underneath unmounts INSIDE the hidden
+ * boundary — exactly the draft loss the Activity exists to prevent. The
+ * comparator reports "equal" while the subtree is not usable, so React keeps
+ * the last committed output (and its state) untouched until the scope is
+ * usable again, when fresh props flow in as normal.
+ */
+const FrozenWhileConcealed = memo(
+  function FrozenWhileConcealed(props: {
+    readonly usable: boolean;
+    readonly children: ReactNode;
+  }) {
+    return <>{props.children}</>;
+  },
+  (_prev, next) => !next.usable,
+);
 
 function UnreachableNotice(props: {
   readonly scope: HostScope;

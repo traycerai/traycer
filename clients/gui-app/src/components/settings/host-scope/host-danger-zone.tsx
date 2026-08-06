@@ -76,13 +76,11 @@ function ClearFileEditSnapshotsRow(props: {
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
+  // The scope moving to another host underneath this open dialog is handled
+  // at the boundary, not here: `HostScopeGate` keys this subtree by host, so
+  // a host switch unmounts the dialog with everything else. A confirmation
+  // armed against one machine cannot survive to be retargeted at another.
   const [confirmOpen, setConfirmOpen] = useState(false);
-  // The host this dialog was opened against, captured at open time. The scope
-  // can move underneath an open dialog — the active host can change from
-  // another window, or the user can pick a different host in the sidebar —
-  // and a destructive action must never execute against a host the user did
-  // not have on screen when they decided. Compared on confirm, not assumed.
-  const [armedHostId, setArmedHostId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const currentUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? state.profile?.userId ?? null,
@@ -134,7 +132,6 @@ function ClearFileEditSnapshotsRow(props: {
             .markCleared(context.userId, context.hostId, Date.now());
         }
         setConfirmOpen(false);
-        setArmedHostId(null);
         toast.success("Cleared file edit snapshots", {
           description: `${formatSnapshotBytes(result.clearedBytes)} removed.`,
         });
@@ -143,11 +140,6 @@ function ClearFileEditSnapshotsRow(props: {
         toastFromHostError(error, "Couldn't clear file edit snapshots."),
     },
   });
-
-  // The scope moved while the dialog was open. Disarm rather than close:
-  // closing discards an intent the user expressed, and retargeting silently
-  // executes against a host they never chose.
-  const targetMoved = armedHostId !== null && armedHostId !== scope.hostId;
 
   return (
     <>
@@ -169,7 +161,6 @@ function ClearFileEditSnapshotsRow(props: {
               disabled={client === null || clearSnapshotsMutation.isPending}
               data-testid="settings-clear-file-edit-snapshots"
               onClick={() => {
-                setArmedHostId(scope.hostId);
                 setConfirmOpen(true);
               }}
             >
@@ -187,21 +178,14 @@ function ClearFileEditSnapshotsRow(props: {
       />
       <ConfirmDestructiveDialog
         open={confirmOpen}
-        onOpenChange={(open) => {
-          setConfirmOpen(open);
-          if (!open) setArmedHostId(null);
-        }}
+        onOpenChange={setConfirmOpen}
         title={`Clear file edit snapshots on ${hostLabel}?`}
-        description={
-          targetMoved
-            ? "The selected host changed while this dialog was open, so this action is no longer armed. Close it and try again on the host you want."
-            : `Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that host.`
-        }
+        description={`Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that host.`}
         cascadeSummary={null}
         actionLabel="Clear snapshots"
         isPending={clearSnapshotsMutation.isPending}
         onConfirm={() => {
-          if (targetMoved || client === null) return;
+          if (client === null) return;
           clearSnapshotsMutation.mutate(SNAPSHOTS_LOCAL_STORAGE_PARAMS);
         }}
       />
