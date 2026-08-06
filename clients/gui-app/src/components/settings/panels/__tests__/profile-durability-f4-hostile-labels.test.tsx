@@ -209,6 +209,15 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => null };
 });
 
+// Panels depend on the host SCOPE, not on the hooks it composes.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({ client: null }),
+  };
+});
+
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 

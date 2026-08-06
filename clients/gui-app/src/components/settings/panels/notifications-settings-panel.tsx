@@ -16,26 +16,25 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
+import { useHostNotificationsConfigForClient } from "@/hooks/host/use-host-notifications-config-query";
+import { useHostNotificationsSetConfigForClient } from "@/hooks/host/use-host-notifications-set-config-mutation";
 import {
-  useHostNotificationsConfig,
-  useHostNotificationsConfigForClient,
-} from "@/hooks/host/use-host-notifications-config-query";
-import {
-  useHostNotificationsSetConfig,
-  useHostNotificationsSetConfigForClient,
-} from "@/hooks/host/use-host-notifications-set-config-mutation";
-import {
-  useNotificationHooksSave,
   useNotificationHooksSaveForClient,
-  useNotificationHooksStatus,
   useNotificationHooksStatusForClient,
-  useNotificationHooksTest,
   useNotificationHooksTestForClient,
   type NotificationHooksSaveMutation,
   type NotificationHooksStatusQuery,
   type NotificationHooksTestMutation,
 } from "@/hooks/host/use-notification-hooks-query";
 import { NotificationHooksSection } from "@/components/settings/panels/notification-hooks-section";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
@@ -81,14 +80,28 @@ const LEAVE_SECRET_UNCHANGED: HostNotificationsSecretWrite = {
   kind: "leaveUnchanged",
 };
 
+/**
+ * The route / modal entry point.
+ *
+ * Notification policy and hooks are stored BY THE HOST, so this panel was
+ * always host-scoped — it just never said which host, and silently configured
+ * whichever one happened to be active under a heading that read "Current
+ * host". It was the worst of the invisible bindings: a person could toggle
+ * severities all evening and never learn that the bell they were watching
+ * belonged to a different host. It now reads the one Settings host scope, and
+ * the sidebar that owns that scope names the host and says so explicitly when
+ * it is not the one this window's bell reads from.
+ */
 export function NotificationsSettingsPanel() {
+  const scope = useHostScope();
   return (
     <NotificationsSettingsPanelContent
-      configQuery={useHostNotificationsConfig()}
-      setConfig={useHostNotificationsSetConfig()}
-      hooksStatusQuery={useNotificationHooksStatus()}
-      testHook={useNotificationHooksTest()}
-      saveHooks={useNotificationHooksSave()}
+      scope={scope}
+      configQuery={useHostNotificationsConfigForClient(scope.client)}
+      setConfig={useHostNotificationsSetConfigForClient(scope.client)}
+      hooksStatusQuery={useNotificationHooksStatusForClient(scope.client)}
+      testHook={useNotificationHooksTestForClient(scope.client)}
+      saveHooks={useNotificationHooksSaveForClient(scope.client)}
     />
   );
 }
@@ -98,6 +111,7 @@ export function NotificationsSettingsPanelForClient(props: {
 }) {
   return (
     <NotificationsSettingsPanelContent
+      scope={null}
       configQuery={useHostNotificationsConfigForClient(props.client)}
       setConfig={useHostNotificationsSetConfigForClient(props.client)}
       hooksStatusQuery={useNotificationHooksStatusForClient(props.client)}
@@ -108,6 +122,8 @@ export function NotificationsSettingsPanelForClient(props: {
 }
 
 function NotificationsSettingsPanelContent(props: {
+  /** `null` when the caller supplied a client directly and owns the gating. */
+  readonly scope: HostScope | null;
   readonly configQuery: UseQueryResult<NotificationConfig, HostRpcError>;
   readonly setConfig: NotificationSetConfigMutation;
   readonly hooksStatusQuery: NotificationHooksStatusQuery;
@@ -115,38 +131,69 @@ function NotificationsSettingsPanelContent(props: {
   readonly saveHooks: NotificationHooksSaveMutation;
 }) {
   const compact = useSettingsDensity() === "compact";
+  const { scope } = props;
+  const body = (
+    <div
+      className={cn(
+        "flex h-full min-h-0 flex-col",
+        compact ? "gap-3.5" : "gap-5",
+      )}
+    >
+      <SettingsGroup
+        // Was "In-app notifications · Current host" — a title whose only
+        // qualifier was the one fact the screen refused to resolve. The sidebar
+        // names the host now, so the title is free to name the setting.
+        title="In-app notifications"
+        tone="default"
+        dataTestId="notifications-severity-policy"
+        fill={false}
+      >
+        {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
+      </SettingsGroup>
+      <div className="min-h-0 flex-1">
+        {/* Keyed by host. The editor below holds an open hook draft and an
+            armed pending-delete, and a save rebuilds the host's ENTIRE hooks
+            file from the list it is looking at. Those two pieces of state
+            belong to one machine, but nothing here unmounts when the scope
+            moves: switching to a host whose hooks are already cached kept the
+            draft and the armed delete on screen while every mutation prop
+            re-pointed at the new client, so confirming wrote the new host's
+            file using an intent armed against the old one — copying a hook
+            across machines, or deleting whichever hook happened to share the
+            id. Changing hosts has to DESTROY that state, not re-point it.
+            Same guarantee, and the same reasoning, as the key on
+            `HostRegistryUpdates`. */}
+        <NotificationHooksSection
+          key={scope?.hostId}
+          statusQuery={props.hooksStatusQuery}
+          testHook={props.testHook}
+          saveHooks={props.saveHooks}
+        />
+      </div>
+    </div>
+  );
+
   return (
     <SettingsPanelShell
       title="Notifications"
-      description="Choose what Traycer surfaces and what automation receives."
+      description="What this host surfaces, and what its automation receives."
       fillHeight
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+      // The header named the scoped host until the sidebar started doing it a
+      // row away and permanently. Two statements of one fact is how the old
+      // surface got confusing; this is the one place it was still true.
+      headerAction={undefined}
     >
-      <div
-        className={cn(
-          "flex h-full min-h-0 flex-col",
-          compact ? "gap-3.5" : "gap-5",
-        )}
-      >
-        <SettingsGroup
-          title="In-app notifications · Current host"
-          tone="default"
-          dataTestId="notifications-severity-policy"
-          fill={false}
+      {scope === null ? (
+        body
+      ) : (
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
         >
-          {renderNotificationsSettingsContent(
-            props.configQuery,
-            props.setConfig,
-          )}
-        </SettingsGroup>
-        <div className="min-h-0 flex-1">
-          <NotificationHooksSection
-            statusQuery={props.hooksStatusQuery}
-            testHook={props.testHook}
-            saveHooks={props.saveHooks}
-          />
-        </div>
-      </div>
+          {body}
+        </HostScopeGate>
+      )}
     </SettingsPanelShell>
   );
 }

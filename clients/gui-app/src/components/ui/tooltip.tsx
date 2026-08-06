@@ -4,6 +4,7 @@ import * as React from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
 /**
  * Whether a `TooltipProvider` is already above us. Radix owns the provider's
@@ -62,6 +63,11 @@ function TooltipContent({
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  // Concealed region (see `portal-concealment-context`): the label's anchor
+  // is display:none and can never receive the pointerleave that would close
+  // this, so un-present the portal with the region.
+  const concealed = usePortalConcealed();
+  if (concealed) return null;
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
