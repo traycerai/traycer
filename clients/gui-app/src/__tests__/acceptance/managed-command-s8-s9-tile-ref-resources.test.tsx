@@ -14,7 +14,6 @@
  * The old-peer fold itself and its frame invariant are proven host-side in
  * `traycer-host/.../managed-command-ui-acceptance.test.ts` (S9a-c).
  */
-import "../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";

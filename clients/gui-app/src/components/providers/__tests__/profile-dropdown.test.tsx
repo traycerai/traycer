@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import type { KeyboardEvent, ReactNode } from "react";
 import {
   cleanup,

@@ -17,7 +17,6 @@
  * is also source-pinned: it only mounts for approval queues stacked above a
  * dock, which needs a heavier approvals fixture than this focused suite.
  */
-import "../../../../__tests__/test-browser-apis";
 
 import { readFileSync } from "node:fs";
 import path from "node:path";

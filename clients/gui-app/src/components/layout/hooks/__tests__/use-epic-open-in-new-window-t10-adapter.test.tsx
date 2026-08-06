@@ -12,7 +12,6 @@
  *  - non-moved/failure leaves two valid ordinary tabs
  *  - post-success removal routes through the coordinator
  */
-import "../../../../../__tests__/test-browser-apis";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";

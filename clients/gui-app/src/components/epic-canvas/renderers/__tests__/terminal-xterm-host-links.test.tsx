@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
