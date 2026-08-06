@@ -3328,3 +3328,87 @@ describe("runHostStart - stop signals outside the child-running window", () => {
     expect(recorded.exited).toBe(0);
   });
 });
+
+describe("runHostStart - a stop that lands INSIDE the pre-spawn read", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("does not spawn when the signal arrives during the intent read itself", async () => {
+    // The narrowest window in the pre-spawn guard, and the one operand order
+    // decides. `||` short-circuits: asking `shuttingDown` FIRST reads it as of
+    // before the intent await, so a signal delivered while that read is in
+    // flight is invisible to the condition it is supposed to trip.
+    //
+    // Nothing downstream caught it either. The handler latches and forwards to
+    // `currentChild`, still null this early, so the signal reached no process;
+    // and the post-spawn guard is gated on `!shuttingDown`, which the latch had
+    // just made false. The supervisor created a child AFTER a stop, never
+    // signalled it, and sat waiting on it.
+    //
+    // `hasStopIntent` returning false is not a contrived stub: it is what
+    // `launchctl bootout`, `systemctl stop`, and a CLI stop whose best-effort
+    // intent write failed all look like. On those paths the signal IS the whole
+    // notification.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    // Scripted so a regression spawns and then EXITS rather than hanging the
+    // suite - the assertion below, not a timeout, is what reports it.
+    const scripted = withScriptedAttempts(deps, [{ code: 0, signal: null }]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => {
+              process.emit("SIGTERM");
+              return false;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.exited).toBe(0);
+  });
+});
+
+describe("runHostStart - a marker write must never cost the host", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("still recovers a crash when every marker write fails", async () => {
+    // `writeBootstrapMarker` is an `ensureHostHomeDir` plus an `appendFile`.
+    // Awaited bare inside the loop, a transient EBUSY/EACCES/ENOSPC rejected
+    // straight out of `runHostStart`; the entrypoint turned that into exit 1,
+    // and exit 1 is precisely what the Windows Scheduled Task does NOT answer
+    // with a fresh supervisor. A failed diagnostic write would have left the
+    // machine hostless - this ticket's own outcome, reached through the code
+    // that exists to explain it.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 7, signal: null },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            writeMarker: async () => {
+              throw new Error("EBUSY: marker file momentarily locked");
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // The crash was recovered on the evidence path's own failure: two spawns,
+    // clean exit. Losing a line of evidence is the whole cost.
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+  });
+});

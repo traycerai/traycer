@@ -444,6 +444,45 @@ const defaultRunDeps: RunHostStartDeps = {
 // touching the real filesystem or process.
 export const defaultRunHostStartDeps: RunHostStartDeps = defaultRunDeps;
 
+/**
+ * Every bootstrap-marker write in the supervisor goes through here, because a
+ * marker is EVIDENCE and must never be control flow.
+ *
+ * `writeBootstrapMarker` is an `ensureHostHomeDir` plus an `appendFile`, and
+ * both can reject for reasons that have nothing to do with whether the host
+ * can run - a momentarily locked file on Windows, a transient EACCES, a full
+ * disk. Awaited bare, that rejection escapes the relaunch loop entirely: the
+ * entrypoint turns it into exit 1, and on the platform this ticket exists for
+ * the Scheduled Task does not answer exit 1 with a fresh supervisor. A failed
+ * diagnostic write would have left the machine hostless - the exact outcome
+ * the loop was added to prevent, reached through the code that was supposed to
+ * explain it.
+ *
+ * This is the rule the rest of the file already follows for diagnostics (the
+ * stderr tee swallows, the probe observation is pre-caught, the terminal
+ * marker write is wrapped); the loop's own marker writes were the sites that
+ * had not been brought under it. Losing a marker costs a line of evidence.
+ * Losing the supervisor costs the host.
+ */
+async function writeMarkerBestEffort(
+  deps: Pick<RunHostStartDeps, "writeMarker">,
+  logger: ILogger,
+  environment: Environment,
+  phase: BootstrapPhase,
+  fields: BootstrapMarkerFields,
+): Promise<void> {
+  try {
+    await deps.writeMarker(environment, phase, fields);
+  } catch (cause) {
+    logger.warn("Host supervisor could not write a bootstrap marker", {
+      environment,
+      phase,
+      errorName: errorFromUnknown(cause).name,
+      errorMessage: errorFromUnknown(cause).message,
+    });
+  }
+}
+
 export async function runHostStart(
   opts: RunHostStartOptions,
   injected: Partial<RunHostStartDeps>,
@@ -760,7 +799,9 @@ export async function runHostStart(
         // retry silently, leaving `host.log` with a `starting` marker for an
         // attempt that never spawned and nothing to say why. int #4839 reads
         // exactly these markers to explain a failed start.
-        await deps.writeMarker(
+        await writeMarkerBestEffort(
+          deps,
+          logger,
           opts.environment,
           "failed-to-spawn",
           markerFields(
@@ -813,7 +854,9 @@ export async function runHostStart(
           message: err.message,
           details: err.details,
         });
-        await deps.writeMarker(
+        await writeMarkerBestEffort(
+          deps,
+          logger,
           opts.environment,
           "failed-to-spawn",
           markerFields(
@@ -910,7 +953,9 @@ export async function runHostStart(
       await deps.prepareCrashReportsDir(crashReportsDirPath),
     );
 
-    await deps.writeMarker(
+    await writeMarkerBestEffort(
+      deps,
+      logger,
       opts.environment,
       "starting",
       markerFields(
@@ -976,14 +1021,26 @@ export async function runHostStart(
     // resolution, env overrides, log rotation, crash-report pruning, marker
     // write, fd open - and `host stop` can complete inside it, having found no
     // child to kill because none exists yet.
-    if (
-      shuttingDown ||
-      (await deps.hasStopIntent(
-        opts.environment,
-        Date.now(),
-        supervisorStartedAtMs,
-      ))
-    ) {
+    //
+    // The intent read is sequenced BEFORE the latch, and that order is the
+    // guard, not a style choice. `||` short-circuits, so asking `shuttingDown`
+    // first would capture it as of BEFORE this await. A POSIX stop arriving
+    // DURING the read - `launchctl bootout`, `systemctl stop`, or a CLI stop
+    // whose best-effort intent write failed, i.e. every case with no file to
+    // find - latches `shuttingDown` while `currentChild` is still null, so the
+    // handler forwards the signal to nothing. A false intent answer then let
+    // the spawn proceed, and the post-spawn guard could not catch it either:
+    // that one is gated on `!shuttingDown`, which is true by then. The result
+    // was a child created after a stop, never signalled, still serving.
+    // Reading the latch AFTER the await is what closes it; from here to
+    // `currentChild = child` is unbroken synchronous code, so no signal can
+    // land in between.
+    const stopAnnounced = await deps.hasStopIntent(
+      opts.environment,
+      Date.now(),
+      supervisorStartedAtMs,
+    );
+    if (shuttingDown || stopAnnounced) {
       logger.info("Host supervisor not spawning - a stop was requested", {
         environment: opts.environment,
         attemptId,
@@ -995,7 +1052,9 @@ export async function runHostStart(
       // post-baseline `starting` against nothing, so a cleanly stopped host
       // reads as an attempt still in progress - the same unpaired-marker
       // defect a relaunch that could not resolve its target used to have.
-      await deps.writeMarker(
+      await writeMarkerBestEffort(
+        deps,
+        logger,
         opts.environment,
         "failed-to-spawn",
         markerFields(
@@ -1047,7 +1106,9 @@ export async function runHostStart(
         { environment: opts.environment, exitCode: 66 },
         errorFromUnknown(cause),
       );
-      await deps.writeMarker(
+      await writeMarkerBestEffort(
+        deps,
+        logger,
         opts.environment,
         "failed-to-spawn",
         markerFields(
@@ -1553,7 +1614,9 @@ async function persistAsyncChildSpawnFailure(input: {
     { environment: input.environment, exitCode: 66 },
     errorFromUnknown(input.cause),
   );
-  await input.deps.writeMarker(
+  await writeMarkerBestEffort(
+    input.deps,
+    input.logger,
     input.environment,
     "failed-to-spawn",
     markerFields(
