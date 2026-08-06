@@ -532,6 +532,25 @@ describe("classifyHref", () => {
     });
   });
 
+  it("decodes reserved characters in a filename without reading them as syntax", () => {
+    // `#` and `:` are reserved, so `decodeURI` would leave them encoded and hand
+    // the surface policy a path no filesystem has. Splitting the fragment and
+    // the `:line[:col]` suffix off the ENCODED href is what keeps the decoded
+    // `%23` from being taken as a fragment and the decoded `%3A` as a location.
+    expect(classifyHref("/notes/release%231%3A2.md")).toEqual({
+      kind: "file",
+      path: "/notes/release#1:2.md",
+      line: null,
+      col: null,
+    });
+    expect(classifyHref("/notes/release%231%3A2.md:12:3")).toEqual({
+      kind: "file",
+      path: "/notes/release#1:2.md",
+      line: 12,
+      col: 3,
+    });
+  });
+
   it("rejects a degenerate location-only href with no file path", () => {
     // `:99` has a trailing line but no file in front of it. Reject at the
     // source as `ignore` (the click is still `preventDefault`ed) rather than

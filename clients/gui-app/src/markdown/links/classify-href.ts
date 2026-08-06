@@ -97,10 +97,21 @@ function fileUrlToPath(href: string): string {
  * normalizes a link destination on the way to the DOM, so a path with a space
  * or a Windows separator arrives as `…Traycer%20Dev%5Crepo…`. The surface
  * policies resolve against a real filesystem, so they need the native form.
+ *
+ * This is the ONE decode on a file path's way to a surface policy - consumers
+ * (`resolveArtifactRelativeLinkPath`, the workspace-file candidates) take the
+ * native path as given. A second decode downstream would eat a literal percent
+ * escape in a real name (`my%20folder` authored as `my%2520folder`) and could
+ * turn `%252E%252E` into a `..` that walks out of the linked folder.
+ *
+ * `decodeURIComponent`, not `decodeURI`: the latter preserves the reserved set,
+ * so a filename's `%23` or `%3A` would reach the filesystem literally. Splitting
+ * the `:line[:col]` suffix off the ENCODED href (see {@link fileHref}) is what
+ * keeps those from being read as a fragment or a location in the first place.
  */
 function decodePercentEncoding(path: string): string {
   try {
-    return decodeURI(path);
+    return decodeURIComponent(path);
   } catch {
     return path;
   }

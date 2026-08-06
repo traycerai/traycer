@@ -99,25 +99,31 @@ describe("resolveArtifactRelativeLinkPath", () => {
     ).toBe("epics/epic-1/artifacts/ticket-breakdown/decision-log/index.md");
   });
 
-  it("decodes a URL-encoded '..' segment before walking it", () => {
+  // `classifyHref` owns the single decode on the way here, so a percent escape
+  // that survives it is a LITERAL part of the folder name and must stay one.
+  // Decoding again would both miss the real folder and let an authored
+  // `%252E%252E` become a `..` that walks out of the linked folder.
+  it("keeps a literal percent escape in a folder name as authored", () => {
+    expect(
+      resolveArtifactRelativeLinkPath(EPIC_ID, SELF_CHAIN, "my%20folder"),
+    ).toBe(
+      "epics/epic-1/artifacts/ticket-breakdown/01-something/my%20folder/index.md",
+    );
+  });
+
+  it("does not resurrect a '..' traversal from an encoded segment", () => {
     expect(
       resolveArtifactRelativeLinkPath(
         EPIC_ID,
         SELF_CHAIN,
         "%2E%2E/decision-log/index.md",
       ),
-    ).toBe("epics/epic-1/artifacts/ticket-breakdown/decision-log/index.md");
-  });
-
-  it("decodes a URL-encoded space in a folder name", () => {
-    expect(
-      resolveArtifactRelativeLinkPath(EPIC_ID, SELF_CHAIN, "my%20folder"),
     ).toBe(
-      "epics/epic-1/artifacts/ticket-breakdown/01-something/my folder/index.md",
+      "epics/epic-1/artifacts/ticket-breakdown/01-something/%2E%2E/decision-log/index.md",
     );
   });
 
-  it("falls back to the raw string on a malformed percent-escape instead of throwing", () => {
+  it("passes a malformed percent-escape through unchanged instead of throwing", () => {
     expect(() =>
       resolveArtifactRelativeLinkPath(EPIC_ID, SELF_CHAIN, "bad%escape"),
     ).not.toThrow();
