@@ -347,17 +347,31 @@ function connectedServer(
   };
 }
 
-function renderTab(
+function renderTabWithCliBinary(
   caps: ProviderMcpCapabilities,
   providerId: "codex" | "cursor" | "kimi",
+  cliBinaryResolved: boolean,
 ) {
   return render(
     <ProviderMcpTab
       providerId={providerId}
       capabilities={caps}
       providerLabel={providerId}
+      cliBinaryResolved={cliBinaryResolved}
     />,
   );
+}
+
+/**
+ * The ordinary case: the host resolved a CLI binary, so nothing is gated away
+ * and the tab renders its full affordances. Cases about the binary-absent gate
+ * call {@link renderTabWithCliBinary} directly.
+ */
+function renderTab(
+  caps: ProviderMcpCapabilities,
+  providerId: "codex" | "cursor" | "kimi",
+) {
+  return renderTabWithCliBinary(caps, providerId, true);
 }
 
 /**
@@ -1450,7 +1464,7 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.queryByText("context7")).toBeNull();
     expect(screen.queryByText("github")).toBeNull();
     expect(screen.queryByText("No MCP servers")).toBeNull();
-    expect(screen.getByText('No servers match “zzzz-nope”.')).toBeDefined();
+    expect(screen.getByText("No servers match “zzzz-nope”.")).toBeDefined();
     expect(screen.getByRole("status").textContent).toBe("No servers match.");
   });
 
@@ -1470,5 +1484,62 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.getByText("context7")).toBeDefined();
     expect(screen.queryByText("github")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("1 server shown.");
+  });
+
+  /**
+   * The shape `applyBinaryAbsentGate` hands the client when it could not
+   * resolve a CLI: the write verbs' scope lists are emptied while the ROUTING
+   * fields (`addServer`/`removeServer`) keep saying "cli" - which is the only
+   * evidence the client has that something was subtracted rather than never
+   * offered.
+   */
+  const BINARY_ABSENT_CAPS: ProviderMcpCapabilities = {
+    ...FULL_CAPS,
+    authActions: [],
+    actionScopes: {
+      ...FULL_CAPS.actionScopes,
+      add: [],
+      remove: [],
+      auth: [],
+    },
+  };
+
+  describe("binary-absent gate", () => {
+    it("explains the missing write actions instead of silently dropping them", () => {
+      mcpMocks.listResult.data = { servers: [connectedServer({})] };
+      renderTabWithCliBinary(BINARY_ABSENT_CAPS, "codex", false);
+
+      // The regression this guards: servers listed, Add gone, and nothing
+      // anywhere saying why or what to do about it.
+      expect(
+        screen.queryByRole("button", { name: "Add MCP server" }),
+      ).toBeNull();
+      const notice = screen.getByTestId("mcp-binary-absent-notice");
+      expect(notice.textContent).toContain("couldn't find the codex CLI");
+      expect(notice.textContent).toContain("adding and removing");
+      expect(notice.textContent).toContain("CLI & Args");
+    });
+
+    it("stays silent when the host resolved a binary", () => {
+      mcpMocks.listResult.data = { servers: [connectedServer({})] };
+      renderTabWithCliBinary(FULL_CAPS, "codex", true);
+
+      expect(screen.queryByTestId("mcp-binary-absent-notice")).toBeNull();
+    });
+
+    it("does not accuse a provider whose write verbs were never CLI-routed", () => {
+      // Cursor patches its config file, so an absent binary takes nothing this
+      // notice can prove. Claiming otherwise would be a guess, and the empty
+      // `authActions` it DOES leave behind is indistinguishable from a contract
+      // that never had auth actions at all.
+      mcpMocks.listResult.data = { servers: [connectedServer({})] };
+      renderTabWithCliBinary(
+        { ...CURSOR_CAPS, addServer: "patch", removeServer: "patch" },
+        "cursor",
+        false,
+      );
+
+      expect(screen.queryByTestId("mcp-binary-absent-notice")).toBeNull();
+    });
   });
 });

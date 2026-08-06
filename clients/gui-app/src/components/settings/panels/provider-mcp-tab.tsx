@@ -51,6 +51,7 @@ import { useProvidersMcpAuth } from "@/hooks/providers/use-providers-mcp-auth-mu
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
+import { mcpBinaryAbsentNotice } from "./provider-mcp-binary-gate";
 import { redactLogText } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
@@ -233,8 +234,15 @@ export function ProviderMcpTab(props: {
   readonly providerId: ProviderId;
   readonly capabilities: ProviderMcpCapabilities;
   readonly providerLabel: string;
+  /**
+   * `state.cliBinaryResolved` - whether the host resolved a runnable CLI for
+   * this provider. Passed down rather than re-derived from `candidates`: it is
+   * the same value that decided whether the capabilities above were gated, so
+   * the explanation can never disagree with what it explains.
+   */
+  readonly cliBinaryResolved: boolean;
 }): ReactNode {
-  const { providerId, capabilities, providerLabel } = props;
+  const { providerId, capabilities, providerLabel, cliBinaryResolved } = props;
   const scopeState = useProviderNativeScope(capabilities.actionScopes.list);
   const {
     hostId,
@@ -725,6 +733,11 @@ export function ProviderMcpTab(props: {
       <McpCapabilityNotices
         capabilities={capabilities}
         authInstruction={authInstruction}
+        binaryAbsentNotice={mcpBinaryAbsentNotice(
+          capabilities,
+          cliBinaryResolved,
+          providerLabel,
+        )}
       />
 
       {!projectNeedsWorkspace ? (
@@ -876,9 +889,24 @@ function McpScopeHeader(props: {
 function McpCapabilityNotices(props: {
   readonly capabilities: ProviderMcpCapabilities;
   readonly authInstruction: string | null;
+  readonly binaryAbsentNotice: string | null;
 }): ReactNode {
   return (
     <>
+      {/*
+        First, and the only one of these three painted as a warning rather than
+        a muted aside: the others describe a permanent property of the provider,
+        while this one describes controls that are missing RIGHT NOW from the
+        pane the user is looking at, and names the fix.
+      */}
+      {props.binaryAbsentNotice !== null ? (
+        <p
+          className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-ui-xs text-muted-foreground"
+          data-testid="mcp-binary-absent-notice"
+        >
+          {props.binaryAbsentNotice}
+        </p>
+      ) : null}
       {props.capabilities.stdioDegradeNotice ? (
         <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
           Stdio servers are config-only under this provider — live connect is

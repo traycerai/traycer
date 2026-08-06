@@ -247,7 +247,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
         "No skills yet. Create one or import from a git URL / folder.",
       ),
     ).toBeNull();
-    expect(screen.getByText('No skills match “zzzz-nope”.')).toBeDefined();
+    expect(screen.getByText("No skills match “zzzz-nope”.")).toBeDefined();
     expect(screen.getByRole("status").textContent).toBe("No skills match.");
   });
 

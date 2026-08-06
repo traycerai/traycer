@@ -125,9 +125,7 @@ describe("<ProviderSkillsTab /> entry points", () => {
     renderTab();
 
     expect(screen.getByRole("button", { name: /New skill/ })).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: /Import skill/ }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: /Import skill/ })).toBeDefined();
     // Killing the menu-of-one is the whole point of this change: there must
     // be no dropdown standing in for either button.
     expect(screen.queryByRole("menu")).toBeNull();
@@ -140,9 +138,7 @@ describe("<ProviderSkillsTab /> entry points", () => {
     skillMocks.importScopes = ["global"];
     renderTab();
 
-    expect(
-      screen.getByRole("button", { name: /Import skill/ }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: /Import skill/ })).toBeDefined();
     expect(screen.queryByRole("button", { name: /New skill/ })).toBeNull();
   });
 

@@ -101,9 +101,9 @@ describe("<ProviderSkillComposerDialog />", () => {
     });
 
     const readySubmit = screen.getByRole("button", { name: "Create skill" });
-    expect(readySubmit instanceof HTMLButtonElement && readySubmit.disabled).toBe(
-      false,
-    );
+    expect(
+      readySubmit instanceof HTMLButtonElement && readySubmit.disabled,
+    ).toBe(false);
     expect(screen.queryByText("Give the skill a name.")).toBeNull();
   });
 

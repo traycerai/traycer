@@ -12,12 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
@@ -272,7 +267,8 @@ function WriteFields({
   readonly setShowPreview: (v: boolean) => void;
   readonly disabled: boolean;
 }): ReactNode {
-  const overSoftLimit = description.trim().length > SKILL_DESCRIPTION_SOFT_LIMIT;
+  const overSoftLimit =
+    description.trim().length > SKILL_DESCRIPTION_SOFT_LIMIT;
   return (
     <>
       <Field

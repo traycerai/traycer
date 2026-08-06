@@ -940,6 +940,11 @@ function ProviderTabBody({
           providerId={state.providerId}
           capabilities={mcp}
           providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+          // An old host omits the key entirely; `?? true` matches the schema's
+          // own `.catch(true)` - assume resolved, show no notice - so a host
+          // that cannot report this never accuses a provider of a missing
+          // binary it knows nothing about.
+          cliBinaryResolved={state.cliBinaryResolved ?? true}
         />
       );
     }
