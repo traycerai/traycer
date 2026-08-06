@@ -8,6 +8,7 @@ import {
 import {
   ChevronDown,
   ChevronRight,
+  Info,
   LogIn,
   LogOut,
   Pencil,
@@ -36,6 +37,11 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -1124,12 +1130,6 @@ function McpCapabilityNotices(props: {
 }): ReactNode {
   return (
     <>
-      {props.capabilities.traycerSessionsOnlyEnforcement ? (
-        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
-          Tool enable/disable applies to Traycer sessions only for this
-          provider.
-        </p>
-      ) : null}
       {props.capabilities.stdioDegradeNotice ? (
         <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
           Stdio servers are config-only under this provider — live connect is
@@ -1711,7 +1711,7 @@ function ServerToolsPanel(props: {
           ) : null}
         </TabsList>
         {!toolsReadOnly && server.tools.length > 0 ? (
-          <div className="ml-auto flex gap-2 text-ui-xs text-muted-foreground">
+          <div className="ml-auto flex items-center gap-2 text-ui-xs text-muted-foreground">
             <button
               type="button"
               className="hover:text-foreground"
@@ -1733,6 +1733,35 @@ function ServerToolsPanel(props: {
             >
               Disable all
             </button>
+            {/*
+             * The scope caveat sits on the control it qualifies rather than in
+             * a banner above the list: it only ever describes what these two
+             * buttons (and the per-tool switches) do, and as a full-width
+             * notice it read as a warning about the whole server.
+             *
+             * A real `<button>`, not an icon with `tabIndex`: Radix's
+             * `TooltipTrigger` opens on focus as well as hover, but only for an
+             * element that can natively take focus - and a `tabIndex` on a
+             * non-interactive element without a role fails
+             * jsx-a11y/no-noninteractive-tabindex.
+             */}
+            {capabilities.traycerSessionsOnlyEnforcement ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="cursor-help appearance-none bg-transparent p-0 text-muted-foreground hover:text-foreground"
+                    aria-label="Where tool enable/disable applies"
+                  >
+                    <Info className="size-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Tool enable/disable applies to Traycer sessions only for this
+                  provider.
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
           </div>
         ) : null}
       </div>

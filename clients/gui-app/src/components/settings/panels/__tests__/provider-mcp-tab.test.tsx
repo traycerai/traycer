@@ -1332,8 +1332,15 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.getByText(/<redacted>/)).toBeDefined();
   });
 
-  it("shows Traycer sessions only note when descriptor flag is set", () => {
-    mcpMocks.listResult.data = { servers: [] };
+  /*
+   * The caveat rides the bulk-toggle controls now, not a banner over the whole
+   * tab - so it only exists once a server is expanded, and its text lives in a
+   * tooltip. Asserting the trigger's accessible name rather than opening the
+   * tooltip keeps this a placement test; Radix renders the content into a
+   * portal only while open.
+   */
+  it("offers the Traycer-sessions-only caveat beside the bulk tool toggles", () => {
+    mcpMocks.listResult.data = { servers: [connectedServer({})] };
     renderTab(
       {
         ...FULL_CAPS,
@@ -1341,7 +1348,30 @@ describe("<ProviderMcpTab />", () => {
       },
       "codex",
     );
-    expect(screen.getByText(/Traycer sessions only/)).toBeDefined();
+
+    expect(screen.queryByText(/Traycer sessions only/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand context7/ }));
+
+    expect(screen.getByRole("button", { name: "Enable all" })).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: "Where tool enable/disable applies",
+      }),
+    ).toBeDefined();
+  });
+
+  it("omits the caveat when the provider does not scope tool toggles", () => {
+    mcpMocks.listResult.data = { servers: [connectedServer({})] };
+    renderTab(FULL_CAPS, "codex");
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand context7/ }));
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Where tool enable/disable applies",
+      }),
+    ).toBeNull();
   });
 
   it("shows the empty list copy when no servers are configured", () => {
