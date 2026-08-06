@@ -165,6 +165,11 @@ export const runnerQueryKeys = {
     ["runner.host.controllerStatus", management] as const,
   hostInstalledRecord: (management: object) =>
     ["runner.host.installedRecord", management] as const,
+  // The no-bridge variant of the key above: a disabled placeholder query
+  // still needs a key, and an inlined one drifts when this resource's keys
+  // change.
+  hostInstalledRecordUnavailable: () =>
+    ["runner.host.installedRecord", "unavailable"] as const,
   hostLogs: (management: object, tailLines: number) =>
     ["runner.host.logs", management, tailLines] as const,
   hostDoctor: (management: object) =>

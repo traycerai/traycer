@@ -27,10 +27,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import {
-  localSnapshotClearScopeKey,
-  useLocalSnapshotClearStore,
-} from "@/stores/settings/local-snapshot-clear-store";
+import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 
 interface CapturedHostQueryArgs {
   readonly method: string;
@@ -520,172 +517,20 @@ describe("GeneralSettingsPanel", () => {
     ).toBeTruthy();
   });
 
-  it("renders file edit snapshot storage size from the host query", () => {
+  // The Danger Zone used to mix three scopes in one red box: one machine's
+  // snapshots, this device's installation, and this app's state. Only the last
+  // is app-global, so it is the only one that stays; the other two live on the
+  // machine's own page, where the title already names the target.
+  it("keeps only the app-global destructive action", () => {
     renderPanel();
 
-    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
     expect(
-      screen.getByTestId("settings-local-snapshots-size").textContent,
-    ).toBe("432 MB");
-    expect(hostQueryMocks.capturedQueryArgs?.method).toBe(
-      "snapshots.getLocalStorageSize",
-    );
-  });
-
-  it("opens confirmation and clears file edit snapshots through the mutation", () => {
-    renderPanel();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Clear file edit snapshots" }),
-    );
-
-    expect(
-      screen.getByText("Clear file edit snapshots for Local host?"),
+      screen.getByRole("button", { name: "Clear local app state" }),
     ).toBeTruthy();
-    fireEvent.click(getDialogButton("Clear file edit snapshots"));
-
-    expect(hostQueryMocks.mutationResult.mutate).toHaveBeenCalledWith({});
-    expect(hostQueryMocks.capturedMutationArgs?.method).toBe(
-      "snapshots.clearLocalSnapshots",
-    );
-  });
-
-  it("switches file edit snapshots to a panel-local host without changing the active host", async () => {
-    const queryClient = renderPanel();
-    expect(queryClient).toBeTruthy();
     expect(
-      screen
-        .getByTestId("active-host-probe")
-        .getAttribute("data-bound-host-id"),
-    ).toBe("host-test");
-
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "File edit snapshots host" }),
-    );
-    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
-
-    await waitFor(() => {
-      expect(hostQueryMocks.lastTransientTarget?.hostId).toBe("remote-host");
-      expect(hostQueryMocks.capturedQueryArgs?.client?.getActiveHostId()).toBe(
-        "remote-host",
-      );
-    });
-    expect(
-      screen
-        .getByTestId("active-host-probe")
-        .getAttribute("data-bound-host-id"),
-    ).toBe("host-test");
-    expect(
-      screen.getByText(
-        "Pre-edit file snapshots for Undo and cached long plan content on Remote host. This data stays local and is not synced.",
-      ),
-    ).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Clear file edit snapshots" }),
-    );
-
-    expect(
-      screen.getByText("Clear file edit snapshots for Remote host?"),
-    ).toBeTruthy();
-    const captured = hostQueryMocks.capturedMutationArgs;
-    if (captured === null) {
-      throw new Error("expected snapshots mutation");
-    }
-    expect(captured.options.onMutate()).toEqual({
-      hostId: "remote-host",
-      userId: "owner-test",
-    });
-  });
-
-  it("disables clearing and shows an unavailable notice when the picked host vanishes from the directory", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    const { rerender } = render(
-      <QueryClientProvider client={queryClient}>
-        <GeneralSettingsPanel />
-      </QueryClientProvider>,
-    );
-
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "File edit snapshots host" }),
-    );
-    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
-
-    await waitFor(() => {
-      expect(hostQueryMocks.lastTransientTarget?.hostId).toBe("remote-host");
-    });
-
-    // The picked host is deregistered - it drops out of the directory
-    // entirely (not merely marked "unavailable" while still listed).
-    hostQueryMocks.directoryEntries = [hostQueryMocks.directoryEntries[0]];
-    rerender(
-      <QueryClientProvider client={queryClient}>
-        <GeneralSettingsPanel />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => {
-      // The label can no longer be resolved once the entry drops out of the
-      // directory - `settingsHostLabelFor` falls back to the raw hostId.
-      expect(
-        screen.getByTestId("settings-file-edit-snapshots-host-unavailable")
-          .textContent,
-      ).toBe(
-        "remote-host is no longer available - pick a different host above.",
-      );
-    });
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: "Clear file edit snapshots",
-      }).disabled,
-    ).toBe(true);
-    // Must not silently fall back to reading/writing through the active host.
-    expect(hostQueryMocks.capturedQueryArgs?.client).toBeNull();
-  });
-
-  it("invalidates size and shows a toast after clearing file edit snapshots", () => {
-    const queryClient = renderPanel();
-    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
-    const now = vi.spyOn(Date, "now").mockReturnValue(9000);
-    const captured = hostQueryMocks.capturedMutationArgs;
-    if (captured === null) {
-      throw new Error("expected snapshots mutation");
-    }
-
-    const context = captured.options.onMutate();
-    captured.options.onSuccess({ clearedBytes: 1024 }, {}, context);
-
-    expect(context).toEqual({
-      hostId: "host-test",
-      userId: "owner-test",
-    });
-    expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["host", "host-test", "snapshots.getLocalStorageSize", {}],
-    });
-    expect(toast.success).toHaveBeenCalledWith("Cleared file edit snapshots", {
-      description: "1 KB removed.",
-    });
-    expect(
-      useLocalSnapshotClearStore.getState().clearedAtByScope[
-        localSnapshotClearScopeKey("owner-test", "host-test")
-      ],
-    ).toBe(9000);
-    now.mockRestore();
-  });
-
-  it("renders the local app state action distinct from snapshots", () => {
-    renderPanel();
-
-    const button = screen.getByRole("button", {
-      name: "Clear local app state",
-    });
-    expect(button).toBeTruthy();
-    // Distinct control from the host-side snapshot clear.
-    expect(
-      screen.getByRole("button", { name: "Clear file edit snapshots" }),
-    ).not.toBe(button);
+      screen.queryByRole("button", { name: "Clear file edit snapshots" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove Traycer" })).toBeNull();
   });
 
   it("opens the confirm dialog when clicking Clear local app state", () => {
@@ -793,37 +638,6 @@ describe("GeneralSettingsPanel", () => {
     });
   });
 
-  it("keeps local destructive actions visible when host management is unavailable", () => {
-    runnerHostMock.current = { hostManagement: null };
-    renderPanel();
-    expect(screen.getByTestId("settings-danger-zone")).toBeTruthy();
-    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
-    expect(screen.getByText("Local app state")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Remove Traycer" })).toBeNull();
-  });
-
-  it("removes Traycer from the Danger Zone after confirmation", async () => {
-    const uninstallTraycer = vi.fn(() =>
-      Promise.resolve({
-        removedHost: true,
-        deregisteredService: true,
-        removedLoginItem: true,
-      }),
-    );
-    runnerHostMock.current = { hostManagement: { uninstallTraycer } };
-    renderPanel();
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove Traycer" }));
-    fireEvent.click(getDialogButton("Remove Traycer"));
-
-    await waitFor(() => {
-      expect(uninstallTraycer).toHaveBeenCalledTimes(1);
-    });
-    // The remove row switches to the success/quit state.
-    await screen.findByText("Traycer removed");
-    expect(screen.getByRole("button", { name: "Quit Traycer" })).toBeTruthy();
-  });
-
   it("renders the four named section headers in order", () => {
     renderPanel();
 
@@ -866,7 +680,7 @@ describe("GeneralSettingsPanel", () => {
     const voice = screen.getByText("Voice input");
     const preventSleep = screen.getByText("Prevent sleep while running");
     const productTour = screen.getByText("Product tour");
-    const snapshots = screen.getByText("File Edit Snapshots");
+    const snapshots = screen.getByText("Local app state");
 
     const chatHeading = headings[0];
     const runningHeading = headings[1];
@@ -927,7 +741,7 @@ describe("GeneralSettingsPanel", () => {
     const globalResources = screen.getByText("Show global resources button");
     const productTour = screen.getByText("Product tour");
     const dataMigration = screen.getByText("Data migration");
-    const snapshots = screen.getByText("File Edit Snapshots");
+    const snapshots = screen.getByText("Local app state");
 
     // Chat & composer rows sit between that header and Running agents.
     expect(documentPosition(chat, voice)).toBe("before");

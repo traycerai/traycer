@@ -33,6 +33,8 @@ const guideMocks = vi.hoisted(
   (): {
     activeHostId: string;
     scopedHostId: string;
+    /** What the sidebar picker has selected; `null` follows the active host. */
+    pickedHostId: string | null;
     queryData: GuideData | undefined;
     queryDataByHost: Record<string, GuideData>;
     queryIsError: boolean;
@@ -54,6 +56,7 @@ const guideMocks = vi.hoisted(
   } => ({
     activeHostId: "local",
     scopedHostId: "local",
+    pickedHostId: null,
     queryData: {
       content: "claude guide",
       generatedDefaultContent: "claude guide",
@@ -101,6 +104,69 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
     };
   },
 }));
+
+// The in-panel host dropdown is gone: the ONE picker lives in the sidebar and
+// this panel just reads its selection. So the suite drives `pickedHostId` and
+// lets the scope hook resolve it, exactly as the real hook does - including
+// the `vanished` verdict, which is the state that used to let a panel silently
+// read through the active host.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => {
+      const hosts = guideMocks.directoryEntries.map((entry) =>
+        hostScopeOptionFixture({
+          hostId: entry.hostId,
+          name: entry.label,
+          isLocalMachine: entry.hostId === "local",
+          isActive: entry.hostId === guideMocks.activeHostId,
+        }),
+      );
+      const activeHost =
+        hosts.find((host) => host.hostId === guideMocks.activeHostId) ?? null;
+      const picked = guideMocks.pickedHostId;
+      if (picked === null) {
+        return hostScopeFixture({
+          hosts,
+          host: activeHost,
+          hostId: activeHost?.hostId ?? null,
+          hostLabel: activeHost?.name ?? "No host",
+          activeHost,
+          isViewingActive: true,
+          status: "following",
+          client: null,
+        });
+      }
+      const host = hosts.find((entry) => entry.hostId === picked) ?? null;
+      if (host === null) {
+        return hostScopeFixture({
+          hosts,
+          host: null,
+          hostId: null,
+          hostLabel: picked,
+          vanishedHostId: picked,
+          activeHost,
+          isViewingActive: false,
+          status: "vanished",
+          client: null,
+        });
+      }
+      return hostScopeFixture({
+        hosts,
+        host,
+        hostId: host.hostId,
+        hostLabel: host.name,
+        activeHost,
+        isViewingActive: host.hostId === guideMocks.activeHostId,
+        status: "ready",
+        // Only a resolved scope hands back a client, and it is the PICKED
+        // host's - never the ambient one.
+        client: { getActiveHostId: () => host.hostId } as never,
+      });
+    },
+  };
+});
 
 function requireHostId(hostId: string | null): string {
   if (hostId === null) {
@@ -242,6 +308,7 @@ describe("AgentSelectionGuideSection", () => {
     guideMocks.queryIsError = false;
     guideMocks.activeHostId = "local";
     guideMocks.scopedHostId = "local";
+    guideMocks.pickedHostId = null;
     guideMocks.lastTransientTarget = null;
     guideMocks.setGlobalHostIds = [];
     guideMocks.resetGlobalHostIds = [];
@@ -313,6 +380,22 @@ describe("AgentSelectionGuideSection", () => {
     expect(screen.queryByTestId("agents-selection-guide-input")).toBeNull();
   });
 
+  // Regression: the scope refactor wrapped the loaded state in a frame that
+  // printed the title, while `AgentSelectionGuideEditorSurface` was already
+  // printing its own - so the panel showed the heading and description twice.
+  // Every other assertion in this file passed throughout.
+  it("prints the guide heading exactly once in each state", () => {
+    const { rerender, unmount } = renderPanel();
+    expect(screen.getAllByText("Agent selection guide")).toHaveLength(1);
+
+    // ...and the message states, which own the heading themselves.
+    guideMocks.queryData = undefined;
+    guideMocks.queryIsError = true;
+    rerender(strictPanel());
+    expect(screen.getAllByText("Agent selection guide")).toHaveLength(1);
+    unmount();
+  });
+
   it("switches the guide editor host without changing the app-wide active host", async () => {
     guideMocks.queryDataByHost = {
       local: {
@@ -324,7 +407,7 @@ describe("AgentSelectionGuideSection", () => {
         generatedDefaultContent: "remote guide",
       },
     };
-    renderPanel();
+    const { rerender } = renderPanel();
 
     expect(
       screen
@@ -335,13 +418,11 @@ describe("AgentSelectionGuideSection", () => {
       readMarkdown(screen.getByTestId("agents-selection-guide-input")),
     ).toBe("local guide");
 
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Agent instructions host" }),
-    );
-    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
+    // The sidebar picker moved the scope; this panel owns no picker of its own.
+    guideMocks.pickedHostId = "remote";
+    rerender(strictPanel());
 
     await waitFor(() => {
-      expect(guideMocks.lastTransientTarget?.hostId).toBe("remote");
       expect(
         readMarkdown(screen.getByTestId("agents-selection-guide-input")),
       ).toBe("remote guide");
@@ -376,13 +457,13 @@ describe("AgentSelectionGuideSection", () => {
     };
     const { rerender } = renderPanel();
 
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Agent instructions host" }),
-    );
-    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
+    guideMocks.pickedHostId = "remote";
+    rerender(strictPanel());
 
     await waitFor(() => {
-      expect(guideMocks.lastTransientTarget?.hostId).toBe("remote");
+      expect(
+        readMarkdown(screen.getByTestId("agents-selection-guide-input")),
+      ).toBe("remote guide");
     });
 
     // The picked host is deregistered - it drops out of the directory
@@ -391,11 +472,7 @@ describe("AgentSelectionGuideSection", () => {
     rerender(strictPanel());
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          "remote is no longer available. Pick a different host above.",
-        ),
-      ).toBeTruthy();
+      expect(screen.getByText("remote is no longer registered")).toBeTruthy();
     });
     // The stale local-scoped editor from before the pick must not remain
     // mounted, silently reading/writing through the active host's client.

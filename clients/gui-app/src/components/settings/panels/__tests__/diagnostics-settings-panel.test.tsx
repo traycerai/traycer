@@ -1,3 +1,17 @@
+// The panel is host-scoped now (shell config / log levels are fields of the
+// selected host's own config), so it reads `useHostScope`. Mock at that
+// boundary: these suites render the panel bare, without the host runtime and
+// query providers the real hook needs.
+const scopeOverrides = vi.hoisted((): { current: Partial<HostScope> } => ({
+  current: {},
+}));
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture(scopeOverrides.current),
+  };
+});
 import {
   cleanup,
   fireEvent,
@@ -17,6 +31,8 @@ import {
   type Mock,
 } from "vitest";
 import type { LogLevel } from "@traycer/protocol/config/log-level";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import type {
   LogLevelScope,
@@ -314,6 +330,33 @@ describe("<DiagnosticsSettingsPanel />", () => {
   afterEach(() => {
     cleanup();
     clearLogLevelsBridge();
+    scopeOverrides.current = {};
+  });
+
+  it("keeps app-scoped diagnostics reachable when the scoped host is remote", async () => {
+    // The desktop log level and the memory capture describe THIS app — their
+    // subject never changes with the sidebar's host scope. Only the host-tied
+    // rows (cli/host levels, this machine's log tails) yield to the notice.
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId: "host-remote",
+        name: "Remote Box",
+        isLocalMachine: false,
+      }),
+      status: "ready",
+    };
+    installLogLevelsBridge(defaultSnapshot());
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    expect(
+      await screen.findByTestId("settings-log-level-desktop"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("settings-log-level-cli")).toBeNull();
+    expect(screen.queryByTestId("settings-log-level-host")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Memory" })).toBeTruthy();
+    expect(screen.getByTestId("requires-local-host-notice")).toBeTruthy();
+    // This machine's log tails stay withheld under a remote host's name.
+    expect(screen.queryByTestId("diagnostics-log-list")).toBeNull();
   });
 
   it("shows independent unavailable states when both bridges are absent", () => {

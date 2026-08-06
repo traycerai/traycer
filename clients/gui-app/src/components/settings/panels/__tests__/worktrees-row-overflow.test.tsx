@@ -80,9 +80,6 @@ function renderSingleRow(
         onVisiblePathsChange={() => {}}
         taskTitlesByEpicId={new Map()}
         toolbarProps={{
-          hosts: [],
-          value: null,
-          onChange: () => {},
           onRefresh: () => Promise.resolve(),
           refreshing: false,
           canRefresh: true,

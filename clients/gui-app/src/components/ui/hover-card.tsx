@@ -5,6 +5,7 @@ import { HoverCard as HoverCardPrimitive } from "radix-ui";
 
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
 import { cn } from "@/lib/utils";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
 // Match the tooltip's 500ms hover-in; give a small grace on the way out so the
 // pointer can travel from the trigger into the card to reach its actions
@@ -53,6 +54,10 @@ function HoverCardContent({
   sideOffset = 4,
   ...props
 }: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
+  // Concealed region (see `portal-concealment-context`): un-present with the
+  // region — the anchor is display:none and cannot deliver the close events.
+  const concealed = usePortalConcealed();
+  if (concealed) return null;
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content

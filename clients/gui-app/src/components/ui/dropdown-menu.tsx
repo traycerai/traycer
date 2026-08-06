@@ -4,6 +4,7 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
 function DropdownMenu({
   ...props
@@ -51,7 +52,10 @@ function DropdownMenuContent({
   // The close-autofocus half lives in `usePaneAwareContentGuard`.
   const { paneFocused, handleCloseAutoFocus } =
     usePaneAwareContentGuard(onCloseAutoFocus);
-  if (!paneFocused) return null;
+  // Concealed region (see `portal-concealment-context`): un-present the
+  // portal; it re-presents intact when the region returns.
+  const concealed = usePortalConcealed();
+  if (!paneFocused || concealed) return null;
   return (
     <DropdownMenuPrimitive.Portal container={container}>
       <DropdownMenuPrimitive.Content

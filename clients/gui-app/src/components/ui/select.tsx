@@ -9,6 +9,7 @@ import {
   usePaneAwareContentGuard,
   usePaneFocused,
 } from "@/components/epic-tabs/pane-visibility-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
 /**
  * Un-presents in a background split pane by forcing the root CLOSED, not by
@@ -123,6 +124,13 @@ function SelectContent({
   // The root forces itself closed in a background pane, which is what actually
   // drops the focus trap / `hideOthers` / scroll lock.
   const { handleCloseAutoFocus } = usePaneAwareContentGuard(onCloseAutoFocus);
+  // Concealment DOES unmount, unlike the pane decision above: an unfocused
+  // pane stays visible, so the closed content must keep feeding the trigger's
+  // label — but a concealed region is display:none in its entirety, nothing
+  // reads the label, and remount on return restores it atomically (see
+  // `portal-concealment-context`).
+  const concealed = usePortalConcealed();
+  if (concealed) return null;
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
