@@ -1282,11 +1282,11 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(
       screen.getByText(
-        "Hermes must be installed on this machine. It ships without a bundled binary.",
+        "No Hermes Agent CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     const guide = screen.getByRole("link", {
-      name: "Hermes installation guide",
+      name: "Hermes Agent installation guide",
     });
     expect(guide.getAttribute("href")).toBe(
       "https://hermes-agent.nousresearch.com/docs/getting-started/installation",

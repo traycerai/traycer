@@ -30,11 +30,21 @@ import {
 
 const EMPTY_PLUGINS: readonly ProviderPlugin[] = [];
 
-const CURSOR_SESSION_NOTICE =
-  "Cursor marketplace plugins are not yet active in Traycer sessions. Listing is read-only until settingSources includes plugins.";
-
-const AMP_SESSION_NOTICE =
-  "Plugin tools may not appear in Traycer-launched sessions (they load for CLI tools/plugins list but not the execute stream).";
+/**
+ * Shown for every provider whose contract sets `traycerSessionToolsNotice`
+ * (amp and cursor today). There used to be two strings selected by
+ * `providerId === "cursor"`, which was the tail of a redundancy: cursor's
+ * contract ALREADY sets the flag (`contract-registry/cursor.ts`), so the id
+ * arms could never change what rendered - only which sentence did. Two
+ * sentences for one flag is how the flag stops being the thing that decides,
+ * and the next provider to set it would have got amp's copy anyway.
+ *
+ * The wording is the union of what both said that the user can act on. Cursor's
+ * old copy also asserted "listing is read-only", which its `addModes:
+ * ["read-only"]` already renders on screen without being told.
+ */
+const SESSION_TOOLS_NOTICE =
+  "Plugin tools may not appear in Traycer-launched sessions. They load for this provider's own CLI, but not for the session stream Traycer drives.";
 
 export function ProviderPluginsTab({
   state,
@@ -82,8 +92,6 @@ function ProviderPluginsTabBody({
   readonly caps: ProviderPluginsCapabilities;
 }): ReactNode {
   const { isReadOnly, canAdd } = pluginCapabilityFlags(caps);
-  const showSessionNotice =
-    caps.traycerSessionToolsNotice || providerId === "cursor";
 
   const listQuery = useProvidersPluginsList({
     providerId,
@@ -113,7 +121,7 @@ function ProviderPluginsTabBody({
   const removeDialogPending =
     removeTarget !== null && pendingIds.has(removeTarget.id);
 
-  const sessionNotice = sessionNoticeFor(providerId, caps);
+  const sessionNotice = sessionNoticeFor(caps);
 
   function markPending(trackId: string, pending: boolean): void {
     setPendingIds((prev) => {
@@ -158,7 +166,7 @@ function ProviderPluginsTabBody({
 
   return (
     <div className="flex flex-col gap-3">
-      {showSessionNotice && sessionNotice !== null ? (
+      {sessionNotice !== null ? (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-xs text-amber-700 dark:text-amber-200">
           {sessionNotice}
         </div>
@@ -258,18 +266,8 @@ function ProviderPluginsTabBody({
   );
 }
 
-function sessionNoticeFor(
-  providerId: ProviderId,
-  caps: ProviderPluginsCapabilities,
-): string | null {
-  // Cursor is by id because its copy differs; everything else that needs the
-  // notice is selected by capability. No `providerId === "amp"` arm: amp's
-  // contract sets `traycerSessionToolsNotice: true`, so it is already covered
-  // below, and an id arm here could never fire on its own anyway - the caller
-  // gates rendering on that same capability.
-  if (providerId === "cursor") return CURSOR_SESSION_NOTICE;
-  if (caps.traycerSessionToolsNotice) return AMP_SESSION_NOTICE;
-  return null;
+function sessionNoticeFor(caps: ProviderPluginsCapabilities): string | null {
+  return caps.traycerSessionToolsNotice ? SESSION_TOOLS_NOTICE : null;
 }
 
 function PluginAddFromSource({
