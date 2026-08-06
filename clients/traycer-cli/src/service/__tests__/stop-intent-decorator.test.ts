@@ -172,6 +172,50 @@ describe("withStopIntent", () => {
     expect(stopped).toBe(true);
   });
 
+  it("refuses a RESTART on win32 when the intent could not be recorded", async () => {
+    // `host free-port-and-restart` reaches the controller's `restart` directly,
+    // and that path kills the host exactly as `stop` does - `schtasks /End` plus
+    // a process-tree kill - before running the task again. With no record the
+    // orphaned supervisor reads the kill as a crash and relaunches on its own
+    // schedule, racing the `/Run` that is starting the replacement: one restart,
+    // two hosts. "It comes back anyway" is not a reason to skip the record.
+    mocks.platform = "win32";
+    mocks.persisted = false;
+    let restarted = false;
+    const controller = withStopIntent(
+      baseController({
+        restart: async () => {
+          restarted = true;
+        },
+      }),
+    );
+
+    await expect(controller.restart(label)).rejects.toThrow(
+      /could not record the stop request/,
+    );
+    expect(restarted).toBe(false);
+  });
+
+  it("proceeds with a restart on POSIX when the intent could not be recorded", async () => {
+    mocks.platform = "linux";
+    mocks.persisted = false;
+    let restarted = false;
+    const controller = withStopIntent(
+      baseController({
+        restart: async () => {
+          restarted = true;
+        },
+      }),
+    );
+
+    await controller.restart(label);
+
+    expect(restarted).toBe(true);
+    // Still cleared afterwards: a restart ends with the host UP, so leaving the
+    // record behind would suppress the next crash's recovery.
+    expect(mocks.clears).toEqual(["production"]);
+  });
+
   it("clears the intent after a start, succeed or fail", async () => {
     const ok = withStopIntent(baseController({ start: async () => undefined }));
     await ok.start(label);

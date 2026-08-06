@@ -227,7 +227,22 @@ export function formatServiceLifecycleWarning(
  * host the user asked to stop, while `host stop` reports success. Failing
  * loudly is the honest outcome: the stop genuinely could not be guaranteed,
  * and it is retryable.
+ *
+ * Every route that kills the host goes through here, INCLUDING `restart`. A
+ * restart's kill is just as unattributable to the orphaned supervisor as a
+ * stop's, and it is followed immediately by a start: the supervisor relaunching
+ * on its own schedule while `/Run` brings up another host is how one restart
+ * becomes two hosts. "It comes back anyway" is not a reason to skip the record.
  */
+const FAILED_STOP_CONSEQUENCE: Readonly<
+  Record<"stop" | "restart" | "uninstall", string>
+> = {
+  stop: "The host has NOT been stopped.",
+  restart:
+    "The host has NOT been restarted, and restarting without the record risks leaving two hosts running.",
+  uninstall: "The host has NOT been uninstalled.",
+};
+
 async function announceStop(
   environment: ServiceLabel["environment"],
   reason: "stop" | "restart" | "uninstall",
@@ -236,8 +251,7 @@ async function announceStop(
   if (persisted || osPlatform() !== "win32") return;
   throw cliError({
     code: CLI_ERROR_CODES.HOST_STOP_INTENT_UNWRITABLE,
-    message:
-      "could not record the stop request, and on Windows that record is the only thing that stops the supervisor bringing the host back. The host has NOT been stopped. Check that the Traycer host directory is writable, then try again.",
+    message: `could not record the stop request, and on Windows that record is the only thing that stops the supervisor bringing the host back. ${FAILED_STOP_CONSEQUENCE[reason]} Check that the Traycer host directory is writable, then try again.`,
     details: { environment, reason },
     exitCode: 1,
   });
@@ -298,7 +312,7 @@ export function withStopIntent(
       }
     },
     restart: async (label) => {
-      await writeStopIntent(label.environment, "restart");
+      await announceStop(label.environment, "restart");
       try {
         return await controller.restart(label);
       } finally {

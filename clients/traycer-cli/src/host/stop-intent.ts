@@ -205,14 +205,29 @@ export function isStopIntentAlreadyServed(
   return requestedAtMs < supervisorStartedAtMs;
 }
 
+/**
+ * Whether `intent` is recent enough to still be acted on - a SYMMETRIC window,
+ * `STOP_INTENT_STALE_MS` either side of `nowMs`.
+ *
+ * The forward half is not symmetry for its own sake. A future-dated stamp is
+ * still evidence someone asked for a stop (a small skew between the stopper and
+ * the supervisor should not discard a real request), but an UNBOUNDED forward
+ * window is a wedge with no expiry at all, which is the one thing this whole
+ * sentinel must never become. A backward wall-clock jump - a VM resuming, NTP
+ * correcting a bad clock - leaves the record dated hours ahead. Such a stamp is
+ * newer than every subsequent supervisor's invocation cutoff, so
+ * `isStopIntentAlreadyServed` can never retire it either: every automatic start
+ * would decline to spawn until the clock caught up, holding the machine hostless
+ * for exactly as long as the jump. That is this ticket's own bug, reintroduced
+ * through the guard meant to prevent it.
+ *
+ * Bounding the forward half caps that at the same five minutes the backward half
+ * already accepts.
+ */
 export function isStopIntentFresh(intent: StopIntent, nowMs: number): boolean {
   const requestedAtMs = Date.parse(intent.requestedAt);
   if (Number.isNaN(requestedAtMs)) return false;
-  // A future-dated stamp (clock skew between the stopper and the supervisor, or
-  // a wall-clock jump) still counts as fresh: it is evidence someone asked, and
-  // the expiry exists to bound wedges, not to police clocks.
-  if (requestedAtMs > nowMs) return true;
-  return nowMs - requestedAtMs < STOP_INTENT_STALE_MS;
+  return Math.abs(nowMs - requestedAtMs) < STOP_INTENT_STALE_MS;
 }
 
 function parseStopIntent(value: unknown): StopIntent | null {

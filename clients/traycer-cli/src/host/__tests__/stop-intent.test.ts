@@ -162,6 +162,23 @@ describe("isStopIntentFresh", () => {
     expect(isStopIntentFresh(intent, now)).toBe(true);
   });
 
+  it("expires a stamp dated FAR in the future, so a backward clock jump cannot wedge recovery", () => {
+    // The window has to be symmetric. A VM resuming, or NTP correcting a bad
+    // clock, leaves an already-written intent dated hours ahead - and an
+    // unbounded forward window makes that record permanent, because it is also
+    // newer than every later supervisor's invocation cutoff, so
+    // `isStopIntentAlreadyServed` can never retire it either. Every automatic
+    // start would decline to spawn until the clock caught up: the guard against
+    // a stop being undone, holding the machine hostless, which is this
+    // ticket's own bug wearing the fix's clothes.
+    const now = Date.parse("2026-08-05T12:00:00.000Z");
+    const intent = at(
+      new Date(now + (STOP_INTENT_STALE_MS + 1_000)).toISOString(),
+    );
+
+    expect(isStopIntentFresh(intent, now)).toBe(false);
+  });
+
   it("treats an unparseable timestamp as stale rather than blocking recovery", () => {
     expect(isStopIntentFresh(at("not-a-date"), Date.now())).toBe(false);
   });

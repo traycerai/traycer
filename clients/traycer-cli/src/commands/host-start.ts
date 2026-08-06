@@ -756,6 +756,11 @@ export async function runHostStart(
           consecutiveRelaunches = decision.consecutiveRelaunches;
           continue;
         }
+        // A stop outranks the error that happened to be in flight when it
+        // arrived. Reporting 69 here would be launchd's cue to start another
+        // supervisor, which would resume this very retry - see
+        // `RelaunchStopCause`.
+        if (decision.cause === "stop-requested") return exitSupervisor(0);
         return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
       }
       if (err instanceof CliError) {
@@ -1057,6 +1062,9 @@ export async function runHostStart(
           consecutiveRelaunches = decision.consecutiveRelaunches;
           continue;
         }
+        // See `RelaunchStopCause`: 66 would be read as a crash and answered
+        // with a fresh supervisor, undoing the stop this branch just honoured.
+        if (decision.cause === "stop-requested") return exitSupervisor(0);
       }
       return exitSupervisor(66);
     }
@@ -1224,6 +1232,9 @@ export async function runHostStart(
           consecutiveRelaunches = decision.consecutiveRelaunches;
           continue;
         }
+        // See `RelaunchStopCause`: 66 would be read as a crash and answered
+        // with a fresh supervisor, undoing the stop this branch just honoured.
+        if (decision.cause === "stop-requested") return exitSupervisor(0);
       }
       return exitSupervisor(66);
     }
@@ -1300,7 +1311,15 @@ export async function runHostStart(
       shutdownRequested,
     });
     if (decision.kind !== "relaunch") {
-      return exitSupervisor(outcome.exitCode);
+      // The load-bearing one. A stop landing during the backoff is the case
+      // `refused("after")` exists for, and the child it interrupts died
+      // abnormally by definition - so `outcome.exitCode` is nonzero, and
+      // reporting it would have launchd start a replacement supervisor that
+      // reads the intent as already served and brings the host back. The
+      // refusal and the exit code have to agree. See `RelaunchStopCause`.
+      return exitSupervisor(
+        decision.cause === "stop-requested" ? 0 : outcome.exitCode,
+      );
     }
     consecutiveRelaunches = decision.consecutiveRelaunches;
   }
@@ -1316,7 +1335,23 @@ type ChildEnding =
 
 type RelaunchDecision =
   | { readonly kind: "relaunch"; readonly consecutiveRelaunches: number }
-  | { readonly kind: "stop" };
+  | { readonly kind: "stop"; readonly cause: RelaunchStopCause };
+
+/**
+ * WHY the loop stopped, because the two answers need opposite exit codes.
+ *
+ * `stop-requested` must exit 0. Nothing else in the exit path can express "do
+ * not bring this back": `KeepAlive{SuccessfulExit:false}`, `Restart=on-failure`
+ * and the Scheduled Task's `RestartOnFailure` all read a nonzero exit as a crash
+ * and start a fresh supervisor - which then reads the stop intent as older than
+ * its own invocation, treats it as already served, and starts the host. The
+ * refusal would hold for one process and be undone by the next.
+ *
+ * `budget-exhausted` keeps the child's own nonzero code, deliberately: after
+ * five relaunches this supervisor stops guessing and hands the machine back to
+ * the platform, whose throttling is the outer bound on the loop.
+ */
+type RelaunchStopCause = "stop-requested" | "budget-exhausted";
 
 /**
  * The single place that answers "may this dead child be brought back?".
@@ -1386,7 +1421,7 @@ async function decideRelaunch(input: {
 
   // Checked before the sleep too - purely so an already-known stop does not
   // pay a minute of backoff before being honoured.
-  if (await refused("before")) return { kind: "stop" };
+  if (await refused("before")) return { kind: "stop", cause: "stop-requested" };
   if (input.consecutiveRelaunches >= deps.maxRelaunches) {
     logger.error(
       "Host supervisor relaunch budget exhausted - leaving the host down",
@@ -1397,7 +1432,7 @@ async function decideRelaunch(input: {
       },
       null,
     );
-    return { kind: "stop" };
+    return { kind: "stop", cause: "budget-exhausted" };
   }
   // `Math.min` keeps the index in range, so the lookup cannot be undefined;
   // the last entry repeats for every attempt past the ladder's length.
@@ -1421,7 +1456,7 @@ async function decideRelaunch(input: {
   // re-read below; there the cost of waiting is latency, not a defeated stop.
   await Promise.race([deps.sleep(backoffMs), input.shutdownRequested]);
   // The load-bearing one: a stop that landed while we slept.
-  if (await refused("after")) return { kind: "stop" };
+  if (await refused("after")) return { kind: "stop", cause: "stop-requested" };
   return {
     kind: "relaunch",
     consecutiveRelaunches: input.consecutiveRelaunches + 1,

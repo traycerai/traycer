@@ -1730,7 +1730,13 @@ describe("runHostStart - crash relaunch loop", () => {
       term.recorded,
     );
     expect(term.recorded.spawnCalls).toHaveLength(1);
-    expect(term.recorded.exited).toBe(128 + osConstants.signals.SIGTERM);
+    // Exit 0, NOT 128+SIGTERM. This is the ordinary macOS `host stop`: launchd
+    // signals the supervisor, it forwards, and the child dies by that signal.
+    // Reporting 143 would be `KeepAlive{SuccessfulExit:false}`'s cue to start a
+    // replacement supervisor - which reads the stop intent as predating its own
+    // invocation, treats it as served, and starts the host. Not relaunching
+    // in-process while telling the service manager to relaunch us is not a stop.
+    expect(term.recorded.exited).toBe(0);
   });
 
   it("releases the signal handlers when it leaves by throwing", async () => {
@@ -1793,7 +1799,11 @@ describe("runHostStart - crash relaunch loop", () => {
     );
 
     expect(recorded.spawnCalls).toHaveLength(1);
-    expect(recorded.exited).toBe(7);
+    // And exits 0, not the crashed child's 7 - see the exit-code describe
+    // below. This scenario makes the point sharply: the restart is mid-flight,
+    // so a nonzero exit here races `kickstart` with launchd's own respawn of
+    // this job.
+    expect(recorded.exited).toBe(0);
   });
 
   it("kills a child that a stop raced between the guard and the spawn", async () => {
@@ -1986,11 +1996,14 @@ describe("runHostStart - crash relaunch loop", () => {
       recorded,
     );
 
-    // Both halves matter: the guard was consulted, AND nothing respawned.
-    // Asserting only the spawn count would pass if the loop never ran.
+    // Three halves, really: the guard was consulted, nothing respawned, AND the
+    // exit code does not ask the platform to respawn on our behalf. Asserting
+    // only the spawn count would pass if the loop never ran - and asserting the
+    // child's code, as this used to, passed while the stop was undone one
+    // process later.
     expect(intentChecks).toBeGreaterThanOrEqual(1);
     expect(recorded.spawnCalls).toHaveLength(1);
-    expect(recorded.exited).toBe(1);
+    expect(recorded.exited).toBe(0);
   });
 
   it("abandons the relaunch when another host claims the data dir during backoff", async () => {
@@ -2183,7 +2196,14 @@ describe("runHostStart - relaunch loop, guards re-checked across the backoff", (
     );
 
     expect(recorded.spawnCalls).toHaveLength(1);
-    expect(recorded.exited).toBe(1);
+    // Exit 0, NOT the crashed child's 1. This assertion used to read `toBe(1)`,
+    // which quietly gave back everything the refusal above had just won: launchd
+    // (`KeepAlive{SuccessfulExit:false}`), systemd (`Restart=on-failure`) and the
+    // Scheduled Task all treat a nonzero exit as a crash and start a REPLACEMENT
+    // supervisor, and that one reads the stop intent as older than its own
+    // invocation - already served - and spawns the host. Honouring the stop and
+    // then reporting a crash is not honouring the stop.
+    expect(recorded.exited).toBe(0);
   });
 
   it("honours a shutdown signal that lands DURING the backoff", async () => {
@@ -2209,6 +2229,164 @@ describe("runHostStart - relaunch loop, guards re-checked across the backoff", (
     );
 
     expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The exit code IS the refusal, on every route out of the loop.
+//
+// `decideRelaunch` returning `stop` only settles what THIS process does next.
+// What the machine does next is decided by the number this process exits with,
+// because launchd (`KeepAlive{SuccessfulExit:false}`), systemd
+// (`Restart=on-failure`) and the Scheduled Task's `RestartOnFailure` all read a
+// nonzero exit as a crash worth answering with a fresh supervisor - and that
+// supervisor starts AFTER the stop intent was written, so it reads the record as
+// already served and starts the host. A stop honoured with a nonzero exit is a
+// stop that survives one process.
+//
+// Reported against the target-resolution branch; the same mistake was in all
+// four, so these pin every one, plus the budget half that must NOT change.
+// ---------------------------------------------------------------------------
+
+describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("exits 0, not 69, when a stop interrupts target-resolution retries", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 0, signal: null }]);
+    let stopRequested = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            // The install record never comes back, so every attempt fails to
+            // resolve a target and the loop keeps retrying.
+            readInstallRecord: async () => null,
+            hasStopIntent: async () => stopRequested,
+            sleep: async () => {
+              stopRequested = true;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("still exits 69 when target resolution runs out of budget instead", async () => {
+    // The other half, and the reason this is a `cause` rather than a blanket
+    // "stop means 0": exhaustion deliberately hands the machine back to the
+    // platform, and it needs the nonzero code to do that.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 0, signal: null }]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          {
+            ...scripted.deps,
+            maxRelaunches: 0,
+            readInstallRecord: async () => null,
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.exited).toBe(69);
+  });
+
+  it("exits 0, not 66, when a stop interrupts a throwing spawn", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopRequested = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              throw new Error("EBUSY: install swap in progress");
+            },
+            hasStopIntent: async () => stopRequested,
+            sleep: async () => {
+              stopRequested = true;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("exits 0, not 66, when a stop interrupts an async spawn failure", async () => {
+    // `spawn()` reporting through the `error` event rather than throwing is a
+    // platform detail, so the two routes must not disagree about this either.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopRequested = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              setImmediate(() => {
+                child.emit("error", new Error("ENOENT: bundle vanished"));
+              });
+              const asUnknown: unknown = child;
+              return asUnknown as ChildProcess;
+            },
+            hasStopIntent: async () => stopRequested,
+            sleep: async () => {
+              stopRequested = true;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
   });
 });
 
