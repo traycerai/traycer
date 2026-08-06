@@ -213,20 +213,47 @@ export function formatServiceLifecycleWarning(
  * systemd kill it outright. Uniform is cheaper than conditional, and it keeps
  * the mechanism exercisable on any developer's machine.
  */
-function withStopIntent(controller: ServiceController): ServiceController {
+export function withStopIntent(
+  controller: ServiceController,
+): ServiceController {
   return {
     ...controller,
+    // Intent is written BEFORE the operation - that ordering is the contract,
+    // since the supervisor has to be able to see it before anything is killed
+    // - and cleared again if the operation THROWS.
+    //
+    // Deliberately not `finally`: on success the record must OUTLIVE this
+    // call, because reading it is how the supervisor knows the child's death
+    // was asked for. On failure it must not. `stopForRestart` refusing with
+    // `HOST_BUSY` leaves the host RUNNING, and an abandoned "restart" record
+    // would then suppress that live host's crash recovery for the whole
+    // freshness window - a refused restart ending in a hostless machine.
     stop: async (label) => {
       await writeStopIntent(label.environment, "stop");
-      return controller.stop(label);
+      try {
+        return await controller.stop(label);
+      } catch (error) {
+        await clearStopIntent(label.environment);
+        throw error;
+      }
     },
     stopForRestart: async (label) => {
       await writeStopIntent(label.environment, "restart");
-      return controller.stopForRestart(label);
+      try {
+        return await controller.stopForRestart(label);
+      } catch (error) {
+        await clearStopIntent(label.environment);
+        throw error;
+      }
     },
     uninstall: async (options) => {
       await writeStopIntent(options.label.environment, "uninstall");
-      return controller.uninstall(options);
+      try {
+        return await controller.uninstall(options);
+      } catch (error) {
+        await clearStopIntent(options.label.environment);
+        throw error;
+      }
     },
     // The starts CLEAR intent, and do so in `finally`: a start that failed is
     // still not a stop in progress, and a leftover intent would suppress the

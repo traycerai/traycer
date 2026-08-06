@@ -1701,20 +1701,199 @@ describe("runHostStart - crash relaunch loop", () => {
     );
     expect(fatal.recorded.spawnCalls).toHaveLength(2);
 
+    // The forwarded case has to actually FORWARD: the supervisor is signalled,
+    // latches, and passes it on. Scripting a SIGTERM child death without
+    // signalling the supervisor does not exercise this - it is the direct-kill
+    // case below, and asserting "no relaunch" on it was pinning a bug.
     const term = makeRunStubs(sampleRecord(exec), null);
     const termScript = withScriptedAttempts(term.deps, [
       { code: null, signal: "SIGTERM" },
     ]);
+    const termSpawn = termScript.deps.spawn;
+    if (termSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
     await runUntilExit(
       () =>
         runHostStart(
           { environment: "production", cwd: null },
-          { ...termScript.deps, maxRelaunches: 5 },
+          {
+            ...termScript.deps,
+            maxRelaunches: 5,
+            spawn: (command, args, options) => {
+              const spawned = termSpawn(command, args, options);
+              process.emit("SIGTERM");
+              return spawned;
+            },
+          },
         ),
       term.recorded,
     );
     expect(term.recorded.spawnCalls).toHaveLength(1);
     expect(term.recorded.exited).toBe(128 + osConstants.signals.SIGTERM);
+  });
+
+  it("abandons the backoff the moment a shutdown signal arrives", async () => {
+    // Re-checking the latch AFTER the wait is not enough. On a CLI-owned macOS
+    // host a `host restart` during a 30-60s backoff sends `launchctl kill
+    // TERM`, then `stopService` waits only on the already-dead host pid and
+    // proceeds to `kickstart` - which no-ops while launchd still considers
+    // this supervisor running. Sit out the full sleep and the restart has
+    // already no-op'd by the time the latch is read: the machine stays
+    // hostless. The wait has to END, not merely be re-examined afterwards.
+    //
+    // The injected sleep here NEVER resolves, so only the shutdown edge can
+    // complete the race. Without it this test times out rather than failing on
+    // an assertion - which is the honest signal, since the production symptom
+    // is also "waits when it should not".
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 7, signal: null }]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            sleep: () =>
+              new Promise<void>(() => {
+                setImmediate(() => {
+                  process.emit("SIGTERM");
+                });
+              }),
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(7);
+  });
+
+  it("kills a child that a stop raced between the guard and the spawn", async () => {
+    // The pre-spawn guard cannot close a CROSS-PROCESS window: `host stop` can
+    // write intent just after that read returned false, scan for a host while
+    // this child does not exist yet, find nothing to kill, and return
+    // successfully - leaving a host running that the stopper never saw.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const killed: string[] = [];
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let spawns = 0;
+    let stopLanded = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            // False for the pre-spawn guard, true immediately afterwards.
+            hasStopIntent: async () => stopLanded,
+            spawn: (command, args, options) => {
+              spawns += 1;
+              originalSpawn(command, args, options);
+              stopLanded = true;
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                killed.push(String(signal));
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              const asUnknown: unknown = child;
+              return asUnknown as ChildProcess;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(spawns).toBe(1);
+    expect(killed).toEqual(["SIGTERM"]);
+    // And the death it caused is NOT then treated as a crash to recover from.
+    expect(recorded.spawnCalls).toHaveLength(1);
+  });
+
+  it("disposes a timed-out stderr stream instead of carrying it into the next attempt", async () => {
+    // The diagnostic wait is bounded because a grandchild can inherit the dead
+    // host's stderr and hold the pipe open. When that bound expires the stream
+    // is still live, still feeding this attempt's tee, and still holds a libuv
+    // handle - and the five-relaunch budget does not bound the accumulation,
+    // because sustained uptime resets the counter.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const stderrs: PassThrough[] = [];
+    let spawns = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 1,
+            spawn: (command, args, options) => {
+              spawns += 1;
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              // Never ends: exactly the grandchild-holding-the-pipe case.
+              const stderr = new PassThrough();
+              stderrs.push(stderr);
+              Object.assign(child, { stderr });
+              setImmediate(() => {
+                child.emit("exit", spawns === 1 ? 3 : 0, null);
+              });
+              const asUnknown: unknown = child;
+              return asUnknown as ChildProcess;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(stderrs).toHaveLength(2);
+    for (const stderr of stderrs) {
+      expect(stderr.destroyed).toBe(true);
+      expect(stderr.listenerCount("data")).toBe(0);
+    }
+  });
+
+  it("relaunches a child signalled directly, even with a signal it could have forwarded", async () => {
+    // An operator or watchdog sending SIGTERM to the HOST does not go through
+    // this supervisor: the latch stays false and no intent is written. An
+    // earlier classifier read the signal NAME and concluded the death was
+    // requested, so the host stayed down.
+    //
+    // A signal name says a stop COULD have been forwarded, never that it was.
+    // Only the latch and the sentinel carry that, and both are checked in
+    // `decideRelaunch` - which is why classification here is now simply "any
+    // signal death is abnormal".
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: null, signal: "SIGTERM" },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
   });
 
   it("relaunches a host the OOM killer took, which no diagnostic whitelist names", async () => {

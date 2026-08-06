@@ -172,21 +172,17 @@ export const SUSTAINED_UPTIME_RESET_MS = 300_000;
  * The signals a deliberate stop reaches this supervisor as, and which it
  * forwards to its child.
  *
- * Used for two things that must not drift apart: which handlers get installed,
- * and which child signal deaths count as ASKED FOR rather than recoverable. A
- * child killed by anything else - `SIGKILL` from the OOM killer above all -
- * died from outside and should be brought back.
+ * This list decides which handlers get installed and NOTHING ELSE. It is
+ * deliberately not used to classify a child's death: the same signal can
+ * arrive from a service manager stopping us or from an operator killing the
+ * child directly, and the name cannot tell those apart. Only the
+ * `shuttingDown` latch and the stop-intent sentinel carry that evidence.
  */
 const FORWARDED_SHUTDOWN_SIGNALS = [
   "SIGTERM",
   "SIGINT",
   "SIGHUP",
 ] as const satisfies readonly NodeJS.Signals[];
-
-function isForwardedShutdownSignal(signal: NodeJS.Signals): boolean {
-  const forwarded: readonly string[] = FORWARDED_SHUTDOWN_SIGNALS;
-  return forwarded.includes(signal);
-}
 
 export interface ResolveHostStartTargetDeps {
   readonly readInstallRecord: (
@@ -585,6 +581,20 @@ export async function runHostStart(
   let consecutiveRelaunches = 0;
   let shuttingDown = false;
   let currentChild: ChildProcess | null = null;
+  // Resolves the first time a shutdown signal arrives, so a backoff can be
+  // ABANDONED rather than merely re-checked once it finishes.
+  //
+  // Waiting out a 60s backoff before noticing a stop is not just slow, it can
+  // defeat the stop entirely. On a CLI-owned macOS host, `host restart` sends
+  // `launchctl kill TERM`, then `stopService` waits only on the (already dead)
+  // host pid and proceeds to `kickstart` - which no-ops while launchd still
+  // considers this supervisor running (see `platforms/macos.ts`). By the time
+  // the sleep ends and the latch is read, the restart has already no-op'd and
+  // the machine is left hostless.
+  let markShutdownRequested: () => void = () => undefined;
+  const shutdownRequested = new Promise<void>((resolve) => {
+    markShutdownRequested = resolve;
+  });
 
   // Registered ONCE for the supervisor's whole life. Five relaunches must not
   // install five listener sets, so the handler reads a mutable reference to
@@ -603,6 +613,7 @@ export async function runHostStart(
   const shutdownHandlers = FORWARDED_SHUTDOWN_SIGNALS.map((sig) => {
     const handler = (): void => {
       shuttingDown = true;
+      markShutdownRequested();
       const child = currentChild;
       logger.debug("Host supervisor forwarding signal to child", {
         environment: opts.environment,
@@ -736,6 +747,7 @@ export async function runHostStart(
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
           supervisorStartedAtMs,
+          shutdownRequested,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -1032,6 +1044,7 @@ export async function runHostStart(
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
           supervisorStartedAtMs,
+          shutdownRequested,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -1117,7 +1130,11 @@ export async function runHostStart(
     // about to exit anyway.
     currentChild = child;
     let childFinalized = false;
-    const ending = await new Promise<ChildEnding>((resolve) => {
+    // Constructed SYNCHRONOUSLY, so both listeners are attached before the
+    // intent re-read below can yield. A child that died during that await
+    // would otherwise emit `exit` with nothing listening, and this promise
+    // would never settle.
+    const childEnding = new Promise<ChildEnding>((resolve) => {
       const settle = (value: ChildEnding): void => {
         if (childFinalized) return;
         childFinalized = true;
@@ -1133,6 +1150,41 @@ export async function runHostStart(
         settle({ kind: "exit", code, signal }),
       );
     });
+
+    // The pre-spawn guard closes the window it can see, but not a CROSS-PROCESS
+    // one: `host stop` can write its intent just after that read returned
+    // false, scan for a host while this child does not exist yet, find nothing
+    // to kill, and return successfully - leaving a host running that the
+    // stopper never saw. The stopper cannot fix this from its side, because it
+    // has no way to wait for a process that has not been created.
+    //
+    // So the supervisor closes it from ours: having created the child, ask
+    // once more, and undo the spawn if the answer changed. Latching
+    // `shuttingDown` is what makes the death that follows read as requested
+    // rather than as a crash to be recovered.
+    if (
+      !shuttingDown &&
+      (await deps.hasStopIntent(
+        opts.environment,
+        Date.now(),
+        supervisorStartedAtMs,
+      ))
+    ) {
+      logger.info("Host supervisor stopping a child a stop raced", {
+        environment: opts.environment,
+        attemptId,
+        childPidKnown: child.pid !== undefined,
+      });
+      shuttingDown = true;
+      markShutdownRequested();
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Already gone - the ending below still settles.
+      }
+    }
+
+    const ending = await childEnding;
     currentChild = null;
 
     if (ending.kind === "spawn-error") {
@@ -1159,6 +1211,7 @@ export async function runHostStart(
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
           supervisorStartedAtMs,
+          shutdownRequested,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -1192,6 +1245,27 @@ export async function runHostStart(
       preexistingReportNames,
     });
 
+    // The diagnostic wait above is bounded precisely BECAUSE a grandchild can
+    // inherit the dead host's stderr and hold the pipe open indefinitely. When
+    // that bound expires the stream is still live, still has a `data` listener
+    // feeding this attempt's tee, and still holds a libuv handle - so a
+    // supervisor that goes on to relaunch keeps every one of them, per attempt,
+    // for as long as it lives. The five-relaunch budget does not bound that: a
+    // child surviving the sustained-uptime window resets the counter, so spaced
+    // crash cycles accumulate without limit. Same argument as the log fd.
+    //
+    // Best-effort and deliberately last: the marker and the capture have both
+    // already been written from this stream by the time we get here.
+    const attemptStderr = child.stderr;
+    if (attemptStderr !== null && attemptStderr !== undefined) {
+      attemptStderr.removeAllListeners("data");
+      try {
+        attemptStderr.destroy();
+      } catch {
+        // A stream that is already closed must not end the supervisor.
+      }
+    }
+
     // A clean exit is the host standing down on purpose - never relaunch it.
     // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
     // restated, which is the point: one semantic on all three platforms.
@@ -1216,6 +1290,7 @@ export async function runHostStart(
       consecutiveRelaunches,
       isShuttingDown: () => shuttingDown,
       supervisorStartedAtMs,
+      shutdownRequested,
     });
     if (decision.kind !== "relaunch") {
       return exitSupervisor(outcome.exitCode);
@@ -1273,6 +1348,7 @@ async function decideRelaunch(input: {
   readonly consecutiveRelaunches: number;
   readonly isShuttingDown: () => boolean;
   readonly supervisorStartedAtMs: number;
+  readonly shutdownRequested: Promise<void>;
 }): Promise<RelaunchDecision> {
   const { deps, logger, environment, reason } = input;
   const refused = async (when: "before" | "after"): Promise<boolean> => {
@@ -1332,7 +1408,11 @@ async function decideRelaunch(input: {
     maxAttempts: deps.maxRelaunches,
     backoffMs,
   });
-  await deps.sleep(backoffMs);
+  // Whichever comes first. A shutdown signal ENDS the wait rather than being
+  // noticed after it - see the note on `shutdownRequested`. The Windows
+  // sentinel has no such edge to race against, so it is still caught by the
+  // re-read below; there the cost of waiting is latency, not a defeated stop.
+  await Promise.race([deps.sleep(backoffMs), input.shutdownRequested]);
   // The load-bearing one: a stop that landed while we slept.
   if (await refused("after")) return { kind: "stop" };
   return {
@@ -1509,20 +1589,26 @@ async function persistChildExit(input: {
             },
       ),
       exitCode: 128 + signalNumber(signal),
-      // Recoverability is a DIFFERENT question from diagnosability, and using
-      // `fatalMeaning` for both was wrong. `describeFatalSignal` answers "can
-      // this signal be explained in a support log" - a deliberately narrow
-      // whitelist of native-crash signals. It does not contain `SIGKILL`, so
-      // an OOM-killed host - the single most likely way a host dies by signal
-      // on Linux - read as "not abnormal" and was never relaunched.
+      // EVERY signal death is abnormal here, and the deliberate-stop question
+      // is answered where it is actually known - `decideRelaunch`, which reads
+      // the `shuttingDown` latch and the stop-intent file.
       //
-      // The question here is only whether the death was ASKED FOR. The three
-      // signals this supervisor forwards are the ones a deliberate stop
-      // arrives as; anything else killed the child from outside and is
-      // recoverable. This stays a second, independent guard alongside the
-      // `shuttingDown` latch, because a child can be signalled directly
-      // without the supervisor ever being told.
-      abnormal: !isForwardedShutdownSignal(signal),
+      // Two earlier shapes of this line were both wrong, in the same way:
+      // they answered "was this death asked for" with a proxy.
+      //
+      //   1. `fatalMeaning !== null` used `describeFatalSignal`, which answers
+      //      "can this be explained in a support log" - a narrow whitelist of
+      //      native-crash signals that deliberately omits SIGKILL. An
+      //      OOM-killed host, the likeliest signal death on Linux, was never
+      //      relaunched.
+      //   2. `!isForwardedShutdownSignal(signal)` used the signal NAME. But a
+      //      name only says the signal COULD have been forwarded, not that it
+      //      was: an operator or watchdog signalling the child directly leaves
+      //      the latch false and no intent on disk, and the host stayed down.
+      //
+      // The signal carries no evidence about intent. Only the latch and the
+      // sentinel do, and both are already consulted downstream.
+      abnormal: true,
     });
   }
   if (code === null || code === 0) {
