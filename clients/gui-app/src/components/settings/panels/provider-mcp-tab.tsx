@@ -961,6 +961,9 @@ export function ProviderMcpTab(props: {
         listPending={listQuery.isPending}
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
+        onRetryList={() => {
+          void listQuery.refetch();
+        }}
         servers={servers}
         providerLabel={providerLabel}
         capabilities={capabilities}
@@ -1123,6 +1126,7 @@ function McpServerList(props: {
   readonly listPending: boolean;
   readonly listError: boolean;
   readonly errorMessage: string | null;
+  readonly onRetryList: () => void;
   readonly servers: readonly ProviderMcpServer[];
   readonly providerLabel: string;
   readonly capabilities: ProviderMcpCapabilities;
@@ -1170,6 +1174,8 @@ function McpServerList(props: {
         <EmptyState
           title="Select a workspace"
           description="Choose a project workspace above to manage project-scoped MCP servers on this host."
+          actionLabel={null}
+          onAction={null}
         />
       );
     }
@@ -1177,6 +1183,8 @@ function McpServerList(props: {
       <EmptyState
         title="Open a workspace"
         description="Open a workspace on this host to manage project-scoped MCP servers."
+        actionLabel={null}
+        onAction={null}
       />
     );
   }
@@ -1193,6 +1201,8 @@ function McpServerList(props: {
       <EmptyState
         title="Couldn't load MCP servers"
         description={props.errorMessage ?? "Try refreshing or check the host."}
+        actionLabel="Retry"
+        onAction={props.onRetryList}
       />
     );
   }
@@ -1201,6 +1211,8 @@ function McpServerList(props: {
       <EmptyState
         title="No MCP servers"
         description={`Add an MCP server so ${props.providerLabel} can use external tools and context.`}
+        actionLabel={null}
+        onAction={null}
       />
     );
   }
@@ -1260,6 +1272,8 @@ function McpServerList(props: {
 function EmptyState(props: {
   readonly title: string;
   readonly description: string;
+  readonly actionLabel: string | null;
+  readonly onAction: (() => void) | null;
 }): ReactNode {
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-border/60 p-4">
@@ -1267,6 +1281,17 @@ function EmptyState(props: {
         {props.title}
       </div>
       <p className="text-ui-xs text-muted-foreground">{props.description}</p>
+      {props.actionLabel !== null && props.onAction !== null ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2 self-start"
+          onClick={props.onAction}
+        >
+          {props.actionLabel}
+        </Button>
+      ) : null}
     </div>
   );
 }
