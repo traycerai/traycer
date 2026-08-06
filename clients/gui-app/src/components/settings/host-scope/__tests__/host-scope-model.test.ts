@@ -158,6 +158,55 @@ describe("buildHostScopeOptions connectable", () => {
   });
 });
 
+describe("buildHostScopeOptions planRestricted", () => {
+  // `connectable: false` alone erased WHY, and consumers rendered a billing
+  // limit as "unreachable" — sending people debugging their network when the
+  // remedy is an upgrade. `planRestricted` is true exactly when the plan gate
+  // is the ONLY thing costing the route.
+  it("names the plan gate when it alone costs a live remote route", () => {
+    const option = buildOne({
+      entry: entry({ kind: "remote" }),
+      item: null,
+      localHostId: null,
+      remoteHostsPlanRestricted: true,
+    });
+    expect(option.connectable).toBe(false);
+    expect(option.planRestricted).toBe(true);
+  });
+
+  it("stays false for a genuinely unreachable route, restricted plan or not", () => {
+    // No URL / stale status is connectivity, not billing: an upgrade would
+    // not fix it, so the upgrade affordance must not appear.
+    expect(
+      buildOne({
+        entry: entry({ kind: "remote", websocketUrl: null }),
+        item: null,
+        localHostId: null,
+        remoteHostsPlanRestricted: true,
+      }).planRestricted,
+    ).toBe(false);
+    expect(
+      buildOne({
+        entry: entry({ kind: "remote", status: "unavailable" }),
+        item: null,
+        localHostId: null,
+        remoteHostsPlanRestricted: true,
+      }).planRestricted,
+    ).toBe(false);
+  });
+
+  it("stays false on a plan that includes remote hosts", () => {
+    expect(
+      buildOne({
+        entry: entry({ kind: "remote" }),
+        item: null,
+        localHostId: null,
+        remoteHostsPlanRestricted: false,
+      }).planRestricted,
+    ).toBe(false);
+  });
+});
+
 describe("resolveScopedHost", () => {
   const PINNED = hostScopeOptionFixture({ hostId: "host-pinned" });
   const ACTIVE = hostScopeOptionFixture({ hostId: "host-active" });

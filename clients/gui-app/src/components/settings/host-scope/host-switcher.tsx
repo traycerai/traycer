@@ -295,10 +295,13 @@ function HostSwitcherRow(props: {
       {props.active ? <ActiveTag /> : null}
       {/* A host this client cannot dial is still worth listing — it is the
           account's host and its status is real — but saying so up front
-          prevents a click that could only ever fail. */}
+          prevents a click that could only ever fail. Plan-gated is named
+          apart from unreachable: the first is fixed by an upgrade, the
+          second maybe by waiting, and one word covering both sends people
+          debugging their network over a billing limit. */}
       {host.connectable ? null : (
         <span className="shrink-0 text-ui-xs text-muted-foreground">
-          unreachable
+          {host.planRestricted ? "requires upgrade" : "unreachable"}
         </span>
       )}
       <HostPresenceDot

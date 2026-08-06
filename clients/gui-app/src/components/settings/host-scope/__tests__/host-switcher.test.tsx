@@ -135,4 +135,34 @@ describe("<HostSwitcher /> empty vs failed", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetryLists).toHaveBeenCalledTimes(1);
   });
+
+  it("labels a plan-gated host 'requires upgrade', not 'unreachable'", () => {
+    // Same `connectable: false`, different fact: one is fixed by an upgrade,
+    // the other maybe by waiting. One word covering both sent people
+    // debugging their network over a billing limit.
+    render(
+      <HostSwitcher
+        hosts={[
+          hostScopeOptionFixture({
+            hostId: "host-gated",
+            name: "Office Linux",
+            isLocalMachine: false,
+            connectable: false,
+            planRestricted: true,
+          }),
+        ]}
+        selected={null}
+        activeHostId={null}
+        onSelect={() => undefined}
+        onAddHost={() => undefined}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    expect(screen.getByText("requires upgrade")).not.toBeNull();
+    expect(screen.queryByText("unreachable")).toBeNull();
+  });
 });

@@ -39,6 +39,13 @@ export interface HostScopeOption {
   readonly isActive: boolean;
   /** In the runtime directory with a dialable URL — i.e. administrable. */
   readonly connectable: boolean;
+  /**
+   * `connectable` is false ONLY because of the plan gate: the route is
+   * present and live, and the server would refuse the attach
+   * (`plan_restricted`). A consumer that renders this as "unreachable"
+   * erases the actual remedy — the fix is an upgrade, not a retry.
+   */
+  readonly planRestricted: boolean;
   /** Present in the account's host registry. */
   readonly registered: boolean;
   readonly platform: string | null;
@@ -89,6 +96,10 @@ export function buildHostScopeOptions(
       isLocalMachine,
       isActive: hostId === input.activeHostId,
       connectable: isAdministrableRoute(entry, input.remoteHostsPlanRestricted),
+      planRestricted: isPlanRestrictedRoute(
+        entry,
+        input.remoteHostsPlanRestricted,
+      ),
       registered: item !== null,
       platform: item?.platform ?? null,
       version: item?.status.appVersion ?? entry?.version ?? null,
@@ -141,6 +152,23 @@ function isAdministrableRoute(
   if (entry === null || entry.websocketUrl === null) return false;
   if (entry.status !== "available") return false;
   return !(remoteHostsPlanRestricted && entry.kind === "remote");
+}
+
+/**
+ * The one case where `connectable: false` is a BILLING fact rather than a
+ * connectivity one: the route is present and live, and only the plan gate
+ * refuses it. Recorded separately because the boolean alone erased the
+ * distinction — the deleted My Hosts notice said "requires a paid plan —
+ * Upgrade", and rendering these rows as generically "unreachable" replaced
+ * that remedy with a retry that can never work.
+ */
+function isPlanRestrictedRoute(
+  entry: HostDirectoryEntry | null,
+  remoteHostsPlanRestricted: boolean,
+): boolean {
+  if (entry === null || entry.websocketUrl === null) return false;
+  if (entry.status !== "available") return false;
+  return remoteHostsPlanRestricted && entry.kind === "remote";
 }
 
 /**

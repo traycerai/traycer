@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
-import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 /**
  * The gate is where "no hosts in hand" is turned into a sentence a person
@@ -27,6 +32,48 @@ describe("<HostScopeGate /> empty and failed states", () => {
 
     expect(screen.getByTestId("body")).not.toBeNull();
     expect(screen.queryByTestId("skeleton")).toBeNull();
+  });
+
+  it("names the plan gate and offers Upgrade instead of claiming unreachable", () => {
+    // A plan-gated route is a billing fact: the host works on its own
+    // machine and the server refuses the attach. Rendering it through the
+    // generic unreachable notice sent people debugging connectivity over a
+    // limit only an upgrade lifts.
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.example/sign-in",
+      authnBaseUrl: "https://auth.example",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    render(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostScopeGate
+          scope={hostScopeFixture({
+            host: hostScopeOptionFixture({
+              hostId: "host-b",
+              name: "Office Linux",
+              isLocalMachine: false,
+              connectable: false,
+              planRestricted: true,
+            }),
+            status: "unreachable",
+          })}
+          skeleton={<div data-testid="skeleton" />}
+        >
+          <div data-testid="body" />
+        </HostScopeGate>
+      </RunnerHostProvider>,
+    );
+
+    expect(screen.getByTestId("host-scope-plan-restricted")).not.toBeNull();
+    expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+    expect(screen.queryByTestId("body")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    expect(runnerHost.openedExternalLinks.length).toBe(1);
   });
 
   it("renders the skeleton, not the body, while the scope is connecting", () => {

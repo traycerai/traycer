@@ -29,6 +29,7 @@ import type {
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("sonner", () => ({
@@ -42,9 +43,11 @@ vi.mock("sonner", () => ({
 const hostScopeMocks: {
   client: HostClient<HostRpcRegistry> | null;
   hostId: string;
+  extra: Partial<HostScope>;
 } = vi.hoisted(() => ({
   client: null,
   hostId: "host-a",
+  extra: {},
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
@@ -57,6 +60,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       hostScopeFixture({
         client: hostScopeMocks.client,
         hostId: hostScopeMocks.hostId,
+        ...hostScopeMocks.extra,
       }),
   };
 });
@@ -64,6 +68,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 afterEach(() => {
   cleanup();
   hostScopeMocks.hostId = "host-a";
+  hostScopeMocks.extra = {};
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.info).mockClear();
@@ -109,6 +114,31 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+  });
+
+  it("keeps the install console reachable on a fresh install with no hosts anywhere", async () => {
+    // First run: no local host id yet, so the union has no row at all and the
+    // scope resolves to NOTHING. The old branch rendered only the "No hosts
+    // yet" notice — while the CLI bridge sat right here reporting
+    // not-installed. Install must not hide behind a host list that can only
+    // become non-empty by installing.
+    hostScopeMocks.extra = {
+      host: null,
+      hosts: [],
+      hostId: null,
+      vanishedHostId: null,
+      isLoading: false,
+      listsFailed: false,
+      status: "unreachable",
+    };
+    const { management } = makeManagement({
+      installedRecord: vi.fn(() => Promise.resolve(null)),
+    });
+    renderPanel(makeHost(management, null));
+
+    const install = await waitForButton("Install host");
+    expect(install.getAttribute("data-variant")).toBe("default");
+    expect(screen.queryByTestId("host-scope-empty")).toBeNull();
   });
 
   it("disarms an open restart confirmation when the scoped host changes", async () => {

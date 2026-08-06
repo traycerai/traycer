@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { cn } from "@/lib/utils";
 
 /**
@@ -93,44 +96,7 @@ export function HostScopeGate(props: {
   }
 
   if (scope.status === "unreachable") {
-    return (
-      <HostScopeNotice
-        tone="warn"
-        title={`Can't reach ${scope.host.name} from here`}
-        // The two causes read the same to a user but have different fixes, so
-        // the copy names which one this is rather than offering a generic
-        // "try again" against a route that does not exist.
-        detail={
-          scope.host.registered && !scope.host.connectable
-            ? "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
-            : "No connection is available to this host."
-        }
-        // Gated on `!scope.isViewingActive` — and that arm is live now, though
-        // it genuinely was dead when this was written. The reasoning then was
-        // that `deriveHostScopeStatus` answers "following" before it can ever
-        // answer "unreachable", so the active host could not reach this branch.
-        // Asking `connectable` BEFORE `isFollowing` — so an active host whose
-        // directory entry goes `unavailable` stops mounting RPC panels — made
-        // the combination reachable, and with it a button offering to take you
-        // "Back to" the host you are already on by clearing an override that is
-        // already null. There is nothing to return to, so nothing is offered:
-        // the notice above already names the host and says why it is stuck.
-        action={
-          scope.isViewingActive ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={scope.returnToActive}
-              data-testid="host-scope-return-to-active"
-            >
-              Back to {scope.activeHost?.name ?? "your active host"}
-            </Button>
-          )
-        }
-        testId="host-scope-unreachable"
-      />
-    );
+    return <UnreachableNotice scope={scope} host={scope.host} />;
   }
 
   if (scope.status === "connecting") {
@@ -138,6 +104,91 @@ export function HostScopeGate(props: {
   }
 
   return <>{props.children}</>;
+}
+
+function UnreachableNotice(props: {
+  readonly scope: HostScope;
+  readonly host: HostScopeOption;
+}): ReactNode {
+  const { scope, host } = props;
+  // A plan-gated route is not a broken one. The server would refuse the
+  // attach (`plan_restricted`) while the host keeps working on its own
+  // machine — so the remedy is an upgrade, and presenting it as "can't
+  // reach" sends people debugging connectivity over a billing limit. The
+  // deleted My Hosts list carried exactly this notice; the scope model now
+  // preserves the reason so this gate can keep making the distinction.
+  if (host.planRestricted) {
+    return (
+      <HostScopeNotice
+        tone="warn"
+        title={`Connecting to ${host.name} needs a paid plan`}
+        detail="It keeps working on its own machine, and account-level settings here still apply. This app just can't attach to it remotely on the current plan."
+        action={<PlanRestrictedUpgradeAction />}
+        testId="host-scope-plan-restricted"
+      />
+    );
+  }
+  return (
+    <HostScopeNotice
+      tone="warn"
+      title={`Can't reach ${host.name} from here`}
+      // The two causes read the same to a user but have different fixes, so
+      // the copy names which one this is rather than offering a generic
+      // "try again" against a route that does not exist.
+      detail={
+        host.registered && !host.connectable
+          ? "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
+          : "No connection is available to this host."
+      }
+      // Gated on `!scope.isViewingActive` — and that arm is live now, though
+      // it genuinely was dead when this was written. The reasoning then was
+      // that `deriveHostScopeStatus` answers "following" before it can ever
+      // answer "unreachable", so the active host could not reach this branch.
+      // Asking `connectable` BEFORE `isFollowing` — so an active host whose
+      // directory entry goes `unavailable` stops mounting RPC panels — made
+      // the combination reachable, and with it a button offering to take you
+      // "Back to" the host you are already on by clearing an override that is
+      // already null. There is nothing to return to, so nothing is offered:
+      // the notice above already names the host and says why it is stuck.
+      action={
+        scope.isViewingActive ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={scope.returnToActive}
+            data-testid="host-scope-return-to-active"
+          >
+            Back to {scope.activeHost?.name ?? "your active host"}
+          </Button>
+        )
+      }
+      testId="host-scope-unreachable"
+    />
+  );
+}
+
+/**
+ * Its own component so `useRunnerHost` mounts only in the plan-restricted
+ * branch — the gate itself stays renderable without the runner provider.
+ */
+function PlanRestrictedUpgradeAction(): ReactNode {
+  const runnerHost = useRunnerHost();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={() => {
+        void runnerHost.openExternalLink(
+          resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
+        );
+      }}
+      data-testid="host-scope-plan-upgrade"
+    >
+      Upgrade plan
+    </Button>
+  );
 }
 
 function HostScopeNotice(props: {

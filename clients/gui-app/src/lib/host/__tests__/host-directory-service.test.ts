@@ -13,6 +13,7 @@ import {
 } from "@/lib/host/host-directory-service";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
@@ -111,6 +112,7 @@ afterEach(() => {
   }
   window.localStorage.removeItem(LAST_SELECTED_HOST_STORAGE_KEY);
   window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
+  useSettingsHostScopeStore.getState().setScopedHostId(null);
   if (restoreDocumentHidden !== null) {
     restoreDocumentHidden();
     restoreDocumentHidden = null;
@@ -1744,6 +1746,63 @@ describe("HostDirectoryService", () => {
       expect(directory.getSelected()?.kind).toBe("local");
       expect(window.localStorage.getItem(LAST_LOCAL_HOST_ID_STORAGE_KEY)).toBe(
         "re-enrolled-host-id",
+      );
+    });
+
+    it("migrates a pinned Settings scope of the old local id on re-enrollment", async () => {
+      // The Settings viewing scope is a holder like the persisted and live
+      // selections: left behind, it keeps administering the dead registry
+      // twin, then reads `vanished` once the twin deregisters.
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      useSettingsHostScopeStore
+        .getState()
+        .setScopedHostId(localSnapshot.hostId);
+      const host = makeHost(localSnapshot);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+      });
+      await directory.start();
+
+      host.setLocalHost({
+        ...localSnapshot,
+        hostId: "re-enrolled-host-id",
+      });
+      await flushPromises();
+
+      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+        "re-enrolled-host-id",
+      );
+    });
+
+    it("leaves a genuine remote Settings pin unchanged on re-enrollment", async () => {
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      useSettingsHostScopeStore
+        .getState()
+        .setScopedHostId("some-other-remote-host");
+      const host = makeHost(localSnapshot);
+      const directory = makeDirectory({
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+      });
+      await directory.start();
+
+      host.setLocalHost({
+        ...localSnapshot,
+        hostId: "re-enrolled-host-id",
+      });
+      await flushPromises();
+
+      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+        "some-other-remote-host",
       );
     });
 

@@ -21,6 +21,7 @@ export function hostScopeOptionFixture(
     isLocalMachine: true,
     isActive: true,
     connectable: true,
+    planRestricted: false,
     registered: true,
     platform: "darwin-arm64",
     version: "1.4.2",

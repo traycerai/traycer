@@ -229,6 +229,22 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   // was paying five CLI-bridge calls per visit for data nothing displayed.
   const scopedIsLocalMachine = scope.host?.isLocalMachine ?? false;
 
+  // The fresh-install carve-out. On a first run there is no local host id
+  // yet, so the union has no local row at all: the scope resolves to NOTHING
+  // and the honest-state rule above would leave only an empty notice — while
+  // the CLI bridge sits right here reporting `not-installed`, which is the
+  // one state the install console exists for. An EMPTY account (both lists
+  // answered, nothing failed, no vanished pick) is exactly when this
+  // computer's console is recovery rather than misattribution: there is no
+  // other host the controls could be mistaken for.
+  const emptyAccountLocalRecovery =
+    scope.host === null &&
+    scope.vanishedHostId === null &&
+    scope.hosts.length === 0 &&
+    !scope.isLoading &&
+    !scope.listsFailed;
+  const showLocalConsole = scopedIsLocalMachine || emptyAccountLocalRecovery;
+
   // Canonical two-lane `HostControllerStatus` (Host Update Layer Redesign
   // Tech Plan), shared with the landing-page banner, the tray/menu, and any
   // other open window via the same query key. The mutation lane drives the
@@ -255,7 +271,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       ),
       queryFn: () => management.availableVersions({ includePreReleases }),
       staleTime: 5 * 60 * 1000,
-      enabled: scopedIsLocalMachine,
+      enabled: showLocalConsole,
     }),
   );
 
@@ -264,7 +280,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostRegistryUpdate(management),
       queryFn: () => management.registryCheck({ force: false }),
       staleTime: 60 * 60 * 1000,
-      enabled: scopedIsLocalMachine,
+      enabled: showLocalConsole,
     }),
   );
 
@@ -273,7 +289,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostInstalledRecord(management),
       queryFn: () => management.installedRecord(),
       staleTime: 30_000,
-      enabled: scopedIsLocalMachine,
+      enabled: showLocalConsole,
     }),
   );
 
@@ -282,7 +298,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostCliManifest(management),
       queryFn: () => management.cliManifest(),
       staleTime: 5 * 60 * 1000,
-      enabled: scopedIsLocalMachine,
+      enabled: showLocalConsole,
     }),
   );
 
@@ -295,7 +311,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostName(management),
       queryFn: () => management.getHostName(),
       staleTime: 30_000,
-      enabled: scopedIsLocalMachine,
+      enabled: showLocalConsole,
     }),
   );
 
@@ -653,8 +669,13 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           So the gate now wraps the one region that IS host RPC. What replaces
           it above is the weaker, correct question — did the scope settle on a
           host at all — and `scopedIsLocalMachine` (`?? false`) is what keeps a
-          non-local host from reaching the local console. */}
-      {scope.host === null || scope.status === "vanished" ? (
+          non-local host from reaching the local console. One carve-out: an
+          EMPTY account with the CLI bridge present renders the console anyway
+          (`emptyAccountLocalRecovery`) — a first run has no local host id and
+          therefore no row to resolve, and hiding Install behind "No hosts
+          yet" left a fresh install with no way to create its first host. */}
+      {(scope.host === null && !emptyAccountLocalRecovery) ||
+      scope.status === "vanished" ? (
         <HostScopeGate
           scope={scope}
           skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
@@ -663,7 +684,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         </HostScopeGate>
       ) : (
         <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-          {scopedIsLocalMachine ? null : (
+          {showLocalConsole || scope.host === null ? null : (
             <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
               <ThisWindowCard scope={scope} host={scope.host} />
               <HostIdRow
@@ -673,9 +694,9 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
             </HostIdentityCard>
           )}
 
-          {scopedIsLocalMachine ? null : updatesCard}
+          {showLocalConsole ? null : updatesCard}
 
-          {scopedIsLocalMachine ? (
+          {showLocalConsole ? (
             <>
               {packageManagerUpgrade !== null ? (
                 <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
@@ -763,9 +784,11 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
 
               {updatesCard}
 
-              {/* Unconditional: the branch above already established a resolved
-                host, so the old null check could not fire. */}
-              <ThisWindowCardStandalone scope={scope} host={scope.host} />
+              {/* Null only in the fresh-install carve-out, where there is no
+                host row yet for this card to describe. */}
+              {scope.host === null ? null : (
+                <ThisWindowCardStandalone scope={scope} host={scope.host} />
+              )}
 
               <SettingsGroup
                 title="Installation"
@@ -812,8 +835,11 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
             needs a live route, but removing Traycer runs over the local CLI
             bridge and is exactly what someone reaches for when the service is
             stopped or broken. A gate around both took the recovery action away
-            in the only state that needs it, so the region gates its own rows. */}
-          <HostDangerZone scope={scope} />
+            in the only state that needs it, so the region gates its own rows.
+
+            Skipped in the fresh-install carve-out: with no host row there is
+            nothing to clear and nothing enrolled to remove. */}
+          {scope.host === null ? null : <HostDangerZone scope={scope} />}
         </div>
       )}
 
