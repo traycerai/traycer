@@ -1200,6 +1200,14 @@ export async function runHostStart(
     }
 
     const ending = await childEnding;
+    // Stamped HERE, at the child's death, not where uptime is finally compared.
+    // Everything between the two is diagnostics - the stderr end wait (2s), the
+    // tee flush (1s) and the bounded crash-report scan (2s) - so reading the
+    // clock later credits a dead child with up to five seconds it did not run.
+    // That is enough to carry a host that died just short of
+    // `SUSTAINED_UPTIME_RESET_MS` over the line and reset the budget, which is
+    // the governor's own re-arming bug in a narrower window.
+    const childEndedAtMs = Date.now();
     currentChild = null;
 
     if (ending.kind === "spawn-error") {
@@ -1295,7 +1303,7 @@ export async function runHostStart(
     // records why a weaker rule is wrong - a host that dies shortly after boot
     // every time answers "it started" every time, and treating that as recovery
     // is what let the original respawn loop re-arm itself forever.
-    const ranForMs = Date.now() - childSpawnedAtMs;
+    const ranForMs = childEndedAtMs - childSpawnedAtMs;
     if (ranForMs >= SUSTAINED_UPTIME_RESET_MS) {
       consecutiveRelaunches = 0;
     }

@@ -8,6 +8,7 @@ import { createLinuxController } from "./platforms/linux";
 import { createMacosController } from "./platforms/macos";
 import { createWindowsController } from "./platforms/windows";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
+import { findLiveIncumbentHost } from "../host/incumbent-check";
 
 export type { ServiceLabel } from "./label";
 export { serviceLabelFor, serviceManifestPath, windowsTaskName } from "./label";
@@ -196,7 +197,7 @@ export function formatServiceLifecycleWarning(
 // so callers don't re-resolve per call.
 /**
  * Announce a deliberate stop before it happens, and withdraw the announcement
- * once something has been started again.
+ * only when the host turns out to have SURVIVED it.
  *
  * Wrapped HERE, at the single production factory, rather than inside each
  * platform backend: every stop route in the CLI (`host stop`, `host restart`,
@@ -257,27 +258,65 @@ async function announceStop(
   });
 }
 
+/**
+ * Withdraw the announcement, but ONLY if the host is still serving.
+ *
+ * The question a failed stop has to answer is "did the kill land?", and the
+ * honest instrument for that is the same one the supervisor itself uses: is
+ * something actually answering the recorded endpoint. Not the error type - a
+ * `HOST_BUSY` refusal happens before anything is touched, but `stopService`
+ * throwing because the pid outlived its exit wait happens strictly AFTER the
+ * kill, and both arrive here as an exception.
+ *
+ * Live host: the operation did not remove it, so the record must go - otherwise
+ * a refused stop would suppress that live host's own crash recovery for the
+ * whole freshness window, and a machine left hostless is the failure this
+ * ticket exists to end.
+ *
+ * Nothing live: the kill landed and only the cleanup failed. The record is now
+ * the only evidence that the child's death was asked for, and clearing it would
+ * let the orphaned supervisor read a deliberate kill as a crash and bring the
+ * host back - after a `host uninstall`, possibly with its task already deleted.
+ *
+ * An unreachable probe reads as "nothing live" and therefore KEEPS the record,
+ * which is the safe half here: the cost is a bounded recovery pause, against
+ * resurrecting a host the user explicitly asked to remove.
+ */
+async function retireIntentIfHostSurvived(
+  environment: ServiceLabel["environment"],
+): Promise<void> {
+  if ((await findLiveIncumbentHost(environment)) === null) return;
+  await clearStopIntent(environment);
+}
+
 export function withStopIntent(
   controller: ServiceController,
 ): ServiceController {
   return {
     ...controller,
     // Intent is written BEFORE the operation - that ordering is the contract,
-    // since the supervisor has to be able to see it before anything is killed
-    // - and cleared again if the operation THROWS.
+    // since the supervisor has to be able to see it before anything is killed.
     //
-    // Deliberately not `finally`: on success the record must OUTLIVE this
-    // call, because reading it is how the supervisor knows the child's death
-    // was asked for. On failure it must not. `stopForRestart` refusing with
-    // `HOST_BUSY` leaves the host RUNNING, and an abandoned "restart" record
-    // would then suppress that live host's crash recovery for the whole
-    // freshness window - a refused restart ending in a hostless machine.
+    // Nothing withdraws it on the ordinary path, and that is not an oversight.
+    // `hasActionableStopIntent` filters by the READER's invocation time, so the
+    // record already answers each supervisor differently: the one that predates
+    // it (the process being retired) is silenced, and the one started after it
+    // treats it as served and spawns normally. It then expires on its own.
+    //
+    // The starts used to clear it in `finally`, on the reasoning that "a
+    // leftover intent would suppress the NEXT crash's recovery". The invocation
+    // cutoff had already made that false, and the clear was doing real damage:
+    // on win32 the killed host's supervisor SURVIVES as an orphan, and
+    // `restartService` returns once the replacement's `starting` marker is
+    // written - before it has spawned a child or published `pid.json`. Clearing
+    // there hands the old supervisor a window in which it sees neither intent
+    // nor an incumbent, and it relaunches. One restart, two hosts.
     stop: async (label) => {
       await announceStop(label.environment, "stop");
       try {
         return await controller.stop(label);
       } catch (error) {
-        await clearStopIntent(label.environment);
+        await retireIntentIfHostSurvived(label.environment);
         throw error;
       }
     },
@@ -286,7 +325,7 @@ export function withStopIntent(
       try {
         return await controller.stopForRestart(label);
       } catch (error) {
-        await clearStopIntent(label.environment);
+        await retireIntentIfHostSurvived(label.environment);
         throw error;
       }
     },
@@ -295,42 +334,17 @@ export function withStopIntent(
       try {
         return await controller.uninstall(options);
       } catch (error) {
-        await clearStopIntent(options.label.environment);
+        await retireIntentIfHostSurvived(options.label.environment);
         throw error;
-      }
-    },
-    // The starts CLEAR intent, and do so in `finally`: a start that failed is
-    // still not a stop in progress, and a leftover intent would suppress the
-    // NEXT crash's recovery. Biasing toward "recoverable" matches
-    // `findLiveIncumbentHost`'s own bias - the costly failure here is a machine
-    // left hostless, not one extra relaunch.
-    start: async (label) => {
-      try {
-        return await controller.start(label);
-      } finally {
-        await clearStopIntent(label.environment);
       }
     },
     restart: async (label) => {
       await announceStop(label.environment, "restart");
       try {
         return await controller.restart(label);
-      } finally {
-        await clearStopIntent(label.environment);
-      }
-    },
-    relaunchAfterRestart: async (label, stop) => {
-      try {
-        return await controller.relaunchAfterRestart(label, stop);
-      } finally {
-        await clearStopIntent(label.environment);
-      }
-    },
-    install: async (options) => {
-      try {
-        return await controller.install(options);
-      } finally {
-        await clearStopIntent(options.label.environment);
+      } catch (error) {
+        await retireIntentIfHostSurvived(label.environment);
+        throw error;
       }
     },
   };

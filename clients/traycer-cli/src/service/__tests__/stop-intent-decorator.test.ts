@@ -1,24 +1,34 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-// The decorator's whole contract is an ORDERING and a failure rule:
+// The decorator's whole contract is an ORDERING and a withdrawal rule:
 //
 //   - intent is written BEFORE the operation, because the supervisor has to be
 //     able to see it before anything is killed;
-//   - on success it OUTLIVES the call, because reading it is how the
-//     supervisor knows the child's death was asked for;
-//   - on failure it is cleared, because an operation that did not happen must
-//     not leave a record claiming it did.
+//   - it OUTLIVES the call, because reading it is how the supervisor knows the
+//     child's death was asked for, and because `hasActionableStopIntent`
+//     already answers each supervisor separately by its invocation time;
+//   - it is withdrawn ONLY when the operation failed AND the host is still
+//     serving, because that is the one case where the record describes a kill
+//     that did not happen.
 //
-// That last rule is the one with teeth. `stopForRestart` refusing with
-// `HOST_BUSY` leaves the host RUNNING, and an abandoned "restart" record would
-// suppress that live host's crash recovery for the whole freshness window - a
-// refused restart ending in a hostless machine.
+// The withdrawal rule is the one with teeth, in both directions. Withdraw too
+// eagerly and a partly-completed uninstall lets the orphaned supervisor read a
+// deliberate kill as a crash and bring the host back. Never withdraw and a
+// `HOST_BUSY` refusal - which leaves the host RUNNING and untouched - suppresses
+// that live host's own crash recovery for the whole freshness window.
+//
+// Note what does NOT decide it: the error type. `HOST_BUSY` is raised before
+// anything is touched, but `stopService` throwing because the pid outlived its
+// exit wait happens strictly after the kill, and both arrive as an exception.
+// Only liveness separates them.
 
 const mocks = vi.hoisted(() => ({
   writes: [] as string[],
   clears: [] as string[],
   persisted: true,
   platform: "darwin" as NodeJS.Platform,
+  liveHost: null as { pid: number } | null,
+  incumbentProbes: 0,
 }));
 
 vi.mock("../../host/stop-intent", () => ({
@@ -28,6 +38,13 @@ vi.mock("../../host/stop-intent", () => ({
   },
   clearStopIntent: async (environment: string) => {
     mocks.clears.push(environment);
+  },
+}));
+
+vi.mock("../../host/incumbent-check", () => ({
+  findLiveIncumbentHost: async () => {
+    mocks.incumbentProbes += 1;
+    return mocks.liveHost;
   },
 }));
 
@@ -67,6 +84,10 @@ beforeEach(() => {
   mocks.clears.length = 0;
   mocks.persisted = true;
   mocks.platform = "darwin";
+  // Default: the operation's kill LANDED (nothing is serving any more), which
+  // is the ordinary shape and the one where the record must stand.
+  mocks.liveHost = null;
+  mocks.incumbentProbes = 0;
 });
 
 describe("withStopIntent", () => {
@@ -83,7 +104,12 @@ describe("withStopIntent", () => {
     expect(mocks.clears).toEqual([]);
   });
 
-  it("clears the intent when stopForRestart is refused", async () => {
+  it("clears the intent when stopForRestart is refused and the host is STILL SERVING", async () => {
+    // `HOST_BUSY` never touches the host, so it is still up - and leaving a
+    // "restart" record behind would suppress its own crash recovery for the
+    // whole freshness window. A refused restart must not end in a hostless
+    // machine.
+    mocks.liveHost = { pid: 4242 };
     const busy = new Error("E_HOST_BUSY");
     const controller = withStopIntent(
       baseController({
@@ -99,32 +125,59 @@ describe("withStopIntent", () => {
     expect(mocks.clears).toEqual(["production"]);
   });
 
-  it("clears the intent when a stop throws", async () => {
+  it("KEEPS the intent when a stop throws after the kill already landed", async () => {
+    // The other half of the same failure, and the half the error type cannot
+    // distinguish: `stopService` signals, then waits for the pid to go, then
+    // throws if it did not - by which point the host may well be dead anyway.
+    // Nothing is serving, so the record is the only evidence the death was
+    // asked for. Clearing it lets the orphaned supervisor call it a crash.
+    mocks.liveHost = null;
     const controller = withStopIntent(
       baseController({
         stop: async () => {
-          throw new Error("boom");
+          throw new Error("host pid outlived its exit wait");
         },
       }),
     );
 
-    await expect(controller.stop(label)).rejects.toThrow("boom");
+    await expect(controller.stop(label)).rejects.toThrow("outlived");
 
-    expect(mocks.clears).toEqual(["production"]);
+    expect(mocks.incumbentProbes).toBe(1);
+    expect(mocks.clears).toEqual([]);
   });
 
-  it("clears the intent when an uninstall throws", async () => {
+  it("KEEPS the intent when an uninstall fails after killing the host", async () => {
+    // A `host uninstall` that ran `/End`, killed the tree, and then failed to
+    // remove the hidden launcher has already crossed its kill boundary. If this
+    // cleared, the orphaned supervisor would resurrect a host whose Scheduled
+    // Task may already be deleted - while uninstall reports failure.
+    mocks.liveHost = null;
     const controller = withStopIntent(
       baseController({
         uninstall: async () => {
-          throw new Error("boom");
+          throw new Error("EPERM: could not remove launcher");
         },
       }),
     );
 
-    await expect(controller.uninstall({ label })).rejects.toThrow("boom");
+    await expect(controller.uninstall({ label })).rejects.toThrow("EPERM");
 
     expect(mocks.writes).toEqual(["uninstall"]);
+    expect(mocks.clears).toEqual([]);
+  });
+
+  it("clears the intent when an uninstall fails with the host untouched", async () => {
+    mocks.liveHost = { pid: 4242 };
+    const controller = withStopIntent(
+      baseController({
+        uninstall: async () => {
+          throw new Error("refused before touching anything");
+        },
+      }),
+    );
+
+    await expect(controller.uninstall({ label })).rejects.toThrow("refused");
+
     expect(mocks.clears).toEqual(["production"]);
   });
 
@@ -211,27 +264,56 @@ describe("withStopIntent", () => {
     await controller.restart(label);
 
     expect(restarted).toBe(true);
-    // Still cleared afterwards: a restart ends with the host UP, so leaving the
-    // record behind would suppress the next crash's recovery.
-    expect(mocks.clears).toEqual(["production"]);
   });
 
-  it("clears the intent after a start, succeed or fail", async () => {
-    const ok = withStopIntent(baseController({ start: async () => undefined }));
-    await ok.start(label);
-    expect(mocks.clears).toEqual(["production"]);
-
-    mocks.clears.length = 0;
-    const bad = withStopIntent(
-      baseController({
-        start: async () => {
-          throw new Error("boom");
-        },
-      }),
+  it("leaves the record standing after a SUCCESSFUL restart", async () => {
+    // This used to clear in `finally`, and that was the bug. On win32 the killed
+    // host's supervisor survives as an orphan, and `restartService` returns once
+    // the replacement's `starting` marker is written - before it has spawned a
+    // child or published `pid.json`. Clearing there hands the old supervisor a
+    // window in which it sees neither intent nor an incumbent, and it relaunches
+    // into the one the `/Run` is bringing up. One restart, two hosts.
+    //
+    // Keeping it is safe precisely because the record is not a global mute:
+    // `hasActionableStopIntent` compares it against the READER's invocation
+    // time, so the replacement supervisor - started after the request - reads it
+    // as already served and spawns normally.
+    const controller = withStopIntent(
+      baseController({ restart: async () => undefined }),
     );
-    // A start that failed is still not a stop in progress, so the record goes
-    // either way - biasing toward "recoverable".
-    await expect(bad.start(label)).rejects.toThrow("boom");
-    expect(mocks.clears).toEqual(["production"]);
+
+    await controller.restart(label);
+
+    expect(mocks.writes).toEqual(["restart"]);
+    expect(mocks.clears).toEqual([]);
+  });
+
+  it("leaves the starts alone entirely - no write, no clear", async () => {
+    // The starts used to clear in `finally`, justified by "a leftover intent
+    // would suppress the NEXT crash's recovery". The invocation cutoff had
+    // already made that false, and the clear carried the same resurrection race
+    // as the restart above: `host start` after a `host stop` re-arms the
+    // orphaned supervisor if the new host has not published yet.
+    const started = withStopIntent(
+      baseController({ start: async () => undefined }),
+    );
+    await started.start(label);
+
+    const relaunched = withStopIntent(
+      baseController({ relaunchAfterRestart: async () => undefined }),
+    );
+    await relaunched.relaunchAfterRestart(label, { forcedRecycle: false });
+
+    const installed = withStopIntent(
+      baseController({ install: async () => undefined }),
+    );
+    await installed.install({
+      label,
+      cli: { command: "traycer", args: [] },
+      enableLinger: false,
+    });
+
+    expect(mocks.writes).toEqual([]);
+    expect(mocks.clears).toEqual([]);
   });
 });

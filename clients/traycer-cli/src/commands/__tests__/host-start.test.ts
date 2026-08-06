@@ -5,13 +5,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { constants as osConstants } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliError, CLI_ERROR_CODES } from "../../runner/errors";
 import {
   defaultRunHostStartDeps,
   MAX_CONSECUTIVE_RELAUNCHES,
   RELAUNCH_BACKOFF_MS,
   resolveHostStartTarget,
+  SUSTAINED_UPTIME_RESET_MS,
   runHostStart,
   type HostStartTarget,
   type RunHostStartDeps,
@@ -2157,6 +2158,79 @@ describe("runHostStart - crash relaunch loop", () => {
 
     expect(recorded.spawnCalls).toHaveLength(3);
     expect(recorded.exited).toBe(8);
+  });
+
+  it("measures that window at the child's DEATH, not after the diagnostics", async () => {
+    // `ranForMs` used to read the clock where it was compared, which is on the
+    // far side of the whole post-mortem: the stderr end wait (2s), the tee
+    // flush (1s) and the bounded crash-report scan (2s). A child that died a
+    // second short of the window was therefore credited with five seconds it
+    // never ran, cleared the bar, and reset the budget - every time. That is
+    // the governor's own re-arming bug, and D7 exists to prevent exactly it.
+    //
+    // Here every child dies 1s short of the window and the diagnostics burn 5s,
+    // so the two readings fall on opposite sides of the threshold.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.parse("2026-08-06T00:00:00.000Z"));
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      // The 6th outcome is a CLEAN exit, purely so the buggy reading
+      // terminates: without it, a budget that keeps resetting never stops and
+      // this test would hang instead of failing.
+      const scripted = withScriptedAttempts(deps, [
+        { code: 9, signal: null },
+        { code: 9, signal: null },
+        { code: 9, signal: null },
+        { code: 9, signal: null },
+        { code: 9, signal: null },
+        { code: 0, signal: null },
+      ]);
+      const scriptedSpawn = scripted.deps.spawn;
+      // The post-mortem writes through `writeTerminalMarker`, NOT `writeMarker`
+      // - `writeMarker` only carries "starting" and "failed-to-spawn", so
+      // hooking it puts the clock advance AFTER `ranForMs` is computed and
+      // makes this test inert. It was, until a mutation probe survived.
+      const scriptedTerminal = scripted.deps.writeTerminalMarker;
+      if (scriptedSpawn === undefined || scriptedTerminal === undefined) {
+        throw new Error("test dependencies missing");
+      }
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...scripted.deps,
+              maxRelaunches: 2,
+              sleep: async () => undefined,
+              spawn: (command, args, options) => {
+                const child = scriptedSpawn(command, args, options);
+                // `childSpawnedAtMs` is stamped before this call, so advancing
+                // here is the child running. It dies one second short.
+                vi.setSystemTime(
+                  Date.now() + SUSTAINED_UPTIME_RESET_MS - 1_000,
+                );
+                return child;
+              },
+              writeTerminalMarker: (environment, phase, fields) => {
+                // The post-mortem, between the child's death and the comparison.
+                if (phase === "crashed") {
+                  vi.setSystemTime(Date.now() + 5_000);
+                }
+                scriptedTerminal(environment, phase, fields);
+              },
+            },
+          ),
+        recorded,
+      );
+
+      // 1 initial + 2 relaunches, then the budget is spent. Reading the clock
+      // after the diagnostics instead reaches the 6th, clean-exit attempt.
+      expect(recorded.spawnCalls).toHaveLength(3);
+      expect(recorded.exited).toBe(9);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

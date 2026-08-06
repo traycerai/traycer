@@ -9,8 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //
 //   - a false "intent present" leaves the machine with NO host (the crash goes
 //     unrecovered), so a torn/garbled/unknown record must read as ABSENT;
-//   - a false "intent absent" costs one unwanted relaunch, which the
-//     supervisor's budget and incumbent re-check then contain.
+//   - a false "intent absent" relaunches a host the user just stopped.
+//
+// This header used to call that second cost "one unwanted relaunch, which the
+// supervisor's budget and incumbent re-check then contain". Neither contains
+// it: a replacement that stays healthy resets the budget and IS the incumbent.
+// The bias is still the one above, but it is a real trade, not a free one.
 //
 // Same direction as `findLiveIncumbentHost`: never strand the machine hostless.
 
@@ -33,7 +37,6 @@ const {
   STOP_INTENT_STALE_MS,
   clearStopIntent,
   hasActionableStopIntent,
-  hasFreshStopIntent,
   isStopIntentAlreadyServed,
   isStopIntentFresh,
   readStopIntent,
@@ -184,26 +187,23 @@ describe("isStopIntentFresh", () => {
   });
 });
 
-describe("hasFreshStopIntent", () => {
-  it("is false with no file, true right after a write", async () => {
-    await expect(hasFreshStopIntent("production", Date.now())).resolves.toBe(
-      false,
-    );
+describe("hasActionableStopIntent - file round trip", () => {
+  it("is false with no file, true right after a write, false once cleared", async () => {
+    const before = Date.now() - 1_000;
+
+    await expect(
+      hasActionableStopIntent("production", Date.now(), before),
+    ).resolves.toBe(false);
 
     await writeStopIntent("production", "restart");
+    await expect(
+      hasActionableStopIntent("production", Date.now(), before),
+    ).resolves.toBe(true);
 
-    await expect(hasFreshStopIntent("production", Date.now())).resolves.toBe(
-      true,
-    );
-  });
-
-  it("is false again once the intent is cleared", async () => {
-    await writeStopIntent("production", "restart");
     await clearStopIntent("production");
-
-    await expect(hasFreshStopIntent("production", Date.now())).resolves.toBe(
-      false,
-    );
+    await expect(
+      hasActionableStopIntent("production", Date.now(), before),
+    ).resolves.toBe(false);
   });
 });
 
@@ -272,8 +272,11 @@ describe("hasActionableStopIntent", () => {
     await expect(
       hasActionableStopIntent("production", now, now + 1_000),
     ).resolves.toBe(false);
-    // Still FRESH - it is the cutoff, not staleness, doing the work here.
-    await expect(hasFreshStopIntent("production", now)).resolves.toBe(true);
+    // Still FRESH - it is the cutoff, not staleness, doing the work here: the
+    // same record read with an earlier cutoff is actionable.
+    await expect(
+      hasActionableStopIntent("production", now, now - 1_000),
+    ).resolves.toBe(true);
   });
 
   it("honours an intent written after the supervisor started", async () => {

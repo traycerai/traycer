@@ -131,25 +131,12 @@ export async function readStopIntent(
 }
 
 /**
- * The supervisor's question, answered in one call: may this crash be recovered,
- * or was the child's death asked for?
+ * The supervisor's question: is there a stop intent that this invocation has
+ * NOT already served?
  *
  * A torn or malformed file reads as NO intent - biased toward recovering the
  * host, matching `findLiveIncumbentHost`'s own bias. Leaving a machine hostless
  * on a garbled byte is the worse failure.
- */
-export async function hasFreshStopIntent(
-  environment: Environment | undefined,
-  nowMs: number,
-): Promise<boolean> {
-  const intent = await readStopIntent(environment);
-  if (intent === null) return false;
-  return isStopIntentFresh(intent, nowMs);
-}
-
-/**
- * The supervisor's question, asked correctly: is there a stop intent that this
- * invocation has NOT already served?
  *
  * `ignoreRequestedBeforeMs` is the moment this supervisor was invoked. Intent
  * older than that was answered by our own existence - something asked for a
@@ -165,8 +152,11 @@ export async function hasFreshStopIntent(
  * because either one's clear can delete intent written after the other's.
  *
  * Filtering destroys nothing, so there is no window in which a real stop can be
- * lost. The record still disappears on its own via `STOP_INTENT_STALE_MS`, and
- * the service controller's `start` decorator clears it on the ordinary path.
+ * lost. The record disappears on its own via `STOP_INTENT_STALE_MS`, and that is
+ * now the ONLY thing that retires it on the ordinary path: the cutoff answers
+ * each supervisor separately, so a lingering record silences the process being
+ * retired while a later one reads it as served and starts normally. Deleting it
+ * is what would re-arm the retired process - see `withStopIntent`.
  *
  * It is also what makes checking intent on the FIRST attempt safe. Reading the
  * raw file there would make a logon-started supervisor refuse to start the host
