@@ -15,6 +15,11 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 /** Concealed-or-absent: the gate's claim for children in a non-usable state. */
@@ -342,5 +347,32 @@ describe("<HostScopeGate /> concealment and preservation", () => {
 
     rerender(gateAt("ready", <EffectProbe log={log} />, "host-a"));
     expect(log).toEqual(["mount", "cleanup", "mount"]);
+  });
+
+  it("un-presents an open portaled surface while concealed and re-presents it", () => {
+    // A portal's DOM escapes the hidden Activity's styling entirely (it hangs
+    // off document.body, and React conceals only the topmost in-tree host
+    // nodes), so without the concealment context an open popover, menu, or
+    // select would float above the unreachable notice with its dismissal
+    // effects torn down — visible, interactive, and unclosable. The popover
+    // stands in for the class here; the dialog variant is covered end-to-end
+    // in the notifications panel suite.
+    const surface = (
+      <Popover open>
+        <PopoverTrigger>anchor</PopoverTrigger>
+        <PopoverContent>
+          <div data-testid="portal-surface">floating content</div>
+        </PopoverContent>
+      </Popover>
+    );
+    const { rerender } = render(gateAt("ready", surface, "host-a"));
+    expect(screen.getByTestId("portal-surface")).not.toBeNull();
+
+    rerender(gateAt("unreachable", surface, "host-a"));
+    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    expect(screen.queryByTestId("portal-surface")).toBeNull();
+
+    rerender(gateAt("ready", surface, "host-a"));
+    expect(screen.getByTestId("portal-surface")).not.toBeNull();
   });
 });

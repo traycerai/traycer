@@ -573,30 +573,7 @@ function WorktreesBody(props: {
 
   let content: ReactNode;
   let listOwnsToolbar = false;
-  if (!scopeUsable) {
-    // The gate owns every state where the scope has no client: it names the
-    // host, distinguishes deregistered from unroutable, and — the part this
-    // panel never had — offers the way back to the active host. The old
-    // `hostId === null` branch flattened all of that into "Select a host",
-    // which is not something the user can act on when the host they picked was
-    // deregistered out from under them.
-    content = (
-      <HostScopeGate
-        scope={scope}
-        skeleton={
-          <WorktreesStateMessage tone="muted" spinner>
-            Connecting to {scope.hostLabel}…
-          </WorktreesStateMessage>
-        }
-      >
-        {null}
-      </HostScopeGate>
-    );
-    // No `hostId === null` branch below: a usable scope is `following` or
-    // `ready`, and both require a resolved host — so the old "Select a host to
-    // manage its worktrees" state is unreachable from here, and was the
-    // flattened non-answer the gate above now replaces properly.
-  } else if (reachability.status === "checking") {
+  if (reachability.status === "checking") {
     content = (
       <WorktreesStateMessage tone="muted" spinner>
         Checking {reachability.hostLabel}…
@@ -680,7 +657,26 @@ function WorktreesBody(props: {
           onRetry={listing.retryPartial}
         />
       ) : null}
-      {content}
+      {/* The gate owns every state where the scope has no client: it names
+          the host, distinguishes deregistered from unroutable, and offers the
+          way back to the active host — the old `hostId === null` branch
+          flattened all of that into "Select a host". The reachability/listing
+          content renders as the gate's CHILDREN (not beside it) so the list —
+          a script review mid-read, an armed delete, selection and collapse
+          state — is preserved through a transient same-host disconnect
+          instead of being unmounted, exactly as the other host-scoped panels
+          do. A usable scope is `following` or `ready`, both of which require
+          a resolved host, so no "Select a host" branch is needed inside. */}
+      <HostScopeGate
+        scope={scope}
+        skeleton={
+          <WorktreesStateMessage tone="muted" spinner>
+            Connecting to {scope.hostLabel}…
+          </WorktreesStateMessage>
+        }
+      >
+        {content}
+      </HostScopeGate>
     </div>
   );
 }
