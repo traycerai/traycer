@@ -10,6 +10,7 @@ import { CliError, CLI_ERROR_CODES } from "../../runner/errors";
 import {
   defaultRunHostStartDeps,
   MAX_CONSECUTIVE_RELAUNCHES,
+  RACED_STOP_KILL_GRACE_MS,
   RELAUNCH_BACKOFF_MS,
   resolveHostStartTarget,
   SUSTAINED_UPTIME_RESET_MS,
@@ -28,6 +29,7 @@ import {
   type CrashReportMatch,
   type StderrTee,
 } from "../../host/crash-diagnostics";
+import { SHUTDOWN_FORCE_EXIT_MS } from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
@@ -166,6 +168,20 @@ function makeStubChild(): StubChild {
   emitter.pid = 4242;
   emitter.kill = () => true;
   return emitter;
+}
+
+/**
+ * The ONE place this file bridges `StubChild` to `ChildProcess`.
+ *
+ * `StubChild` is an EventEmitter standing in for a real child process, and no
+ * structural type bridges those. Owning the conversion here keeps the
+ * assertion out of every call site - which is the point of the guideline
+ * against `as unknown` and chained assertions: one reviewed bridge, not nine
+ * unreviewed ones.
+ */
+function asChildProcess(child: StubChild): ChildProcess {
+  const bridged: unknown = child;
+  return bridged as ChildProcess;
 }
 
 interface Recorded {
@@ -1595,8 +1611,7 @@ function withScriptedAttempts(
         setImmediate(() => {
           child.emit("exit", outcome.code, outcome.signal);
         });
-        const asUnknown: unknown = child;
-        return asUnknown as ChildProcess;
+        return asChildProcess(child);
       },
     },
   };
@@ -1706,30 +1721,58 @@ describe("runHostStart - crash relaunch loop", () => {
     // latches, and passes it on. Scripting a SIGTERM child death without
     // signalling the supervisor does not exercise this - it is the direct-kill
     // case below, and asserting "no relaunch" on it was pinning a bug.
+    //
+    // TWO earlier versions of this test failed to exercise it anyway. The first
+    // only scripted the death. The second emitted the signal SYNCHRONOUSLY from
+    // inside the spawn stub - before `deps.spawn` had returned, so
+    // `currentChild` was still null and the handler forwarded nothing; the
+    // child died purely because the script said so, and the test could not tell
+    // the two cases apart. The signal has to arrive AFTER the spawn call
+    // returns, and the child's death has to be CAUSED by the forwarded kill.
     const term = makeRunStubs(sampleRecord(exec), null);
-    const termScript = withScriptedAttempts(term.deps, [
-      { code: null, signal: "SIGTERM" },
-    ]);
-    const termSpawn = termScript.deps.spawn;
+    const termSpawn = term.deps.spawn;
     if (termSpawn === undefined) {
       throw new Error("test spawn dependency missing");
     }
+    const forwarded: string[] = [];
     await runUntilExit(
       () =>
         runHostStart(
           { environment: "production", cwd: null },
           {
-            ...termScript.deps,
+            ...term.deps,
             maxRelaunches: 5,
             spawn: (command, args, options) => {
-              const spawned = termSpawn(command, args, options);
-              process.emit("SIGTERM");
-              return spawned;
+              termSpawn(command, args, options);
+              const child = makeStubChild();
+              // The child dies ONLY from the forwarded signal, which is what
+              // makes this a forwarding test rather than a latch test.
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                forwarded.push(String(signal));
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              setImmediate(() => {
+                // `currentChild` is assigned once this spawn call returns, so
+                // by now the handler has a child to forward to. The handler
+                // runs synchronously inside `emit`.
+                process.emit("SIGTERM");
+                if (forwarded.length === 0) {
+                  // Nothing forwarded: end the attempt so the assertion below
+                  // reports it instead of hanging the suite.
+                  child.emit("exit", null, "SIGTERM");
+                }
+              });
+              return asChildProcess(child);
             },
           },
         ),
       term.recorded,
     );
+    // The load-bearing assertion: the supervisor passed the signal on.
+    expect(forwarded).toEqual(["SIGTERM"]);
     expect(term.recorded.spawnCalls).toHaveLength(1);
     // Exit 0, NOT 128+SIGTERM. This is the ordinary macOS `host stop`: launchd
     // signals the supervisor, it forwards, and the child dies by that signal.
@@ -1807,6 +1850,113 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(recorded.exited).toBe(0);
   });
 
+  it("escalates a raced stop to SIGKILL when the child ignores SIGTERM", async () => {
+    // Without this the supervisor awaits `childEnding` with no deadline, and
+    // nothing else intervenes: the stop announced itself on disk, `host stop`
+    // has already returned, and no service manager is watching this process. A
+    // child that never handles SIGTERM would leave the supervisor waiting
+    // forever while the host it was told to stop kept serving.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const killed: string[] = [];
+    let stopLanded = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => stopLanded,
+            // Fire the escalation immediately instead of after 30s.
+            escalateAfter: (_ms, run) => {
+              setImmediate(run);
+              return () => undefined;
+            },
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              stopLanded = true;
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                killed.push(String(signal));
+                // SIGTERM is IGNORED - only the escalation ends this child.
+                if (signal === "SIGKILL") {
+                  setImmediate(() => {
+                    child.emit("exit", null, "SIGKILL");
+                  });
+                }
+                return true;
+              };
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(killed).toEqual(["SIGTERM", "SIGKILL"]);
+    // Still a deliberate stop: no relaunch, and no nonzero exit asking the
+    // service manager to start a replacement.
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("cancels the escalation when the raced stop's child exits on its own", async () => {
+    // The ordinary path. A 30s timer left armed per attempt would keep the
+    // supervisor's event loop busy long after the child is gone.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let cancelled = false;
+    let escalated = false;
+    let stopLanded = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => stopLanded,
+            escalateAfter: (_ms, run) => {
+              const timer = setTimeout(() => {
+                escalated = true;
+                run();
+              }, 10_000);
+              return () => {
+                cancelled = true;
+                clearTimeout(timer);
+              };
+            },
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              stopLanded = true;
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(cancelled).toBe(true);
+    expect(escalated).toBe(false);
+    expect(recorded.spawnCalls).toHaveLength(1);
+  });
+
   it("kills a child that a stop raced between the guard and the spawn", async () => {
     // The pre-spawn guard cannot close a CROSS-PROCESS window: `host stop` can
     // write intent just after that read returned false, scan for a host while
@@ -1842,8 +1992,7 @@ describe("runHostStart - crash relaunch loop", () => {
                 });
                 return true;
               };
-              const asUnknown: unknown = child;
-              return asUnknown as ChildProcess;
+              return asChildProcess(child);
             },
           },
         ),
@@ -1852,8 +2001,12 @@ describe("runHostStart - crash relaunch loop", () => {
 
     expect(spawns).toBe(1);
     expect(killed).toEqual(["SIGTERM"]);
-    // And the death it caused is NOT then treated as a crash to recover from.
+    // And the death it caused is NOT then treated as a crash to recover from -
+    // in BOTH halves. The signal death is abnormal, so only the latch keeps the
+    // spawn count at one, and only the cause keeps the exit code at zero. A
+    // nonzero exit here would have the service manager start a replacement.
     expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
   });
 
   it("disposes a timed-out stderr stream instead of carrying it into the next attempt", async () => {
@@ -1888,8 +2041,7 @@ describe("runHostStart - crash relaunch loop", () => {
               setImmediate(() => {
                 child.emit("exit", spawns === 1 ? 3 : 0, null);
               });
-              const asUnknown: unknown = child;
-              return asUnknown as ChildProcess;
+              return asChildProcess(child);
             },
           },
         ),
@@ -2448,8 +2600,7 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               setImmediate(() => {
                 child.emit("error", new Error("ENOENT: bundle vanished"));
               });
-              const asUnknown: unknown = child;
-              return asUnknown as ChildProcess;
+              return asChildProcess(child);
             },
             hasStopIntent: async () => stopRequested,
             sleep: async () => {
@@ -2496,8 +2647,7 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
           setImmediate(() => {
             child.emit("exit", code, null);
           });
-          const asUnknown: unknown = child;
-          return asUnknown as ChildProcess;
+          return asChildProcess(child);
         },
       },
     };
@@ -2654,8 +2804,7 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
             setImmediate(() => {
               child.emit("error", new Error("ENOENT: no such file"));
             });
-            const asUnknown: unknown = child;
-            return asUnknown as ChildProcess;
+            return asChildProcess(child);
           },
         };
       },
@@ -2763,8 +2912,7 @@ describe("runHostStart - relaunch loop, spawn-failure policy", () => {
               setImmediate(() => {
                 child.emit("exit", calls === 1 ? 7 : 0, null);
               });
-              const asUnknown: unknown = child;
-              return asUnknown as ChildProcess;
+              return asChildProcess(child);
             },
           },
         ),
@@ -2842,8 +2990,7 @@ describe("runHostStart - relaunch loop, spawn-failure policy", () => {
               setImmediate(() => {
                 child.emit("exit", 0, null);
               });
-              const asUnknown: unknown = child;
-              return asUnknown as ChildProcess;
+              return asChildProcess(child);
             },
           },
         ),
@@ -2992,6 +3139,37 @@ describe("runHostStart - production defaults", () => {
 
     expect(during).toBe(before + 1);
     expect(countTimers()).toBe(before);
+  });
+
+  it("keeps the raced-stop escalation timer referenced, and cancels it on demand", async () => {
+    // Same argument as the backoff timer, one path over: this timer is the only
+    // thing that ends an unbounded wait on a child that will not honour
+    // SIGTERM. Unref'd, Node could decide the supervisor had nothing left to do
+    // and exit while the host it was told to stop kept serving.
+    const countTimers = (): number =>
+      process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+
+    const before = countTimers();
+    let fired = false;
+    const cancel = defaultRunHostStartDeps.escalateAfter(60_000, () => {
+      fired = true;
+    });
+    const during = countTimers();
+    cancel();
+
+    expect(during).toBe(before + 1);
+    // And the canceller really cancels - otherwise the ordinary path leaks a
+    // 30s timer per attempt.
+    expect(countTimers()).toBe(before);
+    expect(fired).toBe(false);
+  });
+
+  it("gives a raced stop longer than the host's own force-exit watchdog", async () => {
+    // Derived, not chosen. A functioning host arms its own force-exit watchdog,
+    // so a grace at or below it would SIGKILL hosts that were moments from
+    // completing the exact shutdown we asked for. This is the assertion that
+    // fails if someone later "tunes" the constant down to a literal.
+    expect(RACED_STOP_KILL_GRACE_MS).toBeGreaterThan(SHUTDOWN_FORCE_EXIT_MS);
   });
 });
 

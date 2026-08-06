@@ -1081,9 +1081,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
   it("recycles rather than plain-kickstarts when relaunching a CLI-owned restart", async () => {
     // The other half: `forcedRecycle` only matters if the relaunch honours it.
-    const calls: { args: readonly string[] }[] = [];
-    const runner: ProcessRunner = async (_command, args) => {
-      calls.push({ args });
+    // Assert the exact invocation, not "some argument list contains -k": the
+    // latter passes for any call carrying that flag anywhere, which is not
+    // evidence that `launchctl kickstart -k` was the thing issued.
+    const calls: { command: string; args: readonly string[] }[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
       return buildSuccessResult();
     };
     const controller = createMacosController(runner);
@@ -1092,7 +1095,14 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       controller.relaunchAfterRestart(label, { forcedRecycle: true }),
     ).resolves.toBeUndefined();
 
-    expect(calls.some((c) => c.args.includes("-k"))).toBe(true);
+    expect(
+      calls.some(
+        (c) =>
+          c.command === "launchctl" &&
+          c.args[0] === "kickstart" &&
+          c.args[1] === "-k",
+      ),
+    ).toBe(true);
   });
 
   it("detects SMAppService in-bundle LaunchAgent paths", () => {

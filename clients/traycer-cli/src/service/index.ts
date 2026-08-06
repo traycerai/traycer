@@ -214,6 +214,17 @@ export function formatServiceLifecycleWarning(
  * systemd kill it outright. Uniform is cheaper than conditional, and it keeps
  * the mechanism exercisable on any developer's machine.
  */
+// What a refused operation leaves behind, said accurately per reason - the
+// message is the only thing telling the caller whether the host is still up.
+const FAILED_STOP_CONSEQUENCE: Readonly<
+  Record<"stop" | "restart" | "uninstall", string>
+> = {
+  stop: "The host has NOT been stopped.",
+  restart:
+    "The host has NOT been restarted, and restarting without the record risks leaving two hosts running.",
+  uninstall: "The host has NOT been uninstalled.",
+};
+
 /**
  * Record the intent, and refuse the stop if the record did not land AND this
  * platform depends on it.
@@ -235,15 +246,6 @@ export function formatServiceLifecycleWarning(
  * on its own schedule while `/Run` brings up another host is how one restart
  * becomes two hosts. "It comes back anyway" is not a reason to skip the record.
  */
-const FAILED_STOP_CONSEQUENCE: Readonly<
-  Record<"stop" | "restart" | "uninstall", string>
-> = {
-  stop: "The host has NOT been stopped.",
-  restart:
-    "The host has NOT been restarted, and restarting without the record risks leaving two hosts running.",
-  uninstall: "The host has NOT been uninstalled.",
-};
-
 async function announceStop(
   environment: ServiceLabel["environment"],
   reason: "stop" | "restart" | "uninstall",

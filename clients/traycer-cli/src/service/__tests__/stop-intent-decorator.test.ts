@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ServiceController, ServiceLabel } from "../index";
 
 // The decorator's whole contract is an ORDERING and a withdrawal rule:
 //
@@ -55,28 +56,35 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { withStopIntent } = await import("../index");
 
-type Controller = Parameters<typeof withStopIntent>[0];
+// Declared types rather than stubs laundered through `unknown`: a shape that
+// drifts from `ServiceController` then fails the build here, which is the only
+// thing making these tests evidence about the real decorator.
+const label: ServiceLabel = {
+  id: "ai.traycer.host",
+  displayName: "Traycer Host",
+  environment: "production",
+  devSlot: null,
+};
 
-const label = { environment: "production" } as Parameters<
-  Controller["stop"]
->[0];
-
-function baseController(overrides: Partial<Controller>): Controller {
-  const unimplemented = () => {
+function baseController(
+  overrides: Partial<ServiceController>,
+): ServiceController {
+  const unimplemented = (): never => {
     throw new Error("not used in this test");
   };
-  const stub = {
-    stop: unimplemented,
-    stopForRestart: unimplemented,
+  return {
+    install: unimplemented,
     uninstall: unimplemented,
+    status: unimplemented,
+    stop: unimplemented,
     start: unimplemented,
     restart: unimplemented,
+    stopForRestart: unimplemented,
     relaunchAfterRestart: unimplemented,
-    install: unimplemented,
+    retireCompetingRegistration: unimplemented,
+    takeoverDesktopRegistration: unimplemented,
     ...overrides,
   };
-  const asUnknown: unknown = stub;
-  return asUnknown as Controller;
 }
 
 beforeEach(() => {

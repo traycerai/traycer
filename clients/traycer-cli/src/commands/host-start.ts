@@ -28,6 +28,10 @@ import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import { withHostNodeOptions } from "../service/host-node-options";
 import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   CRASH_REPORT_SPAWN_SLACK_MS,
   MAX_KEPT_CRASH_REPORTS,
@@ -167,6 +171,24 @@ export const RELAUNCH_BACKOFF_MS: readonly number[] = [
  * would then relaunch forever. Only real uptime counts.
  */
 export const SUSTAINED_UPTIME_RESET_MS = 300_000;
+
+/**
+ * How long a child gets to honour a raced deliberate SIGTERM before the
+ * supervisor escalates to SIGKILL.
+ *
+ * DERIVED from the shared constants rather than hand-tuned, and the derivation
+ * is the safety property: a functioning host arms its own force-exit watchdog
+ * at `SHUTDOWN_FORCE_EXIT_MS`, so a shorter grace would SIGKILL hosts that were
+ * moments from completing the exact shutdown we asked for. Same rule, same
+ * derivation, as `STOP_EXIT_TIMEOUT_MS` on the stop side - raising the watchdog
+ * cannot silently leave this too short.
+ *
+ * What this covers is therefore only what that watchdog cannot: a child that
+ * never armed it. That is a narrow case, and it is the one where waiting is
+ * unbounded, which is the only reason this exists at all.
+ */
+export const RACED_STOP_KILL_GRACE_MS =
+  SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
 
 /**
  * The signals a deliberate stop reaches this supervisor as, and which it
@@ -338,6 +360,10 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // tests (a five-attempt run would otherwise cost ~110s and make the suite
   // load-sensitive); `hasStopIntent` is the "was this death asked for?" check.
   readonly sleep: (ms: number) => Promise<void>;
+  // Escalation timer for a raced deliberate stop. Injected for the same reason
+  // as `sleep` - a 30s wait would make the suite load-sensitive - and returns
+  // its own canceller so the caller never has to hold a timer handle.
+  readonly escalateAfter: (ms: number, run: () => void) => () => void;
   // `ignoreRequestedBeforeMs` is this supervisor's invocation time: intent
   // older than that was served by our own start. Filtering rather than
   // deleting is what lets attempt one be guarded without a logon-started
@@ -395,6 +421,18 @@ const defaultRunDeps: RunHostStartDeps = {
     new Promise((resolve) => {
       setTimeout(resolve, ms);
     }),
+  // Referenced, like `sleep`, and for a related reason: this timer is the only
+  // thing that ends an otherwise unbounded wait on a child that will not honour
+  // SIGTERM. Unref'ing it would let Node decide the supervisor had nothing left
+  // to do and exit while the host it was told to stop kept serving - the exact
+  // shape of the `sleep` defect, one path over. Cancelled as soon as the child
+  // ends, so the reference costs nothing on the ordinary path.
+  escalateAfter: (ms, run) => {
+    const timer = setTimeout(run, ms);
+    return () => {
+      clearTimeout(timer);
+    };
+  },
   hasStopIntent: hasActionableStopIntent,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
 };
@@ -1197,6 +1235,34 @@ export async function runHostStart(
       } catch {
         // Already gone - the ending below still settles.
       }
+      // Bounded, because on THIS path nothing else escalates. The forwarded
+      // path is signalled by launchd/systemd, which follow up with SIGKILL
+      // against the job; here the stop announced itself on disk, `host stop`
+      // has already returned, and no one is watching this supervisor. A child
+      // that never handles SIGTERM would leave `await childEnding` below
+      // waiting forever, holding the job slot open while the host it was told
+      // to stop keeps serving.
+      //
+      // The grace is DERIVED, not chosen: a functioning host arms its own
+      // force-exit watchdog at `SHUTDOWN_FORCE_EXIT_MS`, so anything shorter
+      // would SIGKILL hosts that were about to complete the very shutdown we
+      // asked for - destroying a clean exit to save a few seconds. Same
+      // reasoning, and the same derivation, as `STOP_EXIT_TIMEOUT_MS`. What is
+      // left is the case that watchdog cannot cover: a child that never armed
+      // it.
+      const escalation = deps.escalateAfter(RACED_STOP_KILL_GRACE_MS, () => {
+        logger.warn("Host supervisor escalating a raced stop to SIGKILL", {
+          environment: opts.environment,
+          attemptId,
+          graceMs: RACED_STOP_KILL_GRACE_MS,
+        });
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      });
+      void childEnding.finally(escalation);
     }
 
     const ending = await childEnding;
