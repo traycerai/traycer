@@ -949,6 +949,54 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.queryByRole("button", { name: /Edit context7/ })).toBeNull();
   });
 
+  // F4: realistic multi-row list — Edit must stay gone on every server name,
+  // not only the single-server double above. Delete/Add remain the live
+  // affordances.
+  it("does not render Edit on any realistic server row while Add and Delete stay", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({ name: "context7" }),
+        connectedServer({
+          name: "github",
+          transport: {
+            type: "http",
+            url: "https://mcp.github.com",
+            auth: null,
+          },
+          status: "needs_auth",
+          tools: [],
+        }),
+        connectedServer({
+          name: "local-stdio",
+          transport: {
+            type: "stdio",
+            command: "npx",
+            env: null,
+          },
+          status: "connected",
+          tools: [],
+        }),
+      ],
+    };
+    renderTab(FULL_CAPS, "codex");
+
+    for (const name of ["context7", "github", "local-stdio"] as const) {
+      expect(screen.queryByRole("button", { name: new RegExp(`Edit ${name}`) })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: new RegExp(`Delete ${name}`) }),
+      ).toBeDefined();
+    }
+
+    // Add still mounts a dialog fixed in mode="add" (no editTarget restore).
+    fireEvent.click(screen.getByRole("button", { name: /Add MCP server/ }));
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    expect(dialog).toBeDefined();
+    expect(within(dialog).getByRole("button", { name: /Add server/ })).toBeDefined();
+    // Edit-mode copy would say "Save" / "Update server"; add mode does not.
+    expect(within(dialog).queryByRole("button", { name: /Save/ })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /Update/ })).toBeNull();
+  });
+
   it("hides Add/Delete/auth/discover on Project when actionScopes only allow them for Global", () => {
     // Codex/Droid/Copilot-style: list both scopes, but CRUD/auth/discover
     // only global. Populate project list so Project scope has a real row
