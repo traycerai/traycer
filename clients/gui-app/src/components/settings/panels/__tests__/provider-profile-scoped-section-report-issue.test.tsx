@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {

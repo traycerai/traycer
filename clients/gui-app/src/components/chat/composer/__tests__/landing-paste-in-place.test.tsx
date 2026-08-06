@@ -6,7 +6,6 @@
  * and failed ingest (remove node + toast + reconcile). Fake only idb-keyval;
  * putImage / rewrite-by-id run for real.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";

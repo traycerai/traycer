@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

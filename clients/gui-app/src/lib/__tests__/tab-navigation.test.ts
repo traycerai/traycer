@@ -11,7 +11,6 @@
  * funnels through the router seam (`router.navigateToTabIntent`)
  * instead of bypassing it.
  */
-import "../../../__tests__/test-browser-apis";
 import type {
   NavigateOptions,
   UseNavigateResult,

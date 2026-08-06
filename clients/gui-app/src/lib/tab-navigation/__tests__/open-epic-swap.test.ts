@@ -7,7 +7,6 @@
  * installTabSyncCoordinator, seedCommittedLayout) - duplicated locally here
  * (not imported) so this file has no coupling to that one.
  */
-import "../../../../__tests__/test-browser-apis";
 import type {
   NavigateOptions,
   UseNavigateResult,

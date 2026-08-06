@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";

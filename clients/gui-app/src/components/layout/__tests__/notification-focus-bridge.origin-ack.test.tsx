@@ -14,7 +14,6 @@
  * feature does not retry it and does not roll the app back out from under the
  * user's navigation.
  */
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";

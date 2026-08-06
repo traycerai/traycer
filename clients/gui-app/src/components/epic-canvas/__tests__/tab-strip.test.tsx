@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },

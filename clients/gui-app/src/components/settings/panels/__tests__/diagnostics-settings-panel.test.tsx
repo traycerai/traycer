@@ -1,5 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
-
 // The panel is host-scoped now (shell config / log levels are fields of the
 // selected host's own config), so it reads `useHostScope`. Mock at that
 // boundary: these suites render the panel bare, without the host runtime and

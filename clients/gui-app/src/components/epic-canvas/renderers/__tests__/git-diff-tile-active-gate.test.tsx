@@ -1,5 +1,4 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";

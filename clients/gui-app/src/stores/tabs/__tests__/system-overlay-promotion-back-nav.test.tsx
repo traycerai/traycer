@@ -12,7 +12,6 @@
 // module-scoped cold-load latch (layer 2) plus `replace` semantics on the
 // focus-tab-first redirect (layer 3) defeat the back-button trap even under
 // such a remount, independent of layer 1.
-import "../../../../__tests__/test-browser-apis";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
@@ -193,11 +192,13 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     act(() => {
       modalProbe.current?.promoteToTab();
     });
-    await waitFor(() =>
-      expect(router.state.location.pathname).toBe("/settings/general"),
-    );
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    // Wait for the full promotion transition: route path + history cursor.
+    // Fixed scheduling margins previously papered over the same settle.
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/general");
+      const promoted = snapshot(router);
+      expect(promoted.rendered).toBe("/settings/general");
+      expect(promoted.canGoBack).toBe(true);
     });
 
     const before = snapshot(router);
@@ -206,8 +207,13 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     act(() => {
       goBack(router);
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    // Causal wait on the history/router landing the first Back produces.
+    // Negative checks below only run after this transition completes — so a
+    // cold-load re-push of /settings/general would fail the wait, not race a
+    // fixed delay window.
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/draft/d1");
+      expect(snapshot(router).rendered).not.toBe(before.rendered);
     });
 
     const afterFirstBack = snapshot(router);
@@ -233,15 +239,18 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     // bounces to /settings/general again, and repeated presses make
     // monotonic progress back to the original entry instead of looping.
     for (let clicksRemaining = 2; clicksRemaining > 0; clicksRemaining--) {
+      const indexBefore = snapshot(router).index;
       act(() => {
         goBack(router);
       });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      await waitFor(() => {
+        expect(snapshot(router).index).toBeLessThan(indexBefore);
+        expect(router.state.location.pathname).not.toBe("/settings/general");
       });
-      expect(router.state.location.pathname).not.toBe("/settings/general");
     }
 
-    expect(router.state.location.pathname).toBe("/draft/d0");
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/draft/d0"),
+    );
   });
 });
