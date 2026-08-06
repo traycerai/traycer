@@ -19,6 +19,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
+import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -106,6 +107,10 @@ function SettingsSidebarHostHeader(): ReactNode {
         }
         isLoading={scope.isLoading}
       />
+      {/* Mounted here rather than at each call site: the switcher and the
+          Overview page both open it, and two mounted copies would race each
+          other's open state. */}
+      <AddHostDialog />
     </div>
   );
 }

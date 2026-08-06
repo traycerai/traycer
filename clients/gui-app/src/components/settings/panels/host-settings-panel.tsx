@@ -20,7 +20,16 @@ import {
   extractErrorMessage,
   findReleasedAt,
 } from "@/components/settings/panels/host-settings-panel-model";
-import { MyHostsList } from "@/components/settings/panels/my-hosts-list";
+import {
+  HostIdentityCard,
+  HostIdRow,
+  OtherMachinesStrip,
+  ThisWindowCard,
+  ThisWindowCardStandalone,
+} from "@/components/settings/host-scope/host-identity-card";
+import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { HostSummaryCard } from "@/components/settings/panels/host-settings-summary-card";
 import { InstallationDetailsDisclosure } from "@/components/settings/panels/host-settings-installation-details";
 import { PackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -77,21 +86,45 @@ export function HostSettingsPanel() {
   const runnerHost = useRunnerHost();
   const management = runnerHost.hostManagement;
   if (management === null) {
-    return (
-      <SettingsPanelShell
-        title="Host"
-        description="Your hosts across every device."
-      >
-        <MyHostsList />
-        <div className="px-5 py-6 text-ui-sm text-muted-foreground">
-          Local host management is only available on the desktop app — this
-          shell doesn&apos;t bundle the Traycer CLI.
-        </div>
-      </SettingsPanelShell>
-    );
+    return <HostSettingsPanelWithoutManagement />;
   }
   return (
     <HostSettingsPanelInner management={management} runnerHost={runnerHost} />
+  );
+}
+
+/**
+ * Shells without the Traycer CLI (web, mobile) can still ADMINISTER a machine
+ * over its host RPC — they simply cannot install, restart or register a local
+ * service, because there is no local service here. So the page keeps the
+ * scoped machine's identity and the fleet, and says exactly which capability
+ * is missing instead of degrading to a bare sentence.
+ */
+function HostSettingsPanelWithoutManagement() {
+  const scope = useHostScope();
+  const openAddHost = useAddHostDialogStore((s) => s.openDialog);
+  return (
+    <SettingsPanelShell
+      title={scope.host?.name ?? "Machine"}
+      description="Status and maintenance for the machine selected in the sidebar."
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <div className="flex flex-col gap-5">
+        {scope.host === null ? null : (
+          <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
+            <ThisWindowCard scope={scope} host={scope.host} />
+          </HostIdentityCard>
+        )}
+        <p className="px-1 text-ui-sm text-muted-foreground">
+          Installing and restarting a local host service is only available in
+          the desktop app — this shell doesn&apos;t bundle the Traycer CLI.
+        </p>
+        <OtherMachinesStrip
+          scope={scope}
+          onAddHost={() => openAddHost(scope.hosts.map((host) => host.hostId))}
+        />
+      </div>
+    </SettingsPanelShell>
   );
 }
 
@@ -107,6 +140,8 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const { management, runnerHost } = props;
   const queryClient = useQueryClient();
   const compact = useSettingsDensity() === "compact";
+  const scope = useHostScope();
+  const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   const nowMs = useNowMs();
   const [doctorOpen, setDoctorOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -455,30 +490,41 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     }
   };
 
+  // The scoped machine is the SUBJECT of this page. The local service console
+  // below renders only when that subject is this device — a remote machine has
+  // no local service to install, restart or register, and pretending otherwise
+  // is what produced two cards describing one machine in two dialects.
+  const scopedIsLocalMachine = scope.host?.isLocalMachine ?? true;
+
   return (
     <SettingsPanelShell
-      title="Host"
-      description="Your hosts across every device, plus this machine's local service."
+      title={scope.host?.name ?? "Machine"}
+      description="Status, updates and maintenance for the machine selected in the sidebar."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      <MyHostsList />
-      <section aria-labelledby="local-host-management-heading">
-        <div className="border-b border-border/40 px-5 py-4">
-          <h3
-            id="local-host-management-heading"
-            className="text-ui font-medium"
+      <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+        {scope.host === null || scopedIsLocalMachine ? null : (
+          <HostIdentityCard
+            host={scope.host}
+            onRename={null}
+            renameDisabled
           >
-            This machine
-          </h3>
-          <p className="mt-1 text-ui-sm text-muted-foreground">
-            Install, update, restart, register, deregister, and rename the
-            Traycer host service running on this machine.
-          </p>
-        </div>
-        <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-          {packageManagerUpgrade !== null ? (
-            <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
-          ) : null}
+            <ThisWindowCard scope={scope} host={scope.host} />
+            <HostIdRow
+              hostId={scope.host.hostId}
+              onCopy={(value) => {
+                void navigator.clipboard.writeText(value);
+                toast.success("Machine ID copied");
+              }}
+            />
+          </HostIdentityCard>
+        )}
+
+        {scopedIsLocalMachine ? (
+          <>
+            {packageManagerUpgrade !== null ? (
+              <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
+            ) : null}
 
           <HostSummaryCard
             status={status}
@@ -557,40 +603,57 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
             }}
           />
 
-          <SettingsGroup
-            title="Installation"
-            tone="default"
-            dataTestId={undefined}
-            fill={false}
-          >
-            <InstallationDetailsDisclosure
-              record={installedRecord ?? null}
-              loading={installedPending}
-            />
-            <AdvancedDisclosure
-              installedVersion={installedRecord?.version ?? null}
-              availableSnapshot={availableSnapshot}
-              availablePending={availablePending}
-              availableErrorMessage={extractErrorMessage(
-                availableError,
-                registryState,
-              )}
-              availableFetching={availableFetching}
-              includePreReleases={includePreReleases}
-              registryState={registryState}
-              statusState={status?.state}
-              anyPending={anyPending}
-              registerPending={registerPending}
-              deregisterPending={deregisterServiceMutation.isPending}
-              onInstallVersion={(version) => runInstallVersion(version, false)}
-              onRegisterService={() => registerServiceMutation.mutate()}
-              onDeregisterService={() => deregisterServiceMutation.mutate()}
-              onRefreshAvailable={handleRefreshRegistry}
-              onIncludePreReleasesChange={setIncludePreReleases}
-            />
-          </SettingsGroup>
-        </div>
-      </section>
+            {scope.host === null ? null : (
+              <ThisWindowCardStandalone scope={scope} host={scope.host} />
+            )}
+
+            <SettingsGroup
+              title="Installation"
+              tone="default"
+              dataTestId={undefined}
+              fill={false}
+            >
+              <InstallationDetailsDisclosure
+                record={installedRecord ?? null}
+                loading={installedPending}
+              />
+              <AdvancedDisclosure
+                installedVersion={installedRecord?.version ?? null}
+                availableSnapshot={availableSnapshot}
+                availablePending={availablePending}
+                availableErrorMessage={extractErrorMessage(
+                  availableError,
+                  registryState,
+                )}
+                availableFetching={availableFetching}
+                includePreReleases={includePreReleases}
+                registryState={registryState}
+                statusState={status?.state}
+                anyPending={anyPending}
+                registerPending={registerPending}
+                deregisterPending={deregisterServiceMutation.isPending}
+                onInstallVersion={(version) => runInstallVersion(version, false)}
+                onRegisterService={() => registerServiceMutation.mutate()}
+                onDeregisterService={() => deregisterServiceMutation.mutate()}
+                onRefreshAvailable={handleRefreshRegistry}
+                onIncludePreReleasesChange={setIncludePreReleases}
+              />
+            </SettingsGroup>
+          </>
+        ) : null}
+
+        {/* The scoped machine is the subject above, so it is excluded here by
+            construction. That exclusion IS the fix for the machine that used
+            to appear twice — as a cloud-iconed row AND as "This machine". */}
+        <OtherMachinesStrip
+          scope={scope}
+          onAddHost={() =>
+            openAddHost(scope.hosts.map((host) => host.hostId))
+          }
+        />
+
+        <HostDangerZone scope={scope} />
+      </div>
 
       <RestartHostConfirmDialog
         open={restartConfirmOpen}

@@ -1,0 +1,302 @@
+import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { SettingsGroup } from "@/components/settings/settings-group";
+import { SettingsRow } from "@/components/settings/settings-row";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
+import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { hostQueryKeys, snapshotsMutationKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+
+const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
+
+interface ClearLocalSnapshotsMutationContext {
+  readonly hostId: string | null;
+  readonly userId: string | null;
+}
+
+/**
+ * Destructive actions that belong to a MACHINE.
+ *
+ * These used to sit in General → Danger Zone, in one red box with "Clear local
+ * app state" — three rows at three different scopes, one of which carried its
+ * own host dropdown so that a destructive button took its target from a
+ * control styled like a form field. Splitting by scope is the fix: what
+ * belongs to a machine lives on that machine's page, where the page title
+ * already names the target; "Clear local app state" is genuinely app-global
+ * and stays behind in General.
+ */
+export function HostDangerZone(props: {
+  readonly scope: HostScope;
+}): ReactNode {
+  const { scope } = props;
+  if (scope.host === null) return null;
+  return (
+    <SettingsGroup
+      title="Danger zone"
+      tone="danger"
+      dataTestId="host-danger-zone"
+      fill={false}
+    >
+      <ClearFileEditSnapshotsRow scope={scope} />
+      {scope.host.isLocalMachine ? <RemoveTraycerRow /> : null}
+    </SettingsGroup>
+  );
+}
+
+function ClearFileEditSnapshotsRow(props: {
+  readonly scope: HostScope;
+}): ReactNode {
+  const { scope } = props;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  // The host this dialog was opened against, captured at open time. The scope
+  // can move underneath an open dialog — the active host can change from
+  // another window, or the user can pick a different machine in the sidebar —
+  // and a destructive action must never execute against a machine the user did
+  // not have on screen when they decided. Compared on confirm, not assumed.
+  const [armedHostId, setArmedHostId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const currentUserId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? state.profile?.userId ?? null,
+  );
+  const hostLabel = scope.hostLabel;
+  const client = scope.client;
+
+  const storageSizeQuery = useHostQuery<
+    HostRpcRegistry,
+    "snapshots.getLocalStorageSize"
+  >({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "snapshots.getLocalStorageSize",
+    params: SNAPSHOTS_LOCAL_STORAGE_PARAMS,
+    options: null,
+  });
+
+  const clearSnapshotsMutation = useHostMutation<
+    HostRpcRegistry,
+    "snapshots.clearLocalSnapshots",
+    ClearLocalSnapshotsMutationContext
+  >({
+    client,
+    method: "snapshots.clearLocalSnapshots",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: snapshotsMutationKeys.clearLocalSnapshots(),
+      onMutate: () => ({
+        hostId: client === null ? null : client.getActiveHostId(),
+        userId: currentUserId,
+      }),
+      onSuccess: (result, _variables, context) => {
+        if (context.hostId !== null) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.method<
+              HostRpcRegistry,
+              "snapshots.getLocalStorageSize"
+            >(
+              context.hostId,
+              "snapshots.getLocalStorageSize",
+              SNAPSHOTS_LOCAL_STORAGE_PARAMS,
+            ),
+          });
+        }
+        if (context.hostId !== null && context.userId !== null) {
+          useLocalSnapshotClearStore
+            .getState()
+            .markCleared(context.userId, context.hostId, Date.now());
+        }
+        setConfirmOpen(false);
+        setArmedHostId(null);
+        toast.success("Cleared file edit snapshots", {
+          description: `${formatSnapshotBytes(result.clearedBytes)} removed.`,
+        });
+      },
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't clear file edit snapshots."),
+    },
+  });
+
+  // The scope moved while the dialog was open. Disarm rather than close:
+  // closing discards an intent the user expressed, and retargeting silently
+  // executes against a machine they never chose.
+  const targetMoved = armedHostId !== null && armedHostId !== scope.hostId;
+
+  return (
+    <>
+      <SettingsRow
+        label="File edit snapshots"
+        description={`Pre-edit file snapshots for Undo, and cached long plan content, stored on ${hostLabel}. This data stays on that machine and is never synced.`}
+        control={
+          <div className="flex flex-col items-end gap-2">
+            <div
+              className="font-mono text-code-xs text-muted-foreground"
+              data-testid="settings-local-snapshots-size"
+            >
+              <SnapshotsSize query={storageSizeQuery} />
+            </div>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={client === null || clearSnapshotsMutation.isPending}
+              data-testid="settings-clear-file-edit-snapshots"
+              onClick={() => {
+                setArmedHostId(scope.hostId);
+                setConfirmOpen(true);
+              }}
+            >
+              {clearSnapshotsMutation.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="settings-clear-file-edit-snapshots-spinner"
+                  variant={undefined}
+                />
+              ) : null}
+              Clear snapshots
+            </Button>
+          </div>
+        }
+      />
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          setConfirmOpen(open);
+          if (!open) setArmedHostId(null);
+        }}
+        title={`Clear file edit snapshots on ${hostLabel}?`}
+        description={
+          targetMoved
+            ? "The selected machine changed while this dialog was open, so this action is no longer armed. Close it and try again on the machine you want."
+            : `Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that machine.`
+        }
+        cascadeSummary={null}
+        actionLabel="Clear snapshots"
+        isPending={clearSnapshotsMutation.isPending}
+        onConfirm={() => {
+          if (targetMoved || client === null) return;
+          clearSnapshotsMutation.mutate(SNAPSHOTS_LOCAL_STORAGE_PARAMS);
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * Uninstalling the host is the most host-scoped action there is, so it lives
+ * on the machine's own page rather than beside app-global resets in General.
+ * Local machine only — there is no remote uninstall verb.
+ */
+function RemoveTraycerRow(): ReactNode {
+  const { hostManagement } = useRunnerHost();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const uninstall = useRunnerUninstallTraycer();
+  if (hostManagement === null) return null;
+
+  if (uninstall.isSuccess) {
+    return (
+      <SettingsRow
+        label="Traycer removed"
+        description="Background components were removed. Your agents, history and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            data-testid="settings-quit-after-uninstall"
+            onClick={() => requestAppQuit()}
+          >
+            Quit Traycer
+          </Button>
+        }
+      />
+    );
+  }
+
+  return (
+    <>
+      <SettingsRow
+        label="Remove Traycer from this device"
+        description="Stops the background host and services and removes the installed components. Your agents and history are preserved, and the host won't reinstall itself."
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={uninstall.isPending}
+            data-testid="settings-remove-traycer"
+            onClick={() => setConfirmOpen(true)}
+          >
+            {uninstall.isPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId="settings-remove-traycer-spinner"
+                variant={undefined}
+              />
+            ) : null}
+            Remove Traycer
+          </Button>
+        }
+      />
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Remove Traycer from this device?"
+        description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your agents, history and credentials stay on this device - you can reinstall anytime from Settings."
+        cascadeSummary={null}
+        actionLabel="Remove Traycer"
+        isPending={uninstall.isPending}
+        onConfirm={() => {
+          uninstall.mutate(undefined, {
+            onSuccess: () => setConfirmOpen(false),
+          });
+        }}
+      />
+    </>
+  );
+}
+
+function SnapshotsSize(props: {
+  readonly query: {
+    readonly isPending: boolean;
+    readonly isError: boolean;
+    readonly data: { readonly bytes: number } | undefined;
+  };
+}): ReactNode {
+  const { query } = props;
+  if (query.isPending) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <AgentSpinningDots
+          className="text-muted-foreground"
+          testId="settings-local-snapshots-size-spinner"
+          variant={undefined}
+        />
+        Calculating
+      </span>
+    );
+  }
+  if (query.isError) return "Unavailable";
+  return formatSnapshotBytes(query.data?.bytes ?? 0);
+}
+
+export function formatSnapshotBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"] as const;
+  const exponent = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  const value = bytes / 1024 ** exponent;
+  const precision =
+    exponent === 0 || value >= 10 || Number.isInteger(value) ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[exponent] ?? "TB"}`;
+}
