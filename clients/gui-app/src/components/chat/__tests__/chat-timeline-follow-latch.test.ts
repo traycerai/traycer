@@ -934,4 +934,51 @@ describe("useChatTimelineFollowLatch", () => {
     result.current.followEndIfPermitted();
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
+
+  it("regression: a sub-epsilon bottom report cannot disarm an owned free navigation", () => {
+    // Minimap/find/deep-link jump issued while latched at the strict bottom.
+    // An ANIMATED jump's first smooth-scroll frame moves <1px, so its scroll
+    // event still reads as strict-bottom geometry; that report must not
+    // consume the armed departure, or every later (genuinely departing)
+    // report is classified layout-owned and a correction burst yanks the
+    // jump straight back to the tail.
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    // navigateToMessage's exact sequence for a minimap click:
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: false,
+      publishesReaderPosition: false,
+    });
+    result.current.beginOwnedFreeNavigation();
+
+    // First animated frame: still inside the 1px strict-bottom epsilon.
+    shim.setGeometry(node, { scrollTop: 999.5 });
+    fireNativeScroll(node);
+
+    // Subsequent frames genuinely leave the bottom.
+    shim.setGeometry(node, { scrollTop: 900 });
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollTop: 400 });
+    fireNativeScroll(node);
+    for (let i = 0; i < 12; i++) flushAnimationFrame();
+
+    // Follow releases to the navigation; no corrective snap-back is issued.
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
 });

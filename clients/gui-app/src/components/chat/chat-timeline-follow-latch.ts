@@ -206,9 +206,16 @@ export function useChatTimelineFollowLatch(
 
   const setFollowIntent = useCallback(
     (isFollowing: boolean): void => {
-      readerDepartureArmedRef.current = false;
       if (!isFollowing) cancelActiveCorrection();
+      // Disarm only on an actual intent TRANSITION. An owned free navigation
+      // (minimap/find/deep-link) arms departure while the viewport is still
+      // latched at the bottom; an animated jump's first smooth-scroll frame
+      // can report geometry still inside the strict-bottom epsilon, and that
+      // report must not consume the armed flag - otherwise every subsequent
+      // (genuinely departing) report reads as layout-owned and the latch
+      // yanks the jump straight back to the tail.
       if (permissionRef.current === isFollowing) return;
+      readerDepartureArmedRef.current = false;
       permissionRef.current = isFollowing;
       onFollowIntentChangeRef.current?.(isFollowing);
     },
