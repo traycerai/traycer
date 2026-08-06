@@ -1,10 +1,6 @@
 import type { ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  HostGlyph,
-  HostPresenceDot,
-} from "@/components/settings/host-scope/host-glyph";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { cn } from "@/lib/utils";
 
@@ -105,48 +101,6 @@ export function HostScopeGate(props: {
   }
 
   return <>{props.children}</>;
-}
-
-/**
- * A one-line readout naming the host a panel is acting on.
- *
- * Panels that are scoped by the sidebar switcher still owe the reader an
- * answer to "which host is this?" at the point of the content — the
- * sidebar is a glance away, but a destructive button is not the place to make
- * someone glance. It is deliberately inert: the accent-free styling and the
- * absence of a chevron say "this is a fact, the control is elsewhere".
- */
-export function HostScopeLine(props: {
-  readonly scope: HostScope;
-  readonly className: string | undefined;
-}): ReactNode {
-  const { scope } = props;
-  if (scope.host === null) return null;
-  return (
-    <span
-      className={cn(
-        "inline-flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground",
-        props.className,
-      )}
-      data-testid="host-scope-line"
-    >
-      <HostGlyph host={scope.host} className="size-3.5" />
-      <span className="truncate">{scope.host.name}</span>
-      <HostPresenceDot
-        tone={scope.host.health.tone}
-        animate={scope.host.health.live}
-        className={undefined}
-      />
-      <span className="truncate">{scope.host.health.label}</span>
-      {scope.isViewingActive ? null : (
-        // The one asymmetry worth stating inline: you are configuring a
-        // host that is NOT the one this window's bell and new work use.
-        // Without it, a person edits notification policy on B all evening and
-        // wonders why the bell never changes.
-        <span className="shrink-0">· not this window's active host</span>
-      )}
-    </span>
-  );
 }
 
 function HostScopeNotice(props: {

@@ -1647,19 +1647,19 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   // The panel used to carry its own host `Select` in the header - one of four
-  // near-identical dropdowns doing one job. The single control now lives in the
-  // settings sidebar and heads the group it scopes, so this panel must render
-  // an inert READOUT of the scoped machine and no picker of its own. Asserting
-  // the absence is the point: a second control reappearing here is the exact
-  // regression the unification exists to prevent.
-  it("names the scoped machine without offering its own host picker", () => {
+  // near-identical dropdowns doing one job - and then, briefly, an inert
+  // readout of the scoped host. Both are gone: the sidebar states the scope one
+  // row away and never scrolls. Asserting the absence is the point - a second
+  // control here is the exact regression the unification exists to prevent, and
+  // a second READOUT is the duplication that made the old surface confusing.
+  it("states nothing about the host, leaving the scope to the sidebar", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    expect(screen.getByTestId("host-scope-line")).toBeDefined();
+    expect(screen.queryByTestId("host-scope-line")).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Host" })).toBeNull();
   });
 

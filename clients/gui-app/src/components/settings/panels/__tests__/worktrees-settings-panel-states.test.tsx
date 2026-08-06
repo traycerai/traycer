@@ -447,10 +447,10 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     await waitFor(() => {
       screen.getByText("feat-clean");
     });
-    // The toolbar names the scoped host but no longer PICKS it: the one
-    // picker lives in the sidebar, so this slot is an inert readout.
-    screen.getByTestId("host-scope-line");
+    // The toolbar neither picks the host nor names it: both belong to the
+    // sidebar, which states the scope a row away and never scrolls off.
     expect(screen.queryByTestId("worktrees-host-select")).toBeNull();
+    expect(screen.queryByTestId("host-scope-line")).toBeNull();
     screen.getByPlaceholderText("Search repo, branch, path, PR, or Task");
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
@@ -462,7 +462,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     expect(
       documentPosition(
         screen.getByRole("textbox", { name: "Branch prefix" }),
-        screen.getByTestId("host-scope-line"),
+        screen.getByTestId("worktrees-toolbar-actions"),
       ),
     ).toBe("before");
   });

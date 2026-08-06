@@ -18,10 +18,7 @@ import { useAgentSelectionGuideGlobalQuery } from "@/hooks/agent/use-agent-selec
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
-import {
-  HostScopeGate,
-  HostScopeLine,
-} from "@/components/settings/host-scope/host-scope-gate";
+import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   useHostScope,
   type HostScope,
@@ -175,12 +172,9 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
   return (
     <div className="h-full min-h-0 p-5">
       <section className="flex h-full min-h-0 flex-col">
-        {/* The dropdown that used to sit here is gone: this file is per-host,
-            but the control that says WHICH host is the one picker in the
-            sidebar. What remains is the inert readout naming it. */}
-        <div className="mb-3 flex justify-end">
-          <HostScopeLine scope={scope} className={undefined} />
-        </div>
+        {/* This file is per-host, but neither the control that says WHICH host
+            nor the readout of it lives here: both are the sidebar's, one row
+            away and always on screen. */}
         <HostScopeGate
           scope={scope}
           skeleton={

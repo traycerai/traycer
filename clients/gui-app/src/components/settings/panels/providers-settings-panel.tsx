@@ -25,7 +25,6 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import {
   HostScopeConnecting,
   HostScopeGate,
-  HostScopeLine,
 } from "@/components/settings/host-scope/host-scope-gate";
 import {
   useHostScope,
@@ -313,9 +312,12 @@ function ProvidersSettingsPanelInner({
       description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
       fillHeight
       bodyClassName="max-h-[min(85vh,52rem)]"
+      // No host readout here. The sidebar states the scoped host one row above
+      // this panel and never scrolls away, so repeating it in every header was
+      // the same fact printed twice — and it crowded out the controls this
+      // header actually owns.
       headerAction={
         <div className="flex items-center gap-2">
-          <HostScopeLine scope={scope} className={undefined} />
           <ProviderLastChecked
             checkedAt={checkedAt}
             checking={checkingProviders}

@@ -58,12 +58,11 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           <div
             className={cn(
               "flex flex-col gap-0.5",
-              // Indent + a guide line running down from the picker: these
-              // sections are not siblings of the host row, they are its
-              // contents. Without it the picker reads as one more nav item
-              // and "scoped by the host above" is something you have to be
-              // told rather than something you can see.
-              group.id === "host" && "ml-4 border-l border-border/40",
+              // Indent alone: these sections are not siblings of the host row,
+              // they are its contents, and stepping them in says so without
+              // drawing anything. A guide line said the same thing louder and
+              // put a second vertical edge next to the rail's own border.
+              group.id === "host" && "ml-4",
             )}
           >
             {SETTINGS_SECTIONS.map((section, index) =>

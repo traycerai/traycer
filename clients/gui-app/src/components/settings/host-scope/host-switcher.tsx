@@ -88,13 +88,16 @@ export function HostSwitcher(props: {
         // for while withholding the one thing it displays.
         aria-label={`Settings host: ${selected.name}`}
         data-testid="settings-host-switcher"
-        // Shaped like a sidebar row, not a card. A bordered box here read as a
-        // second panel sitting inside the rail; the group rule above already
-        // says where the host tier starts, so this only has to line its dot up
-        // with the section icons beneath it and behave on hover like they do.
+        // A filled row, not a bordered card. It has to read as a CONTROL among
+        // navigation — the sections below it are transparent rows, so a quiet
+        // fill separates "this thing opens" from "this thing navigates"
+        // without adding a second vertical edge beside the rail's own border,
+        // which is what made the earlier bordered version look like a panel
+        // wedged into the sidebar. Muted, never accent: the accent is spoken
+        // for by the selected section.
         className={cn(
-          "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors",
-          "hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+          "flex w-full items-center gap-3 rounded-md bg-muted/50 px-3 py-2 text-left transition-colors",
+          "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
         )}
       >
         <span className="flex size-4 shrink-0 items-center justify-center">

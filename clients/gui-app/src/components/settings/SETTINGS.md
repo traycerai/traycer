@@ -120,11 +120,16 @@ directly above a destructive button) and Agent selection (floating above the
 editor). They differed in width, placement and scoping mechanism while doing
 one job.
 
-All four are gone. Where one stood, the panel now renders `HostScopeLine` - an
-inert readout naming the scoped host, deliberately accent-free and without a
-chevron, so it reads as a fact rather than a control. `settings-host-select.tsx`
-and `use-settings-host-scope.ts` are deleted; `useHostScope` is the only host
-scope in Settings. `settings-host-labels.ts` survives solely for the composer's
+All four are gone, and nothing replaced them: a panel states NOTHING about which
+host it is scoped to. An interim pass put an inert `HostScopeLine` readout where
+each dropdown had been, on the theory that content owes the reader the host name
+at the point of use. It does not - the sidebar picker sits one row away, never
+scrolls off, and already carries the name, the health dot and the "Viewing -"
+note. The readout was that same fact printed a second time in four places, which
+is the duplication this surface exists to remove, so panels now carry only the
+controls they own. `settings-host-select.tsx` and `use-settings-host-scope.ts`
+are deleted; `useHostScope` is the only host scope in Settings.
+`settings-host-labels.ts` survives solely for the composer's
 `host-workspace-selector`.
 
 **Two host relationships, kept apart by grammar.** Merging them is the defect
@@ -155,8 +160,9 @@ of its states look identical if you only check `client !== null`:
 The invariant every consumer owes: **a visible host name must always match the
 client used by every read, stream and mutation beneath it.** `HostScopeGate`
 (`host-scope/host-scope-gate.tsx`) enforces this centrally so each panel does
-not re-derive it; `HostScopeLine` is the inert readout that names the host
-at the point of the content.
+not re-derive it - and because the only visible host name is the sidebar's, the
+invariant reduces to one rule: a panel must render no content while the scope
+has no client behind it.
 
 **One host model.** The app carries two host lists that need not agree - the
 runtime directory (what this client can dial; it alone knows `websocketUrl`)

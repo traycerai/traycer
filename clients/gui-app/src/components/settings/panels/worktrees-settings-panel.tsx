@@ -101,9 +101,6 @@ import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dial
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import {
-  HostScopeLine,
-} from "@/components/settings/host-scope/host-scope-gate";
-import {
   useHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
@@ -271,7 +268,6 @@ export function WorktreesSettingsPanel(): ReactNode {
 }
 
 function WorktreesToolbar(props: {
-  readonly scope: HostScope;
   readonly onRefresh: () => Promise<unknown>;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
@@ -285,7 +281,6 @@ function WorktreesToolbar(props: {
     lastUpdatedAt,
     onRefresh,
     refreshing,
-    scope,
     selectionControls,
   } = props;
   const refreshWorktrees = useCallback(async () => {
@@ -299,8 +294,10 @@ function WorktreesToolbar(props: {
 
   return (
     <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <HostScopeLine scope={scope} className={undefined} />
+      {/* The slot on the left held first a host `<Select>`, then a readout of
+          the scoped host. Both are gone: the sidebar names that host one row
+          away and never scrolls, so this toolbar carries only what it owns. */}
+      <div className="flex items-center justify-end gap-2">
         <div
           className="flex shrink-0 items-center gap-2"
           data-testid="worktrees-toolbar-actions"
@@ -554,7 +551,6 @@ function WorktreesBody(props: {
   const canRefresh = reachable && client !== null;
   const onRefresh = useCallback(() => listing.refresh(), [listing]);
   const toolbarProps = {
-    scope,
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
     // A cold fleet enriches for tens of seconds; gating on that stranded the
@@ -808,7 +804,6 @@ export function WorktreesList(props: {
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
-    readonly scope: HostScope;
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;

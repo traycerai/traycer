@@ -30,7 +30,6 @@ import { NotificationHooksSection } from "@/components/settings/panels/notificat
 import {
   HostScopeConnecting,
   HostScopeGate,
-  HostScopeLine,
 } from "@/components/settings/host-scope/host-scope-gate";
 import {
   useHostScope,
@@ -89,9 +88,9 @@ const LEAVE_SECRET_UNCHANGED: HostNotificationsSecretWrite = {
  * whichever one happened to be active under a heading that read "Current
  * host". It was the worst of the invisible bindings: a person could toggle
  * severities all evening and never learn that the bell they were watching
- * belonged to a different machine. It now reads the one Settings host scope,
- * names the machine, and says so explicitly when that machine is not the one
- * this window's bell reads from.
+ * belonged to a different host. It now reads the one Settings host scope, and
+ * the sidebar that owns that scope names the host and says so explicitly when
+ * it is not the one this window's bell reads from.
  */
 export function NotificationsSettingsPanel() {
   const scope = useHostScope();
@@ -142,9 +141,8 @@ function NotificationsSettingsPanelContent(props: {
     >
       <SettingsGroup
         // Was "In-app notifications · Current host" — a title whose only
-        // qualifier was the one fact the screen refused to resolve. The scope
-        // line in the header names the machine now, so the title is free to
-        // name the setting.
+        // qualifier was the one fact the screen refused to resolve. The sidebar
+        // names the host now, so the title is free to name the setting.
         title="In-app notifications"
         tone="default"
         dataTestId="notifications-severity-policy"
@@ -165,14 +163,13 @@ function NotificationsSettingsPanelContent(props: {
   return (
     <SettingsPanelShell
       title="Notifications"
-      description="What this machine surfaces, and what its automation receives."
+      description="What this host surfaces, and what its automation receives."
       fillHeight
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
-      headerAction={
-        scope === null ? undefined : (
-          <HostScopeLine scope={scope} className={undefined} />
-        )
-      }
+      // The header named the scoped host until the sidebar started doing it a
+      // row away and permanently. Two statements of one fact is how the old
+      // surface got confusing; this is the one place it was still true.
+      headerAction={undefined}
     >
       {scope === null ? (
         body
