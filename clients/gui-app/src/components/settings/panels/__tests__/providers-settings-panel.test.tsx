@@ -1249,10 +1249,14 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     // Not consumed here: the pane stays on the rail's first provider rather
-    // than opening the deep link's target on the wrong machine.
+    // than opening the deep link's target on the wrong machine. The probe is
+    // that provider's DEFAULT tab, which is the first entry of
+    // PROVIDER_TAB_ORDER it supports - "Profiles & Limits" here, since
+    // FULL_TABS advertises `usage` and `providerState` leaves the API key
+    // unsupported so no Account tab precedes it.
     expect(
       screen
-        .getByRole("tab", { name: "CLI & Args" })
+        .getByRole("tab", { name: "Profiles & Limits" })
         .getAttribute("data-state"),
     ).toBe("active");
     expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
