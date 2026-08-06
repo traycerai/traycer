@@ -939,23 +939,14 @@ describe("<ProviderMcpTab />", () => {
     ).toBeDefined();
   });
 
-  it("hides Edit when actionScopes.update is empty", () => {
-    const noUpdateCaps: ProviderMcpCapabilities = {
-      ...FULL_CAPS,
-      actionScopes: {
-        ...FULL_CAPS.actionScopes,
-        update: [],
-      },
-    };
-    mcpMocks.listResult.data = { servers: [connectedServer({})] };
-    renderTab(noUpdateCaps, "codex");
-    expect(screen.queryByRole("button", { name: /Edit context7/ })).toBeNull();
-  });
-
-  it("shows Edit when actionScopes.update includes current scope", () => {
+  // F4: every production contract sets updateServer: "none" and update: [].
+  // The pencil/edit path was maintained dead code; it is removed rather than
+  // wired. When a provider implements update, restore the affordance and this
+  // assertion (see provider-mcp-tab canUpdate comment).
+  it("does not render Edit even when a test double advertises update scopes", () => {
     mcpMocks.listResult.data = { servers: [connectedServer({})] };
     renderTab(FULL_CAPS, "codex");
-    expect(screen.getByRole("button", { name: /Edit context7/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Edit context7/ })).toBeNull();
   });
 
   it("hides Add/Delete/auth/discover on Project when actionScopes only allow them for Global", () => {
