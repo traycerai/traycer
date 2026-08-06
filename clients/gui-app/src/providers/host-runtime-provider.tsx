@@ -230,6 +230,25 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
               auth: createStreamAuthRevalidator(auth),
               authnBaseUrl: runnerHost.authnBaseUrl,
               requestId,
+              // Un-strands queries that errored while this binding's remote
+              // session was still dialing (a Settings host-picker selection
+              // has no other session holder). NON-active hosts only: the
+              // active host's evidence is owned by the stream-runtime wiring
+              // over the SAME shared session, and the active variant of the
+              // notify emits a host-change event - which the `onChange`
+              // subscription below answers with `runtimeMessenger.reset()`,
+              // so routing the active host through here would tear this very
+              // binding down as a side effect of its own good news.
+              onRemoteAvailabilityRecovered: (hostId) => {
+                if (runtime === null) {
+                  return;
+                }
+                const active = runtime.hostClient.getActiveHost();
+                if (active !== null && active.hostId === hostId) {
+                  return;
+                }
+                runtime.hostClient.notifyHostAvailabilityRecovered(hostId);
+              },
             })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
       // the Traycer cloud backend is surfaced by the host as

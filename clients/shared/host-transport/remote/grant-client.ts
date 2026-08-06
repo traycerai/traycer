@@ -41,23 +41,30 @@ export interface AttachGrant {
  *                        bearer is VALID — never treat this as an auth failure
  *                        or retry it; it clears only when the owner upgrades.
  *  - `network-error`   — transient transport/timeout/5xx or a malformed body.
+ *
+ * Every non-`ok`, non-`plan-restricted` result carries a human-readable
+ * `detail`. Not decoration: this mint is the first step of a silently
+ * forever-retrying connect loop, and the detail is the only place the actual
+ * fault (DNS? 401? 500 body?) survives into the session's `DialFailureLog`.
  */
 export type AttachGrantResult =
   | { readonly kind: "ok"; readonly grant: AttachGrant }
-  | { readonly kind: "unauthorized" }
+  | { readonly kind: "unauthorized"; readonly detail: string }
   | { readonly kind: "plan-restricted" }
-  | { readonly kind: "network-error" };
+  | { readonly kind: "network-error"; readonly detail: string };
 
 /**
- * Reads a 401/403 body looking for the attach-grant entitlement denial
+ * Reads a 401/403 body TEXT looking for the attach-grant entitlement denial
  * (`reason: "plan_restricted"` — CS's `HOST_CONNECTIVITY_DENIAL_REASON`).
- * Any read/parse failure means "not plan-restricted": the caller then treats
- * the status as an ordinary credential rejection, the safe default.
+ * Any parse failure means "not plan-restricted": the caller then treats the
+ * status as an ordinary credential rejection, the safe default. Takes the
+ * already-read text (not the `Response`) so the same single body read also
+ * feeds the failure detail — a `Response` body can only be consumed once.
  */
-async function isPlanRestrictedBody(response: Response): Promise<boolean> {
+function isPlanRestrictedBody(bodyText: string): boolean {
   let body: unknown;
   try {
-    body = await response.json();
+    body = JSON.parse(bodyText);
   } catch {
     return false;
   }
@@ -65,6 +72,51 @@ async function isPlanRestrictedBody(response: Response): Promise<boolean> {
     return false;
   }
   return (body as Record<string, unknown>).reason === "plan_restricted";
+}
+
+/** The response body as text, or `""` when it cannot be read. Never throws. */
+async function readBodyText(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A failure body, flattened onto one line and capped, for a log detail. A
+ * server error body frequently names the whole outage on its own (an authn
+ * missing-signing-key 500 did exactly that), so it is worth carrying — capped
+ * because it comes off the wire. NEVER applied to a 2xx body: that carries
+ * the grant itself and must not reach a log line.
+ */
+const BODY_SNIPPET_CAP = 200;
+
+function bodySnippet(body: string): string {
+  const collapsed = body.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) {
+    return "";
+  }
+  return collapsed.length <= BODY_SNIPPET_CAP
+    ? ` - ${collapsed}`
+    : ` - ${collapsed.slice(0, BODY_SNIPPET_CAP)}...`;
+}
+
+/**
+ * Node/Chromium `fetch` throws a bare `TypeError: fetch failed`-style error
+ * and hangs the discriminating reason (DNS, refused, TLS, the timeout signal)
+ * off `cause` where one exists. Unwrap one level so those read differently.
+ */
+function describeFetchFailure(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const head = error.name === "Error" ? error.message : error.name;
+  const cause: unknown = error.cause;
+  if (!(cause instanceof Error)) {
+    return head;
+  }
+  return `${head}: ${cause.message}`;
 }
 
 function attachGrantUrl(authnBaseUrl: string, hostId: string): string {
@@ -96,30 +148,48 @@ export async function mintAttachGrantViaHttp(
       body: JSON.stringify({ role: "client" }),
       signal: AbortSignal.timeout(GRANT_FETCH_TIMEOUT_MS),
     });
-  } catch {
-    return { kind: "network-error" };
+  } catch (error) {
+    return {
+      kind: "network-error",
+      detail: `the mint request never completed (${describeFetchFailure(error)})`,
+    };
   }
 
   if (response.status === 401 || response.status === 403) {
-    if (await isPlanRestrictedBody(response)) {
+    const bodyText = await readBodyText(response);
+    if (isPlanRestrictedBody(bodyText)) {
       return { kind: "plan-restricted" };
     }
-    return { kind: "unauthorized" };
+    return {
+      kind: "unauthorized",
+      detail: `authn rejected the mint with HTTP ${response.status}${bodySnippet(bodyText)}`,
+    };
   }
   if (response.status < 200 || response.status >= 300) {
-    return { kind: "network-error" };
+    const bodyText = await readBodyText(response);
+    return {
+      kind: "network-error",
+      detail: `authn answered HTTP ${response.status}${bodySnippet(bodyText)}`,
+    };
   }
 
+  // NOTE: no body snippet from here down — a 2xx body carries the grant.
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    return { kind: "network-error" };
+    return {
+      kind: "network-error",
+      detail: `authn answered HTTP ${response.status} with a body that is not valid JSON`,
+    };
   }
 
   const parsed = attachGrantResponseSchema.safeParse(body);
   if (!parsed.success) {
-    return { kind: "network-error" };
+    return {
+      kind: "network-error",
+      detail: `authn answered HTTP ${response.status} but the body is not an attach grant`,
+    };
   }
   return {
     kind: "ok",
@@ -138,8 +208,13 @@ export type AttachGrantProvision =
    * connectivity. The session goes terminal-fatal — backoff cannot fix a plan.
    */
   | { readonly kind: "plan-restricted" }
-  /** Signed out / revoked / transient failure — stay in reconnect backoff. */
-  | { readonly kind: "unavailable" };
+  /**
+   * Signed out / revoked / transient failure — stay in reconnect backoff.
+   * `detail` says WHICH, in words, for the session's `DialFailureLog`: the
+   * retry cadence is the same for all of them, so this is the only place the
+   * distinction survives.
+   */
+  | { readonly kind: "unavailable"; readonly detail: string };
 
 /** Injectable grant source the session calls on attach + resume + re-auth. */
 export type AttachGrantProvider = () => Promise<AttachGrantProvision>;
@@ -160,7 +235,12 @@ export function createAttachGrantProvider(deps: {
   return async () => {
     const bearerToken = deps.getBearerToken();
     if (bearerToken === null) {
-      return { kind: "unavailable" };
+      // Not a mint failure at all — there is no user bearer to mint WITH.
+      // Worth its own wording: it points at sign-in/token state, not authn.
+      return {
+        kind: "unavailable",
+        detail: "no user bearer available (signed out?)",
+      };
     }
     const result = await mintAttachGrantViaHttp(
       deps.authnBaseUrl,
@@ -173,6 +253,6 @@ export function createAttachGrantProvider(deps: {
     if (result.kind === "plan-restricted") {
       return { kind: "plan-restricted" };
     }
-    return { kind: "unavailable" };
+    return { kind: "unavailable", detail: result.detail };
   };
 }

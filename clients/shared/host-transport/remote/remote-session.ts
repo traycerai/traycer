@@ -45,6 +45,7 @@ import { backoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
   CLIENT_REAUTH_JITTER_MS,
+  DIAL_FAILURE_RESTATE_MS,
   HOST_STANDING_BOUND_MS,
   INITIAL_BULK_SEND_CREDITS,
   ATTACH_ACK_TIMEOUT_MS,
@@ -54,6 +55,7 @@ import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
 } from "./config";
+import { DialFailureLog } from "./dial-failure-log";
 import {
   CURRENT_MUX_VERSION,
   MuxFrameType,
@@ -177,12 +179,25 @@ export interface IRemoteSession<
    */
   onClosed(listener: () => void): () => void;
   /**
-   * Subscribes to positive evidence that the session just re-reached its
-   * ready boundary after a drop (reconnecting → full re-attach + every live
-   * stream restored). A clean FIRST open never fires - nothing recovered.
-   * The remote analog of the recovery evidence `WsStreamClient` surfaces via
-   * `subscribeAvailabilityRecovered`, consumed to un-strand errored
-   * host-scoped queries.
+   * Subscribes to positive evidence that the session just reached its ready
+   * boundary (full attach + every live stream restored) - EVERY boundary,
+   * including the clean first open. The remote analog of the recovery
+   * evidence `WsStreamClient` surfaces via `subscribeAvailabilityRecovered`,
+   * consumed to un-strand errored host-scoped queries.
+   *
+   * The clean first open fires deliberately, unlike the local transport:
+   * a remote session is built on demand and torn down at refcount zero
+   * (after the cache's keep-warm linger), so its FIRST dial races the very
+   * queries that created it. Those queries
+   * error pre-send ("Remote session is not ready"), exhaust their retry, and
+   * then have no automatic signal left - in production that stranded the
+   * Providers panel on an error card for 15-20s (until the query layer's own
+   * doubling backoff happened to re-fire) when the session had been ready
+   * since second two. For a local transport "first open" happens once per
+   * app run before anything could have errored, so never-on-first-open costs
+   * nothing there; for the remote session it is precisely the gap. Consumers
+   * already cooldown-coalesce (`wireAvailabilityRecovery`), so the extra
+   * emission is at most one host-scope invalidation per session build.
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void;
   close(): void;
@@ -265,17 +280,19 @@ export class RemoteSession<
    * transport's no-progress bound).
    */
   private noProgressUnauthorizedReconnects = 0;
-  /**
-   * Set on every connection drop; consumed at the next ready boundary to
-   * emit availability-recovered evidence. A boundary reached without a prior
-   * drop is the clean first open - NOT recovery - so it stays silent.
-   */
-  private droppedSinceReady = false;
 
   private phaseTimer: TimerHandle | null = null;
   private backoffTimer: TimerHandle | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
+
+  /**
+   * Throttled connect-loop failure logging (see `dial-failure-log.ts`). The
+   * loop otherwise fails in TOTAL silence — a relay hostname that does not
+   * resolve in DNS produced months of "Remote session is not ready" with not
+   * one diagnostic line anywhere on the client.
+   */
+  private readonly dialFailures: DialFailureLog;
 
   constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
     this.options = options;
@@ -283,6 +300,16 @@ export class RemoteSession<
       rpc: buildRpcManifest(options.rpcRegistry),
       stream: buildStreamManifest(options.streamRegistry),
     };
+    this.dialFailures = new DialFailureLog({
+      label: `remote session (host ${options.hostId})`,
+      now: () => Date.now(),
+      repeatIntervalMs: DIAL_FAILURE_RESTATE_MS,
+      // Console on purpose: this is shared OSS transport code with no logger
+      // seam (parity with `WsStreamClient`), and the desktop shell forwards
+      // renderer console output into `traycer-desktop.log`.
+      warn: (message) => console.warn(message),
+      info: (message) => console.info(message),
+    });
   }
 
   // ---- Public surface (consumed by the messenger + stream client) -------- //
@@ -612,7 +639,12 @@ export class RemoteSession<
     }
     if (provision.kind === "unavailable") {
       // No grant (signed out / revoked / transient CS failure): stay in backoff.
-      this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnect();
+      this.dialFailures.recordFailure({
+        cause: `could not mint an attach grant: ${provision.detail}`,
+        context: "",
+        retryInMs,
+      });
       return;
     }
     const grant = provision.grant;
@@ -639,7 +671,11 @@ export class RemoteSession<
         onReauthAck: () => undefined,
         onPeerGone: (reason) => this.onPeerGone(generation, reason),
         onError: () => undefined,
-        onClose: () => this.handleConnectionLost(generation, "socket-closed"),
+        onClose: (info) =>
+          this.handleConnectionLost(
+            generation,
+            describeSocketClose(this.phase, info),
+          ),
       },
     });
 
@@ -1055,7 +1091,8 @@ export class RemoteSession<
       return;
     }
     this.dropConnection(cause);
-    this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnect();
+    this.dialFailures.recordFailure({ cause, context: "", retryInMs });
   }
 
   /**
@@ -1067,7 +1104,6 @@ export class RemoteSession<
    */
   private dropConnection(cause: string): void {
     this.phase = "reconnecting";
-    this.droppedSinceReady = true;
     this.restoredStreamIds.clear();
     this.teardownConnection(cause);
     // In-flight unary calls are post-send from the caller's view → not
@@ -1180,7 +1216,13 @@ export class RemoteSession<
     }
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
-      this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnect();
+      this.dialFailures.recordFailure({
+        cause:
+          "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",
+        context: "",
+        retryInMs,
+      });
       return;
     }
     // outcome === "rotated": authn accepts the credential. If the bearer the
@@ -1200,7 +1242,13 @@ export class RemoteSession<
     } else {
       this.noProgressUnauthorizedReconnects = 0;
     }
-    this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnect();
+    this.dialFailures.recordFailure({
+      cause:
+        "the host rejected the session bearer (UNAUTHORIZED); redialing after credential revalidation",
+      context: "",
+      retryInMs,
+    });
   }
 
   /**
@@ -1243,6 +1291,11 @@ export class RemoteSession<
     if (this.phase === "closed") {
       return;
     }
+    // One-shot, not throttled: terminal means the loop is OVER, so the
+    // absence of further retry lines must not read as recovery.
+    console.warn(
+      `[remote-session] remote session (host ${this.options.hostId}) closed terminally: ${details.code}: ${details.reason}`,
+    );
     this.phase = "closed";
     this.restoredStreamIds.clear();
     this.clearAllTimers();
@@ -1263,9 +1316,14 @@ export class RemoteSession<
     this.emitClosed();
   }
 
-  private scheduleReconnect(): void {
+  /**
+   * Arms the backoff redial and returns the armed delay, so failure paths can
+   * report the SAME value they actually scheduled (never a second jitter/
+   * growth roll purely for the log line).
+   */
+  private scheduleReconnect(): number {
     if (this.phase === "closed") {
-      return;
+      return 0;
     }
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);
@@ -1280,6 +1338,7 @@ export class RemoteSession<
       this.backoffTimer = null;
       void this.beginConnect();
     }, delay);
+    return delay;
   }
 
   // ---- Re-auth loop + host-standing watchdog (R4-D2) --------------------- //
@@ -1459,13 +1518,13 @@ export class RemoteSession<
     }
     this.readyBoundaryGeneration = this.connectGeneration;
     this.reconnectAttempt = 0;
-    if (this.droppedSinceReady) {
-      // The session just fully recovered from a drop (re-attach + streams
-      // restored) - the "endpoint recovered" evidence availability-recovered
-      // consumers refetch on. A clean first open never sets the flag.
-      this.droppedSinceReady = false;
-      this.emitAvailabilityRecovered();
-    }
+    this.dialFailures.recordSuccess();
+    // EVERY ready boundary is availability evidence, the clean first open
+    // included: queries that raced this session's first dial have already
+    // errored pre-send and exhausted their retry, and this emission is the
+    // only automatic signal that can un-strand them (see the
+    // `subscribeAvailabilityRecovered` contract).
+    this.emitAvailabilityRecovered();
   }
 
   private clientStreamCanonical(method: string): SchemaVersion {
@@ -1624,6 +1683,28 @@ function indexMethodRegistry(
 ): MethodVersionRegistry {
   const entry = registry[method];
   return entry as MethodVersionRegistry;
+}
+
+/**
+ * A `DialFailureLog` cause for a relay-socket close. The browser WebSocket
+ * strips the discriminating fault: a DNS failure (the outage this logging was
+ * written for was a relay hostname with NO DNS record), a refused/blocked
+ * connection, and a relay-rejected upgrade (bad grant, wrong relay) ALL
+ * surface as `code=1006` with an empty reason. When the close happened before
+ * `attach_ack` (phase "connecting") the line says so explicitly, because that
+ * is the one client-side observable that narrows the fault to the dial
+ * itself. Stable per fault (code + reason + phase bucket), so it dedups.
+ */
+function describeSocketClose(
+  phase: SessionPhase,
+  info: { readonly code: number; readonly reason: string },
+): string {
+  const reason = info.reason === "" ? "" : ` reason=${info.reason}`;
+  const base = `the relay socket closed (code=${info.code}${reason})`;
+  if (phase === "connecting") {
+    return `${base} before attach_ack - a DNS failure, a refused/blocked connection, and a relay-rejected upgrade (bad or wrong-environment grant) all look exactly like this`;
+  }
+  return base;
 }
 
 function unaryTimeoutError(requestId: string, method: string): HostRpcError {

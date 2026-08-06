@@ -157,6 +157,19 @@ export interface BuildRuntimeHostMessengerParams<
   readonly auth: StreamAuthRevalidator | null;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
+  /**
+   * Ready-boundary evidence for the runtime binding's remote session, keyed
+   * by the host it serves. The runtime messenger is the ONLY holder of a
+   * remote session for a host that is neither the active host (stream-
+   * runtime wires that one) nor tab-bound (the durable per-tab transport
+   * wires those) - e.g. a Settings host-picker selection. Queries that raced
+   * this session's dial have already errored pre-send, so without this
+   * callback their host scope is never told the session came up and they
+   * strand on an error card until their own retry backoff fires (measured at
+   * 15-20s in production). Wire it to
+   * `HostClient.notifyHostAvailabilityRecovered`.
+   */
+  readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
 }
 
 export function buildRuntimeHostMessenger<
@@ -180,6 +193,7 @@ class RuntimeHostMessenger<
   private readonly auth: StreamAuthRevalidator | null;
   private readonly authnBaseUrl: string;
   private readonly requestId: RequestIdProvider;
+  private readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
   private readonly localMessenger: IHostMessenger<Registry>;
   private remoteBinding: RemoteBinding<Registry> | null = null;
   // The bearer of the request currently being dispatched. The cached remote
@@ -194,6 +208,7 @@ class RuntimeHostMessenger<
     this.auth = params.auth;
     this.authnBaseUrl = params.authnBaseUrl;
     this.requestId = params.requestId;
+    this.onRemoteAvailabilityRecovered = params.onRemoteAvailabilityRecovered;
     this.localMessenger = new WsRpcClient<Registry>({
       registry: params.registry,
       requestId: params.requestId,
@@ -318,9 +333,18 @@ class RuntimeHostMessenger<
       return null;
     }
     built.remoteTransport.session.start();
+    // Every ready boundary (the clean first open included) un-strands the
+    // queries that raced this session's dial and errored pre-send - this
+    // binding is the only session holder for a non-active, non-tab host, so
+    // nothing else can deliver that evidence.
+    const unsubscribeAvailability =
+      built.remoteTransport.session.subscribeAvailabilityRecovered(() => {
+        this.onRemoteAvailabilityRecovered(target.hostId);
+      });
     this.remoteBinding = {
       key: nextKey,
       transport: built.remoteTransport,
+      unsubscribeAvailability,
     };
     return built.messenger;
   }
@@ -329,6 +353,7 @@ class RuntimeHostMessenger<
     if (this.remoteBinding === null) {
       return;
     }
+    this.remoteBinding.unsubscribeAvailability();
     this.remoteBinding.transport.session.close();
     this.remoteBinding = null;
   }
@@ -337,6 +362,7 @@ class RuntimeHostMessenger<
 interface RemoteBinding<Registry extends VersionedRpcRegistry> {
   readonly key: string;
   readonly transport: RemoteHostTransport<Registry, HostStreamRpcRegistry>;
+  readonly unsubscribeAvailability: () => void;
 }
 
 function remoteTransportKey(entry: HostDirectoryEntry): string | null {

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { REMOTE_SESSION_LINGER_MS } from "../config";
 import type { IRemoteSession } from "../remote-session";
 import {
   acquireRemoteSession,
@@ -76,6 +77,21 @@ function freshIdentity(): RemoteSessionIdentity {
   };
 }
 
+// The keep-warm linger defers the real teardown by `REMOTE_SESSION_LINGER_MS`
+// after the last release, so every teardown assertion below advances fake
+// time explicitly - "released" and "torn down" are now distinct states.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Advances past the keep-warm window so a zero-consumer entry tears down. */
+function expireLinger(): void {
+  vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS);
+}
+
 describe("acquireRemoteSession", () => {
   it("constructs a session on the first acquire and shares it on subsequent acquires for the same identity", () => {
     const identity = freshIdentity();
@@ -104,15 +120,71 @@ describe("acquireRemoteSession", () => {
     second.close();
   });
 
-  it("(a) tears the shared session down IMMEDIATELY on the last release", () => {
+  it("(a) keeps the session warm for the linger window after the last release, then tears it down", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     const view = acquireRemoteSession(identity, () => session);
 
     expect(session.closeCalls).toBe(0);
     view.close();
-    expect(session.closeCalls).toBe(1);
+    // Released but NOT torn down: the session lingers, connected, for the
+    // keep-warm window.
+    expect(session.closeCalls).toBe(0);
     expect(remoteSessionRefCountForTest(identity)).toBe(0);
+
+    vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS - 1);
+    expect(session.closeCalls).toBe(0);
+    vi.advanceTimersByTime(1);
+    expect(session.closeCalls).toBe(1);
+  });
+
+  it("a re-acquire within the linger window adopts the warm session and cancels the teardown", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const createSession = vi.fn(() => session);
+
+    const first = acquireRemoteSession(identity, createSession);
+    first.close();
+    vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS - 1);
+
+    // The whole point of the keep-warm: no fresh mint/dial/handshake - the
+    // second acquire reuses the still-connected session.
+    const second = acquireRemoteSession(identity, createSession);
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+
+    // The pending teardown was cancelled, not merely outpaced: even far past
+    // the original window the adopted session stays open.
+    vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS * 3);
+    expect(session.closeCalls).toBe(0);
+
+    // Releasing again starts a FRESH window.
+    second.close();
+    expect(session.closeCalls).toBe(0);
+    expireLinger();
+    expect(session.closeCalls).toBe(1);
+  });
+
+  it("a mid-establishment release (acquire, release before ready, prompt re-acquire) never tears the dial down", () => {
+    // The measured panel-open churn shape: the messenger's single binding
+    // slot released the session while its first dial was still in flight,
+    // then re-acquired moments later - producing a observed double
+    // mint/attach. With the linger the in-flight session survives the gap.
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const createSession = vi.fn(() => session);
+
+    const during = acquireRemoteSession(identity, createSession);
+    // Still not ready - establishment in flight.
+    expect(session.ready).toBe(false);
+    during.close();
+    expect(session.closeCalls).toBe(0);
+
+    vi.advanceTimersByTime(1_000);
+    const reacquired = acquireRemoteSession(identity, createSession);
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(session.closeCalls).toBe(0);
+    reacquired.close();
   });
 
   it("(c) two concurrent acquires for the same identity share one session and only the SECOND release tears it down", () => {
@@ -130,10 +202,11 @@ describe("acquireRemoteSession", () => {
     expect(session.closeCalls).toBe(0);
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
 
-    // Second release: last consumer gone, so the shared session tears down now.
+    // Second release: last consumer gone - teardown after the linger window.
     consumerB.close();
-    expect(session.closeCalls).toBe(1);
     expect(remoteSessionRefCountForTest(identity)).toBe(0);
+    expireLinger();
+    expect(session.closeCalls).toBe(1);
   });
 
   it("a view's close() is idempotent - releasing twice never double-decrements or double-closes", () => {
@@ -148,6 +221,7 @@ describe("acquireRemoteSession", () => {
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
 
     other.close();
+    expireLinger();
     expect(session.closeCalls).toBe(1);
   });
 
@@ -162,6 +236,7 @@ describe("acquireRemoteSession", () => {
 
     const view1 = acquireRemoteSession(identity, createSession);
     view1.close();
+    expireLinger();
     expect(first.closeCalls).toBe(1);
 
     const view2 = acquireRemoteSession(identity, createSession);
@@ -176,6 +251,7 @@ describe("acquireRemoteSession", () => {
     expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
 
     view2.close();
+    expireLinger();
     expect(second.closeCalls).toBe(1);
   });
 
@@ -209,6 +285,39 @@ describe("acquireRemoteSession", () => {
     expect(fresh.closeCalls).toBe(0);
 
     rebuiltView.close();
+    expireLinger();
+    expect(fresh.closeCalls).toBe(1);
+  });
+
+  it("a session that goes fatal WHILE lingering is evicted on the next acquire, and the stale linger timer never touches the successor", () => {
+    const identity = freshIdentity();
+    const dead = fakeSession();
+    const fresh = fakeSession();
+    const createSession = vi
+      .fn()
+      .mockReturnValueOnce(dead)
+      .mockReturnValueOnce(fresh);
+
+    const view = acquireRemoteSession(identity, createSession);
+    view.close();
+    // Mid-linger, the warm session hits a session-level fatal underneath.
+    vi.advanceTimersByTime(1_000);
+    dead.closedUnderneath = true;
+
+    // The next acquire must not adopt the corpse - fresh session instead.
+    const rebuilt = acquireRemoteSession(identity, createSession);
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(rebuilt.isClosed()).toBe(false);
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+
+    // Even once the ORIGINAL linger deadline passes, the successor entry is
+    // untouched: the eviction cancelled/orphaned the old timer.
+    expireLinger();
+    expect(fresh.closeCalls).toBe(0);
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+
+    rebuilt.close();
+    expireLinger();
     expect(fresh.closeCalls).toBe(1);
   });
 
@@ -234,10 +343,12 @@ describe("acquireRemoteSession", () => {
     expect(remoteSessionRefCountForTest(identityB)).toBe(1);
 
     viewA.close();
+    expireLinger();
     expect(sessionForUserA.closeCalls).toBe(1);
     expect(sessionForUserB.closeCalls).toBe(0);
 
     viewB.close();
+    expireLinger();
     expect(sessionForUserB.closeCalls).toBe(1);
   });
 
@@ -279,11 +390,13 @@ describe("acquireRemoteSession", () => {
     // Releasing the stale key's consumer tears down ONLY that session -
     // independent of the new key's live session.
     viewA.close();
+    expireLinger();
     expect(sessionForKeyA.closeCalls).toBe(1);
     expect(sessionForKeyB.closeCalls).toBe(0);
     expect(remoteSessionRefCountForTest(identityKeyB)).toBe(1);
 
     viewB.close();
+    expireLinger();
     expect(sessionForKeyB.closeCalls).toBe(1);
   });
 
@@ -301,9 +414,11 @@ describe("acquireRemoteSession", () => {
     const viewB = acquireRemoteSession(identity, createSession);
     expect(remoteSessionRefCountForTest(identity)).toBe(2);
 
-    // Both release: the original entry fully tears down and is deleted.
+    // Both release, and the linger window expires: the original entry fully
+    // tears down and is deleted.
     viewA.close();
     viewB.close();
+    expireLinger();
     expect(original.closeCalls).toBe(1);
 
     // A fresh acquire for the IDENTICAL identity creates a brand-new
@@ -322,12 +437,13 @@ describe("acquireRemoteSession", () => {
     expect(successor.closeCalls).toBe(0);
 
     viewC.close();
+    expireLinger();
     expect(successor.closeCalls).toBe(1);
   });
 });
 
 describe("hasReadyRemoteSession", () => {
-  it("is false once the last consumer releases (no lingering evidence for a torn-down session)", () => {
+  it("stays true through the keep-warm linger (the session IS still live) and goes false once the window expires", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
@@ -335,6 +451,10 @@ describe("hasReadyRemoteSession", () => {
 
     expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
     view.close();
+    // Lingering, still connected: honest liveness evidence.
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
+    expireLinger();
+    // Torn down for real: no lingering evidence for a closed session.
     expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
   });
 

@@ -17,6 +17,7 @@ import {
   remoteSessionRefCountForTest,
   type RemoteSessionIdentity,
 } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
+import { REMOTE_SESSION_LINGER_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -254,6 +255,9 @@ describe("HostStreamProvider", () => {
     mocks.createRemoteHostTransport.mockReset();
     streamFactorySpy.build.mockReset();
     vi.restoreAllMocks();
+    // Tests that drive the session cache's keep-warm linger enable fake
+    // timers; restore unconditionally so a mid-test failure cannot leak them.
+    vi.useRealTimers();
   });
 
   it("force-reconnects all stream sessions on a shell system-resume signal", () => {
@@ -407,6 +411,10 @@ describe("HostStreamProvider", () => {
   // `identityKey`, and the shared `acquireRemoteSession` cache - so a
   // regression in any one of those layers fails this test.
   it("rebuilds and closes the client on a same-host remote public-key rotation, isolated from every other field", () => {
+    // Fake timers so the cache's keep-warm linger can be driven to expiry -
+    // a released stale-key session now closes when the window ends, not
+    // synchronously in the release.
+    vi.useFakeTimers();
     const sessionForKeyA = fakeRemoteSession();
     const sessionForKeyB = fakeRemoteSession();
     mocks.createRemoteHostTransport.mockImplementation(
@@ -454,13 +462,21 @@ describe("HostStreamProvider", () => {
       hostClient.bind(remoteTarget("pubkey-b"));
     });
 
-    // The old owner closed...
-    expect(sessionForKeyA.closeCalls).toBe(1);
+    // The old owner released its reference...
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-a"))).toBe(0);
     // ...and a FRESH one was acquired for the new key, not a resurrected
     // stale-key session.
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-b"))).toBe(1);
+
+    // The stale-key session lingers (keep-warm) - nothing can re-adopt it
+    // (its identity key includes the OLD public key), so the window expiring
+    // closes it for real, while the new key's live session is untouched.
+    expect(sessionForKeyA.closeCalls).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS);
+    });
+    expect(sessionForKeyA.closeCalls).toBe(1);
     expect(sessionForKeyB.closeCalls).toBe(0);
   });
 

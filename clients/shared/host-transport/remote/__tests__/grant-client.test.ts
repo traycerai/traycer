@@ -44,24 +44,29 @@ describe("mintAttachGrantViaHttp", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ role: "client" });
   });
 
-  it("maps 401/403 to unauthorized", async () => {
+  it("maps 401/403 to unauthorized, with the status + body in the detail", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => jsonResponse({ error: "nope" }, 403)),
     );
-    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
-      kind: "unauthorized",
-    });
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({ kind: "unauthorized" });
+    if (result.kind === "unauthorized") {
+      expect(result.detail).toContain("HTTP 403");
+      expect(result.detail).toContain("nope");
+    }
   });
 
-  it("maps a 5xx to network-error", async () => {
+  it("maps a 5xx to network-error, carrying the status in the detail", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => jsonResponse({}, 503)),
     );
-    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
-      kind: "network-error",
-    });
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({ kind: "network-error" });
+    if (result.kind === "network-error") {
+      expect(result.detail).toContain("HTTP 503");
+    }
   });
 
   it("fails closed on a body missing expires_in (old ISO shape)", async () => {
@@ -71,7 +76,7 @@ describe("mintAttachGrantViaHttp", () => {
         jsonResponse({ grant: "jws", expiresAt: "2026-01-01" }, 200),
       ),
     );
-    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
+    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toMatchObject({
       kind: "network-error",
     });
   });
@@ -83,9 +88,13 @@ describe("mintAttachGrantViaHttp", () => {
         throw new Error("boom");
       }),
     );
-    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
-      kind: "network-error",
-    });
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({ kind: "network-error" });
+    if (result.kind === "network-error") {
+      // The thrown error's message survives into the detail - a DNS failure,
+      // a refusal, and the 10s mint timeout must not read identically.
+      expect(result.detail).toContain("boom");
+    }
   });
 });
 
@@ -114,7 +123,7 @@ describe("mintAttachGrantViaHttp plan-restricted discrimination", () => {
       "fetch",
       vi.fn<typeof fetch>(async () => new Response("nope", { status: 403 })),
     );
-    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
+    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toMatchObject({
       kind: "unauthorized",
     });
   });
@@ -127,7 +136,12 @@ describe("createAttachGrantProvider", () => {
       hostId: HOST_ID,
       getBearerToken: () => null,
     });
-    expect(await provider()).toEqual({ kind: "unavailable" });
+    const provision = await provider();
+    expect(provision).toMatchObject({ kind: "unavailable" });
+    if (provision.kind === "unavailable") {
+      // Points at sign-in state, not at authn's endpoint.
+      expect(provision.detail).toContain("signed out");
+    }
   });
 
   it("returns the minted grant on success", async () => {
@@ -175,12 +189,55 @@ describe("createAttachGrantProvider", () => {
         jsonResponse({ statusCode: 403, error: "revoked" }, 403),
       ),
     );
-    expect(await provider()).toEqual({ kind: "unavailable" });
+    expect(await provider()).toMatchObject({ kind: "unavailable" });
 
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => jsonResponse({}, 503)),
     );
-    expect(await provider()).toEqual({ kind: "unavailable" });
+    expect(await provider()).toMatchObject({ kind: "unavailable" });
+  });
+});
+
+describe("mint failure detail", () => {
+  it("carries a 500 body through the provider - the body frequently names the outage", async () => {
+    // The real staging outage body: authn had no attach-grant signing key.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            statusCode: 500,
+            message: `JWE key with ID 'signing class "attach-grant"' not found`,
+          },
+          500,
+        ),
+      ),
+    );
+    const provider = createAttachGrantProvider({
+      authnBaseUrl: AUTHN,
+      hostId: HOST_ID,
+      getBearerToken: () => BEARER,
+    });
+    const provision = await provider();
+    expect(provision).toMatchObject({ kind: "unavailable" });
+    if (provision.kind === "unavailable") {
+      expect(provision.detail).toContain("HTTP 500");
+      expect(provision.detail).toContain("attach-grant");
+    }
+  });
+
+  it("never echoes a 2xx body - it carries the grant", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () => new Response("secret-grant-bytes {", { status: 200 }),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({ kind: "network-error" });
+    if (result.kind === "network-error") {
+      expect(result.detail).not.toContain("secret-grant-bytes");
+    }
   });
 });

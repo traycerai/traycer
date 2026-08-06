@@ -1,5 +1,7 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { TimerHandle } from "../timer-handle";
+import { REMOTE_SESSION_LINGER_MS } from "./config";
 import type { IRemoteSession } from "./remote-session";
 
 /**
@@ -11,13 +13,19 @@ import type { IRemoteSession } from "./remote-session";
  * `RemoteSession`: one Noise handshake, one attach-grant mint, one relay
  * socket, one re-auth loop per identity, instead of one per consumer.
  *
- * Ref-counted: `acquireRemoteSession` increments the key's live-consumer
- * count and hands back a per-consumer `IRemoteSession` view; calling that
- * view's `close()` releases this consumer's reference rather than tearing
- * down the shared connection directly. The underlying session tears down
- * IMMEDIATELY once the count reaches zero - no keep-warm/linger (explicitly
- * deferred; see the S1 ticket). A later acquire for the same key after
- * teardown always constructs a FRESH session via the caller's factory -
+ * Ref-counted with a keep-warm linger: `acquireRemoteSession` increments the
+ * key's live-consumer count and hands back a per-consumer `IRemoteSession`
+ * view; calling that view's `close()` releases this consumer's reference
+ * rather than tearing down the shared connection directly. When the count
+ * reaches zero the session is NOT torn down immediately - it lingers, still
+ * connected, for `REMOTE_SESSION_LINGER_MS`, and a re-acquire inside that
+ * window adopts the warm session and cancels the teardown (the S1 ticket
+ * deferred this; the immediate-teardown behavior made every consumer
+ * rebuild - a panel open, the messenger's single binding slot flipping to a
+ * local host and back - pay a fresh mint + dial + handshake, and could tear
+ * a dial down mid-establishment). Only when the window expires with the
+ * count still zero is the session closed for real and the entry dropped; a
+ * later acquire then constructs a FRESH session via the caller's factory -
  * nothing keeps a torn-down session reachable.
  */
 
@@ -45,6 +53,8 @@ interface CacheEntry {
     VersionedStreamRpcRegistry
   >;
   refCount: number;
+  /** Armed while the entry lingers at refCount 0; null while consumers hold it. */
+  lingerTimer: TimerHandle | null;
 }
 
 // Matches the `TRANSPORT_KEY_SEPARATOR` convention elsewhere in this codebase
@@ -81,8 +91,10 @@ export function remoteSessionCacheKey(identity: RemoteSessionIdentity): string {
  *
  * The returned view's `close()` releases this ONE reference; every other
  * method delegates straight through to the shared `RemoteSession`. When a
- * `close()` brings the key's count to zero, the shared session is closed for
- * real, synchronously, in that same call - never deferred.
+ * `close()` brings the key's count to zero, the shared session enters the
+ * keep-warm linger (`REMOTE_SESSION_LINGER_MS`) instead of closing: it stays
+ * cached and connected so a prompt re-acquire adopts it warm, and only the
+ * window expiring with no consumers closes it for real.
  */
 export function acquireRemoteSession<
   RpcRegistry extends VersionedRpcRegistry,
@@ -95,18 +107,30 @@ export function acquireRemoteSession<
   let entry = entriesByKey.get(key);
   if (entry !== undefined && entry.session.isClosed()) {
     // A terminally-closed session (a session-level fatal closes it in place,
-    // underneath every consumer) must never be handed to a NEW acquirer:
-    // `start()` no-ops once closed, so the view could never carry traffic
-    // again. Evict the dead entry so this acquire constructs a fresh session;
-    // its remaining views release against the entry captured at THEIR acquire
-    // time (the identity check in `release`), so a late release can never
-    // touch the successor's refCount.
+    // underneath every consumer - or while lingering with none) must never be
+    // handed to a NEW acquirer: `start()` no-ops once closed, so the view
+    // could never carry traffic again. Evict the dead entry so this acquire
+    // constructs a fresh session; its remaining views release against the
+    // entry captured at THEIR acquire time (the identity check in `release`),
+    // so a late release can never touch the successor's refCount, and the
+    // evicted entry's still-pending linger timer (if any) finds itself
+    // superseded and does nothing.
+    if (entry.lingerTimer !== null) {
+      clearTimeout(entry.lingerTimer);
+    }
     entriesByKey.delete(key);
     entry = undefined;
   }
   if (entry === undefined) {
-    entry = { session: createSession(), refCount: 0 };
+    entry = { session: createSession(), refCount: 0, lingerTimer: null };
     entriesByKey.set(key, entry);
+  }
+  if (entry.lingerTimer !== null) {
+    // Warm hit: the entry was lingering at refCount 0. Adopting it cancels
+    // the pending teardown - this consumer now owns a live, possibly
+    // already-ready session with no new mint/dial/handshake.
+    clearTimeout(entry.lingerTimer);
+    entry.lingerTimer = null;
   }
   entry.refCount += 1;
 
@@ -130,10 +154,24 @@ export function acquireRemoteSession<
       return;
     }
     entry.refCount -= 1;
-    if (entry.refCount <= 0) {
+    if (entry.refCount > 0) {
+      return;
+    }
+    // Keep-warm: defer the real teardown by the linger window. The entry
+    // stays in the map (so `hasReadyRemoteSession` keeps reporting honest
+    // liveness and a re-acquire adopts it), and the session keeps its own
+    // reconnect/re-auth machinery running - bounded by the window, so an
+    // abandoned session cannot dial forever.
+    entry.lingerTimer = setTimeout(() => {
+      entry.lingerTimer = null;
+      // Superseded (evicted after a fatal, then re-created) or re-acquired
+      // entries are not this timer's to tear down.
+      if (entriesByKey.get(key) !== entry || entry.refCount > 0) {
+        return;
+      }
       entriesByKey.delete(key);
       entry.session.close();
-    }
+    }, REMOTE_SESSION_LINGER_MS);
   };
 
   return {
@@ -152,7 +190,11 @@ export function acquireRemoteSession<
   };
 }
 
-/** True if the cached session for `hostId` (any signed-in user) is currently ready. */
+/**
+ * True if the cached session for `hostId` (any signed-in user) is currently
+ * ready. A lingering keep-warm session (refCount 0, window not yet expired)
+ * counts: it is a live, attached connection, so it is honest evidence.
+ */
 export function hasReadyRemoteSession(hostId: string): boolean {
   for (const [key, entry] of entriesByKey) {
     if (keyHostId(key) === hostId && entry.session.isReady()) {

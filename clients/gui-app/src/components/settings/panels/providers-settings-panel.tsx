@@ -4,6 +4,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
+import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -439,6 +440,21 @@ function ProvidersPanelBody({
     );
   }
   if (query.isError) {
+    // A transport failure says nothing about the RPC or the host's version -
+    // the host never saw (or never answered) the request. On a remote host
+    // this is routinely just the session's first dial still in flight (the
+    // ready boundary refetches this query the moment the session is up), so
+    // describe the connection instead of blaming the host.
+    if (query.error instanceof HostTransportFailureError) {
+      return (
+        <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
+          <MutedAgentSpinner />
+          {isSelectedHostLocal
+            ? "Reconnecting to the host…"
+            : "Connecting to the remote host…"}
+        </div>
+      );
+    }
     return (
       <div className="px-6 py-8 text-ui-sm text-destructive">
         Couldn't load provider state. The host may need to be updated.

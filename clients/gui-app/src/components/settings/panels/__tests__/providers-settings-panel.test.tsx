@@ -10,6 +10,10 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   act,
   cleanup,
@@ -123,7 +127,8 @@ const providerMocks = vi.hoisted(() => ({
     isPending: false,
     isError: false,
     isFetching: false,
-    error: undefined as { message: string; code: string } | undefined,
+    error: undefined as
+      HostRpcError | { message: string; code: string } | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -599,10 +604,12 @@ const hostScopeMocks: {
   client: null;
   setHostId: Mock<(hostId: string) => void>;
   hostId: string;
+  host: HostScopeOption | undefined;
 } = vi.hoisted(() => ({
   client: null,
   setHostId: vi.fn<(hostId: string) => void>(),
   hostId: "host-a",
+  host: undefined,
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
@@ -616,6 +623,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
         client: hostScopeMocks.client,
         setHostId: hostScopeMocks.setHostId,
         hostId: hostScopeMocks.hostId,
+        // `host: undefined` must be OMITTED, not passed: the fixture's final
+        // spread would clobber its default host with the explicit undefined.
+        ...(hostScopeMocks.host === undefined
+          ? {}
+          : { host: hostScopeMocks.host }),
       }),
   };
 });
@@ -1152,6 +1164,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.refreshUsageLimits.mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.host = undefined;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1377,6 +1390,53 @@ describe("<ProvidersSettingsPanel />", () => {
         source: "Providers",
       },
     });
+  });
+
+  it("shows connecting copy, not the failure card, while a remote host's transport is still dialing", () => {
+    hostScopeMocks.host = hostScopeOptionFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+    });
+    providerMocks.listResult.isError = true;
+    // The pre-send "session not ready" rejection every host-scoped query gets
+    // while the remote session's first dial is still in flight.
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Remote session is not ready",
+      requestId: "req-1",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Connecting to the remote host…")).toBeDefined();
+    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+  });
+
+  it("describes a local host's transport failure as reconnecting rather than a host fault", () => {
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Local host connection is not ready",
+      requestId: "req-2",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Reconnecting to the host…")).toBeDefined();
+    expect(screen.queryByText(/may need to be updated/)).toBeNull();
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {

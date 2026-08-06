@@ -62,8 +62,9 @@ export interface RemoteHostTransport<
    * A per-caller view onto the shared `(hostId, userId)` session. Every
    * method delegates to the same live connection as every other consumer's
    * view; `close()` releases only THIS caller's reference (Architecture §4 /
-   * S1) - the underlying connection tears down once every consumer has
-   * released, not on any single caller's `close()`.
+   * S1) - the underlying connection tears down only after every consumer has
+   * released AND the cache's keep-warm linger has expired, never on any
+   * single caller's `close()`.
    */
   readonly session: IRemoteSession<RpcRegistry, StreamRegistry>;
   readonly messenger: RemoteHostMessenger<RpcRegistry, StreamRegistry>;
