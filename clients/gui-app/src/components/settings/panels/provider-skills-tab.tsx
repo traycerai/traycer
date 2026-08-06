@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
 import {
@@ -36,6 +37,8 @@ import {
   ProviderListSearch,
   ProviderListSearchEmptyState,
 } from "./provider-list-search";
+import { McpScopePicker } from "./provider-mcp-scope-picker";
+import { useProviderNativeScope } from "./use-provider-native-scope";
 
 const EMPTY_SKILLS: readonly ProviderSkill[] = [];
 
@@ -73,13 +76,34 @@ function ProviderSkillsTabBody({
   readonly providerLabel: string;
   readonly caps: ProviderSkillsCapabilities;
 }): ReactNode {
-  const canList = caps.actionScopes.list.length > 0;
-  const authoring = skillAuthoring(caps);
+  const scopeState = useProviderNativeScope(caps.actionScopes.list);
+  const {
+    targets,
+    workspaceRoot,
+    setWorkspaceRoot,
+    browseForWorkspace,
+    browsePending,
+    multiScope,
+    effectiveScope,
+    setScope,
+    projectNeedsWorkspace,
+    listWorkspaceRoot,
+    listEnabled,
+    workspacesLoading,
+  } = scopeState;
+  const canList =
+    caps.actionScopes.list.includes(effectiveScope) && listEnabled;
+  // Authoring gates use the selected scope so a project-only create verb does
+  // not appear while viewing Global (and vice versa). The composer still
+  // sends the same scopeTuple as the list — destination copy for project
+  // writes is imperfect when the list is empty (providerRoot unknown); full
+  // project-path preview remains a follow-up.
+  const authoring = skillAuthoring(caps, effectiveScope);
 
   const listQuery = useProvidersSkillsList({
     providerId,
-    scope: "global",
-    workspaceRoot: null,
+    scope: effectiveScope,
+    workspaceRoot: listWorkspaceRoot,
     enabled: canList,
   });
   const mutate = useProvidersSkillsMutate();
@@ -119,6 +143,11 @@ function ProviderSkillsTabBody({
   const listLoading = canList && (listQuery.isLoading || listQuery.isPending);
   const removePending = isRemovePending(isMutating, pendingKey);
   const composerPending = isComposerPending(isMutating, pendingKey);
+  const globalOnly = !multiScope && effectiveScope === "global";
+  // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`, widening
+  // boolean props to `boolean | null`.
+  const canWriteHere = authoring.canWrite && !projectNeedsWorkspace;
+  const canImportHere = authoring.canImport && !projectNeedsWorkspace;
 
   // Read off the listing rather than mirrored from host code, so the composer
   // can name the provider's own skills folder without a second copy of that
@@ -126,6 +155,23 @@ function ProviderSkillsTabBody({
   // render (`?? []` on an optional query result), so a `useMemo` keyed on it
   // would recompute every time anyway while implying it does not.
   const providerRoot = providerRootFromSkills(skills);
+
+  const handleBrowse = useCallback(() => {
+    void browseForWorkspace()
+      .then((path) => {
+        if (path === null) return;
+        setWorkspaceRoot(path);
+        setScope("project");
+      })
+      .catch(() => {
+        reportableErrorToast("Couldn't open the folder picker.", undefined, {
+          title: "Could not add workspace folders",
+          message: "The folder picker failed to open.",
+          code: null,
+          source: "Workspace folders",
+        });
+      });
+  }, [browseForWorkspace, setScope, setWorkspaceRoot]);
 
   function openComposer(tab: SkillComposerTab): void {
     setComposerError(null);
@@ -138,8 +184,8 @@ function ProviderSkillsTabBody({
     mutate.mutate(
       {
         providerId,
-        scope: "global",
-        workspaceRoot: null,
+        scope: effectiveScope,
+        workspaceRoot: listWorkspaceRoot,
         mutation,
         // This surface renders the failure inside the composer via
         // `setComposerError`, so the hook's global toast would double-report
@@ -174,8 +220,8 @@ function ProviderSkillsTabBody({
     mutate.mutate(
       {
         providerId,
-        scope: "global",
-        workspaceRoot: null,
+        scope: effectiveScope,
+        workspaceRoot: listWorkspaceRoot,
         // `name` AND `path`: the host re-lists and matches on both (plus a
         // realpath containment check) before deleting anything, so sending the
         // pair the row was rendered from is what lets it refuse a stale one.
@@ -203,28 +249,64 @@ function ProviderSkillsTabBody({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="text-ui-sm font-medium text-foreground">Skills</div>
           <p className="text-ui-xs text-muted-foreground">
             Invoked by the agent when relevant, or manually with / in chat.
           </p>
         </div>
         <SkillEntryButtons
-          canWrite={authoring.canWrite}
-          canImport={authoring.canImport}
+          canWrite={canWriteHere}
+          canImport={canImportHere}
           disabled={isMutating}
           onOpen={openComposer}
         />
       </div>
 
-      <ProviderListSearch
-        query={searchQuery}
-        onQueryChange={setSearchQuery}
-        resultCount={filteredSkills.length}
-        resourceLabel="skills"
-      />
+      {/*
+        Global/project is WHERE the skill files live (host vs workspace). The
+        composer's "Available to" control is a different axis — shared
+        (~/.agents/skills) vs this provider's own folder — and must not look
+        like a second scope picker.
+      */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {globalOnly ? (
+          <p className="text-ui-xs text-muted-foreground">
+            Applies to every workspace on this host.
+          </p>
+        ) : (
+          <McpScopePicker
+            multiScope={multiScope}
+            effectiveScope={effectiveScope}
+            targets={targets}
+            workspaceRoot={workspaceRoot}
+            loading={workspacesLoading}
+            browsePending={browsePending}
+            locationLabel="Skills location"
+            onBrowse={handleBrowse}
+            onSelectGlobal={() => {
+              setScope("global");
+            }}
+            onSelectProject={(path) => {
+              setWorkspaceRoot(path);
+              setScope("project");
+            }}
+          />
+        )}
+      </div>
+
+      {!projectNeedsWorkspace ? (
+        <ProviderListSearch
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          resultCount={filteredSkills.length}
+          resourceLabel="skills"
+        />
+      ) : null}
 
       <SkillsListBody
+        projectNeedsWorkspace={projectNeedsWorkspace}
+        workspacesLoading={workspacesLoading}
         listLoading={listLoading}
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
@@ -232,8 +314,8 @@ function ProviderSkillsTabBody({
         unfilteredSkillCount={skills.length}
         searchQuery={searchQuery}
         searchActive={skillSearchActive}
-        canWrite={authoring.canWrite}
-        canImport={authoring.canImport}
+        canWrite={canWriteHere}
+        canImport={canImportHere}
         disabled={isMutating}
         onOpenComposer={openComposer}
         onOpenSkill={setOpenSkill}
@@ -261,6 +343,7 @@ function ProviderSkillsTabBody({
           removal={skillRemovability({
             removeScopes: caps.actionScopes.remove,
             source: openSkill.source,
+            effectiveScope,
           })}
           removePending={removePending}
           removeDisabled={isMutating}
@@ -395,6 +478,8 @@ function SkillRemoveConfirm({
 }
 
 function SkillsListBody({
+  projectNeedsWorkspace,
+  workspacesLoading,
   listLoading,
   listError,
   errorMessage,
@@ -408,6 +493,8 @@ function SkillsListBody({
   onOpenComposer,
   onOpenSkill,
 }: {
+  readonly projectNeedsWorkspace: boolean;
+  readonly workspacesLoading: boolean;
   readonly listLoading: boolean;
   readonly listError: boolean;
   readonly errorMessage: string | null;
@@ -421,6 +508,20 @@ function SkillsListBody({
   readonly onOpenComposer: (tab: SkillComposerTab) => void;
   readonly onOpenSkill: (skill: ProviderSkill) => void;
 }): ReactNode {
+  if (projectNeedsWorkspace) {
+    return (
+      <div className="flex flex-col gap-1 rounded-lg border border-border/60 p-4">
+        <div className="text-ui-sm font-medium text-foreground">
+          {workspacesLoading ? "Resolving workspaces…" : "Select a workspace"}
+        </div>
+        <p className="text-ui-xs text-muted-foreground">
+          {workspacesLoading
+            ? "Resolving workspaces on this host."
+            : "Choose a project workspace above to manage project-scoped skills on this host."}
+        </p>
+      </div>
+    );
+  }
   if (listLoading) {
     return (
       <div className="flex items-center gap-2 py-4 text-ui-xs text-muted-foreground">

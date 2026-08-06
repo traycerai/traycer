@@ -32,13 +32,12 @@ const SHARED_SKILLS_RELATIVE = ".agents/skills";
 export type SkillComposerTab = "write" | "import";
 
 /**
- * Which authoring paths this provider actually offers.
+ * Which authoring paths this provider actually offers for the selected scope.
  *
- * `includes("global")` rather than `length > 0`, for the same reason
- * `skillRemovability` tests that scope: this whole tab is global-scoped — it
- * lists with `scope: "global"` and every mutation sends the same — so a
- * provider advertising only `project` would get a button whose request the
- * host must refuse.
+ * `includes(effectiveScope)` rather than `length > 0`: a verb advertised only
+ * for project must not light a button while the user is viewing Global (and
+ * vice versa). The tab sends mutations at the same scope it lists, so testing
+ * the scope that is actually invoked is the point.
  */
 export interface SkillAuthoring {
   /** Author a new SKILL.md from the composer's Write tab. */
@@ -49,14 +48,13 @@ export interface SkillAuthoring {
   readonly canAuthor: boolean;
 }
 
-export function skillAuthoring(caps: ProviderSkillsCapabilities): SkillAuthoring {
-  const canWrite = hasGlobal(caps.actionScopes.create);
-  const canImport = hasGlobal(caps.actionScopes.import);
+export function skillAuthoring(
+  caps: ProviderSkillsCapabilities,
+  effectiveScope: ProviderNativeScope,
+): SkillAuthoring {
+  const canWrite = caps.actionScopes.create.includes(effectiveScope);
+  const canImport = caps.actionScopes.import.includes(effectiveScope);
   return { canWrite, canImport, canAuthor: canWrite || canImport };
-}
-
-function hasGlobal(scopes: readonly ProviderNativeScope[]): boolean {
-  return scopes.includes("global");
 }
 
 /**

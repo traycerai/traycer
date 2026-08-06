@@ -939,23 +939,62 @@ describe("<ProviderMcpTab />", () => {
     ).toBeDefined();
   });
 
-  it("hides Edit when actionScopes.update is empty", () => {
-    const noUpdateCaps: ProviderMcpCapabilities = {
-      ...FULL_CAPS,
-      actionScopes: {
-        ...FULL_CAPS.actionScopes,
-        update: [],
-      },
-    };
+  // F4: every production contract sets updateServer: "none" and update: [].
+  // The pencil/edit path was maintained dead code; it is removed rather than
+  // wired. When a provider implements update, restore the affordance and this
+  // assertion (see provider-mcp-tab canUpdate comment).
+  it("does not render Edit even when a test double advertises update scopes", () => {
     mcpMocks.listResult.data = { servers: [connectedServer({})] };
-    renderTab(noUpdateCaps, "codex");
+    renderTab(FULL_CAPS, "codex");
     expect(screen.queryByRole("button", { name: /Edit context7/ })).toBeNull();
   });
 
-  it("shows Edit when actionScopes.update includes current scope", () => {
-    mcpMocks.listResult.data = { servers: [connectedServer({})] };
+  // F4: realistic multi-row list — Edit must stay gone on every server name,
+  // not only the single-server double above. Delete/Add remain the live
+  // affordances.
+  it("does not render Edit on any realistic server row while Add and Delete stay", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({ name: "context7" }),
+        connectedServer({
+          name: "github",
+          transport: {
+            type: "http",
+            url: "https://mcp.github.com",
+            auth: null,
+          },
+          status: "needs_auth",
+          tools: [],
+        }),
+        connectedServer({
+          name: "local-stdio",
+          transport: {
+            type: "stdio",
+            command: "npx",
+            env: null,
+          },
+          status: "connected",
+          tools: [],
+        }),
+      ],
+    };
     renderTab(FULL_CAPS, "codex");
-    expect(screen.getByRole("button", { name: /Edit context7/ })).toBeDefined();
+
+    for (const name of ["context7", "github", "local-stdio"] as const) {
+      expect(screen.queryByRole("button", { name: new RegExp(`Edit ${name}`) })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: new RegExp(`Delete ${name}`) }),
+      ).toBeDefined();
+    }
+
+    // Add still mounts a dialog fixed in mode="add" (no editTarget restore).
+    fireEvent.click(screen.getByRole("button", { name: /Add MCP server/ }));
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    expect(dialog).toBeDefined();
+    expect(within(dialog).getByRole("button", { name: /Add server/ })).toBeDefined();
+    // Edit-mode copy would say "Save" / "Update server"; add mode does not.
+    expect(within(dialog).queryByRole("button", { name: /Save/ })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /Update/ })).toBeNull();
   });
 
   it("hides Add/Delete/auth/discover on Project when actionScopes only allow them for Global", () => {

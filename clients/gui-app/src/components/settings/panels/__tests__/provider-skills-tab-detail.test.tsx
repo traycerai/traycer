@@ -46,6 +46,18 @@ const skillMocks = vi.hoisted(() => ({
   },
 }));
 
+// Detail suite is about open/remove/readFile — not scope switching. Stub the
+// shared hook so F5's workspace resolution does not require a QueryClient.
+// Dynamic import: `vi.mock` is hoisted above static imports.
+vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
+  const { GLOBAL_ONLY_NATIVE_SCOPE } = await import(
+    "@/components/settings/panels/__tests__/provider-native-scope-test-mocks"
+  );
+  return {
+    useProviderNativeScope: () => GLOBAL_ONLY_NATIVE_SCOPE,
+  };
+});
+
 vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
   useProvidersSkillsList: () => ({
     data: { skills: skillMocks.skills },

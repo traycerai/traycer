@@ -708,21 +708,23 @@ const FULL_TABS: ProviderNativeCapabilities = {
   plugins: {
     addModes: ["cli-source"],
     marketplaceBrowse: false,
+    // Both scopes so the F5 scope picker renders (global-only contracts get a
+    // plain "every workspace" line instead of a trigger with locationLabel).
     actionScopes: {
-      list: ["global"],
-      add: ["global"],
-      remove: ["global"],
-      setEnabled: ["global"],
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      remove: [...BOTH_SCOPES],
+      setEnabled: [...BOTH_SCOPES],
     },
     traycerSessionToolsNotice: false,
   },
   skills: {
     actionScopes: {
-      list: ["global"],
-      add: ["global"],
-      create: ["global"],
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      create: [...BOTH_SCOPES],
       import: [],
-      remove: ["global"],
+      remove: [...BOTH_SCOPES],
     },
   },
 };
@@ -1913,11 +1915,20 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     selectTab("Plugins");
-    expect(screen.getByText("Installed plugins")).toBeDefined();
+    // F5 replaced the "Installed plugins" heading with the shared scope
+    // picker. Match the MCP suite's aria-label idiom so this both identifies
+    // the Plugins tab body and covers the control the heading used to stand
+    // in for.
+    expect(
+      screen.getByRole("button", { name: /^Plugins location/ }),
+    ).toBeDefined();
 
     selectTab("Skills");
     expect(
       screen.getByText(/Invoked by the agent when relevant/),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /^Skills location/ }),
     ).toBeDefined();
   });
 

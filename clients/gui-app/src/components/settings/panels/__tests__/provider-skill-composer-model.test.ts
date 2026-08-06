@@ -32,47 +32,60 @@ function capsWith(
 }
 
 describe("skillAuthoring", () => {
-  it("opens both paths when both actions advertise global", () => {
-    expect(skillAuthoring(capsWith(["global"], ["global"]))).toEqual({
+  it("opens both paths when both actions advertise the selected scope", () => {
+    expect(
+      skillAuthoring(capsWith(["global"], ["global"]), "global"),
+    ).toEqual({
       canWrite: true,
       canImport: true,
       canAuthor: true,
     });
   });
 
-  it("opens only write when only create advertises global", () => {
-    expect(skillAuthoring(capsWith(["global"], []))).toEqual({
+  it("opens only write when only create advertises the selected scope", () => {
+    expect(skillAuthoring(capsWith(["global"], []), "global")).toEqual({
       canWrite: true,
       canImport: false,
       canAuthor: true,
     });
   });
 
-  it("opens only import when only import advertises global", () => {
-    expect(skillAuthoring(capsWith([], ["global"]))).toEqual({
+  it("opens only import when only import advertises the selected scope", () => {
+    expect(skillAuthoring(capsWith([], ["global"]), "global")).toEqual({
       canWrite: false,
       canImport: true,
       canAuthor: true,
     });
   });
 
-  it("opens neither when neither action advertises global", () => {
-    expect(skillAuthoring(capsWith([], []))).toEqual({
+  it("opens neither when neither action advertises the selected scope", () => {
+    expect(skillAuthoring(capsWith([], []), "global")).toEqual({
       canWrite: false,
       canImport: false,
       canAuthor: false,
     });
   });
 
-  // The load-bearing case: this tab lists and mutates at scope "global" only,
-  // so a provider that advertises just "project" must NOT get a button whose
-  // request the host is guaranteed to refuse. `length > 0` would wrongly pass
-  // this.
-  it("treats a project-only scope as closed, not merely non-global", () => {
-    expect(skillAuthoring(capsWith(["project"], ["project"]))).toEqual({
+  // The load-bearing case: the tab lists and mutates at the selected scope, so
+  // a provider that advertises just "project" must NOT get a button while the
+  // user is viewing Global. `length > 0` would wrongly pass this.
+  it("treats a project-only verb as closed when viewing global", () => {
+    expect(
+      skillAuthoring(capsWith(["project"], ["project"]), "global"),
+    ).toEqual({
       canWrite: false,
       canImport: false,
       canAuthor: false,
+    });
+  });
+
+  it("opens project verbs when viewing project", () => {
+    expect(
+      skillAuthoring(capsWith(["project"], ["project"]), "project"),
+    ).toEqual({
+      canWrite: true,
+      canImport: true,
+      canAuthor: true,
     });
   });
 });
