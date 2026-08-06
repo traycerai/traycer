@@ -120,9 +120,10 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // root when there is no open Epic) keeps the legacy raw-root RPC. Gated on the
   // picker being open with a current Epic so a closed composer holds no
   // bindings subscription.
+  const epicIdOrEmpty = currentEpicId ?? "";
   const bindingsQuery = useWorktreeListBindingsForEpicForClient({
     client: hostClient,
-    epicId: currentEpicId ?? "",
+    epicId: epicIdOrEmpty,
     enabled: active && currentEpicId !== null,
   });
   const epicAttachedRoots = useMemo<ReadonlySet<string>>(() => {
@@ -155,10 +156,15 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // surfaces share one cache entry and can never disagree about what exists.
   // A null client is `useTerminalListFor`'s disable switch, so a closed picker
   // (or a composer with no open Task) holds no terminal subscription at all.
-  const terminalsRequested = active && currentEpicId !== null;
+  // "Requested" mirrors the query's real enable condition, including the
+  // client: with no hostClient the query is disabled and no rows are ever
+  // coming, so the zero-match verdict must not wait on it (a disabled query
+  // pends forever - gating on isPending would pin the menu open offline).
+  const terminalsRequested =
+    active && currentEpicId !== null && hostClient !== null;
   const terminalListQuery = useTerminalListFor(
     terminalsRequested ? hostClient : null,
-    { kind: "epic", epicId: currentEpicId ?? "" },
+    { kind: "epic", epicId: epicIdOrEmpty },
   );
   const terminalSessions = terminalListQuery.data?.sessions;
   const epicTerminalEntries = useMemo<
