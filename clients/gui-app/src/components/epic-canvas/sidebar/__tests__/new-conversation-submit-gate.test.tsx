@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { createRef, useRef, useState } from "react";
 import {
   act,
@@ -13,6 +12,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
@@ -88,8 +88,22 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicNodeWorkspaceFolders: () => [],
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => ({ getActiveHostId: () => "host-1" }),
+const stubHostClient = {
+  getActiveHostId: () => "host-1",
+  // Read by `useHostClientFor` on every render, ahead of its own null gate.
+  getRequestContext: () => null,
+  getRequestContextUserId: () => null,
+};
+
+vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
+
+// The body resolves its host through `useHostClientForHostId`, which reads the
+// directory to pin an explicit id. This suite only exercises the unpinned
+// (`hostId: null`) path, where that lookup is skipped and the app-wide client
+// above is returned as-is - so an empty directory is all it needs.
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: [] }),
 }));
 
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
@@ -151,14 +165,14 @@ vi.mock("@/lib/composer/workspace-composer-availability", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({
+  useEpicCreateChatForHostClient: () => ({
     isPending: false,
     mutate: testState.createChat,
   }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgent: () => ({ isPending: false, mutate: vi.fn() }),
+  useCreateTuiAgentForClient: () => ({ isPending: false, create: vi.fn() }),
 }));
 
 vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
@@ -252,6 +266,7 @@ function Med4Harness(props: { readonly focused: boolean }) {
               tabId="tab-1"
               placement={ACTIVE_TILE_PLACEMENT}
               parentId={null}
+              hostId={null}
               dismissPickerRef={dismissPickerRef}
               onSubmitted={() => undefined}
             />
@@ -299,6 +314,7 @@ describe("NewConversationModalBody direct submit gate", () => {
         tabId="tab-1"
         placement={ACTIVE_TILE_PLACEMENT}
         parentId={null}
+        hostId={null}
         dismissPickerRef={createRef<(() => boolean) | null>()}
         onSubmitted={() => undefined}
       />,
@@ -313,6 +329,7 @@ describe("NewConversationModalBody direct submit gate", () => {
         tabId="tab-1"
         placement={ACTIVE_TILE_PLACEMENT}
         parentId={null}
+        hostId={null}
         dismissPickerRef={createRef<(() => boolean) | null>()}
         onSubmitted={() => undefined}
       />,
@@ -330,6 +347,7 @@ describe("NewConversationModalBody direct submit gate", () => {
         tabId="tab-1"
         placement={ACTIVE_TILE_PLACEMENT}
         parentId={null}
+        hostId={null}
         dismissPickerRef={createRef<(() => boolean) | null>()}
         onSubmitted={() => undefined}
       />,
@@ -350,6 +368,7 @@ describe("NewConversationModalBody direct submit gate", () => {
         tabId="tab-1"
         placement={ACTIVE_TILE_PLACEMENT}
         parentId={null}
+        hostId={null}
         dismissPickerRef={createRef<(() => boolean) | null>()}
         onSubmitted={() => undefined}
       />,
@@ -369,6 +388,7 @@ describe("NewConversationModalBody direct submit gate", () => {
         tabId="tab-1"
         placement={ACTIVE_TILE_PLACEMENT}
         parentId={null}
+        hostId={null}
         dismissPickerRef={createRef<(() => boolean) | null>()}
         onSubmitted={() => undefined}
       />,
@@ -389,6 +409,7 @@ describe("NewConversationModalBody direct submit gate", () => {
         tabId="tab-1"
         placement={ACTIVE_TILE_PLACEMENT}
         parentId={null}
+        hostId={null}
         dismissPickerRef={createRef<(() => boolean) | null>()}
         onSubmitted={() => undefined}
       />,
@@ -401,8 +422,10 @@ describe("NewConversationModalBody direct submit gate", () => {
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,

@@ -3116,6 +3116,7 @@ export {
   useIsActivePane,
   useIsActiveTile,
   useOpenEpicTabs,
+  useOpenTileContentIds,
   usePaneTabRefs,
   useTabActivation,
 } from "@/stores/epics/canvas/canvas-selectors";

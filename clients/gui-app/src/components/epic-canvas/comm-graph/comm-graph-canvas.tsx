@@ -93,6 +93,8 @@ export interface CommGraphCanvasProps {
   readonly pulse: CommGraphPulse | null;
   readonly view: CommGraphTileViewState;
   readonly onViewChange: (view: CommGraphTileViewState) => void;
+  /** Whether this row's owning cloud origin can currently open endpoints. */
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   /** Whether a detail row can be opened at its source. */
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
@@ -147,6 +149,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   const {
     agentIds,
     agents,
+    canOpenAgentForEvent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -409,6 +412,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           edge={selectedEdge}
           epicId={epicId}
           agentNames={nameById}
+          canOpenAgentForEvent={canOpenAgentForEvent}
           canJump={canJump}
           onJump={onJump}
           canJumpToSender={canJumpToSender}
@@ -425,6 +429,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           epicId={epicId}
           agentNames={nameById}
           events={selectedAgentEvents}
+          canOpenAgentForEvent={canOpenAgentForEvent}
           canJump={canJump}
           onJump={onJump}
           canJumpToSender={canJumpToSender}

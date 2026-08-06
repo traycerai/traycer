@@ -6,13 +6,16 @@
  * newer queue edit) and Ticket 2 exact-destination races without mounting
  * the full ChatComposer tree.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { RefObject } from "react";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import {
+  createComposerEditorIncarnation,
+  type ComposerEditorIncarnation,
+} from "@/lib/composer/composer-editor-incarnation";
 import {
   useChatPromptStashDestination,
   useChatPromptStashSource,
@@ -76,10 +79,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "chat-stash-entry-id"),
-}));
-
 function textDoc(text: string): JsonContent {
   return {
     type: "doc",
@@ -105,12 +104,16 @@ function makeEditorHandle(
     | {
         ready?: boolean;
         onFocus?: () => void;
+        editorIncarnation?: ComposerEditorIncarnation;
       }
     | undefined,
 ): ComposerPromptEditorHandle {
   const ready = options?.ready ?? true;
+  const editorIncarnation =
+    options?.editorIncarnation ?? createComposerEditorIncarnation();
   return {
     isReady: () => ready,
+    getEditorIncarnation: () => (ready ? editorIncarnation : null),
     hasFocus: () => false,
     focus: () => {
       options?.onFocus?.();
@@ -136,17 +139,21 @@ function makeEditor(content: JsonContent): {
   readonly focuses: number[];
   readonly handle: ComposerPromptEditorHandle;
   /**
-   * Simulates remount: new ready handle object under the same task id.
+   * Simulates React Compiler facade churn: new handle, same Tiptap editor.
    */
+  replaceFacade: () => ComposerPromptEditorHandle;
+  /** Simulates a real editor remount under the same task id. */
   remount: () => ComposerPromptEditorHandle;
 } {
   const focuses: number[] = [];
   const editorRef: { current: ComposerPromptEditorHandle | null } = {
     current: null,
   };
+  let editorIncarnation = createComposerEditorIncarnation();
 
   const create = (): ComposerPromptEditorHandle => {
     const handle = makeEditorHandle(content, {
+      editorIncarnation,
       onFocus: () => {
         focuses.push(1);
       },
@@ -161,7 +168,11 @@ function makeEditor(content: JsonContent): {
     editorRef,
     focuses,
     handle: initial,
-    remount: () => create(),
+    replaceFacade: () => create(),
+    remount: () => {
+      editorIncarnation = createComposerEditorIncarnation();
+      return create();
+    },
   };
 }
 
@@ -643,7 +654,31 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
     expect(unreadyDest.current.captureIdentity()).toBeNull();
   });
 
-  it("does not insert or consume when ready handle remounts under the same taskId", async () => {
+  it("accepts React Compiler handle-facade churn for the same editor incarnation", async () => {
+    useComposerDraftStore.getState().setSnapshot(taskId, emptyDoc(), null);
+    const editor = makeEditor(emptyDoc());
+    const { result } = renderHook(() =>
+      useChatPromptStashDestination(taskId, editor.editorRef),
+    );
+    const captured = result.current.captureIdentity();
+    if (captured === null) throw new Error("expected capture");
+
+    const replacement = editor.replaceFacade();
+    expect(replacement).not.toBe(editor.handle);
+    expect(replacement.getEditorIncarnation()).toBe(captured.editorIncarnation);
+
+    const insertResult = await result.current.importAndInsert({
+      identity: captured,
+      content: textDoc("restored after facade churn"),
+    });
+
+    expect(insertResult).toEqual({ status: "accepted" });
+    expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
+      textDoc("restored after facade churn"),
+    );
+  });
+
+  it("does not insert or consume when the editor remounts under the same taskId", async () => {
     useComposerDraftStore.getState().setSnapshot(taskId, emptyDoc(), null);
 
     let resolveMaterialize: ((content: JsonContent) => void) | undefined;
@@ -676,7 +711,7 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
     });
     expect(resolveMaterialize).toBeTypeOf("function");
 
-    // Same taskId, new ready handle object (editor remount).
+    // Same taskId, genuinely new editor incarnation.
     const remounted = editor.remount();
     expect(remounted).not.toBe(capturedHandle);
     expect(editor.editorRef.current).toBe(remounted);

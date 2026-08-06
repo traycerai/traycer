@@ -65,6 +65,9 @@ function entityMentionAttachment(args: {
     chatId: args.contextType === "chat" ? args.entityId : null,
     terminalAgentId:
       args.contextType === "terminal-agent" ? args.entityId : null,
+    // Terminals are not draggable into a composer - the tree drag sources are
+    // chats, terminal agents, and artifacts.
+    terminalId: null,
     status: null,
   };
 }

@@ -9,7 +9,6 @@
  * durable write). Does NOT re-implement ingest on a bare Editor — that is
  * exactly why round 4 missed the store/remount defect.
  */
-import "../../../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,
@@ -151,6 +150,7 @@ vi.mock(
       instance: ComposerPromptEditorHandle,
     ): ComposerPromptEditorHandle => ({
       isReady: () => instance.isReady(),
+      getEditorIncarnation: () => instance.getEditorIncarnation(),
       hasFocus: () => false,
       focus: () => instance.focus(),
       focusAtEnd: () => instance.focusAtEnd(),

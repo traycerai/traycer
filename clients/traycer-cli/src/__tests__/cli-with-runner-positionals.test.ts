@@ -108,10 +108,10 @@ function expectCommand(program: Command, path: readonly string[]): Command {
 }
 
 describe("traycer host install - --release / --from handling", () => {
-  // `runCommand` calls `process.exit(...)` once the command completes.
-  // We swap it out for a throw so commander's `parseAsync` resolves
-  // cleanly and we can assert on the spy. The throw payload is harmless
-  // because we re-suppress it inside the helper.
+  // `runCommand` records its code on `process.exitCode` and lets the loop
+  // drain (runner/exit.ts); it no longer calls `process.exit`. The spy stays
+  // so a regression back to an abrupt exit is caught rather than silently
+  // tolerated - the assertions below check it was NOT called.
   let exitSpy: MockInstance;
   beforeEach(() => {
     exitSpy = vi
@@ -121,6 +121,9 @@ describe("traycer host install - --release / --from handling", () => {
       });
   });
   afterEach(() => {
+    // A failing command leaves this set on the vitest process itself; unset
+    // it or the whole suite exits non-zero with every test green.
+    process.exitCode = undefined;
     exitSpy.mockRestore();
     vi.restoreAllMocks();
   });
@@ -147,7 +150,12 @@ describe("traycer host install - --release / --from handling", () => {
       await program.parseAsync(argv as string[], { from: "user" });
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        return;
+        // Was a silent `return`. The runner records `process.exitCode` and
+        // drains (int#4840), so nothing here should reach `process.exit` -
+        // swallowing it would hide exactly the regression that matters.
+        throw new Error(
+          `${err.message.replace("__test_exit_", "process.exit(")}) was called while parsing ${argv.join(" ")}`,
+        );
       }
       throw err;
     }
@@ -221,11 +229,14 @@ describe("traycer host install - --release / --from handling", () => {
       "--json",
     ]);
     // The check now lives inside the returned CommandFn, so the runner
-    // catches it (CliError → NDJSON error envelope → process.exit(1))
-    // instead of letting a raw throw escape parseAsync. The install
-    // pipeline is never built.
+    // catches it (CliError → NDJSON error envelope → exit code 1) instead
+    // of letting a raw throw escape parseAsync. The install pipeline is
+    // never built.
     expect(spy).not.toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    // Asserted on `process.exitCode`, not on the `process.exit` spy: the
+    // runner records the code and lets the loop drain (see runner/exit.ts).
+    expect(process.exitCode).toBe(1);
+    expect(exitSpy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
 

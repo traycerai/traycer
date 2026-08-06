@@ -29,7 +29,11 @@
  * sink that is connected at that moment - it is never queued, so a
  * reconnecting monitor never replays a stale broadcast.
  */
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { z } from "zod";
 import { roleAwarenessEventSchema } from "@traycer/protocol/host/agent/roles";
@@ -87,6 +91,21 @@ export const agentInboxMessageSchema = z.object({
   enqueuedAt: z.number().int(),
 });
 export type AgentInboxMessage = z.infer<typeof agentInboxMessageSchema>;
+
+/**
+ * `@1.2` message shape: adds `eventId`, the durable inbox row's key, so the
+ * monitor can acknowledge it via `agent.inbox.ack` once it has been safely
+ * surfaced to the agent. A NEW schema object (not a mutation of
+ * `agentInboxMessageSchema`) per the frozen-per-minor-tree rule: `@1.0`/`@1.1`
+ * connections keep parsing the old shape and silently ignore the extra field
+ * a `@1.2`-built server frame carries (zod objects are non-strict), so this
+ * is safe to send unconditionally regardless of negotiated minor.
+ */
+export const agentInboxMessageSchemaV12 = agentInboxMessageSchema.extend({
+  /** Durable inbox row key - see `agent.inbox.ack`. */
+  eventId: z.string(),
+});
+export type AgentInboxMessageV12 = z.infer<typeof agentInboxMessageSchemaV12>;
 
 /**
  * Out-of-band notice the broker emits when a receiver the calling agent
@@ -232,9 +251,47 @@ export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
   ],
 );
 
+// ─── agent.inbox.subscribe@1.2 - additive: durable inbox eventId ──────────
+//
+// The "message" item gains `eventId` (see `agentInboxMessageSchemaV12`) so a
+// durable-inbox-aware monitor can acknowledge delivery via `agent.inbox.ack`.
+// A `@1.0`/`@1.1` monitor negotiates one of the older, frozen frame trees
+// above - which have no `eventId` field at all - and can never call
+// `agent.inbox.ack`. Rather than leave the durable row queued forever for an
+// ack that structurally cannot arrive, the resolver applies a SERVER-SIDE
+// compatibility ack: immediately after successfully sending a "message"
+// frame to a connection negotiated below `@1.2`, it retires that row itself.
+// This mirrors the pre-durable-inbox at-most-once behavior those older
+// monitors were always built against - no regression for them - while a
+// `@1.2`+ monitor keeps the stronger at-least-once guarantee via its own ack.
+export const agentInboxSubscribeServerFrameSchemaV12 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("message"),
+      ...textFrameFields,
+      item: agentInboxMessageSchemaV12,
+    }),
+    z.object({
+      kind: z.literal("notice"),
+      ...textFrameFields,
+      notice: agentInboxNoticeSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("role-awareness"),
+      ...textFrameFields,
+      event: roleAwarenessEventSchema,
+    }),
+  ],
+);
+
 /** The latest installed shape. Host code builds frames against this. */
 export const agentInboxSubscribeServerFrameSchema =
-  agentInboxSubscribeServerFrameSchemaV11;
+  agentInboxSubscribeServerFrameSchemaV12;
 export type AgentInboxSubscribeServerFrame = z.infer<
   typeof agentInboxSubscribeServerFrameSchema
 >;
@@ -268,16 +325,25 @@ export const agentInboxSubscribeV11 = defineStreamRpcContract({
   clientFrameSchema: agentInboxSubscribeClientFrameSchema,
 });
 
+export const agentInboxSubscribeV12 = defineStreamRpcContract({
+  method: "agent.inbox.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: agentInboxSubscribeOpenRequestSchema,
+  serverFrameSchema: agentInboxSubscribeServerFrameSchemaV12,
+  clientFrameSchema: agentInboxSubscribeClientFrameSchema,
+});
+
 // ─── `agent.inbox.read@1.0` - unary recent-inbox read ─────────────────────
 //
-// Lets a TUI agent re-read its recently-delivered inbox messages IN FULL.
+// Lets a TUI agent re-read its recently-delivered inbox messages IN FULL,
+// page by page.
 // The `traycer monitor` stream surfaces each message to the agent through a
 // harness background-output notification, which the harness truncates for
-// large payloads. This unary read returns the broker's retained ring (full
-// bodies, oldest first) so the agent can recover the complete message via a
-// direct `traycer agent inbox` call, whose stdout is not subject to that
-// notification cap. GUI agents have no truncation problem and never route
-// through the broker inbox, so this is a TUI-only recovery path.
+// large payloads. This unary read returns the durable inbox's full bodies,
+// oldest first, through a direct `traycer agent inbox` call, whose stdout is
+// not subject to that notification cap. GUI agents have no truncation problem
+// and never route through the durable TUI inbox, so this is a TUI-only
+// recovery path.
 
 export const agentInboxReadRequestSchema = z.object({
   epicId: z.string(),
@@ -299,4 +365,119 @@ export const agentInboxReadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentInboxReadRequestSchema,
   responseSchema: agentInboxReadResponseSchema,
+});
+
+// ─── `agent.inbox.read@2.0` - bounded durable-inbox page ─────────────────
+//
+// A durable inbox can contain many full 16 MiB prompts while a monitor is
+// disconnected. Keep @1.0 frozen for existing clients, but make the canonical
+// read a single-row cursor page so a recovery read never allocates an entire
+// backlog in the host RPC process.
+export const agentInboxReadCursorSchema = z.object({
+  createdAt: z.number().int(),
+  eventId: z.string(),
+});
+export type AgentInboxReadCursor = z.infer<typeof agentInboxReadCursorSchema>;
+
+export const agentInboxReadRequestSchemaV20 =
+  agentInboxReadRequestSchema.extend({
+    /** Resume after this oldest-first durable inbox row, or start at the head. */
+    after: agentInboxReadCursorSchema.nullable(),
+  });
+export type AgentInboxReadRequestV20 = z.infer<
+  typeof agentInboxReadRequestSchemaV20
+>;
+
+export const agentInboxReadResponseSchemaV20 =
+  agentInboxReadResponseSchema.extend({
+    /** Cursor for the following page, or null when this page reached the end. */
+    nextCursor: agentInboxReadCursorSchema.nullable(),
+  });
+export type AgentInboxReadResponseV20 = z.infer<
+  typeof agentInboxReadResponseSchemaV20
+>;
+
+export const agentInboxReadV20 = defineRpcContract({
+  method: "agent.inbox.read",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: agentInboxReadRequestSchemaV20,
+  responseSchema: agentInboxReadResponseSchemaV20,
+});
+
+export const agentInboxReadUpgradeV10ToV20 = defineUpgradePath<
+  typeof agentInboxReadV10,
+  typeof agentInboxReadV20
+>({
+  from: agentInboxReadV10.schemaVersion,
+  to: agentInboxReadV20.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, after: null }),
+  upgradeResponse: (response) => ({ ...response, nextCursor: null }),
+});
+
+export const agentInboxReadDowngradeV20ToV10 = defineDowngradePath<
+  typeof agentInboxReadV20,
+  typeof agentInboxReadV10
+>({
+  from: agentInboxReadV20.schemaVersion,
+  to: agentInboxReadV10.schemaVersion,
+  downgradeRequest: (request) => {
+    if (request.after !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Paginated inbox reads require a newer Traycer host. Upgrade the host before using --after.",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: { epicId: request.epicId, agentId: request.agentId },
+    };
+  },
+  downgradeResponse: (response) => {
+    if (response.nextCursor !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "This inbox has more messages than an older Traycer client can read safely. Upgrade the client to continue.",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: { messages: response.messages },
+    };
+  },
+});
+
+// ─── `agent.inbox.ack@1.0` - unary durable-inbox acknowledgement ──────────
+//
+// Retires the given durable inbox rows (by `eventId`, from `@1.2`'s
+// `agentInboxMessageSchemaV12.eventId`) for the calling agent. The durable
+// inbox is the source of truth for `agent.inbox.subscribe`: an unacknowledged
+// row survives a host restart or monitor reconnect and is replayed exactly
+// once more, so a monitor should ack promptly after it has safely surfaced a
+// message to the agent (e.g. after printing it).
+
+export const agentInboxAckRequestSchema = z.object({
+  epicId: z.string(),
+  /** The calling agent acknowledging its own inbox. */
+  agentId: z.string(),
+  /** Durable inbox row keys to retire. Empty is a no-op. */
+  eventIds: z.array(z.string()).max(500),
+});
+export type AgentInboxAckRequest = z.infer<typeof agentInboxAckRequestSchema>;
+
+export const agentInboxAckResponseSchema = z.object({});
+export type AgentInboxAckResponse = z.infer<typeof agentInboxAckResponseSchema>;
+
+export const agentInboxAckV10 = defineRpcContract({
+  method: "agent.inbox.ack",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentInboxAckRequestSchema,
+  responseSchema: agentInboxAckResponseSchema,
 });

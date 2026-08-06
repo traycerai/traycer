@@ -224,6 +224,27 @@ export function canParticipateInA2A(target: {
   return target.harnessId === "claude";
 }
 
+// ─── Shared A2A message-size gate ──────────────────────────────────────────
+//
+// One accepted message is either stored in full or the send is rejected
+// before delivery/capture - truncation is never a recovery strategy. The
+// ceiling is shared (not host-domain-private) so every surface that
+// composes an A2A send body - today's host domain, and any future
+// pre-flight client check - agrees on the exact same byte count.
+
+/** Shared UTF-8 byte ceiling for a single A2A message body. */
+export const A2A_MESSAGE_MAX_UTF8_BYTES = 16 * 1024 * 1024;
+
+const UTF8_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of `value`. Uses `TextEncoder` (not `Buffer`) so this
+ * stays callable from browser-hosted surfaces, not just Node.
+ */
+export function utf8ByteLength(value: string): number {
+  return UTF8_ENCODER.encode(value).length;
+}
+
 // ─── Agent-to-agent unary surface (`agent.create` / `agent.list` /
 // `agent.sendMessage` / `agent.getTranscript`) ─────────────────────────────
 //

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  captureDictationFailure,
   capturePersistedAgentError,
   captureReportIssueError,
 } from "@/lib/report-issue-error-capture";
+import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
 import { __resetSupportContextRegistryForTests } from "@/lib/support-context-registry";
 
 const captureException = vi.hoisted(() => vi.fn());
@@ -87,5 +89,63 @@ describe("capturePersistedAgentError", () => {
 
     expect(capture.cause.errorCode).toBeNull();
     expect(capture.fingerprint).toMatch(/^fp:v1:/);
+  });
+});
+
+describe("captureDictationFailure", () => {
+  // Change C (int#4836): the failure class travels in the PUBLIC prefill so a
+  // filed issue names the failing path, while the raw error text - which can
+  // carry browser/host wording - stays private. These are the invariants that
+  // change exists to establish, so they are pinned rather than inspected.
+  it("never calls captureException", () => {
+    captureDictationFailure({
+      failureClass: "not_connected",
+      message: "Not connected to the local host.",
+    });
+
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("keeps the raw message private and the class as the app-defined code", () => {
+    const capture = captureDictationFailure({
+      failureClass: "mic_open_failed",
+      message: "Could not access the microphone: Device in use by OBS",
+    });
+    const draft = createReportIssueDraftContext({
+      title: "Dictation failed",
+      message: null,
+      code: "mic_open_failed",
+      source: "Dictation",
+      capture,
+    });
+
+    // Public: the fixed class only - no raw error text anywhere in it.
+    expect(draft.publicPrefill.code).toBe("mic_open_failed");
+    expect(JSON.stringify(draft.publicPrefill)).not.toContain("OBS");
+    // Private: the real text, joined to the report by correlation id.
+    expect(draft.privateDiagnostics.cause).toEqual(
+      expect.objectContaining({
+        type: "DictationFailed",
+        message: "Could not access the microphone: Device in use by OBS",
+        errorCode: "mic_open_failed",
+        sourceAction: "dictation",
+        stack: null,
+        componentStack: null,
+      }),
+    );
+    expect(draft.privateDiagnostics.correlationId).toBe(capture.correlationId);
+  });
+
+  it("fingerprints two different failure classes apart", () => {
+    const notConnected = captureDictationFailure({
+      failureClass: "not_connected",
+      message: "Not connected to the local host.",
+    });
+    const lost = captureDictationFailure({
+      failureClass: "connection_lost",
+      message: "Lost connection to the local host.",
+    });
+
+    expect(notConnected.fingerprint).not.toBe(lost.fingerprint);
   });
 });

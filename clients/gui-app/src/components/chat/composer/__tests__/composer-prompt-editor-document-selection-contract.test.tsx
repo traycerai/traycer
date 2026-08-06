@@ -5,7 +5,6 @@
  * selection-only `selectionUpdate`. Selection must never call `getJSON()`
  * (documents can carry multi-megabyte inline images).
  */
-import "../../../../../__tests__/test-browser-apis";
 import { useState } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -88,6 +87,65 @@ async function flushEditor(): Promise<void> {
 }
 
 describe("ComposerPromptEditor document vs selection contract", () => {
+  it("keeps one incarnation for the Tiptap editor and changes it on remount", async () => {
+    const onDocumentChange = vi.fn();
+    const onSelectionChange = vi.fn();
+    const handleRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const initialContent = emptyDoc();
+
+    const mounted = render(
+      <Harness
+        handleRef={handleRef}
+        onDocumentChange={onDocumentChange}
+        onSelectionChange={onSelectionChange}
+        initialContent={initialContent}
+        initialSelection={null}
+      />,
+    );
+    await flushEditor();
+
+    const firstHandle = handleRef.current;
+    if (firstHandle === null) throw new Error("editor handle missing");
+    const firstIncarnation = firstHandle.getEditorIncarnation();
+    expect(firstIncarnation).not.toBeNull();
+
+    // This suite runs through the same React Compiler preset as production.
+    // A render may replace the imperative facade, but not the Tiptap Editor.
+    mounted.rerender(
+      <Harness
+        handleRef={handleRef}
+        onDocumentChange={onDocumentChange}
+        onSelectionChange={onSelectionChange}
+        initialContent={textDoc("new prop, same mounted editor")}
+        initialSelection={null}
+      />,
+    );
+    await flushEditor();
+
+    const rerenderedHandle = handleRef.current;
+    if (rerenderedHandle === null) throw new Error("editor handle missing");
+    expect(rerenderedHandle).not.toBe(firstHandle);
+    expect(rerenderedHandle.getEditorIncarnation()).toBe(firstIncarnation);
+
+    mounted.unmount();
+    render(
+      <Harness
+        handleRef={handleRef}
+        onDocumentChange={onDocumentChange}
+        onSelectionChange={onSelectionChange}
+        initialContent={initialContent}
+        initialSelection={null}
+      />,
+    );
+    await flushEditor();
+
+    const remountedHandle = handleRef.current;
+    if (remountedHandle === null) throw new Error("editor handle missing");
+    expect(remountedHandle.getEditorIncarnation()).not.toBe(firstIncarnation);
+  });
+
   it("fires onDocumentChange for a real document mutation", async () => {
     const onDocumentChange = vi.fn();
     const onSelectionChange = vi.fn();

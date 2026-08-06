@@ -15,8 +15,8 @@ import {
 import type {
   AgentMentionInterface,
   EpicAgentMentionEntry,
-  EpicMentionEntry,
   MentionPreview,
+  MentionSuggestionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { dirnameOfPath, mentionPathTree } from "@/lib/path";
@@ -69,26 +69,27 @@ export function agentEntrySecondaryContext(
 }
 
 function isAgentEntry(
-  entry: WorkspaceEntry | EpicMentionEntry,
+  entry: MentionSuggestionEntry,
 ): entry is EpicAgentMentionEntry {
   return entry.kind === "epic-chat" || entry.kind === "epic-terminal-agent";
 }
 
-export function detailForSuggestion(
-  entry: WorkspaceEntry | EpicMentionEntry,
-): string {
+export function detailForSuggestion(entry: MentionSuggestionEntry): string {
   if (entry.kind === "file" || entry.kind === "folder") {
     return dirnameOfPath(entry.relPath);
   }
   // Agent rows are always current-Task, so the epic title the artifact rows use
   // here carries no signal; interface + capability disambiguate instead.
   if (isAgentEntry(entry)) return agentEntrySecondaryContext(entry);
+  // Two shells started in the same Task routinely share a title; the working
+  // directory is what tells them apart.
+  if (entry.kind === "epic-terminal") return entry.cwd;
   if (entry.kind === "epic-artifact") return entry.epicTitle;
   return "";
 }
 
 export function descriptionForSuggestion(
-  entry: WorkspaceEntry | EpicMentionEntry,
+  entry: MentionSuggestionEntry,
 ): string {
   if (entry.kind === "epic-artifact" && entry.description === entry.epicTitle) {
     return "";
@@ -100,7 +101,7 @@ export function descriptionForSuggestion(
 }
 
 export function previewForSuggestion(
-  entry: WorkspaceEntry | EpicMentionEntry,
+  entry: MentionSuggestionEntry,
 ): MentionPreview | null {
   switch (entry.kind) {
     case "file":
@@ -141,6 +142,14 @@ export function previewForSuggestion(
         secondary: agentEntrySecondaryContext(entry),
         mono: false,
       };
+    case "epic-terminal":
+      // The title heads the row already; the panel spends its space on the
+      // full working directory, which the row can only show truncated.
+      return {
+        kind: "path",
+        tree: mentionPathTree(entry.cwd, false),
+        footer: null,
+      };
   }
 }
 
@@ -177,9 +186,7 @@ function commitSubjectFromLabel(label: string): string {
   return spaceIndex === -1 ? "" : label.slice(spaceIndex + 1);
 }
 
-export function iconForSuggestion(
-  entry: WorkspaceEntry | EpicMentionEntry,
-): ReactElement {
+export function iconForSuggestion(entry: MentionSuggestionEntry): ReactElement {
   switch (entry.kind) {
     case "file":
       return <MaterialFileIcon filename={entry.relPath} className="size-4" />;
@@ -197,6 +204,8 @@ export function iconForSuggestion(
       return epicNodeIcon("chat");
     case "epic-terminal-agent":
       return epicNodeIcon("terminal-agent");
+    case "epic-terminal":
+      return epicNodeIcon("terminal");
   }
 }
 
@@ -207,6 +216,11 @@ export function iconForSuggestion(
  */
 export function agentCategoryIcon(): ReactElement {
   return epicNodeIcon("terminal-agent");
+}
+
+/** Icon for the **Terminals** mention category and its rows. */
+export function terminalCategoryIcon(): ReactElement {
+  return epicNodeIcon("terminal");
 }
 
 export function folderIcon(): ReactElement {
@@ -234,7 +248,7 @@ export function artifactsIcon(): ReactElement {
 }
 
 export function epicNodeIcon(
-  kind: "chat" | "terminal-agent" | EpicArtifactKind,
+  kind: "chat" | "terminal-agent" | "terminal" | EpicArtifactKind,
 ): ReactElement {
   const Icon: LucideIcon = EPIC_NODE_ICONS[kind];
   return <Icon className={MENU_ICON_CLASS} aria-hidden />;

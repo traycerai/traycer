@@ -12,7 +12,6 @@
  * a genuine activate -> onResult path runs, then forces unrelated
  * re-renders to prove the guard holds.
  */
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,

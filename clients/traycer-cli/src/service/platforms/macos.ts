@@ -1506,10 +1506,33 @@ async function stopServiceForRestart(
   if (desktopAgent !== null) {
     return await standDownDesktopManagedHost(label, desktopAgent);
   }
-  // CLI-owned: `stopService` signals and then waits for the process to
-  // really exit, so a plain kickstart is enough afterwards.
+  // CLI-owned. This used to report no recycle, on the reasoning that
+  // "`stopService` signals and then waits for the process to really exit, so a
+  // plain kickstart is enough afterwards". It waits for the wrong process.
+  //
+  // `stopService` waits on the pid from `pid.json`, which the HOST publishes.
+  // The launchd job is the SUPERVISOR, and it outlives its child by the whole
+  // post-mortem - the stderr end wait, the tee flush, and on a fatal signal the
+  // crash-report scan. A grandchild holding the inherited stderr descriptor
+  // open stretches that to the full deadline. So there is a window where the
+  // host pid is gone, `stopService` has returned, and launchd still considers
+  // this job running - and a plain kickstart against a running job is a silent
+  // no-op, which is the hazard `forcedRecycle` exists to name.
+  //
+  // That window used to be survivable by accident: the supervisor exited with
+  // its signalled child's code, `KeepAlive{SuccessfulExit:false}` read the
+  // nonzero exit as a crash, and launchd started a replacement. The swallowed
+  // kickstart was covered by a respawn nobody asked for - the same respawn that
+  // made `host stop` come back, which is the bug this branch fixes. Now that a
+  // deliberate stop exits 0, nothing recovers it and the machine stays hostless.
+  //
+  // `-k` unconditionally rather than probing first: whether the supervisor has
+  // retired is a question whose answer can change between the probe and the
+  // kickstart, and `kickstart -k` is correct either way - it recycles a running
+  // job and starts a stopped one. All it costs is the tail of a deliberate
+  // stop's diagnostics, which describe a shutdown nobody is debugging.
   await stopService(label, run);
-  return { forcedRecycle: false };
+  return { forcedRecycle: true };
 }
 
 async function relaunchServiceAfterRestart(

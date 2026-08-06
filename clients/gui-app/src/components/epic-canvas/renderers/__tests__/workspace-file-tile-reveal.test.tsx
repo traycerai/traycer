@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { act } from "react";
 import {
   afterEach,
@@ -69,15 +68,6 @@ vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
-}));
-
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({
-    highlighter: null,
-    theme: "dark",
-    themesVersion: 0,
-  }),
-  highlightCode: () => null,
 }));
 
 vi.mock("@/providers/use-resolved-theme", () => ({

@@ -3,6 +3,7 @@ import {
   defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
   type DowngradeResult,
+  type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   defineVersionedStreamRpcRegistry,
@@ -84,9 +85,14 @@ import {
   agentListProviderProfilesUpgradeV20ToV30,
 } from "@traycer/protocol/host/agent/profiles";
 import {
+  agentInboxAckV10,
+  agentInboxReadDowngradeV20ToV10,
   agentInboxReadV10,
+  agentInboxReadUpgradeV10ToV20,
+  agentInboxReadV20,
   agentInboxSubscribeV10,
   agentInboxSubscribeV11,
+  agentInboxSubscribeV12,
 } from "@traycer/protocol/host/agent/inbox";
 import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
 import {
@@ -272,6 +278,7 @@ import {
   terminalListUpgradeV10ToV20,
   terminalListUpgradeV20ToV21,
   terminalListUpgradeV21ToV22,
+  terminalReadOutputV10,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
@@ -329,7 +336,10 @@ import {
 import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
-import { epicCommunicationGraphSubscribeV10 } from "@traycer/protocol/host/epic/communication-graph";
+import {
+  epicCommunicationGraphSubscribeV10,
+  hostCommunicationGraphCloudFeedSubscribeV10,
+} from "@traycer/protocol/host/epic/communication-graph";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -2867,7 +2877,7 @@ export const workspacePrepareFoldersUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-const HOST_RPC_REGISTRY_DEFINITION = {
+const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.status": {
     1: {
       latestMinor: 1,
@@ -3771,6 +3781,29 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentInboxReadV20,
+          upgradeFromPreviousVersion: agentInboxReadUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentInboxReadDowngradeV20ToV10 },
+    },
+  },
+  "agent.inbox.ack": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentInboxAckV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "agent.stop": {
     1: {
@@ -3928,21 +3961,6 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: workspaceReadFileV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  // Additive, post-v1.0.0 optional method. Older hosts render the same file
-  // surfaces read-only; newer hosts provide conflict-safe in-place saves.
-  "workspace.writeFile": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: workspaceWriteFileV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -4573,21 +4591,6 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Optional edit hydration: full old/new/worktree text is fetched only when
-  // the user enters edit mode. Older hosts keep Git diffs read-only.
-  "git.getFileContents": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: gitGetFileContentsV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "git.getCapabilities": {
     1: {
       latestMinor: 0,
@@ -4720,6 +4723,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: { 1: terminalListDowngradeV22ToV10 },
+    },
+  },
+  // Brand-new v1.0 method on the same `degrade: unsupported` channel as
+  // `resources.kill` above: a host predating agent terminal reads simply
+  // lacks it, so the CLI gets per-call upgrade guidance instead of a fatal
+  // handshake mismatch.
+  "terminal.readOutput": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalReadOutputV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
   "terminal.rename": {
@@ -5622,10 +5642,52 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
 } as const;
 
-export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
+const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
+  // Additive, post-v1.0.0 optional method. Older hosts render the same file
+  // surfaces read-only; newer hosts provide conflict-safe in-place saves.
+  "workspace.writeFile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceWriteFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Optional edit hydration: full old/new/worktree text is fetched only when
+  // the user enters edit mode. Older hosts keep Git diffs read-only.
+  "git.getFileContents": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: gitGetFileContentsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
+type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
+  typeof HOST_RPC_EDITING_REGISTRY_DEFINITION;
+
+const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
+  ...HOST_RPC_REGISTRY_BASE_DEFINITION,
+  ...HOST_RPC_EDITING_REGISTRY_DEFINITION,
+};
+
+export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
+  defineFloorAwareVersionedRpcRegistry(
   RELEASED_FLOOR_METHOD_NAMES,
   HOST_RPC_REGISTRY_DEFINITION,
-);
+  );
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
 
@@ -5870,13 +5932,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // FROZEN: a monitor that negotiated it never receives the new kind, and
       // the resolver gates on the negotiated version rather than assuming the
       // peer will tolerate an unknown frame.
-      latestMinor: 1,
+      //
+      // @1.2 adds `eventId` to the EXISTING "message" item (not a new frame
+      // kind) - unlike a new frame kind, an unrecognized extra field inside an
+      // already-known object is silently dropped by a @1.0/@1.1 monitor's own
+      // non-strict zod parse, so the resolver builds the @1.2 shape
+      // unconditionally rather than branching on negotiated minor.
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentInboxSubscribeV10,
         },
         1: {
           contract: agentInboxSubscribeV11,
+        },
+        2: {
+          contract: agentInboxSubscribeV12,
         },
       },
     },
@@ -5907,6 +5978,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: epicCommunicationGraphSubscribeV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream method: the cloud-relayed
+  // counterpart of `epic.communicationGraph.subscribe` above. A host built
+  // without cloud replication, or one that predates this method, never
+  // advertises it, so the client's subscription degrades to `unsupported`
+  // and falls back to the local per-host stream. Never add it to the unary
+  // released floor - that list is fail-closed on the name set.
+  "host.communicationGraph.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostCommunicationGraphCloudFeedSubscribeV10,
         },
       },
     },

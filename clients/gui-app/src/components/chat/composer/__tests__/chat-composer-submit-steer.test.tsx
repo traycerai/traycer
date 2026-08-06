@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { createRef, type RefObject } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { createComposerPickerStore } from "../picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   useChatComposerSubmit,
   type ChatComposerSubmitResult,
@@ -687,8 +687,10 @@ function mountSubmit(input: MountSubmitInput): {
 }
 
 function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,

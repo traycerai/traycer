@@ -79,7 +79,7 @@ async function withAuthNetworkRetry<T>(
   return outcome;
 }
 
-function authRetryDelayMs(retry: number): number {
+export function authRetryDelayMs(retry: number): number {
   const candidate = AUTH_FETCH_RETRY_BASE_DELAY_MS * 2 ** (retry - 1);
   return Math.min(candidate, AUTH_FETCH_RETRY_MAX_DELAY_MS);
 }

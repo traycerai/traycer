@@ -23,8 +23,10 @@ jobs:
     runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
     # The GUI suite deliberately runs isolated two-worker forks: disabling
     # isolation makes tests leak state. The organization caps every job at ten
-    # minutes, so run its deterministic Vitest shards as four parallel matrix
-    # jobs.
+    # minutes, so run its deterministic Vitest shards as parallel matrix jobs.
+    # The hash range that previously formed shard 1/4 is split into 1/8 and
+    # 2/8 because its canvas-heavy files can exhaust a runner when combined;
+    # the remaining three quarters retain their existing required-check names.
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.
@@ -39,7 +41,10 @@ jobs:
             test_args: ""
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app)"
-            test_args: "-- --shard=1/4"
+            test_args: "-- --shard=1/8"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 2 of 8)"
+            test_args: "-- --shard=2/8"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 2)"
             test_args: "-- --shard=2/4"
@@ -101,6 +106,52 @@ jobs:
         run: git fetch --depth=1 origin tag host-v1.1.5
       - name: Test
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false ${{ matrix.test_args }}
+
+  # Windows job: the ONLY Windows execution of CLI code in PR CI. Until this
+  # existed, `smoke:sea` ran solely inside the release workflows, so every
+  # Windows claim in the CLI was unexecuted until a release — which is how the
+  # win32 SEA exit-teardown abort (int#4840) reached two users' machines.
+  #
+  # It builds the real SEA artifact and loops `host available --json`, the exact
+  # command both field reports died on. The gate is "a successful terminal
+  # envelope implies exit 0", not "exit 0" — see the script header for why that
+  # distinction keeps registry flakiness from turning this red.
+  #
+  # Deliberately NOT path-filtered to `clients/traycer-cli/**`, even though the
+  # SEA build eats much of the ten-minute job cap: the exit path's behaviour
+  # depends on dependencies it does not own — undici's global dispatcher and the
+  # Sentry client are the two handles the teardown races against — so a
+  # `bun.lock` bump is exactly a change that could reintroduce this while
+  # touching no CLI file. A gate that skips on the riskiest diffs is not a gate.
+  test-windows-cli-exit:
+    name: test (cli win32 SEA exit code)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: Cache bun global install cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - name: Build the CLI SEA
+        run: bun run --filter @traycer-clients/traycer-cli build:sea
+      # Proves the artifact runs at all before the loop below attributes an
+      # exit code to the teardown race.
+      - name: SEA smoke
+        run: bun run --filter @traycer-clients/traycer-cli smoke:sea
+      - name: Exit-code repro loop
+        run: bun run --filter @traycer-clients/traycer-cli smoke:exit-code
 
   # macOS job: the desktop workspace's packaging/signing-adjacent assertions
   # (prepack unit suite + the real electron-builder pack in test:packaging)

@@ -1,5 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
-
 const useHostNotificationIndicatorsMock = vi.hoisted(() =>
   vi.fn(() => ({
     data: { epics: {}, chats: {} },
@@ -22,13 +20,26 @@ vi.mock("@tanstack/react-router", () => ({
   useRouter: () => null,
 }));
 
+const hostDirectoryMock = vi.hoisted(() => ({
+  findById: (hostId: string) => ({
+    hostId,
+    label: hostId,
+    kind: "remote" as const,
+    websocketUrl: `wss://${hostId}.example/stream`,
+    version: "1.0.0",
+    status: "available" as const,
+  }),
+  onChange: () => ({ dispose: () => undefined }),
+}));
+
 vi.mock("@/lib/host", () => ({
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
-  // This branch's `EpicSessionProvider` folds the host binding's owner
-  // identity into its rebuild decision; a null binding is the legitimate
-  // "directory not bound yet" state and keeps the identity key null.
+  useHostDirectory: () => hostDirectoryMock,
+  // `EpicSessionProvider` folds the host binding's owner identity into its
+  // rebuild decision; a null binding is the legitimate "directory not bound
+  // yet" state and keeps the identity key null.
   useHostBinding: () => null,
 }));
 

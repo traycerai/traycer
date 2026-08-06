@@ -56,6 +56,9 @@ export function TerminalGridMeasureProbe(props: {
         // point); if the tab closes before a session ever registers, the
         // release path detects the orphan and disposes it.
         keepAlive
+        // Measure-only: the live host takes the same engine moments later and
+        // owns every reader of it.
+        onTerminalReady={null}
       />
     </Suspense>
   );

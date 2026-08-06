@@ -25,6 +25,17 @@ export interface NewConversationModalOpenRequest {
    * child inherits the parent's worktree.
    */
   readonly parentId: string | null;
+  /**
+   * Host the conversation must be created on, for a trigger that already
+   * belongs to one. `null` follows the app-wide active host, which is what the
+   * sidebar `+`, the ⌘K palette and the in-pane PaneOpener want - they are
+   * app-wide surfaces with no host of their own.
+   *
+   * The terminal quote control is the exception: its tile is bound to a
+   * `hostId` for life, and the chat it starts has to land on that same host or
+   * the terminal it quotes is on a machine the new chat cannot see.
+   */
+  readonly hostId: string | null;
 }
 
 interface NewConversationModalOpenStore {

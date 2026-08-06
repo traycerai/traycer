@@ -211,6 +211,41 @@ describe("aggregateCommGraphEdges", () => {
     expect(edges.find((edge) => edge.id === "a<->b")?.hasOpenThread).toBe(true);
   });
 
+  it("uses cloud ingestion order when an origin row id is reused", () => {
+    const edges = aggregateCommGraphEdges(
+      [
+        a2a({
+          id: 7,
+          timestamp: 100,
+          eventId: "cloud-request-1",
+          ingestVersion: 10,
+          expectReply: true,
+          responseId: "r1",
+        }),
+        a2a({
+          id: 7,
+          timestamp: 100,
+          eventId: "cloud-reply",
+          ingestVersion: 11,
+          senderAgentId: "b",
+          receiverAgentId: "a",
+          inReplyTo: "r1",
+        }),
+        a2a({
+          id: 7,
+          timestamp: 90,
+          eventId: "cloud-request-2",
+          ingestVersion: 12,
+          expectReply: true,
+          responseId: "r1",
+        }),
+      ],
+      AGENT_IDS,
+    );
+
+    expect(edges.find((edge) => edge.id === "a<->b")?.hasOpenThread).toBe(true);
+  });
+
   it("closes a same-timestamp request that its reply follows by row id", () => {
     const edges = aggregateCommGraphEdges(
       [

@@ -41,7 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
-  useCreateTuiAgent,
+  useCreateTuiAgentForClient,
   type TuiAgentPlacement,
 } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
@@ -55,7 +55,7 @@ import {
   useWorkspaceMentionRoots,
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
   latestCreatedConversationOwner,
@@ -64,7 +64,10 @@ import {
 } from "@/hooks/worktree/use-latest-conversation-workspace-seed";
 import { useOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-workspace-inheritance-seed";
 import { useEpicStore } from "@/hooks/use-epic-store";
-import { useHostClient } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
 import {
   useEpicConnectionStatus,
@@ -89,6 +92,8 @@ import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-inten
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
+import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
+import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -193,6 +198,9 @@ export function NewConversationModalAction(
       tabId,
       placement: ACTIVE_TILE_PLACEMENT,
       parentId,
+      // App-wide trigger: the sidebar sits outside every `TabHostProvider`, so
+      // the conversation belongs on whichever host is active.
+      hostId: null,
     });
   }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
   // Activation while aria-disabled stays blocked via `handleOpen`'s early
@@ -277,6 +285,7 @@ export function NewConversationModalHost(props: {
       tabId={props.tabId}
       placement={isOpen ? request.placement : ACTIVE_TILE_PLACEMENT}
       parentId={isOpen ? request.parentId : null}
+      hostId={isOpen ? request.hostId : null}
       open={isOpen}
       onOpenChange={(next) => {
         if (!next) closeModal();
@@ -290,6 +299,7 @@ function NewConversationModalDialog(props: {
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
   readonly parentId: string | null;
+  readonly hostId: string | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
@@ -375,6 +385,7 @@ function NewConversationModalDialog(props: {
                   tabId={props.tabId}
                   placement={props.placement}
                   parentId={props.parentId}
+                  hostId={props.hostId}
                   dismissPickerRef={dismissPickerRef}
                   onSubmitted={() => props.onOpenChange(false)}
                 />
@@ -441,16 +452,35 @@ const AGENT_INTERFACE_LABELS: Readonly<Record<ComposerMode, string>> = {
   terminal: "Terminal",
 };
 
+/**
+ * Stand-in host id for the terminal-agent create, used only until the
+ * projection carries the real binding - see `useCreateTuiAgent`.
+ */
+function placeholderHostIdFor(
+  client: HostClient<HostRpcRegistry> | null,
+): string {
+  return client?.getActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+}
+
 export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
   readonly parentId: string | null;
+  /** Host to create on; `null` follows the app-wide active host. */
+  readonly hostId: string | null;
   readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
 }) {
-  const { epicId, tabId, placement, parentId, dismissPickerRef, onSubmitted } =
-    props;
+  const {
+    epicId,
+    tabId,
+    placement,
+    parentId,
+    hostId,
+    dismissPickerRef,
+    onSubmitted,
+  } = props;
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
@@ -471,8 +501,17 @@ export function NewConversationModalBody(props: {
       dismissPickerRef.current = null;
     };
   }, [dismissPickerRef]);
-  const hostClient = useHostClient();
-  const latestWorkspaceSeed = useModalWorkspaceSeed(epicId, parentId);
+  // Every host-derived surface below - workspace seed and controls, profile
+  // validation, picker items, and both create paths - hangs off this one
+  // client, so a pinned request cannot leave some of them on the active host
+  // and the rest on the pinned one. `null` resolves to the app-wide default.
+  const hostClient = useHostClientForHostId(hostId);
+  const latestWorkspaceSeed = useModalWorkspaceSeed(
+    epicId,
+    parentId,
+    hostId,
+    hostClient,
+  );
   const seed = useNewConversationModalSeed(epicId, latestWorkspaceSeed);
   // Subscribe to the NON-content draft fields only. `content` is rewritten on
   // every keystroke (see `handleDocumentChange`); subscribing to the whole
@@ -591,8 +630,11 @@ export function NewConversationModalBody(props: {
     isActive: chatComposerActive,
   });
 
-  const createChat = useEpicCreateChat();
-  const terminalAgentCreate = useCreateTuiAgent();
+  const createChat = useEpicCreateChatForHostClient(hostClient);
+  const terminalAgentCreate = useCreateTuiAgentForClient(
+    hostClient,
+    placeholderHostIdFor(hostClient),
+  );
   const isSubmitting = createChat.isPending || terminalAgentCreate.isPending;
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
@@ -669,6 +711,13 @@ export function NewConversationModalBody(props: {
     editorRef,
     isActive: chatComposerActive,
   });
+  // A pinned request keeps the workspace picker on the same host the chat will
+  // be created on; without it the user could pick a folder that does not exist
+  // over there.
+  const workspaceHostScope = useMemo<HostWorkspaceControlsHostScope>(
+    () => modalWorkspaceHostScope(hostId, hostClient),
+    [hostClient, hostId],
+  );
   const workspaceControls = (
     <ActiveHostWorkspaceControls
       disabled={false}
@@ -677,7 +726,7 @@ export function NewConversationModalBody(props: {
       workspaceSeed={draftWorkspace}
       seedIntent={latestWorkspaceSeed?.intent ?? null}
       seedIntentOverride={null}
-      hostScope={{ kind: "active" }}
+      hostScope={workspaceHostScope}
     />
   );
   const switcher = (
@@ -740,7 +789,7 @@ export function NewConversationModalBody(props: {
     // here (dropped after the modal opened). Bailing after writing last-run
     // would pollute it for a chat that is never created and strand the modal
     // open with no feedback - mirror the landing flow's host-first toast.
-    const activeHostId = hostClient.getActiveHostId();
+    const activeHostId = hostClient?.getActiveHostId() ?? null;
     if (activeHostId === null) {
       reportableErrorToast(
         "Couldn't start the agent.",
@@ -859,6 +908,26 @@ export function NewConversationModalBody(props: {
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
+      // Same host-first gate as `handleSubmit`: with no resolved client (a
+      // pinned host still connecting, or no active device) the create below
+      // can only reject - and the draft would already be gone, because
+      // `cleanupAfterSubmit` runs before the async create. Keep the modal
+      // open and the draft intact instead.
+      if ((hostClient?.getActiveHostId() ?? null) === null) {
+        reportableErrorToast(
+          "Couldn't start the agent.",
+          {
+            description: "No active device. Reconnect and try again.",
+          },
+          {
+            title: "Could not start agent",
+            message: "No active device was available.",
+            code: null,
+            source: "Chat",
+          },
+        );
+        return;
+      }
       const worktreeIntent = worktreeIntentForSubmit();
       const workspaceMode = deriveWorkspaceMode(
         draftWorkspaceFolderCount,
@@ -894,6 +963,7 @@ export function NewConversationModalBody(props: {
       cleanupAfterSubmit,
       draftWorkspaceFolderCount,
       epicId,
+      hostClient,
       parentId,
       placement,
       rememberEpicIntent,
@@ -979,13 +1049,16 @@ export function NewConversationModalBody(props: {
 function useModalWorkspaceSeed(
   epicId: string,
   parentId: string | null,
+  hostId: string | null,
+  hostClient: HostClient<HostRpcRegistry> | null,
 ): LatestConversationWorkspaceSeed | null {
-  const hostClient = useHostClient();
   // Only read the latest-conversation seed for a top-level chat; a child must
   // never inherit an unrelated conversation's worktree (see below), so skip the
-  // binding read entirely when adding a child.
+  // binding read entirely when adding a child. A pinned request reads the seed
+  // from (and about) the pinned host, matching the create/picker below.
   const latestConversationSeed = useLatestConversationWorkspaceSeed(
     parentId === null ? epicId : null,
+    hostId === null ? null : { hostId, hostClient },
   );
   // The parent can be a chat or a terminal agent; read its real kind so the
   // binding lookup matches. Defaulting to "chat" would miss a terminal-agent

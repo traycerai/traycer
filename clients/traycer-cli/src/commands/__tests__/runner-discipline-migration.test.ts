@@ -93,6 +93,12 @@ afterEach(() => {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
   rmSync(workHome, { recursive: true, force: true });
+  // The runner now signals failure by SETTING `process.exitCode` rather than
+  // calling `process.exit`, so a test that drives a failing command leaves it
+  // set on this very process. Left behind, vitest exits non-zero with every
+  // test green - a red suite with nothing to point at. Clear it here so no
+  // individual test has to remember.
+  process.exitCode = undefined;
   stdoutSpy.mockRestore();
   stderrSpy.mockRestore();
   exitSpy.mockRestore();
@@ -113,16 +119,31 @@ function joined(chunks: readonly string[]): string {
 async function runAndCapture(
   fn: () => Promise<void>,
 ): Promise<ParsedRunnerOutput> {
-  let exitCode = 0;
+  // The runner records its code on `process.exitCode` and lets the loop drain
+  // instead of calling `process.exit` (see runner/exit.ts). Snapshot and
+  // RESTORE it around the run: a leaked non-zero value would otherwise make
+  // the vitest process itself exit non-zero with every test green.
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
   try {
     await fn();
   } catch (err) {
+    process.exitCode = priorExitCode;
     if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-      exitCode = Number.parseInt(err.message.replace("__test_exit_", ""), 10);
-    } else {
-      throw err;
+      // Deliberately fatal rather than translated. This harness USED to report
+      // the thrown code as the run's exit code, which meant every
+      // `expect(out.exitCode)` below passed under either implementation - so
+      // none of them was evidence for int#4840's drain fix. Reaching
+      // `process.exit` is now the failure, because on win32 that is the
+      // teardown abort coming back.
+      throw new Error(
+        `${err.message.replace("__test_exit_", "process.exit(")}) was called: the runner must record process.exitCode and let the loop drain, never exit abruptly`,
+      );
     }
+    throw err;
   }
+  const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
+  process.exitCode = priorExitCode;
   const stdout = joined(stdoutChunks);
   const stdoutLines = stdout.split("\n").filter((l) => l.length > 0);
   const envelopes: Record<string, unknown>[] = [];
@@ -392,10 +413,15 @@ describe("buildConfigShellSetCommand conflict-detection", () => {
       );
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        // expected - the runner reached process.exit(1)
-      } else {
-        throw err;
+        // Not tolerated any more: the runner records the failure on
+        // `process.exitCode` and returns normally. A `process.exit` here is
+        // the win32 teardown abort's precondition, so accepting it would let
+        // this case pass against the very implementation it exists to reject.
+        throw new Error(
+          `${err.message.replace("__test_exit_", "process.exit(")}) was called during a --clear-args parse failure`,
+        );
       }
+      throw err;
     }
     const ndjson = joined(stdoutChunks)
       .split("\n")

@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -36,7 +35,6 @@ interface FindTestState {
     hostLabel: string;
   };
   readFile: ReadFileState;
-  syntaxHighlight: boolean;
 }
 
 class MockCssHighlight {
@@ -59,7 +57,6 @@ const state = vi.hoisted((): FindTestState => ({
     isError: false,
     error: null,
   },
-  syntaxHighlight: false,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -89,39 +86,6 @@ vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
-}));
-
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({
-    highlighter: null,
-    theme: "dark",
-    themesVersion: 0,
-  }),
-  highlightCode: () => null,
-}));
-
-vi.mock("@/markdown/use-throttled-code-highlight", () => ({
-  useThrottledCodeHighlight: (input: { readonly code: string }) => {
-    if (!state.syntaxHighlight) return null;
-    const lines = input.code.split("\n");
-    let offset = 0;
-    return (
-      <>
-        {lines.map((line) => {
-          const key = `${offset}:${line}`;
-          offset += line.length;
-          const hasLineBreak = offset < input.code.length;
-          if (hasLineBreak) offset += 1;
-          return (
-            <span key={key}>
-              {line}
-              {hasLineBreak ? "\n" : null}
-            </span>
-          );
-        })}
-      </>
-    );
-  },
 }));
 
 vi.mock("@/providers/use-resolved-theme", () => ({
@@ -174,7 +138,6 @@ beforeEach(() => {
   state.activeHostId = "host-A";
   state.reachability = { status: "reachable", hostLabel: "Host A" };
   state.readFile = loadingReadFile();
-  state.syntaxHighlight = false;
   installMockCssHighlights();
 });
 
@@ -319,8 +282,7 @@ describe("<WorkspaceFileTile /> tile find", () => {
     });
   });
 
-  it("keeps CRLF source highlights aligned on the syntax-highlighted path", async () => {
-    state.syntaxHighlight = true;
+  it("keeps CRLF source highlights aligned in the Diffs renderer", async () => {
     state.readFile = loadedReadFile("foo\r\nbar\r\nbaz", false);
     renderTile(CODE_NODE);
     await waitForSearchable(CODE_NODE);

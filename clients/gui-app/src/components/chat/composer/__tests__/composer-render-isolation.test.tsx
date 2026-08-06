@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { Profiler, useState, type ProfilerOnRenderCallback } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";

@@ -47,7 +47,13 @@ export function DiffTabShell(props: DiffTabShellProps) {
             {props.toolbar}
           </div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Ctrl/Cmd+A selects the diff body, not the whole window (#592). Shared
+            by the git, PR and snapshot diff tiles, so all three opt in here; the
+            title/toolbar header above stays out of the selection. */}
+        <div
+          data-selection-root=""
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
           {props.children}
         </div>
       </div>

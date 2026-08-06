@@ -79,6 +79,7 @@ import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-swi
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import {
   useChatPromptStashDestination,
@@ -249,6 +250,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
     () => setEditorReadyTick((tick) => tick + 1),
     [],
   );
+  // "The chat I am working in" for this Task, which is what a terminal quote
+  // targets by default. Focus is the signal, not message recency: an agent that
+  // just finished streaming is not where the user was typing.
+  const handleComposerFocus = useCallback(() => {
+    if (currentEpicId === null) return;
+    recordFocusedChat(currentEpicId, taskId);
+  }, [currentEpicId, taskId]);
   const [pickerStore] = useState(() => createComposerPickerStore());
   // The mention/slash menu renders through a body portal. It belongs to the
   // one focused canvas tile, not merely every visible split member, so close
@@ -636,6 +644,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     onDragOver={onDragOver}
                     onDrop={onDrop}
                     onEditorReady={handleEditorReady}
+                    onFocus={handleComposerFocus}
                   />
                 }
                 toolbar={

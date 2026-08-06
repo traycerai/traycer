@@ -50,7 +50,8 @@ function DecoratorIcon({
   }
   if (
     mention.contextType === "chat" ||
-    mention.contextType === "terminal-agent"
+    mention.contextType === "terminal-agent" ||
+    mention.contextType === "terminal"
   ) {
     const Icon = EPIC_NODE_ICONS[mention.contextType];
     return (

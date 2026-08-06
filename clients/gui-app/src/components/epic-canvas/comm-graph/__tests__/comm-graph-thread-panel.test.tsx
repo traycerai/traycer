@@ -1,5 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
-
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -51,11 +49,13 @@ interface PanelHandles {
 
 /** Which per-kind jump capabilities the rendered panel advertises. */
 interface PanelCapabilities {
+  readonly plainOpen: boolean;
   readonly senderJump: boolean;
   readonly createdJump: boolean;
 }
 
 const NO_EXTRA_JUMPS: PanelCapabilities = {
+  plainOpen: true,
   senderJump: false,
   createdJump: false,
 };
@@ -95,6 +95,7 @@ function renderPanelWithCapabilities(
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        canOpenAgentForEvent={() => capabilities.plainOpen}
         canJump={() => canJump}
         onJump={onJump}
         canJumpToSender={(event) =>
@@ -131,6 +132,7 @@ function renderPanel(events: ReadonlyArray<CommGraphEvent>): () => void {
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        canOpenAgentForEvent={() => true}
         canJump={() => false}
         onJump={() => undefined}
         canJumpToSender={() => false}
@@ -174,6 +176,36 @@ describe("CommGraphThreadPanel", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("first");
     expect(rows[1].textContent).toContain("second");
+  });
+
+  it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
+    renderPanel([
+      event({
+        id: 1,
+        eventId: "cloud-before-repair",
+        timestamp: 100,
+        messageText: "first\n\nbody",
+      }),
+      event({
+        id: 1,
+        eventId: "cloud-after-repair",
+        timestamp: 200,
+        messageText: "second\n\nbody",
+      }),
+    ]);
+
+    const toggles = await screen.findAllByRole("button", {
+      name: "Expand message",
+    });
+    expect(toggles).toHaveLength(2);
+    const [firstToggle, secondToggle] = toggles;
+    expect(messageRows()).toHaveLength(2);
+    expect(firstToggle.getAttribute("aria-label")).toBe("Expand message");
+    expect(secondToggle.getAttribute("aria-label")).toBe("Expand message");
+
+    fireEvent.click(firstToggle);
+    expect(firstToggle.getAttribute("aria-label")).toBe("Collapse message");
+    expect(secondToggle.getAttribute("aria-label")).toBe("Expand message");
   });
 
   it("interleaves BOTH directions chronologically and labels every row", async () => {
@@ -482,6 +514,19 @@ describe("CommGraphThreadPanel heading links", () => {
     expect(handles.onJump).not.toHaveBeenCalled();
   });
 
+  it("does not render host-local endpoints when plain opening is unavailable", async () => {
+    const handles = renderPanelWithCapabilities(
+      [event({ id: 1, timestamp: 100 })],
+      false,
+      { ...NO_EXTRA_JUMPS, plainOpen: false },
+    );
+
+    await screen.findByTestId("comm-graph-detail-row-host-a-1");
+    expect(screen.queryByTestId(`${ROW}-sender`)).toBeNull();
+    expect(screen.queryByTestId(`${ROW}-receiver`)).toBeNull();
+    expect(handles.onOpenAgentId).not.toHaveBeenCalled();
+  });
+
   it("names both endpoints accessibly, and says which one scrolls", async () => {
     renderPanelWithHandles(
       [event({ id: 1, timestamp: 100, ...ANCHORED })],
@@ -544,7 +589,7 @@ describe("CommGraphThreadPanel heading links", () => {
         }),
       ],
       true,
-      { senderJump: false, createdJump: true },
+      { ...NO_EXTRA_JUMPS, createdJump: true },
     );
 
     // The created agent (arrow's receiver) lands at its transcript's start.

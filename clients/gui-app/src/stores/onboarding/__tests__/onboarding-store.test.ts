@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
 import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";

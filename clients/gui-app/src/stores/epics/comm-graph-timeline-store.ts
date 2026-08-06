@@ -18,7 +18,12 @@
  * `playing` is an intent any reader can observe while exactly one advances it.
  */
 import { create } from "zustand";
-import type { CommGraphTimeCursor } from "@/lib/comm-graph/comm-graph-timeline";
+import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
+import {
+  commGraphCursorForEvent,
+  commGraphCursorMatchesEvent,
+  type CommGraphTimeCursor,
+} from "@/lib/comm-graph/comm-graph-timeline";
 
 /**
  * Playback speeds, in the order the control cycles them. Event-paced, not
@@ -124,4 +129,49 @@ export function readCommGraphTimelineEpicState(
   epicId: string,
 ): CommGraphTimelineEpicState {
   return readEpicState(useCommGraphTimelineStore.getState(), epicId);
+}
+
+/**
+ * Rebinds a held host-local cursor when cloud history becomes authoritative.
+ * Equivalent rows keep their timeline position but gain the cloud eventId
+ * tiebreaker; if cloud has no equivalent row, the cursor returns to live so a
+ * local-only sort key cannot project an empty prefix over the cloud feed.
+ */
+export function reconcileCommGraphCloudAuthorityCursor(
+  epicId: string,
+  cloudEvents: ReadonlyArray<CommGraphEvent>,
+): void {
+  const current = readCommGraphTimelineEpicState(epicId);
+  if (current.cursor === null || current.cursor.eventId !== undefined) return;
+  const equivalentCloudEvent = cloudEvents.find(
+    (event) =>
+      event.timestamp === current.cursor?.timestamp &&
+      event.hostId === current.cursor.hostId &&
+      event.id === current.cursor.id,
+  );
+  const store = useCommGraphTimelineStore.getState();
+  if (equivalentCloudEvent === undefined) {
+    store.setPlaying(epicId, false);
+    store.setCursor(epicId, null);
+    return;
+  }
+  if (!commGraphCursorMatchesEvent(current.cursor, equivalentCloudEvent)) {
+    store.setCursor(epicId, commGraphCursorForEvent(equivalentCloudEvent));
+  }
+}
+
+/** Returns a pruned playback cursor to live and stops its stale play intent. */
+export function reconcilePrunedCommGraphTimelineRows(
+  epicId: string,
+  rowKeys: ReadonlySet<string>,
+): void {
+  if (rowKeys.size === 0) return;
+  const store = useCommGraphTimelineStore.getState();
+  const current = readCommGraphTimelineEpicState(epicId);
+  if (current.cursor === null) return;
+  const cursorRowKey =
+    current.cursor.eventId ?? `${current.cursor.hostId}:${current.cursor.id}`;
+  if (!rowKeys.has(cursorRowKey)) return;
+  store.setPlaying(epicId, false);
+  store.setCursor(epicId, null);
 }

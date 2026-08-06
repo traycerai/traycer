@@ -130,10 +130,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "fixed-entry-id"),
-}));
-
 describe("usePromptStash command/menu state", () => {
   beforeEach(() => {
     resetActivePromptStashForTests();
