@@ -1,4 +1,5 @@
 import type { SuggestionProps } from "@tiptap/suggestion";
+import { isDismissedMentionQuery } from "@/lib/composer/mentions/mention-dismissal";
 import { activePickerItemDisabledReason } from "./composer-picker-store";
 import type {
   ComposerPickerItem,
@@ -44,6 +45,12 @@ export function createComposerSuggestionRender<
     return {
       onStart(props) {
         latestProps = props;
+        // A pasted "@ ..." or "@x, y" is already prose; never open for it.
+        // The session still runs (tiptap owns it), but with no `openPicker`
+        // this session never owns the store, so its later updates no-op.
+        if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+          return;
+        }
         const slashScope = args.slashScopeForProps?.(props) ?? null;
         args.pickerStore.getState().openPicker({
           sessionId,
@@ -62,6 +69,14 @@ export function createComposerSuggestionRender<
 
       onUpdate(props) {
         latestProps = props;
+        // The typed query turned into prose (leading space, `,`/`;`, double
+        // space): dismiss exactly like Escape. `closeSession` clears the
+        // store's owner, so this session's further updates no-op and the menu
+        // stays closed for this `@` occurrence.
+        if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+          args.pickerStore.getState().closeSession(sessionId);
+          return;
+        }
         const slashScope = args.slashScopeForProps?.(props) ?? null;
         args.pickerStore.getState().updateRange({
           sessionId,
@@ -95,6 +110,11 @@ export function createComposerSuggestionRender<
         if (event.key === "Enter") {
           if (event.shiftKey) return false;
           if (state.items.length === 0) return false;
+          // Enter only commits a mention menu the user has ENGAGED (arrowed
+          // into); otherwise it is prose punctuation and falls through to the
+          // composer's normal Enter (send). Slash stays commit-on-Enter - a
+          // typed /command is deliberate, prose never starts with one.
+          if (state.kind === "mention" && !state.engaged) return false;
           // Swallow the key on an inert row. Returning false would let Enter
           // fall through to the composer and submit the message with the
           // picker still open.

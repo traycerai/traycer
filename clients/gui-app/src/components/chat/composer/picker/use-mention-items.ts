@@ -31,9 +31,10 @@ import {
   type ComposerMentionProviderContext,
   type MentionEpicRequest,
   type MentionFlowStep,
-  type MentionMenuEntry,
+  type MentionStepEntries,
   type MentionWorkspaceRequest,
 } from "@/lib/composer/mentions";
+import { shouldCloseMentionForNoMatches } from "@/lib/composer/mentions/mention-dismissal";
 import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/local-epic-suggestions";
 import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { displayTitle } from "@/lib/display-title";
@@ -61,6 +62,10 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 const EMPTY_WORKSPACE_ENTRIES: ReadonlyArray<WorkspaceEntry> = [];
 const EMPTY_EPIC_ENTRIES: ReadonlyArray<EpicMentionEntry> = [];
+const EMPTY_STEP_ENTRIES: MentionStepEntries = {
+  entries: [],
+  matchedCount: null,
+};
 
 export interface UseMentionItemsParams {
   readonly pickerStore: ComposerPickerStore;
@@ -350,11 +355,14 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     ],
   );
 
-  const entries = useMemo<ReadonlyArray<MentionMenuEntry>>(
+  const stepEntries = useMemo<MentionStepEntries>(
     () =>
-      active ? mentionProviderRegistry.entries(step, resolvedContext) : [],
+      active
+        ? mentionProviderRegistry.entriesWithMatches(step, resolvedContext)
+        : EMPTY_STEP_ENTRIES,
     [active, resolvedContext, step],
   );
+  const entries = stepEntries.entries;
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
     () =>
@@ -399,6 +407,27 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     if (!active) return;
     pickerStore.getState().setFetching(fetching);
   }, [active, fetching, pickerStore]);
+
+  // Zero-real-match dismissal: once every source has settled for the CURRENT
+  // query (debounce flushed, nothing loading or refetching) and the ranked
+  // root search matched nothing, the menu closes the way Escape would.
+  // Session-scoped close, so a session that already yielded cannot shut its
+  // successor's menu.
+  const dismissForNoMatches =
+    active &&
+    shouldCloseMentionForNoMatches({
+      stepKind: step.kind,
+      query,
+      debouncedQuery,
+      matchedCount: stepEntries.matchedCount,
+      loading,
+      fetching,
+    });
+
+  useEffect(() => {
+    if (!dismissForNoMatches || sessionId === null) return;
+    pickerStore.getState().closeSession(sessionId);
+  }, [dismissForNoMatches, pickerStore, sessionId]);
 }
 
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];

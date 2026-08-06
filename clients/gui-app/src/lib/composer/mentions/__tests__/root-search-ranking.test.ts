@@ -39,7 +39,9 @@ function rankedLabels(
   candidates: ReadonlyArray<RootSearchCandidate>,
   query: string,
 ): string[] {
-  return rankRootSearchEntries(candidates, query).map((item) => item.label);
+  return rankRootSearchEntries(candidates, query).entries.map(
+    (item) => item.label,
+  );
 }
 
 describe("rankRootSearchEntries", () => {
@@ -76,7 +78,7 @@ describe("rankRootSearchEntries", () => {
     ];
     expect(rankedLabels(candidates, "auth")).toEqual(["auth", "auth"]);
     expect(
-      rankRootSearchEntries(candidates, "auth").map((item) => item.id),
+      rankRootSearchEntries(candidates, "auth").entries.map((item) => item.id),
     ).toEqual(["a1", "f1"]);
   });
 
@@ -126,6 +128,30 @@ describe("rankRootSearchEntries", () => {
     ];
     const labels = rankedLabels(candidates, "auth");
     expect(labels).toEqual(["Auth spec", "zz-unrelated.bin"]);
+  });
+
+  it("reports how many rows actually matched, not counting appended rows", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "zz-unrelated.bin" }),
+      candidate("artifacts", { id: "a1", label: "Auth spec" }),
+    ];
+    const ranked = rankRootSearchEntries(candidates, "auth");
+    expect(ranked.entries).toHaveLength(2);
+    expect(ranked.matchedCount).toBe(1);
+  });
+
+  it("reports zero matches when only appended rows remain", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "zz-unrelated.bin" }),
+    ];
+    const ranked = rankRootSearchEntries(candidates, "qqqq");
+    expect(ranked.entries).toHaveLength(1);
+    expect(ranked.matchedCount).toBe(0);
+  });
+
+  it("reports no match count for an empty query", () => {
+    const candidates = [candidate("files", { id: "f1", label: "zeta.ts" })];
+    expect(rankRootSearchEntries(candidates, "  ").matchedCount).toBeNull();
   });
 
   it("keeps original order among appended unmatched rows", () => {
