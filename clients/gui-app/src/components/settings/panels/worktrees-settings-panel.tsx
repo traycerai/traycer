@@ -651,12 +651,6 @@ function WorktreesBody(props: {
           filterControls={null}
         />
       ) : null}
-      {listing.isPartial ? (
-        <WorktreesPartialListingBanner
-          message={listing.errorMessage}
-          onRetry={listing.retryPartial}
-        />
-      ) : null}
       {/* The gate owns every state where the scope has no client: it names
           the host, distinguishes deregistered from unroutable, and offers the
           way back to the active host — the old `hostId === null` branch
@@ -665,8 +659,14 @@ function WorktreesBody(props: {
           a script review mid-read, an armed delete, selection and collapse
           state — is preserved through a transient same-host disconnect
           instead of being unmounted, exactly as the other host-scoped panels
-          do. A usable scope is `following` or `ready`, both of which require
-          a resolved host, so no "Select a host" branch is needed inside. */}
+          do. The partial-listing banner is a child too: today it could not
+          outlive a disconnect either way (a scope with no client drops the
+          listing data, and `isPartial` with it — measured), but it is
+          host-scoped content, and behind the boundary its concealment stays
+          correct even if the listing cache ever learns to survive a client
+          loss. A usable scope is `following` or `ready`, both of which
+          require a resolved host, so no "Select a host" branch is needed
+          inside. */}
       <HostScopeGate
         scope={scope}
         skeleton={
@@ -675,6 +675,12 @@ function WorktreesBody(props: {
           </WorktreesStateMessage>
         }
       >
+        {listing.isPartial ? (
+          <WorktreesPartialListingBanner
+            message={listing.errorMessage}
+            onRetry={listing.retryPartial}
+          />
+        ) : null}
         {content}
       </HostScopeGate>
     </div>

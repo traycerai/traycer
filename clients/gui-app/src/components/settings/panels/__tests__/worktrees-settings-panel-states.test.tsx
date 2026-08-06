@@ -42,6 +42,9 @@ const state = vi.hoisted(() => ({
     hostLabel: "Host A",
   },
   client: null as HostClient<HostRpcRegistry> | null,
+  // `null` uses the fixture default (follows the host); set to drive the
+  // gate's non-usable states.
+  scopeStatus: null as "unreachable" | null,
   enrichment: {
     enrichedByPath: new Map<string, WorktreeHostEntryV14>(),
     erroredPaths: new Set<string>(),
@@ -80,6 +83,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
                 name: state.reachability.hostLabel,
               }),
         client: state.client,
+        ...(state.scopeStatus === null ? {} : { status: state.scopeStatus }),
       }),
   };
 });
@@ -104,6 +108,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
 }));
 
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import {
   DEFAULT_WORKTREE_BRANCH_PREFIX,
   useSettingsStore,
@@ -150,7 +155,7 @@ function clientWithHandler(
   return client;
 }
 
-function renderPanel(): void {
+function renderPanel(): { readonly rerender: () => void } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -159,11 +164,19 @@ function renderPanel(): void {
       <TooltipProvider>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
-  render(
+  // A FRESH element per (re)render — a referentially identical element lets
+  // React bail out of the subtree without re-reading the mutated mocks.
+  const makeUi = () => (
     <Wrapper>
       <WorktreesSettingsPanel />
-    </Wrapper>,
+    </Wrapper>
   );
+  const view = render(makeUi());
+  return {
+    rerender: () => {
+      view.rerender(makeUi());
+    },
+  };
 }
 
 beforeEach(() => {
@@ -172,6 +185,7 @@ beforeEach(() => {
   state.hosts = [];
   state.reachability = { status: "reachable", hostLabel: "Host A" };
   state.client = null;
+  state.scopeStatus = null;
   state.enrichment = {
     enrichedByPath: new Map(),
     erroredPaths: new Set(),
@@ -393,6 +407,65 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
         source: "Worktrees",
       },
     });
+  });
+
+  it("never leaves the partial-listing Retry actionable over the outage notice", async () => {
+    // Pins the user-visible claim, not the mechanism. Today the banner
+    // cannot outlive the disconnect at all (no client ⇒ the listing data and
+    // `isPartial` drop with it), so this passes via absence; if the listing
+    // cache ever learns to survive a client loss, the banner's place inside
+    // the gate makes this pass via concealment instead. Either way no host
+    // RPC Retry stays clickable above the unreachable notice.
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    const cleanWorktree = {
+      repoLabel: "acme/app",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      worktreePath: "/wt/clean",
+      branch: "feat-clean",
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+      scripts: null,
+      owners: [],
+      lastActivityAt: null,
+      branchStatus: null,
+      createdAt: null,
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      submodules: [],
+      atBaseCommit: false,
+      resolvedAt: 1,
+    } satisfies WorktreeHostEntryV14;
+    let call = 0;
+    state.client = clientWithHandler(() => {
+      call += 1;
+      if (call === 1) {
+        return { worktrees: [cleanWorktree], nextCursor: "cursor-2" };
+      }
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "later page failed",
+        requestId: "req-partial-conceal",
+        method: "worktree.listAllForHost",
+        fatalDetails: null,
+      });
+    });
+
+    const view = renderPanel();
+    await waitFor(() => {
+      screen.getByText(/Some worktrees could not be loaded/);
+    });
+
+    state.scopeStatus = "unreachable";
+    state.client = null;
+    view.rerender();
+
+    screen.getByTestId("host-scope-unreachable");
+    const banner = screen.queryByText(/Some worktrees could not be loaded/);
+    expect(banner === null || isConcealed(banner)).toBe(true);
   });
 
   it("says nothing was created when the host's list is empty", async () => {

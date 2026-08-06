@@ -194,6 +194,33 @@ function ClearFileEditSnapshotsRow(props: {
 }
 
 /**
+ * The empty-account recovery variant: no host ROW exists, but installed
+ * components can — an install that completed while sign-in did not leaves
+ * exactly that state, and this page is the only uninstall surface (General's
+ * was deliberately removed). "No host row" therefore must not be read as
+ * "nothing to remove": enrollment and installation are different facts, and
+ * removal runs over the local CLI bridge, which needs no row. Renders the
+ * local row alone — with no host there is no RPC row to gate — and returns
+ * nothing without the bridge so the danger group never renders empty. The
+ * caller decides whether anything is actually installed; this component
+ * cannot know.
+ */
+export function LocalRecoveryDangerZone(): ReactNode {
+  const { hostManagement } = useRunnerHost();
+  if (hostManagement === null) return null;
+  return (
+    <SettingsGroup
+      title="Danger zone"
+      tone="danger"
+      dataTestId="host-danger-zone"
+      fill={false}
+    >
+      <RemoveTraycerRow />
+    </SettingsGroup>
+  );
+}
+
+/**
  * Uninstalling the host is the most host-scoped action there is, so it lives
  * on the host's own page rather than beside app-global resets in General.
  * Local host only — there is no remote uninstall verb.

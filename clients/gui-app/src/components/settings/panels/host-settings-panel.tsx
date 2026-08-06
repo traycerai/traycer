@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   queryOptions,
   useMutation,
@@ -26,7 +26,10 @@ import {
   ThisWindowCard,
   ThisWindowCardStandalone,
 } from "@/components/settings/host-scope/host-identity-card";
-import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
+import {
+  HostDangerZone,
+  LocalRecoveryDangerZone,
+} from "@/components/settings/host-scope/host-danger-zone";
 import {
   HostScopeConnecting,
   HostScopeGate,
@@ -594,6 +597,13 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   // two update questions, so the mechanisms sit in one card and the copy
   // distinguishes them.
   const registryItem = scope.host?.item ?? null;
+  let dangerZone: ReactNode = null;
+  if (scope.host !== null) {
+    dangerZone = <HostDangerZone scope={scope} />;
+  } else if (showLocalConsole && (installedRecord ?? null) !== null) {
+    dangerZone = <LocalRecoveryDangerZone />;
+  }
+
   const localUpdateRegion =
     scopedIsLocalMachine && status?.state !== "not-installed" ? (
       <HostUpdateRegion
@@ -837,9 +847,15 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
             stopped or broken. A gate around both took the recovery action away
             in the only state that needs it, so the region gates its own rows.
 
-            Skipped in the fresh-install carve-out: with no host row there is
-            nothing to clear and nothing enrolled to remove. */}
-          {scope.host === null ? null : <HostDangerZone scope={scope} />}
+            With no host row the RPC row has nothing to clear — but "no row"
+            is an enrollment fact, not an installation fact: an install that
+            completed while sign-in did not leaves components on this machine
+            with nothing in the account, and this page is the only uninstall
+            surface. In the same empty-account carve-out that shows the
+            install console, a record of installed components keeps the
+            local-bridge removal row reachable; a truly fresh machine (no
+            record) still shows nothing. */}
+          {dangerZone}
         </div>
       )}
 

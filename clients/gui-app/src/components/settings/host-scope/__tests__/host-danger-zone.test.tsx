@@ -23,7 +23,10 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
-import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
+import {
+  HostDangerZone,
+  LocalRecoveryDangerZone,
+} from "@/components/settings/host-scope/host-danger-zone";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 
 /**
@@ -260,6 +263,31 @@ describe("HostDangerZone", () => {
     );
 
     expect(mutateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps uninstall reachable in the empty-account recovery state", () => {
+    // "No host row" is an enrollment fact, not an installation fact: an
+    // install that completed while sign-in did not leaves components on this
+    // machine with nothing in the account — and this page is the only
+    // uninstall surface. The recovery variant renders the local-bridge row
+    // without any host in hand.
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    render(<LocalRecoveryDangerZone />);
+    expect(screen.getByTestId("host-danger-zone")).not.toBeNull();
+    expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
+    // No host means no RPC row — nothing to clear, and nothing that could
+    // read through an ambient client.
+    expect(
+      screen.queryByTestId("settings-clear-file-edit-snapshots"),
+    ).toBeNull();
+  });
+
+  it("renders no recovery zone at all without the local bridge", () => {
+    // Web / remote shells have no uninstall verb; an empty danger group
+    // would be a heading with nothing under it.
+    runnerHostMock.hostManagement = null;
+    const { container } = render(<LocalRecoveryDangerZone />);
+    expect(container.firstChild).toBeNull();
   });
 
   it("offers Remove Traycer only for this computer's host", () => {
