@@ -43,7 +43,7 @@ import {
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
-import { hasFreshStopIntent } from "../host/stop-intent";
+import { clearStopIntent, hasFreshStopIntent } from "../host/stop-intent";
 import {
   attestLaunchdSupervisorPid,
   readLayer0Frame,
@@ -326,6 +326,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     environment: Environment,
     nowMs: number,
   ) => Promise<boolean>;
+  readonly clearStopIntent: (environment: Environment) => Promise<void>;
   // Consecutive relaunches allowed before the supervisor gives up and hands
   // the machine back to launchd / systemd / the next logon. A dependency
   // rather than a bare constant so a test can state which behaviour it is
@@ -368,6 +369,7 @@ const defaultRunDeps: RunHostStartDeps = {
       timer.unref?.();
     }),
   hasStopIntent: hasFreshStopIntent,
+  clearStopIntent,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
 };
 
@@ -514,6 +516,19 @@ export async function runHostStart(
     );
     return deps.exit(0);
   }
+
+  // Reaching here means a start was REQUESTED - by the service manager, a
+  // logon trigger, or a person - so any stop intent still on disk has been
+  // served and must not outlive this invocation. Without this, stopping the
+  // host and logging back in within the sentinel's freshness window would
+  // leave the new supervisor unable to recover its own child's first crash,
+  // because it would read the previous stop as still in progress.
+  //
+  // Clearing here rather than refusing to start is the safe direction: the
+  // costly failure is a machine left hostless. A stop that arrives AFTER this
+  // point still wins - `decideRelaunch` re-reads the file immediately before
+  // every relaunch, including after the backoff.
+  await deps.clearStopIntent(opts.environment);
 
   // ---- Relaunch loop ------------------------------------------------------
   //
@@ -809,6 +824,25 @@ export async function runHostStart(
     // verbatim, fully-quoted command line on Windows; every other case spawns
     // the executable directly.
     const launch = resolveSpawnInvocation(target.executable, hostArgs);
+
+    // Last look before committing to a child.
+    //
+    // Registering the signal handlers up front (once, for the loop's whole
+    // life) SUPPRESSES Node's default "die on SIGTERM" behaviour, which the
+    // single-shot supervisor used to rely on: it installed its handler only
+    // after spawning, so a signal during setup simply killed the process.
+    // Per-attempt setup is a chain of awaits - incumbent probe, target
+    // resolution, env overrides, log rotation, crash-report pruning, marker
+    // write, fd open - and a stop landing anywhere in it would otherwise be
+    // swallowed and followed by a brand-new child that never received it.
+    if (shuttingDown) {
+      logger.info("Host supervisor not spawning - shutting down", {
+        environment: opts.environment,
+        attemptId,
+      });
+      await deps.closeLogFd(logFd);
+      return deps.exit(0);
+    }
 
     // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
     // report before any post-spawn statement runs, and the report scan treats

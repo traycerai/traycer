@@ -310,6 +310,7 @@ function makeRunStubs(
     hasStopIntent: async () => false,
     sleep: async () => undefined,
     closeLogFd: async () => undefined,
+    clearStopIntent: async () => undefined,
     // Pin the shared harness to a SINGLE attempt. Every test built on
     // `makeRunStubs` predates the relaunch loop and asserts what one attempt
     // records and exits with; letting them relaunch would silently change what
@@ -2144,5 +2145,73 @@ describe("runHostStart - production defaults", () => {
     expect(recorded.spawnCalls).toHaveLength(MAX_CONSECUTIVE_RELAUNCHES + 1);
     expect(slept).toEqual([...RELAUNCH_BACKOFF_MS]);
     expect(recorded.exited).toBe(11);
+  });
+});
+
+describe("runHostStart - stop signals outside the child-running window", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("does not spawn when a shutdown signal arrives during per-attempt setup", async () => {
+    // Installing the signal handlers once, up front, SUPPRESSES Node's default
+    // "die on SIGTERM". The single-shot supervisor relied on that default: it
+    // registered its handler only after spawning, so a signal during setup
+    // killed the process. Setup is a chain of awaits, and a stop landing in it
+    // must not be followed by a brand-new child that never received it.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            // Stand in for any await in the setup chain.
+            openLogFd: async () => {
+              process.emit("SIGTERM");
+              return 42;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("serves a stale stop intent on a fresh supervisor start so the next crash is recoverable", async () => {
+    // Stop the host, log back in inside the sentinel's freshness window, and
+    // the new supervisor would otherwise read the previous stop as still in
+    // progress and refuse to recover its OWN child's first crash. Clearing
+    // beats refusing to start: the costly failure is a hostless machine.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 5, signal: null },
+      { code: 0, signal: null },
+    ]);
+    let intentCleared = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            clearStopIntent: async () => {
+              intentCleared = true;
+            },
+            // The file is only "fresh" until this invocation serves it.
+            hasStopIntent: async () => !intentCleared,
+          },
+        ),
+      recorded,
+    );
+
+    expect(intentCleared).toBe(true);
+    // The crash WAS recovered rather than misread as part of the old stop.
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
   });
 });
