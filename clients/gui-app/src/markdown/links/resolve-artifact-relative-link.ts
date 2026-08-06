@@ -29,20 +29,16 @@ import {
   EPICS_DIRNAME,
 } from "@traycer/protocol/common/artifact-path";
 
-/** Decodes a URL-encoded href segment (`%2E%2E`, `my%20folder`) before any `.`/`..` traversal or comparison; malformed escapes fall back to the raw string. */
-function decodeHrefComponent(href: string): string {
-  try {
-    return decodeURIComponent(href);
-  } catch {
-    return href;
-  }
-}
-
 /**
- * Resolves `relativeHref` (as authored inside the artifact whose own
+ * Resolves `relativePath` (as authored inside the artifact whose own
  * folder-name chain is `selfChain`) to an artifact-shaped path string, or
- * `null` when the href is empty/degenerate or navigates above the epic's
+ * `null` when the path is empty/degenerate or navigates above the epic's
  * `artifacts/` root.
+ *
+ * The path arrives ALREADY percent-decoded - `classifyHref` performs the single
+ * decode on the way out of the markdown pipeline. Decoding again here would
+ * consume a literal escape in a real folder name and, worse, could resurrect a
+ * `..` out of an authored `%252E%252E` and walk out of the linked folder.
  *
  * A `null` return for an over-`../`'d href is a DELIBERATE dead end, not a
  * bug: an authoring agent that miscounts `../` depth either lands one level
@@ -58,13 +54,14 @@ function decodeHrefComponent(href: string): string {
 export function resolveArtifactRelativeLinkPath(
   epicId: string,
   selfChain: readonly string[],
-  relativeHref: string,
+  relativePath: string,
 ): string | null {
-  const trimmed = relativeHref.trim();
-  if (trimmed.length === 0) return null;
+  // Trim only to decide emptiness, never to reshape the path: `classifyHref`
+  // already trimmed the raw href, so an edge space surviving to here came out of
+  // a `%20` the author encoded on purpose and is part of the folder name.
+  if (relativePath.trim().length === 0) return null;
 
-  const decoded = decodeHrefComponent(trimmed);
-  const rawSegments = decoded.split(/[\\/]+/u).filter((s) => s.length > 0);
+  const rawSegments = relativePath.split(/[\\/]+/u).filter((s) => s.length > 0);
   if (rawSegments.length === 0) return null;
 
   const lastSegment = rawSegments[rawSegments.length - 1];
