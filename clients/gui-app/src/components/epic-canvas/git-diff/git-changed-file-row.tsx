@@ -24,6 +24,7 @@ export interface GitChangedFileRowProps {
   readonly active: boolean;
   readonly leading: ReactNode | null;
   readonly trailing: ReactNode | null;
+  readonly showStats: boolean;
   /** Filter match ranges into `file.path`; empty when no filter is active. */
   readonly pathRanges: HighlightRanges;
   readonly onClick: (() => void) | null;
@@ -38,9 +39,12 @@ interface RowStatsProps {
   readonly className: string | undefined;
 }
 
-function RowStats(props: RowStatsProps): ReactNode {
+export function GitChangedFileStats(props: RowStatsProps): ReactNode {
   return (
-    <span className={cn("shrink-0 items-center gap-1", props.className)}>
+    <span
+      className={cn("shrink-0 items-center gap-1", props.className)}
+      data-testid="git-changed-file-stats"
+    >
       <span className="shrink-0 text-ui-xs font-medium tabular-nums text-success">
         +{props.file.insertions}
       </span>
@@ -128,6 +132,7 @@ function PanelRowContent(props: {
   readonly metadata: GitFileRowMetadata;
   readonly pathRanges: HighlightRanges;
   readonly trailing: ReactNode | null;
+  readonly showStats: boolean;
 }): ReactNode {
   const { metadata } = props;
   const hasDirectory = metadata.directoryName.length > 0;
@@ -160,10 +165,12 @@ function PanelRowContent(props: {
         </span>
       ) : null}
       {props.trailing}
-      <RowStats
-        file={props.file}
-        className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
-      />
+      {props.showStats ? (
+        <GitChangedFileStats
+          file={props.file}
+          className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
+        />
+      ) : null}
     </>
   );
 }
@@ -194,6 +201,7 @@ function TileRowContent(props: {
   readonly metadata: GitFileRowMetadata;
   readonly leading: ReactNode | null;
   readonly trailing: ReactNode | null;
+  readonly showStats: boolean;
 }): ReactNode {
   const { metadata } = props;
   return (
@@ -230,7 +238,9 @@ function TileRowContent(props: {
         </span>
       ) : null}
       <span aria-hidden className="ml-auto" />
-      <RowStats file={props.file} className="flex" />
+      {props.showStats ? (
+        <GitChangedFileStats file={props.file} className="flex" />
+      ) : null}
       {props.trailing}
     </>
   );
@@ -246,6 +256,7 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
       metadata={metadata}
       pathRanges={props.pathRanges}
       trailing={props.trailing}
+      showStats={props.showStats}
     />
   ) : (
     <TileRowContent
@@ -253,6 +264,7 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
       metadata={metadata}
       leading={props.leading}
       trailing={props.trailing}
+      showStats={props.showStats}
     />
   );
 

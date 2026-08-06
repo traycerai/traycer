@@ -8,6 +8,7 @@ interface CapturedMenuItem {
   readonly role?: string;
   readonly type?: string;
   readonly accelerator?: string;
+  readonly registerAccelerator?: boolean;
   readonly enabled?: boolean;
   readonly submenu?: readonly CapturedMenuItem[];
   readonly click?: (menuItem: unknown, browserWindow: unknown) => void;
@@ -217,6 +218,37 @@ describe("buildApplicationMenu", () => {
     expect(item.accelerator).toBe("CmdOrCtrl+W");
     item.click?.(null, null);
     expect(commands).toEqual(["epic.closeTab"]);
+  });
+
+  it("leaves undo and redo accelerators with the focused renderer", () => {
+    const actions = {
+      command: () => undefined,
+      focusWindow: () => undefined,
+      openExternal: () => undefined,
+    };
+    const macEditMenu =
+      menuByLabel(
+        template(buildApplicationMenu(buildState("darwin"), actions)),
+        "Edit",
+      ).submenu ?? [];
+    const macUndo = macEditMenu.find((item) => item.role === "undo");
+    const macRedo = macEditMenu.find((item) => item.role === "redo");
+    expect(macUndo?.accelerator).toBe("");
+    expect(macRedo?.accelerator).toBe("");
+
+    for (const platform of ["win32", "linux"] as const) {
+      const editMenu =
+        menuByLabel(
+          template(buildApplicationMenu(buildState(platform), actions)),
+          "Edit",
+        ).submenu ?? [];
+      expect(
+        editMenu.find((item) => item.role === "undo")?.registerAccelerator,
+      ).toBe(false);
+      expect(
+        editMenu.find((item) => item.role === "redo")?.registerAccelerator,
+      ).toBe(false);
+    }
   });
 
   it("omits the obsolete Switch Host file menu item", () => {

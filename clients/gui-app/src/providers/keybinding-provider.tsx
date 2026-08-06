@@ -26,6 +26,7 @@ import {
   type LeaderModifier,
   type LeaderState,
 } from "@/providers/keybinding-context";
+import { isDiffsEditorEvent } from "@/lib/keybindings/editable-target";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -306,6 +307,12 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       if (event.defaultPrevented) return;
+      // A Diffs editor boundary claims bare typing plus its native history
+      // commands. Other modified chords (⌘1, a reserved shortcut, ...) still
+      // resolve as app actions below. Undo/redo are different: Diffs owns a
+      // custom edit stack, so even a persisted user binding must not reserve
+      // Cmd/Ctrl-Z or Shift-Cmd/Ctrl-Z before the editor sees them.
+      if (isDiffsEditorOwnedKey(event, hasLeaderModifier(event))) return;
       if (isArtifactEditorLinkShortcut(event)) return;
 
       // Digit actions (e.g. ⌘1 or header tab sequences like ⌥1,0) must match
@@ -453,6 +460,22 @@ function resolveReservedAction(event: KeyboardEvent): ActionId | null {
   const actionId = findActionForChord(chord);
   if (actionId === null) return null;
   return isExternallyHandled(actionId) ? null : actionId;
+}
+
+function isDiffsHistoryShortcut(event: KeyboardEvent): boolean {
+  return (
+    hasPlatformModKey(event) && !event.altKey && event.key.toLowerCase() === "z"
+  );
+}
+
+function isDiffsEditorOwnedKey(
+  event: KeyboardEvent,
+  hasLeaderModifier: boolean,
+): boolean {
+  return (
+    isDiffsEditorEvent(event) &&
+    (!hasLeaderModifier || isDiffsHistoryShortcut(event))
+  );
 }
 
 function isArtifactEditorLinkShortcut(event: KeyboardEvent): boolean {

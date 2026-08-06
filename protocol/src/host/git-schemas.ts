@@ -246,6 +246,42 @@ export type GitGetFileDiffsResponse = z.infer<
 >;
 
 /**
+ * On-demand full text needed to hydrate a patch-backed Diffs editor. Kept out
+ * of the ordinary diff response so opening a read-only diff never transfers
+ * both complete file versions.
+ */
+export const gitGetFileContentsRequestSchema = z.object({
+  hostId: z.string(),
+  runningDir: z.string(),
+  filePath: z.string(),
+  previousPath: z.string().nullable(),
+  stage: gitStageSchema,
+});
+export type GitGetFileContentsRequest = z.infer<
+  typeof gitGetFileContentsRequestSchema
+>;
+
+export const gitEditableFileContentsSchema = z.object({
+  name: z.string(),
+  contents: z.string(),
+});
+export type GitEditableFileContents = z.infer<
+  typeof gitEditableFileContentsSchema
+>;
+
+export const gitGetFileContentsResponseSchema = z.object({
+  runningDir: z.string(),
+  filePath: z.string(),
+  oldFile: gitEditableFileContentsSchema.nullable(),
+  newFile: gitEditableFileContentsSchema.nullable(),
+  worktreeFile: gitEditableFileContentsSchema.nullable(),
+  error: z.string().nullable(),
+});
+export type GitGetFileContentsResponse = z.infer<
+  typeof gitGetFileContentsResponseSchema
+>;
+
+/**
  * `git.getCapabilities` response.
  * `available` indicates if git feature is supported on this host.
  * `reason` is populated only if `available === false`.

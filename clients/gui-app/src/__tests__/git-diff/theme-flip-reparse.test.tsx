@@ -60,6 +60,8 @@ describe("theme-flip-reparse: theme toggle triggers re-parse with new cache key"
       <QueryClientProvider client={queryClient}>
         <FileDiffContent
           diff={diff}
+          fileIdentity={null}
+          isEmptyFile={false}
           mode="unified"
           wordWrap={false}
           backgrounds
@@ -95,6 +97,8 @@ describe("theme-flip-reparse: theme toggle triggers re-parse with new cache key"
       <QueryClientProvider client={queryClient}>
         <FileDiffContent
           diff={diff}
+          fileIdentity={null}
+          isEmptyFile={false}
           mode="unified"
           wordWrap={false}
           backgrounds
@@ -151,6 +155,8 @@ describe("theme-flip-reparse: theme toggle triggers re-parse with new cache key"
       <QueryClientProvider client={queryClient}>
         <FileDiffContent
           diff={diff}
+          fileIdentity={null}
+          isEmptyFile={false}
           mode="split"
           wordWrap={false}
           backgrounds

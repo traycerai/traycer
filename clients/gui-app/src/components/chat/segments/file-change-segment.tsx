@@ -186,6 +186,7 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
       banner={null}
       scrollContainerRef={null}
       onScroll={null}
+      fileIdentity={null}
     >
       <DiffContentPrimitive
         patch={patch}
@@ -196,6 +197,7 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
         lineNumbers={false}
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );
