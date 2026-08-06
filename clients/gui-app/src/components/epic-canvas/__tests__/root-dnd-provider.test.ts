@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Active, ClientRect, DroppableContainer } from "@dnd-kit/core";
 import { epicRootCollisionDetection } from "@/components/epic-canvas/dnd/root-dnd-collision";

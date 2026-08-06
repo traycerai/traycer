@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import {
   PROVIDER_PROFILE_ACCENT_COLORS,
@@ -3429,7 +3428,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // Exactly one login child for the whole switch - re-polling never
     // restarts the OAuth flow.
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
-  }, 10_000);
+  });
 
   it("ignores an in-flight ambient re-poll that resolves after the sign-in was cancelled", async () => {
     providerMocks.listResult.data = {

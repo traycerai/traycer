@@ -26,7 +26,6 @@
  * fires exactly ONCE per batch (a per-item loop fires N times) with a target
  * that is a genuine survivor / the unchanged current focus.
  */
-import "../../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
