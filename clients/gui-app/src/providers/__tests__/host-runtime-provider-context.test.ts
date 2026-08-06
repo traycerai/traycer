@@ -1,31 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import {
-  createHostRuntime,
   type HostRuntimeBinding,
-  createHostRuntimeState,
+  type HostRuntimeState,
 } from "@/providers/host-runtime-provider";
 
-describe("createHostRuntime", () => {
-  it("retains context and binding snapshot across provider and hook module generations", () => {
-    const sharedState = createHostRuntimeState<HostRpcRegistry>();
+interface HostRuntimeDevGlobals {
+  __TRAYCER_HOST_RUNTIME_STATE__: HostRuntimeState<HostRpcRegistry> | undefined;
+}
 
-    const providerGeneration = createHostRuntime(
-      hostRpcSchedulingPolicy,
-      sharedState,
-    );
-    const hookGeneration = createHostRuntime(
-      hostRpcSchedulingPolicy,
-      sharedState,
-    );
+const runtimeDevGlobals = globalThis as typeof globalThis &
+  HostRuntimeDevGlobals;
+const initialRuntimeState = runtimeDevGlobals.__TRAYCER_HOST_RUNTIME_STATE__;
 
-    expect(providerGeneration.HostRuntimeContext).toBe(sharedState.context);
-    expect(hookGeneration.HostRuntimeContext).toBe(sharedState.context);
+afterEach(() => {
+  vi.resetModules();
+  if (initialRuntimeState === undefined) {
+    Reflect.deleteProperty(runtimeDevGlobals, "__TRAYCER_HOST_RUNTIME_STATE__");
+    return;
+  }
+  runtimeDevGlobals.__TRAYCER_HOST_RUNTIME_STATE__ = initialRuntimeState;
+});
+
+describe("host runtime module", () => {
+  it("retains the provider context and binding snapshot across Fast Refresh module generations", async () => {
+    vi.resetModules();
+    Reflect.deleteProperty(runtimeDevGlobals, "__TRAYCER_HOST_RUNTIME_STATE__");
+
+    const providerGeneration = await import("@/lib/host/runtime");
+    const providerState = runtimeDevGlobals.__TRAYCER_HOST_RUNTIME_STATE__;
+    if (providerState === undefined) {
+      throw new Error("Expected the hot runtime state to be retained globally");
+    }
 
     const binding = Object.create(null) as HostRuntimeBinding<HostRpcRegistry>;
-    sharedState.bindingSnapshot.value = binding;
+    providerState.bindingSnapshot.value = binding;
 
-    expect(hookGeneration.getBindingSnapshot()).toBe(binding);
+    vi.resetModules();
+    const hookGeneration = await import("@/lib/host/runtime");
+
+    expect(hookGeneration.HostRuntimeContext).toBe(
+      providerGeneration.HostRuntimeContext,
+    );
+
+    expect(hookGeneration.getHostBindingSnapshot()).toBe(binding);
   });
 });

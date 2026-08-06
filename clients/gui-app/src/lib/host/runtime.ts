@@ -12,19 +12,13 @@ interface HostRuntimeDevGlobals {
   __TRAYCER_HOST_RUNTIME_STATE__: AppHostRuntimeState | undefined;
 }
 
-function isObject(value: unknown): value is object {
-  return typeof value === "object" && value !== null;
-}
-
 function createStableHostRuntimeState(): AppHostRuntimeState {
   // A normal page load evaluates this module once. During Vite HMR, however,
   // React can briefly retain a provider from one module generation while a
-  // refreshed consumer reads hooks from the next. Keep only the context
-  // identity stable across those generations; a real reload resets globalThis.
-  // Vitest also exposes an import.meta.hot stub, but without Vite's data object,
-  // so tests continue to receive an isolated context.
-  const hotData: unknown = import.meta.hot?.data;
-  if (!isObject(hotData)) {
+  // refreshed consumer reads hooks from the next. Keep the whole runtime
+  // state stable across those generations; a real reload resets globalThis.
+  // Vitest's import.meta.hot stub exercises this same module-reimport path.
+  if (import.meta.hot === undefined) {
     return createHostRuntimeState<HostRpcRegistry>();
   }
 
