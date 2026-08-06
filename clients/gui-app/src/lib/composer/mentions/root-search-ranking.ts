@@ -1,4 +1,5 @@
-import Fuse, { type IFuseOptions } from "fuse.js";
+import type { IFuseOptions } from "fuse.js";
+import { searchFuzzyMatches } from "../fuzzy-ranking";
 import type { MentionMenuEntry, MentionProviderId } from "./providers";
 
 /**
@@ -27,16 +28,11 @@ const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
   artifacts: 0.9,
 };
 
-const FUSE_OPTIONS: IFuseOptions<RootSearchCandidate> = {
-  keys: [
-    { name: "entry.label", weight: 2 },
-    { name: "entry.detail", weight: 1 },
-    { name: "entry.description", weight: 0.5 },
-  ],
-  includeScore: true,
-  ignoreLocation: true,
-  threshold: 0.4,
-};
+const FUSE_KEYS: NonNullable<IFuseOptions<RootSearchCandidate>["keys"]> = [
+  { name: "entry.label", weight: 2 },
+  { name: "entry.detail", weight: 1 },
+  { name: "entry.description", weight: 0.5 },
+];
 
 /**
  * Ranks the flattened root `@` search across every provider into one flat
@@ -57,26 +53,18 @@ export function rankRootSearchEntries(
   if (candidates.length === 0 || trimmedQuery.length === 0) {
     return candidates.map((candidate) => candidate.entry);
   }
-  const fuse = new Fuse([...candidates], FUSE_OPTIONS);
-  const matches = fuse
-    .search(trimmedQuery)
-    .map((result) => ({
-      candidate: result.item,
-      refIndex: result.refIndex,
-      score:
-        (result.score ?? 1) * PROVIDER_SCORE_BOOSTS[result.item.providerId],
-    }))
-    .toSorted((left, right) =>
-      left.score === right.score
-        ? left.refIndex - right.refIndex
-        : left.score - right.score,
-    );
+  const matches = searchFuzzyMatches(
+    candidates,
+    trimmedQuery,
+    FUSE_KEYS,
+    (candidate, score) => score * PROVIDER_SCORE_BOOSTS[candidate.providerId],
+  );
   const matchedIndices = new Set(matches.map((match) => match.refIndex));
   const unmatched = candidates.filter(
     (_candidate, index) => !matchedIndices.has(index),
   );
   return [
-    ...matches.map((match) => match.candidate.entry),
+    ...matches.map((match) => match.item.entry),
     ...unmatched.map((candidate) => candidate.entry),
   ];
 }
