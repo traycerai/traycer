@@ -87,6 +87,14 @@ describe("resolveArtifactRelativeLinkPath", () => {
     ).toBeNull();
   });
 
+  it("keeps an edge space that came out of a decoded %20 in a folder name", () => {
+    // `classifyHref` trims the raw href and decodes it, so a space still sitting
+    // at the edge here was authored as `%20` - part of the name, not padding.
+    expect(resolveArtifactRelativeLinkPath(EPIC_ID, SELF_CHAIN, " draft")).toBe(
+      "epics/epic-1/artifacts/ticket-breakdown/01-something/ draft/index.md",
+    );
+  });
+
   it("resolves a bare '.' to this artifact's own directory, like bare index.md", () => {
     expect(resolveArtifactRelativeLinkPath(EPIC_ID, SELF_CHAIN, ".")).toBe(
       "epics/epic-1/artifacts/ticket-breakdown/01-something/index.md",

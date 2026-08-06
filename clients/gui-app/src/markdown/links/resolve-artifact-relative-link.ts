@@ -56,10 +56,12 @@ export function resolveArtifactRelativeLinkPath(
   selfChain: readonly string[],
   relativePath: string,
 ): string | null {
-  const trimmed = relativePath.trim();
-  if (trimmed.length === 0) return null;
+  // Trim only to decide emptiness, never to reshape the path: `classifyHref`
+  // already trimmed the raw href, so an edge space surviving to here came out of
+  // a `%20` the author encoded on purpose and is part of the folder name.
+  if (relativePath.trim().length === 0) return null;
 
-  const rawSegments = trimmed.split(/[\\/]+/u).filter((s) => s.length > 0);
+  const rawSegments = relativePath.split(/[\\/]+/u).filter((s) => s.length > 0);
   if (rawSegments.length === 0) return null;
 
   const lastSegment = rawSegments[rawSegments.length - 1];
