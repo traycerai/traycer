@@ -7,6 +7,7 @@ import type {
 import {
   buildHostScopeOptions,
   resolveScopedHost,
+  transientClientEntry,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -250,6 +251,45 @@ describe("resolveScopedHost", () => {
         listsFailed: false,
       }),
     ).toEqual({ hostId: ACTIVE.hostId, vanishedHostId: null });
+  });
+});
+
+describe("transientClientEntry", () => {
+  it("withholds the entry for a non-connectable host, URL or not", () => {
+    // The leak this closes: `buildTransientHostClient` checks only that a
+    // websocketUrl exists, so handing it the entry of an unavailable or
+    // plan-restricted row produced a live-looking client the status machine
+    // had already ruled unreachable — and panels that read `scope.client`
+    // before their gate renders fired real queries through it.
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      connectable: false,
+      entry: entry({ status: "unavailable" }),
+    });
+    expect(transientClientEntry(host, false)).toBeNull();
+  });
+
+  it("hands out the entry for a connectable non-followed host", () => {
+    const directoryEntry = entry({});
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      connectable: true,
+      entry: directoryEntry,
+    });
+    expect(transientClientEntry(host, false)).toBe(directoryEntry);
+  });
+
+  it("builds nothing while following — the ambient client already exists", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      connectable: true,
+      entry: entry({}),
+    });
+    expect(transientClientEntry(host, true)).toBeNull();
+  });
+
+  it("builds nothing for no host at all", () => {
+    expect(transientClientEntry(null, false)).toBeNull();
   });
 });
 

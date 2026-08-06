@@ -26,6 +26,7 @@ import {
   buildHostScopeOptions,
   findHostOption,
   resolveScopedHost,
+  transientClientEntry,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 
@@ -209,11 +210,13 @@ export function useHostScope(): HostScope {
     host !== null &&
     host.hostId === activeHostId;
 
-  // Only a genuinely different host needs a transient client; the active host
-  // already has the ambient one, and building a second client for it would
-  // duplicate its socket for no gain.
+  // Gated on `connectable`, not on the entry's mere existence: an unavailable
+  // entry can still carry a stale URL, and a plan-restricted remote advertises
+  // one the server will refuse, so keying on the entry built a live-looking
+  // client for a host the status machine was about to call `unreachable`.
+  // The rule itself lives in `transientClientEntry`, where a test can reach it.
   const overrideEntry = useMemo(
-    () => (isFollowing ? null : (host?.entry ?? null)),
+    () => transientClientEntry(host, isFollowing),
     [isFollowing, host],
   );
   const overrideClient = useHostClientFor(overrideEntry);
@@ -246,10 +249,11 @@ export function useHostScope(): HostScope {
     activeHost: findHostOption(hosts, activeHostId),
     isViewingActive: isFollowing,
     status,
-    // `overrideClient` is already null for both `connecting` and `unreachable`,
-    // so only the `following` branch may swap in the ambient client. Any other
-    // branch handing back `ambientClient` would be the exact substitution this
-    // status enum exists to make impossible.
+    // `overrideClient` is null for `connecting`, `unreachable` and `vanished`
+    // — guaranteed by the `connectable` gate on `overrideEntry` above, not by
+    // hope — so only the `following` branch may swap in the ambient client.
+    // Any other branch handing back `ambientClient` would be the exact
+    // substitution this status enum exists to make impossible.
     client: status === "following" ? ambientClient : overrideClient,
     setHostId: setScopedHostId,
     makeActive: (hostId: string) => {

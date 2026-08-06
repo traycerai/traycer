@@ -244,6 +244,30 @@ export function resolveScopedHost(input: {
   return { host: input.hosts[0] ?? null, vanishedHostId: null };
 }
 
+/**
+ * The one rule for which directory entry a transient client may be built
+ * from. `buildTransientHostClient` checks only that a `websocketUrl` exists —
+ * not `status`, not the plan gate — so any caller that hands it an entry from
+ * a non-`connectable` row gets back a live-looking client for a route the
+ * transport refuses. Panels read `scope.client` before their gate renders
+ * (Notifications does), so such a client does not sit unused: it fires real
+ * queries. Withholding the ENTRY here means the client never exists.
+ *
+ * `isFollowing` is not a refusal — the active host already has the ambient
+ * client, and building a second one would duplicate its socket.
+ *
+ * Lives here rather than inline in `useHostScope` for the same reason every
+ * other rule in this file does: panel suites mock the hook wholesale, so a
+ * rule inside it is a rule no test can reach.
+ */
+export function transientClientEntry(
+  host: HostScopeOption | null,
+  isFollowing: boolean,
+): HostDirectoryEntry | null {
+  if (isFollowing || host === null || !host.connectable) return null;
+  return host.entry;
+}
+
 export function findHostOption(
   options: readonly HostScopeOption[],
   hostId: string | null,

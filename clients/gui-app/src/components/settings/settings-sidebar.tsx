@@ -107,6 +107,8 @@ function SettingsSidebarHostPicker(): ReactNode {
         onSelect={scope.setHostId}
         onAddHost={() => openAddHost(scope.hosts.map((host) => host.hostId))}
         isLoading={scope.isLoading}
+        listsFailed={scope.listsFailed}
+        onRetryLists={scope.retryLists}
       />
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the one this window runs on is the single most confusing state

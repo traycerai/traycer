@@ -61,36 +61,62 @@ function AddHostDialogBody(): ReactNode {
   const closeDialog = useAddHostDialogStore((s) => s.closeDialog);
   const [platform, setPlatform] = useState<"unix" | "windows">("unix");
 
-  // The arrival: a host that was NOT there when this dialog opened AND has
-  // actually finished enrolling.
+  // The arrival: a host that was NOT in the last COMPLETE picture of the
+  // account and has finished enrolling.
   //
-  // Diffing against the open-time snapshot is what distinguishes a new host
-  // from one already registered — but the diff alone was not enough. The list
-  // is a UNION of the runtime directory and the cloud registry, so a row can
-  // appear in it while being only half real: a pre-existing registry host whose
-  // list simply resolved after the dialog opened, or a directory row nothing
-  // can dial yet. Both used to trip the success banner, telling the user their
-  // new host was "ready to run agents" when nothing had connected.
+  // Two rules, each carrying a false claim this dialog used to make:
   //
-  // `registered && connectable` is the claim the banner actually makes: the
-  // account knows it, and this client has a route to it.
+  // "Complete picture", not "open-time snapshot". The union is only whole
+  // when both source lists have answered cleanly, and the click that opened
+  // this dialog can land while one of them is failed or still in flight. A
+  // snapshot taken then is missing every host the absent list would have
+  // contributed, so a later successful retry made those PRE-EXISTING hosts
+  // look new, and the banner named one of them as the machine that just
+  // connected. The baseline therefore waits for the first clean read after
+  // opening (`null` until then — the watcher keeps watching, claiming
+  // nothing); the body remounts per open, so it resets with the dialog.
+  //
+  // `registered`, not `registered && connectable`. Requiring a dialable route
+  // stranded exactly the users the plan gate applies to: a free-plan account
+  // enrolling a remote machine sees it register, stay `connectable: false`
+  // forever by design — and this dialog spun on "Watching for a new host…"
+  // over a host that was already in the account. Registration is the
+  // enrollment claim; the route is a separate fact the banner copy states
+  // honestly either way.
+  const listsSettled = !scope.isLoading && !scope.listsFailed;
+  const [baseline, setBaseline] = useState<readonly string[] | null>(() =>
+    listsSettled ? knownHostIds : null,
+  );
+  // Filled during render, not in an effect — the documented "adjusting state
+  // when data changes" shape: React re-renders before committing, and the
+  // arrival check below never sees a settled list without a baseline.
+  if (baseline === null && listsSettled) {
+    setBaseline(scope.hosts.map((host) => host.hostId));
+  }
+
   const arrived = useMemo(() => {
-    const known = new Set(knownHostIds);
+    if (baseline === null) return null;
+    const known = new Set(baseline);
     return (
       scope.hosts.find(
-        (host) =>
-          !known.has(host.hostId) && host.registered && host.connectable,
+        (host) => !known.has(host.hostId) && host.registered,
       ) ?? null
     );
-  }, [scope.hosts, knownHostIds]);
+  }, [scope.hosts, baseline]);
 
   if (arrived !== null) {
     return (
       <>
         <DialogHeader>
-          <DialogTitle>{arrived.name} is connected</DialogTitle>
+          <DialogTitle>
+            {arrived.connectable
+              ? `${arrived.name} is connected`
+              : `${arrived.name} is registered`}
+          </DialogTitle>
           <DialogDescription>
-            It registered itself and is ready to run agents.
+            {arrived.connectable
+              ? "It registered itself and is ready to run agents."
+              : "It's in your account. This window doesn't have a live connection to it, but you can manage it from Settings."}
           </DialogDescription>
         </DialogHeader>
         <div

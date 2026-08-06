@@ -63,6 +63,9 @@ export function HostSwitcher(props: {
   readonly onSelect: (hostId: string) => void;
   readonly onAddHost: () => void;
   readonly isLoading: boolean;
+  /** A host list request FAILED, so an empty `hosts` proves nothing. */
+  readonly listsFailed: boolean;
+  readonly onRetryLists: () => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const binding = useHostBinding();
@@ -78,6 +81,33 @@ export function HostSwitcher(props: {
   // with it, since this popover's footer is its sole opener. So the one moment
   // a person most needs the picker was the one moment it disappeared.
   if (hosts.length === 0) {
+    // A FAILED list is not an empty account, here as much as in the gate — the
+    // same rule, at its second consumer. This branch used to claim "No hosts
+    // yet" and offer Add host over a union that was empty because a request
+    // never came back: contradicting the panel beside it, and letting Add
+    // record an empty known-hosts snapshot that a later successful retry
+    // turned into "your existing host just connected". Retry is the honest
+    // action; Add returns the moment the claim can be made.
+    if (props.listsFailed && !props.isLoading) {
+      return (
+        <div
+          className="flex w-full flex-col gap-2 px-3 py-2"
+          data-testid="settings-host-switcher-lists-failed"
+        >
+          <span className="text-ui-xs text-muted-foreground">
+            Couldn&apos;t load your hosts
+          </span>
+          <button
+            type="button"
+            onClick={props.onRetryLists}
+            className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            data-testid="settings-host-switcher-retry-lists"
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
     return (
       <div
         className="flex w-full flex-col gap-2 px-3 py-2"

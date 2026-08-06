@@ -1202,6 +1202,49 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
   });
 
+  it("switches the scope BEFORE any child can consume the rest of the intent", () => {
+    // Capturing the host half before children mount was necessary but not
+    // sufficient: the rail consumes (and clears) the provider/profile half in
+    // its own mount effect, and child passive effects run before the parent's.
+    // So when the rail mounted in the same commit — cached data — it consumed
+    // the intent against the OLD host, in the worst case starting a re-auth
+    // sign-in there, one commit before the scope moved. The panel now holds
+    // its subtree until the switch has landed, so the rail's first mount is
+    // already scoped to the deep-linked host. This asserts the ORDER, which is
+    // the actual contract the two narrower fixes missed.
+    const order: string[] = [];
+    hostScopeMocks.setHostId.mockImplementation(() => {
+      order.push("scope-switched");
+    });
+    const unsubscribe = useProvidersFocusStore.subscribe((state, prev) => {
+      if (prev.focusProfileId !== null && state.focusProfileId === null) {
+        order.push("intent-consumed");
+      }
+    });
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    unsubscribe();
+
+    const switched = order.indexOf("scope-switched");
+    expect(switched).not.toBe(-1);
+    // Whether or not the rail consumed the intent during this render, nothing
+    // may have consumed it BEFORE the switch.
+    const consumed = order.indexOf("intent-consumed");
+    if (consumed !== -1) {
+      expect(switched).toBeLessThan(consumed);
+    }
+  });
+
   it("gates the provider-list-error report action on capability and never forwards the raw host error", () => {
     providerMocks.listResult.isError = true;
     providerMocks.listResult.error = {
