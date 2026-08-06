@@ -588,6 +588,7 @@ vi.mock("@/components/ui/dropdown-menu", async () => ({
 }));
 const hostScopeMocks = vi.hoisted(() => ({
   client: null,
+  setHostId: vi.fn(),
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
@@ -597,7 +598,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     "@/components/settings/host-scope/host-scope-fixture"
   );
   return {
-    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        setHostId: hostScopeMocks.setHostId,
+      }),
   };
 });
 
@@ -1132,6 +1137,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    hostScopeMocks.setHostId.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1154,6 +1160,46 @@ describe("<ProvidersSettingsPanel />", () => {
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
+  });
+
+  it("applies a re-auth deep link's host even though the rail clears the intent on mount", () => {
+    // The rail is a DESCENDANT of the panel and clears the whole focus intent
+    // — host half included — in its own mount effect. React runs child passive
+    // effects before the parent's, so a parent that read the store in an
+    // effect saw an already-emptied store whenever the rail mounted in the
+    // same commit, which is exactly what cached provider data produces. The
+    // deep link then silently consumed its provider/profile intent against
+    // whichever host was already on screen.
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).toHaveBeenCalledWith(
+      "host-that-needs-reauth",
+    );
+    // Consumed exactly once: the host half is cleared at the point of use, so
+    // a later visit does not yank the scope back to a host the user has since
+    // navigated away from.
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
+  });
+
+  it("leaves the scope alone when no deep link armed a host", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
   });
 
   it("gates the provider-list-error report action on capability and never forwards the raw host error", () => {

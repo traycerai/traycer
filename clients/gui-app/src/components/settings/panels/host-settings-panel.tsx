@@ -106,6 +106,7 @@ export function HostSettingsPanel() {
  */
 function HostSettingsPanelWithoutManagement() {
   const scope = useHostScope();
+  const registryItem = scope.host?.item ?? null;
   return (
     <SettingsPanelShell
       title="Overview"
@@ -116,28 +117,59 @@ function HostSettingsPanelWithoutManagement() {
       }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
+      {scope.host === null || scope.status === "vanished" ? (
+        // Nothing resolved to administer, so the gate owns the whole panel and
+        // says which of the two reasons it is.
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          {null}
+        </HostScopeGate>
+      ) : (
         <div className="flex flex-col gap-5">
-          {scope.host === null ? null : (
-            <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
-              <ThisWindowCard scope={scope} host={scope.host} />
-            </HostIdentityCard>
-          )}
+          <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
+            <ThisWindowCard scope={scope} host={scope.host} />
+          </HostIdentityCard>
           <p className="px-1 text-ui-sm text-muted-foreground">
             Installing and restarting a local host service is only available in
             the desktop app — this shell doesn&apos;t bundle the Traycer CLI.
           </p>
+          {/* Update policy is an ACCOUNT-level write — `PATCH /api/v3/hosts/:id`
+              through AuthService — applied by the host on its next check-in. It
+              needs neither the CLI bridge this shell lacks nor a live route to
+              the machine. `MyHostsList` exposed auto-update, a version pin and
+              force here; deleting it without re-homing these controls removed
+              update management from web and mobile entirely, for a machine the
+              account fully owns. */}
+          {registryItem === null ? null : (
+            <SettingsGroup
+              title="Updates"
+              tone="default"
+              dataTestId="host-updates"
+              fill={false}
+            >
+              <div className="[&>*:first-child]:border-t-0">
+                <HostRegistryUpdates
+                  key={registryItem.hostId}
+                  item={registryItem}
+                  isLocalHost={scope.host.isLocalMachine}
+                />
+              </div>
+            </SettingsGroup>
+          )}
           {/* Snapshots and Remove Traycer travel over the host's own RPC, not
-              the CLI bridge, so a shell without the CLI can still run them.
-              Omitting the whole zone here removed a capability for a reason
-              that does not apply to it — the paragraph above names the ONE
-              thing this shell actually cannot do. */}
-          <HostDangerZone scope={scope} />
+              the CLI bridge, so a shell without the CLI can still run them —
+              but only while there IS a route, which is why this one region
+              keeps the gate the rest of the panel no longer needs. */}
+          <HostScopeGate
+            scope={scope}
+            skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+          >
+            <HostDangerZone scope={scope} />
+          </HostScopeGate>
         </div>
-      </HostScopeGate>
+      )}
     </SettingsPanelShell>
   );
 }
@@ -582,16 +614,35 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      {/* Overview is host-scoped like every other section in its group, so it
-          owes the same contract: render NOTHING about a host the scope cannot
-          resolve. It used to skip this gate entirely, which is how a vanished
-          remote host ended up showing this computer's service console. */}
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
+      {/* Overview owes the same contract as the rest of its group — say NOTHING
+          about a host the scope cannot resolve, which is how a vanished remote
+          host once ended up showing this computer's service console — but it
+          cannot buy that with the whole-panel gate the others use, because most
+          of what it renders never touches the scoped host's RPC:
+
+            - the local service console runs over the CLI bridge
+              (`IHostManagement`), and it is the RECOVERY surface. Gating it on
+              dialability took Install / Start / Restart away in precisely the
+              state they exist for: a local host that is stopped while this
+              window is active on some other machine. The page offered "Can't
+              reach this computer" and no way to fix it.
+            - the Updates card writes update policy through the account API,
+              which a host applies on its next check-in. It needs no route.
+
+          So the gate now wraps the one region that IS host RPC. What replaces
+          it above is the weaker, correct question — did the scope settle on a
+          host at all — and `scopedIsLocalMachine` (`?? false`) is what keeps a
+          non-local host from reaching the local console. */}
+      {scope.host === null || scope.status === "vanished" ? (
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          {null}
+        </HostScopeGate>
+      ) : (
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-        {scope.host === null || scopedIsLocalMachine ? null : (
+        {scopedIsLocalMachine ? null : (
           <HostIdentityCard
             host={scope.host}
             onRename={null}
@@ -697,9 +748,9 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
 
             {updatesCard}
 
-            {scope.host === null ? null : (
-              <ThisWindowCardStandalone scope={scope} host={scope.host} />
-            )}
+            {/* Unconditional: the branch above already established a resolved
+                host, so the old null check could not fire. */}
+            <ThisWindowCardStandalone scope={scope} host={scope.host} />
 
             <SettingsGroup
               title="Installation"
@@ -738,10 +789,18 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
 
         {/* No list of the OTHER hosts, and no "Add host": a page about one
             host is the wrong place to manage the collection it belongs to.
-            The switcher in the sidebar owns both. */}
-        <HostDangerZone scope={scope} />
+            The switcher in the sidebar owns both.
+
+            Gated, alone on this page: snapshots and Remove Traycer are host RPC
+            calls, so they need a live route and not merely a resolved host. */}
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          <HostDangerZone scope={scope} />
+        </HostScopeGate>
       </div>
-      </HostScopeGate>
+      )}
 
       <RestartHostConfirmDialog
         open={restartConfirmOpen}

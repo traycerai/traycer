@@ -5,6 +5,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   deriveHostScopeStatus,
+  hostListReadiness,
   isHostScopeUsable,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
@@ -69,6 +70,43 @@ function derive(overrides: Partial<DeriveOverrides>): HostScopeStatus {
     listsResolved: overrides.listsResolved ?? true,
   });
 }
+
+describe("hostListReadiness", () => {
+  const ANSWERED = { hasData: true, isError: false };
+  const PENDING = { hasData: false, isError: false };
+  const FAILED = { hasData: false, isError: true };
+
+  it("treats a rejected list as settled, not as perpetual loading", () => {
+    // The regression this exists for: a failed request left `resolved` false
+    // forever, so a pinned host that was genuinely gone could never be called
+    // `vanished` and spun until the app restarted.
+    expect(hostListReadiness(FAILED, ANSWERED)).toEqual({
+      resolved: true,
+      failed: true,
+    });
+  });
+
+  it("is unresolved while either list is still pending", () => {
+    expect(hostListReadiness(PENDING, ANSWERED).resolved).toBe(false);
+    expect(hostListReadiness(ANSWERED, PENDING).resolved).toBe(false);
+  });
+
+  it("separates a clean empty answer from a failure", () => {
+    // Both produce no hosts. Only one of them may say "No hosts yet".
+    expect(hostListReadiness(ANSWERED, ANSWERED)).toEqual({
+      resolved: true,
+      failed: false,
+    });
+    expect(hostListReadiness(ANSWERED, FAILED).failed).toBe(true);
+  });
+
+  it("reports a failure even while the other list is still in flight", () => {
+    expect(hostListReadiness(FAILED, PENDING)).toEqual({
+      resolved: false,
+      failed: true,
+    });
+  });
+});
 
 describe("deriveHostScopeStatus", () => {
   it("reports vanished before anything else, even when a host resolved", () => {

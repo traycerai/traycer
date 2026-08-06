@@ -55,6 +55,48 @@ export function isHostScopeUsable(status: HostScopeStatus): boolean {
   return status === "following" || status === "ready";
 }
 
+/** One host list's outcome, reduced to what the scope needs from it. */
+export interface HostListOutcome {
+  /** The query has produced data at least once. */
+  readonly hasData: boolean;
+  /** The query rejected. */
+  readonly isError: boolean;
+}
+
+export interface HostListReadiness {
+  /** Both lists have ANSWERED — with data or with an error. */
+  readonly resolved: boolean;
+  /** At least one list came back as an error. */
+  readonly failed: boolean;
+}
+
+/**
+ * Whether the two host lists have settled, and whether either failed doing it.
+ *
+ * A rejection is an ANSWER. Treating only data as settled left `resolved`
+ * false forever on a failed request, so a pinned host that was genuinely gone
+ * sat in `connecting` until the app restarted, and an empty union rendered the
+ * confident "No hosts yet" — a definite claim produced by a question that
+ * never came back. `failed` keeps those two apart so the empty state can say
+ * which one it is and offer a retry instead of telling someone to install a
+ * host they already own.
+ *
+ * Lives here, beside the status machine and away from the hook, for the same
+ * reason `isHostScopeUsable` does: every panel suite mocks the hook wholesale,
+ * so a rule that lives inside it is a rule no test can reach.
+ */
+export function hostListReadiness(
+  directory: HostListOutcome,
+  registry: HostListOutcome,
+): HostListReadiness {
+  return {
+    resolved:
+      (directory.hasData || directory.isError) &&
+      (registry.hasData || registry.isError),
+    failed: directory.isError || registry.isError,
+  };
+}
+
 /**
  * The status derivation. Exported for its own tests: every "which client may
  * this panel use" decision reduces to this return value, and panel suites mock

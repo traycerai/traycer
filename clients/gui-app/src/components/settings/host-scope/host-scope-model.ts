@@ -85,7 +85,21 @@ export function buildHostScopeOptions(
       // A directory entry with no websocket URL is a listing, not a route:
       // `buildTransientHostClient` returns null for it, so offering it as an
       // administrable target would produce a picker row that can never load.
-      connectable: entry !== null && entry.websocketUrl !== null,
+      //
+      // `status` is half of that question, not a detail. The repository's
+      // canonical dialability rule lives in `dialableHostEndpoint` /
+      // `hostTransportKey`, and BOTH refuse an entry that is not `available`
+      // even when it still carries a URL — a stale address left behind by a
+      // host that went away. `buildTransientHostClient` does not re-check it,
+      // so URL-only would hand back a live-looking client whose every call
+      // hangs: the scope would read `ready`, the panels would mount, and the
+      // Add-host dialog would announce a machine as connected and ready to run
+      // agents. Asking the same question the transport asks is what keeps this
+      // model from disagreeing with the layer that actually dials.
+      connectable:
+        entry !== null &&
+        entry.websocketUrl !== null &&
+        entry.status === "available",
       registered: item !== null,
       platform: item?.platform ?? null,
       version: item?.status.appVersion ?? entry?.version ?? null,

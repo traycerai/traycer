@@ -17,6 +17,7 @@ import { useHostBinding, useHostClient, type HostRpcRegistry } from "@/lib/host"
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
   deriveHostScopeStatus,
+  hostListReadiness,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -48,6 +49,14 @@ export interface HostScope {
   /** Point this window's ambient work at the administered host. */
   readonly makeActive: (hostId: string) => void;
   readonly isLoading: boolean;
+  /**
+   * A host list came back as an ERROR, so an empty `hosts` means "we could not
+   * find out", not "you own no machines". The difference is the whole message:
+   * one is recoverable by retrying, the other by installing a host.
+   */
+  readonly listsFailed: boolean;
+  /** Re-request both host lists after a failure. */
+  readonly retryLists: () => void;
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
 }
@@ -153,10 +162,15 @@ export function useHostScope(): HostScope {
     [directory, registry, localHostId, activeHostId, localService, nowMs],
   );
 
-  // Both lists have answered at least once. `data !== undefined` rather than
-  // `!isLoading`, because a background refetch of an already-resolved list must
-  // not re-open the "still loading" window and un-say `vanished`.
-  const listsResolved = directory !== undefined && registry !== undefined;
+  // `data !== undefined` rather than `!isLoading`, because a background refetch
+  // of an already-resolved list must not re-open the "still loading" window and
+  // un-say `vanished`. The rule itself — including that an error is an ANSWER —
+  // lives in `hostListReadiness`, where a test can reach it.
+  const lists = hostListReadiness(
+    { hasData: directory !== undefined, isError: directoryQuery.isError },
+    { hasData: registry !== undefined, isError: registryQuery.isError },
+  );
+  const listsResolved = lists.resolved;
 
   // Resolution order matters, and the `vanished` branch is the load-bearing
   // one. An explicit pick that is no longer in the list must NOT quietly
@@ -241,6 +255,11 @@ export function useHostScope(): HostScope {
       binding?.directory.selectById(hostId);
     },
     isLoading: directoryQuery.isLoading || registryQuery.isLoading,
+    listsFailed: lists.failed,
+    retryLists: () => {
+      void directoryQuery.refetch();
+      void registryQuery.refetch();
+    },
     nowMs,
   };
 }

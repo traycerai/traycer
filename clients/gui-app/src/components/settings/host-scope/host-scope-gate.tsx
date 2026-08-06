@@ -49,6 +49,33 @@ export function HostScopeGate(props: {
     );
   }
 
+  // A failed list is NOT an empty account. Both render with no hosts in hand,
+  // but "you own no machines" is a confident claim, and making it on the back
+  // of a request that errored told people to go install a host they already
+  // had. This branch precedes the empty one so the confident copy can only be
+  // reached by a list that actually answered.
+  if (scope.host === null && scope.listsFailed) {
+    return (
+      <HostScopeNotice
+        tone="warn"
+        title="Couldn't load your hosts"
+        detail="The list of machines on your account didn't come back. Nothing here is missing — it just hasn't loaded."
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={scope.retryLists}
+            data-testid="host-scope-retry-lists"
+          >
+            Try again
+          </Button>
+        }
+        testId="host-scope-lists-failed"
+      />
+    );
+  }
+
   if (scope.host === null) {
     return (
       <HostScopeNotice

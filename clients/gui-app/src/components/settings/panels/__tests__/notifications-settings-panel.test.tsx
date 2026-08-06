@@ -18,10 +18,17 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
+import {
+  NotificationsSettingsPanel,
+  NotificationsSettingsPanelForClient,
+} from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-const hostScopeMocks = vi.hoisted(() => ({
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+  hostId: string | null;
+} = vi.hoisted(() => ({
   client: null,
+  hostId: "host-a",
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
@@ -31,7 +38,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     "@/components/settings/host-scope/host-scope-fixture"
   );
   return {
-    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        hostId: hostScopeMocks.hostId,
+      }),
   };
 });
 
@@ -701,6 +712,74 @@ function renderNotificationsSettingsWithDeferredRefetch(): {
     setRequests,
   };
 }
+
+/**
+ * The hooks editor holds an open draft and an armed pending-delete, and a save
+ * rebuilds the host's ENTIRE hooks file from the list on screen. Nothing here
+ * unmounts when the scope moves to another host, so without a key that state
+ * outlived the machine it was armed against while every mutation prop
+ * re-pointed at the new client.
+ */
+describe("<NotificationsSettingsPanel /> host scope changes", () => {
+  afterEach(() => {
+    cleanup();
+    hostScopeMocks.hostId = "host-a";
+  });
+
+  it("disarms a pending hook delete when the scoped host changes", async () => {
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-scope",
+        handlers: {
+          "host.notifications.getConfig": () => makeNotificationConfig(),
+          "host.notifications.setConfig": () => makeNotificationConfig(),
+          "host.notificationHooks.status": () =>
+            makeHooksStatus({ hooks: [makeHook({ id: "hook-1" })] }),
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    hostScopeMocks.client = client;
+    hostScopeMocks.hostId = "host-a";
+    const { rerender } = render(<NotificationsSettingsPanel />, { wrapper });
+
+    // Arm a delete against host-a's hook.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDefined();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      expect(screen.getByText("Delete hook?")).toBeDefined();
+    });
+
+    // Move the scope to another machine. The client and its cached data stay
+    // put, which is precisely the case that used to leave this armed: the
+    // confirm stayed on screen while the save mutation re-pointed at the new
+    // host, so confirming rewrote host-b's whole hooks file to delete a hook
+    // chosen on host-a.
+    hostScopeMocks.hostId = "host-b";
+    rerender(<NotificationsSettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Delete hook?")).toBeNull();
+    });
+  });
+});
 
 function makeNotificationConfig(): NotificationConfig {
   return {

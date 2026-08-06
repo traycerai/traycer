@@ -5,6 +5,7 @@ import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -95,6 +96,9 @@ describe("<EpicSessionLifecycleBridge />", () => {
     __getOpenEpicRegistryForTests().disposeAll();
     __getChatSessionRegistryForTests().disposeAll();
     resetAuth("signed-out", null);
+    // Module-level store: without this a leaked pick would travel between the
+    // cases below and the scope assertions would stop meaning anything.
+    useSettingsHostScopeStore.getState().setScopedHostId(null);
   });
 
   it("clears every live Epic and chat session on sign-out", () => {
@@ -182,6 +186,58 @@ describe("<EpicSessionLifecycleBridge />", () => {
     expect(nextChat.userId).toBe("bob@example.com");
     expect(chatRegistry.size()).toBe(1);
     expect(c2.closeCount()).toBe(0);
+  });
+
+  it("drops the Settings host scope on user-switch so it cannot name the prior account's machine", () => {
+    // A host id belongs to an ACCOUNT. Carrying account A's pick into account
+    // B's session opened Settings on a `vanished` host B has never seen and
+    // cannot dismiss without re-picking. `null` restores "follow the active
+    // host", which is the store's unset state, not an empty one.
+    useSettingsHostScopeStore.getState().setScopedHostId("host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com");
+    });
+
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("drops the Settings host scope on sign-out", () => {
+    useSettingsHostScopeStore.getState().setScopedHostId("host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-out", null);
+    });
+
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("keeps the Settings host scope when the same identity merely re-mounts", () => {
+    // The counterpart of the sessions case below: a hydration is not a
+    // transition, so an explicit pick must survive it. Without this the two
+    // assertions above would also pass for a bridge that cleared the scope on
+    // every render.
+    useSettingsHostScopeStore.getState().setScopedHostId("host-a");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
   });
 
   it("does not clear sessions on the initial mount when already signed-in", () => {

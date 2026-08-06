@@ -5,6 +5,7 @@ import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-re
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -45,6 +46,14 @@ export function EpicSessionLifecycleBridge(
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.
       clearSessionCreatedEpics();
+      // Settings' viewing scope is a host id, and host ids belong to an
+      // ACCOUNT. Left standing across a switch it names the previous account's
+      // machine, which the new account's lists will never contain — so Settings
+      // opens `vanished`, reporting a host id the person signing in has never
+      // seen and cannot dismiss except by re-picking. `null` is not "no host",
+      // it is "follow the active host", so this returns the surface to its
+      // default rather than emptying it.
+      useSettingsHostScopeStore.getState().setScopedHostId(null);
     }
   }, []);
 

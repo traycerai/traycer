@@ -76,6 +76,8 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     setHostId: () => undefined,
     makeActive: () => undefined,
     isLoading: false,
+    listsFailed: false,
+    retryLists: () => undefined,
     nowMs: 0,
     ...overrides,
   };

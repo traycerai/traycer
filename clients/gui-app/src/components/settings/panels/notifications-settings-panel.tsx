@@ -151,7 +151,20 @@ function NotificationsSettingsPanelContent(props: {
         {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
       </SettingsGroup>
       <div className="min-h-0 flex-1">
+        {/* Keyed by host. The editor below holds an open hook draft and an
+            armed pending-delete, and a save rebuilds the host's ENTIRE hooks
+            file from the list it is looking at. Those two pieces of state
+            belong to one machine, but nothing here unmounts when the scope
+            moves: switching to a host whose hooks are already cached kept the
+            draft and the armed delete on screen while every mutation prop
+            re-pointed at the new client, so confirming wrote the new host's
+            file using an intent armed against the old one — copying a hook
+            across machines, or deleting whichever hook happened to share the
+            id. Changing hosts has to DESTROY that state, not re-point it.
+            Same guarantee, and the same reasoning, as the key on
+            `HostRegistryUpdates`. */}
         <NotificationHooksSection
+          key={scope?.hostId}
           statusQuery={props.hooksStatusQuery}
           testHook={props.testHook}
           saveHooks={props.saveHooks}

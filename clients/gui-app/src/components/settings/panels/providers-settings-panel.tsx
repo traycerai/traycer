@@ -263,12 +263,25 @@ export function ProvidersSettingsPanel() {
   // deep-linked host was unreachable — so the intent survived, and every later
   // visit to Providers yanked the scope back to a host the user had already
   // moved on from.
+  //
+  // READ DURING RENDER, not in the effect below, and that ordering is the
+  // whole point. The rail mounts as a DESCENDANT of this component, and its
+  // own mount effect calls `clearFocusHarnessId()`, which nulls the host half
+  // of the intent too. React runs child passive effects BEFORE the parent's,
+  // so whenever the rail mounts in the same commit — which is exactly what
+  // happens when Providers opens with cached data — the effect below observed
+  // a store the child had already emptied, silently kept the current host, and
+  // let the re-auth deep link consume its provider/profile intent against the
+  // wrong machine, in the worst case starting a sign-in there. A lazy
+  // initializer runs before any child exists, so the value cannot be raced.
+  const [deepLinkHostId] = useState(
+    () => useProvidersFocusStore.getState().focusHostId,
+  );
   useEffect(() => {
-    const store = useProvidersFocusStore.getState();
-    if (store.focusHostId === null) return;
-    setHostId(store.focusHostId);
-    store.clearFocusHostId();
-  }, [setHostId]);
+    if (deepLinkHostId === null) return;
+    setHostId(deepLinkHostId);
+    useProvidersFocusStore.getState().clearFocusHostId();
+  }, [deepLinkHostId, setHostId]);
 
   const realBinding = useHostBinding();
   // Scope the whole panel (list + refresh + every provider mutation) to the
