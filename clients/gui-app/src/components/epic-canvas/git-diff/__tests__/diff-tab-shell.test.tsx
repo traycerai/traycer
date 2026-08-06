@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { DiffTabShell } from "../diff-tab-shell";
+import { afterEach, describe, it, expect } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { DiffTabHeaderPortal, DiffTabShell } from "../diff-tab-shell";
+
+afterEach(cleanup);
 
 describe("DiffTabShell", () => {
   it("renders title in header", () => {
@@ -33,6 +35,27 @@ describe("DiffTabShell", () => {
     );
 
     expect(screen.getByTestId("test-toolbar")).toBeTruthy();
+  });
+
+  it("places descendant header accessories beside the toolbar", () => {
+    render(
+      <DiffTabShell
+        primaryTitle="test-file.tsx"
+        secondaryLine={null}
+        contextLabel={null}
+        toolbar={<div data-testid="test-toolbar">Toolbar</div>}
+      >
+        <DiffTabHeaderPortal>
+          <span data-testid="test-status">Saved</span>
+        </DiffTabHeaderPortal>
+      </DiffTabShell>,
+    );
+
+    const accessory = screen.getByTestId("diff-tab-header-accessory");
+    expect(accessory.contains(screen.getByTestId("test-status"))).toBe(true);
+    expect(accessory.nextElementSibling).toBe(
+      screen.getByTestId("test-toolbar"),
+    );
   });
 
   it("renders children in main content area", () => {

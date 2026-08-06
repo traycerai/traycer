@@ -545,6 +545,13 @@ export const HOST_METHOD_POLL_TABLE = {
   "workspace.listFileTree": { ...LATEST_SCHEDULING, poll: null },
   "workspace.listDirectory": { ...LATEST_SCHEDULING, poll: null },
   "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
+  // Saving a file writes to disk and each attempt carries the revision
+  // acknowledged by the previous save, so writes must not be coalesced.
+  "workspace.writeFile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "workspace.mentionFiles": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionWorktrees": { ...LATEST_SCHEDULING, poll: null },
@@ -724,6 +731,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "git.getFileDiff": { ...LATEST_SCHEDULING, poll: null },
   "git.getFileDiffs": { ...LATEST_SCHEDULING, poll: null },
+  "git.getFileContents": { ...LATEST_SCHEDULING, poll: null },
   "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
   // A read of the local checkout, requested when the PR Files tab opens.
   // No poll: the PR detail stream is what notices a new push, and a re-render

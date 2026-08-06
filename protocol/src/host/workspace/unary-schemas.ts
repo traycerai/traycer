@@ -360,6 +360,52 @@ export type WorkspaceReadFileResponse = z.infer<
   typeof workspaceReadFileResponseSchema
 >;
 
+export const WORKSPACE_WRITE_FILE_MAX_CHARS = 1_000_000;
+
+const workspaceFileRevisionSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 revision");
+
+/**
+ * Conflict-safe text-file write. `expectedRevision` is the SHA-256 of the
+ * exact UTF-8 text returned by the read that started the edit session. The
+ * host only saves when the live file still matches it (or already equals the
+ * submitted content, making a lost-ack retry idempotent).
+ */
+export const workspaceWriteFileRequestSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+  expectedRevision: workspaceFileRevisionSchema,
+  content: z.string().max(WORKSPACE_WRITE_FILE_MAX_CHARS),
+});
+export type WorkspaceWriteFileRequest = z.infer<
+  typeof workspaceWriteFileRequestSchema
+>;
+
+const workspaceWriteFileResponseBaseSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+});
+
+export const workspaceWriteFileResponseSchema = z.discriminatedUnion("status", [
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("saved"),
+    revision: workspaceFileRevisionSchema,
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("conflict"),
+    currentRevision: workspaceFileRevisionSchema,
+    error: z.string(),
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("error"),
+    error: z.string(),
+  }),
+]);
+export type WorkspaceWriteFileResponse = z.infer<
+  typeof workspaceWriteFileResponseSchema
+>;
+
 // -----------------------------------------------------------------------------
 // Workspace root picking (T14, Journey 3; re-homed onto `workspace.prepareFolders`
 // v1.1 by T18 - see the RPC backward-compat decision log) - the pre-workspace

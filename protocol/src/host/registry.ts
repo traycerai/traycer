@@ -3,6 +3,7 @@ import {
   defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
   type DowngradeResult,
+  type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   defineVersionedStreamRpcRegistry,
@@ -257,6 +258,7 @@ import {
   workspacePrepareFoldersV10,
   workspacePrepareFoldersV11,
   workspaceReadFileV10,
+  workspaceWriteFileV10,
   workspaceResolvePathsByRepoIdentifiersV10,
   workspaceSearchPathsV10,
   workspaceSearchTextV10,
@@ -345,6 +347,7 @@ import {
   gitListChangedFilesUpgradeV10ToV11,
   gitGetFileDiffV10,
   gitGetFileDiffsV10,
+  gitGetFileContentsV10,
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
@@ -2874,7 +2877,7 @@ export const workspacePrepareFoldersUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-const HOST_RPC_REGISTRY_DEFINITION = {
+const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.status": {
     1: {
       latestMinor: 1,
@@ -5639,10 +5642,52 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
 } as const;
 
-export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
+const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
+  // Additive, post-v1.0.0 optional method. Older hosts render the same file
+  // surfaces read-only; newer hosts provide conflict-safe in-place saves.
+  "workspace.writeFile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceWriteFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Optional edit hydration: full old/new/worktree text is fetched only when
+  // the user enters edit mode. Older hosts keep Git diffs read-only.
+  "git.getFileContents": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: gitGetFileContentsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
+type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
+  typeof HOST_RPC_EDITING_REGISTRY_DEFINITION;
+
+const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
+  ...HOST_RPC_REGISTRY_BASE_DEFINITION,
+  ...HOST_RPC_EDITING_REGISTRY_DEFINITION,
+};
+
+export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
+  defineFloorAwareVersionedRpcRegistry(
   RELEASED_FLOOR_METHOD_NAMES,
   HOST_RPC_REGISTRY_DEFINITION,
-);
+  );
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
 

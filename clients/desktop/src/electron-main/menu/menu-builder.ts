@@ -27,7 +27,7 @@ export function buildApplicationMenu(
     [
       ...buildAppMenu(state, actions),
       buildFileMenu(state, actions),
-      buildEditMenu(actions),
+      buildEditMenu(state, actions),
       buildViewMenu(state, actions),
       buildWindowMenu(state, actions),
       buildHelpMenu(state, actions),
@@ -115,13 +115,16 @@ function buildFileMenu(
   };
 }
 
-function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
+function buildEditMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
   return {
     id: desktopTopLevelMenuItemId("edit"),
     label: "Edit",
     submenu: [
-      { role: "undo" },
-      { role: "redo" },
+      rendererOwnedHistoryRole("undo", state.platform),
+      rendererOwnedHistoryRole("redo", state.platform),
       { type: "separator" },
       { role: "cut" },
       { role: "copy" },
@@ -148,6 +151,26 @@ function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
       },
     ],
   };
+}
+
+/**
+ * Electron's native undo/redo roles consume their accelerators and call
+ * `webContents.undo()` / `webContents.redo()`. That bypasses editors with a
+ * JavaScript-owned history, including @pierre/diffs. Keep the roles for menu
+ * clicks, but leave the keyboard event with the renderer so the focused editor
+ * can run its own unmodified Cmd/Ctrl-Z and Shift-Cmd/Ctrl-Z commands.
+ *
+ * `registerAccelerator` releases the chord on Windows/Linux. Electron ignores
+ * that flag on macOS, so an explicit empty accelerator is required there to
+ * override the role's built-in keyboard equivalent.
+ */
+function rendererOwnedHistoryRole(
+  role: "undo" | "redo",
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions {
+  return platform === "darwin"
+    ? { role, accelerator: "" }
+    : { role, registerAccelerator: false };
 }
 
 function buildViewMenu(
