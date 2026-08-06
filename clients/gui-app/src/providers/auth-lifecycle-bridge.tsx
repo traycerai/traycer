@@ -9,6 +9,7 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useNotificationHookDraftStore } from "@/stores/settings/notification-hook-draft-store";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -77,6 +78,11 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
+      // A retained hook draft names a hostId and holds config typed for that
+      // machine's hooks file. Across an account switch it could restore onto
+      // account B's editor if B ever owns the same id string — and either way
+      // it is account A's content.
+      useNotificationHookDraftStore.getState().clear();
     }
   }, []);
 

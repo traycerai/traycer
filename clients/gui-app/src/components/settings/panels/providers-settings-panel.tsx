@@ -264,34 +264,32 @@ export function ProvidersSettingsPanel() {
   // visit to Providers yanked the scope back to a host the user had already
   // moved on from.
   //
-  // READ DURING RENDER via a lazy initializer — and, the part a narrower fix
-  // got wrong twice, NOTHING BELOW MOUNTS until the switch has landed.
-  // Capturing the value before children exist is necessary but not
-  // sufficient: the rail is a descendant, its mount effect consumes and
-  // clears the provider/profile half of the intent, and child passive
-  // effects run BEFORE the parent's. So on a first render with cached data
-  // for host A, the rail mounted FOR host A and consumed the intent there —
-  // in the worst case starting a re-auth sign-in against A — one commit
-  // before this component could move the scope to B. Holding the subtree
-  // back until the scope carries the deep-linked host removes that race
-  // rather than trying to outrun it: the rail's first mount is already
-  // scoped to the host the intent names.
-  const [deepLinkHostId] = useState(
-    () => useProvidersFocusStore.getState().focusHostId,
-  );
-  // "Landed" is read from the STORE, not tracked in local state: applying the
-  // intent clears `focusHostId`, this subscription re-renders, and the hold
-  // below releases — no setState inside the effect. Keying the guard on the
-  // captured id also self-heals if the same host is deep-linked again while
-  // the panel is mounted: pending re-arises and the effect re-applies.
+  // READ LIVE from the store — never captured at mount, which is the part
+  // each narrower fix got wrong in turn. Two constraints meet here:
+  //
+  //   - NOTHING BELOW MOUNTS until the switch has landed. The rail is a
+  //     descendant, its mount effect consumes and clears the provider/profile
+  //     half of the intent, and child passive effects run BEFORE the
+  //     parent's — so children mounted for host A would consume the intent
+  //     there (in the worst case starting a re-auth sign-in against A) one
+  //     commit before the scope could move to B. The hold below removes that
+  //     race rather than trying to outrun it.
+  //   - The panel OUTLIVES its mount. The top-level keep-alive host retains
+  //     this component while its tab is hidden, so a re-auth banner click
+  //     that arms a new intent finds no fresh mount to capture it — a
+  //     mount-time snapshot stayed stale, `pending` never rose, and the Sign
+  //     in action appeared to do nothing. Deriving pending from the live
+  //     subscription reacts to every newly armed intent, whenever it arms.
+  //
+  // Applying the intent clears `focusHostId`, this subscription re-renders,
+  // and the hold releases — no setState inside the effect.
   const liveFocusHostId = useProvidersFocusStore((s) => s.focusHostId);
-  const deepLinkPending =
-    deepLinkHostId !== null && liveFocusHostId === deepLinkHostId;
+  const deepLinkPending = liveFocusHostId !== null;
   useEffect(() => {
-    if (!deepLinkPending) return;
-    setHostId(deepLinkHostId);
+    if (liveFocusHostId === null) return;
+    setHostId(liveFocusHostId);
     useProvidersFocusStore.getState().clearFocusHostId();
-  }, [deepLinkPending, deepLinkHostId, setHostId]);
+  }, [liveFocusHostId, setHostId]);
 
   const realBinding = useHostBinding();
   // Scope the whole panel (list + refresh + every provider mutation) to the

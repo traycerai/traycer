@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { NotificationHookConfig } from "@traycer/protocol/host/notifications/host-notifications";
 import { AlertCircle, CheckCircle2, Copy, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -6,7 +6,9 @@ import {
   draftFromHook,
   emptyDraft,
   HOOK_SEVERITIES,
+  type HookDraft,
 } from "@/components/settings/panels/notification-hook-draft";
+import { useNotificationHookDraftStore } from "@/stores/settings/notification-hook-draft-store";
 import { NotificationHookEditorDialog } from "@/components/settings/panels/notification-hook-editor-dialog";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -36,6 +38,8 @@ export function NotificationHooksSection(props: {
   readonly statusQuery: NotificationHooksStatusQuery;
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
+  /** For the draft-retention store — see `notification-hook-draft-store`. */
+  readonly hostId: string | null;
 }) {
   const { data, error, isLoading, refetch } = props.statusQuery;
   return (
@@ -54,6 +58,7 @@ export function NotificationHooksSection(props: {
         },
         testHook: props.testHook,
         saveHooks: props.saveHooks,
+        hostId: props.hostId,
       })}
     </SettingsGroup>
   );
@@ -66,9 +71,17 @@ function renderManager(args: {
   readonly onRefresh: () => void;
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
+  readonly hostId: string | null;
 }): ReactNode {
-  const { data, errorMessage, isLoading, onRefresh, testHook, saveHooks } =
-    args;
+  const {
+    data,
+    errorMessage,
+    isLoading,
+    onRefresh,
+    testHook,
+    saveHooks,
+    hostId,
+  } = args;
   if (isLoading) {
     return (
       <ManagerShell
@@ -141,6 +154,7 @@ function renderManager(args: {
       onRefresh={onRefresh}
       testHook={testHook}
       saveHooks={saveHooks}
+      hostId={hostId}
     />
   );
 }
@@ -263,9 +277,68 @@ function HooksEditor(props: {
   readonly onRefresh: () => void;
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
+  readonly hostId: string | null;
 }) {
-  const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
+  // A retained draft from a previous mount of THIS host's editor. The gate
+  // unmounts this section whenever the host stops being reachable; for a
+  // real host switch the remount key makes that destruction correct, but a
+  // transient same-host disconnect (restart, sleep, relay blip) was taking
+  // minutes of typed hook configuration with it. The unmount effect below
+  // parks the open editor in the store; this restores it — same host only —
+  // and the mount effect clears the parking spot so a cancel is final.
+  const [restored] = useState(() => {
+    const retained = useNotificationHookDraftStore.getState().retained;
+    if (
+      retained === null ||
+      props.hostId === null ||
+      retained.hostId !== props.hostId
+    ) {
+      return null;
+    }
+    return retained;
+  });
+  const [editor, setEditor] = useState<EditorState>(() => {
+    if (restored === null) return { kind: "closed" };
+    const intent = restored.editor;
+    if (intent.kind === "add") return { kind: "add" };
+    const hook = props.hooks.find((h) => h.id === intent.hookId);
+    return hook === undefined ? { kind: "closed" } : { kind: "edit", hook };
+  });
   const [pendingDelete, setPendingDelete] = useState<HookEntry | null>(null);
+  // The restored draft seeds the dialog exactly once; any explicit editor
+  // transition (cancel, save, reopen) retires it so a fresh open starts
+  // from the hook's real contents again.
+  const [restoredDraft, setRestoredDraft] = useState<HookDraft | null>(
+    restored?.draft ?? null,
+  );
+  const liveDraftRef = useRef<HookDraft | null>(null);
+  const editorRef = useRef<EditorState>(editor);
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
+  const { hostId } = props;
+  useEffect(() => {
+    useNotificationHookDraftStore.getState().clear();
+    return () => {
+      const open = editorRef.current;
+      if (open.kind === "closed" || hostId === null) return;
+      const draft = liveDraftRef.current;
+      if (draft === null) return;
+      useNotificationHookDraftStore.getState().retain({
+        hostId,
+        editor:
+          open.kind === "add"
+            ? { kind: "add" }
+            : { kind: "edit", hookId: open.hook.id },
+        draft,
+      });
+    };
+  }, [hostId]);
+  const transitionEditor = (next: EditorState): void => {
+    setRestoredDraft(null);
+    liveDraftRef.current = null;
+    setEditor(next);
+  };
 
   // Every write rebuilds the whole file from the hooks this render read, so
   // there is no long-lived draft of the entire file to drift out of date.
@@ -275,7 +348,7 @@ function HooksEditor(props: {
       { hooks: [...hooks] },
       {
         onSuccess: () => {
-          setEditor({ kind: "closed" });
+          transitionEditor({ kind: "closed" });
           setPendingDelete(null);
           toast.success(done);
         },
@@ -290,7 +363,7 @@ function HooksEditor(props: {
       addDisabled={props.saveHooks.isPending}
       onRefresh={props.onRefresh}
       onAdd={() => {
-        setEditor({ kind: "add" });
+        transitionEditor({ kind: "add" });
       }}
     >
       <div className="min-h-0 flex-1 overflow-auto">
@@ -313,7 +386,7 @@ function HooksEditor(props: {
               variant="outline"
               size="sm"
               onClick={() => {
-                setEditor({ kind: "add" });
+                transitionEditor({ kind: "add" });
               }}
             >
               <Plus aria-hidden className="size-3.5" />
@@ -329,7 +402,7 @@ function HooksEditor(props: {
                 testHook={props.testHook}
                 saving={props.saveHooks.isPending}
                 onEdit={() => {
-                  setEditor({ kind: "edit", hook });
+                  transitionEditor({ kind: "edit", hook });
                 }}
                 onToggleEnabled={(enabled) => {
                   saveAll(
@@ -351,14 +424,18 @@ function HooksEditor(props: {
       {editor.kind === "closed" ? null : (
         <NotificationHookEditorDialog
           initialDraft={
-            editor.kind === "add"
+            restoredDraft ??
+            (editor.kind === "add"
               ? emptyDraft()
-              : draftFromHook(toConfig(editor.hook))
+              : draftFromHook(toConfig(editor.hook)))
           }
+          onDraftChange={(draft) => {
+            liveDraftRef.current = draft;
+          }}
           title={editor.kind === "add" ? "Add hook" : "Edit hook"}
           saving={props.saveHooks.isPending}
           onCancel={() => {
-            setEditor({ kind: "closed" });
+            transitionEditor({ kind: "closed" });
           }}
           onSave={(hook) => {
             const next =

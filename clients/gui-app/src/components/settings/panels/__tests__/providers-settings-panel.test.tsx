@@ -1256,6 +1256,35 @@ describe("<ProvidersSettingsPanel />", () => {
     }
   });
 
+  it("applies a deep link armed AFTER mount — the keep-alive case", async () => {
+    // The top-level keep-alive host retains this panel while its tab is
+    // hidden, so a re-auth banner click arms the intent against an
+    // already-mounted panel: there is no fresh mount to capture it. A
+    // mount-time snapshot stayed stale, pending never rose, and Sign in
+    // appeared to do nothing while the intent waited to fire against
+    // whichever host a later remount happened to select.
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+
+    act(() => {
+      useProvidersFocusStore.getState().setProfileFocus({
+        harnessId: "opencode",
+        hostId: "host-armed-late",
+        profileId: "profile-1",
+        startSignIn: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(hostScopeMocks.setHostId).toHaveBeenCalledWith("host-armed-late");
+    });
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
+  });
+
   it("gates the provider-list-error report action on capability and never forwards the raw host error", () => {
     providerMocks.listResult.isError = true;
     providerMocks.listResult.error = {

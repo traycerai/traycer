@@ -23,6 +23,7 @@ import {
   NotificationsSettingsPanelForClient,
 } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { useNotificationHookDraftStore } from "@/stores/settings/notification-hook-draft-store";
 const hostScopeMocks: {
   client: HostClient<HostRpcRegistry> | null;
   hostId: string | null;
@@ -81,6 +82,9 @@ const HOOKS_CONFIG_PATH = "/Users/me/.traycer/notification-hooks.json";
 
 afterEach(() => {
   cleanup();
+  hostScopeMocks.hostId = "host-a";
+  hostScopeMocks.client = null;
+  useNotificationHookDraftStore.getState().clear();
 });
 
 describe("<NotificationsSettingsPanel /> severity policy", () => {
@@ -515,6 +519,97 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
       await screen.findByRole("heading", { name: "Edit hook" }),
     ).toBeTruthy();
     expect(screen.getByDisplayValue("Pager")).toBeTruthy();
+  });
+
+  // The retention tests render the SCOPE-BOUND panel, not the ForClient
+  // variant the shared harness uses: `NotificationsSettingsPanelForClient`
+  // passes `scope={null}` (its caller owns the gating), so it carries no
+  // hostId and the retention store — which keys drafts to a host — stays
+  // deliberately inert there.
+  function renderScopedPanel(): void {
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-retention",
+        handlers: {
+          "host.notifications.getConfig": () => makeNotificationConfig(),
+          "host.notificationHooks.status": () => makeHooksStatus({ hooks: [] }),
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok" }),
+    );
+    hostScopeMocks.client = client;
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSettingsPanel />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("retains a typed hook draft across a same-host unmount and restores it", async () => {
+    // The honest-state gate unmounts the hooks section whenever the host
+    // stops being reachable. For a TRANSIENT same-host loss (restart, sleep,
+    // relay blip) the remount must hand back the typed draft — destroying it
+    // is only correct for a real host switch, which the hostId check below
+    // still guarantees.
+    renderScopedPanel();
+    await screen.findByTestId("notification-hooks-empty-state");
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(
+      within(manager).getAllByRole("button", { name: /Add hook/ })[0],
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Add hook" }),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Typed mid-disconnect" },
+    });
+
+    // The gate dropping the section: everything unmounts, and the unmount
+    // parks the open editor in the retention store.
+    cleanup();
+    expect(useNotificationHookDraftStore.getState().retained).not.toBeNull();
+
+    renderScopedPanel();
+    expect(
+      await screen.findByRole("heading", { name: "Add hook" }),
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue("Typed mid-disconnect")).toBeTruthy();
+  });
+
+  it("never restores a retained draft onto a different host", async () => {
+    // A draft is armed against one machine's hooks file. The retention that
+    // survives a same-host blip must not follow the user to another host.
+    renderScopedPanel();
+    await screen.findByTestId("notification-hooks-empty-state");
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(
+      within(manager).getAllByRole("button", { name: /Add hook/ })[0],
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Add hook" }),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Belongs to host-a" },
+    });
+
+    cleanup();
+    hostScopeMocks.hostId = "host-b";
+
+    renderScopedPanel();
+    await screen.findByTestId("notification-hooks-empty-state");
+    expect(screen.queryByRole("heading", { name: "Add hook" })).toBeNull();
   });
 
   it("requires confirmation before deleting a hook", async () => {
