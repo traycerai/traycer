@@ -877,6 +877,7 @@ function ProviderTabBody({
         <ProviderEnvOverridesSection
           providerId={state.providerId}
           overrides={state.envOverrides}
+          envOverrideScope={state.nativeCapabilities.envOverrideScope}
         />
       );
     // The key IS the account for these providers, so it owns a tab rather than
