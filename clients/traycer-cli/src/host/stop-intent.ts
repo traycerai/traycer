@@ -135,6 +135,64 @@ export async function hasFreshStopIntent(
   return isStopIntentFresh(intent, nowMs);
 }
 
+/**
+ * The supervisor's question, asked correctly: is there a stop intent that this
+ * invocation has NOT already served?
+ *
+ * `ignoreRequestedBeforeMs` is the moment this supervisor was invoked. Intent
+ * older than that was answered by our own existence - something asked for a
+ * start after asking for a stop, and the start is the newer instruction.
+ * Intent newer than that is aimed at us.
+ *
+ * ### Why a cutoff rather than deleting the file
+ *
+ * The obvious implementation is to `rm` the sentinel once at startup. It has a
+ * race that matters: a stop landing between this supervisor's invocation and
+ * its clear gets ERASED, and the supervisor then spawns a host the user just
+ * stopped. Two supervisors (a logon trigger plus a manual start) make it worse,
+ * because either one's clear can delete intent written after the other's.
+ *
+ * Filtering destroys nothing, so there is no window in which a real stop can be
+ * lost. The record still disappears on its own via `STOP_INTENT_STALE_MS`, and
+ * the service controller's `start` decorator clears it on the ordinary path.
+ *
+ * It is also what makes checking intent on the FIRST attempt safe. Reading the
+ * raw file there would make a logon-started supervisor refuse to start the host
+ * at all within the freshness window of any stop - strictly worse than the bug.
+ * With the cutoff, attempt one can be guarded like every other attempt.
+ *
+ * KNOWN LIMIT: a backward wall-clock jump between the stop and this supervisor's
+ * start can push a real intent below the cutoff, and it would be ignored. That
+ * is the same class of exposure `isStopIntentFresh` already accepts for skew,
+ * and it degrades to the pre-existing behaviour rather than to something worse.
+ */
+export async function hasActionableStopIntent(
+  environment: Environment | undefined,
+  nowMs: number,
+  ignoreRequestedBeforeMs: number,
+): Promise<boolean> {
+  const intent = await readStopIntent(environment);
+  if (intent === null) return false;
+  if (!isStopIntentFresh(intent, nowMs)) return false;
+  return !isStopIntentAlreadyServed(intent, ignoreRequestedBeforeMs);
+}
+
+/**
+ * Whether `intent` predates the supervisor invocation at
+ * `supervisorStartedAtMs`, and was therefore already answered by that start.
+ *
+ * An unparseable stamp reads as SERVED - the same bias as everywhere else in
+ * this module: a garbled byte must not be able to hold a machine hostless.
+ */
+export function isStopIntentAlreadyServed(
+  intent: StopIntent,
+  supervisorStartedAtMs: number,
+): boolean {
+  const requestedAtMs = Date.parse(intent.requestedAt);
+  if (Number.isNaN(requestedAtMs)) return true;
+  return requestedAtMs < supervisorStartedAtMs;
+}
+
 export function isStopIntentFresh(intent: StopIntent, nowMs: number): boolean {
   const requestedAtMs = Date.parse(intent.requestedAt);
   if (Number.isNaN(requestedAtMs)) return false;

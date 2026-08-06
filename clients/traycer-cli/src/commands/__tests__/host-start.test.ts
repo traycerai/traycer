@@ -310,7 +310,6 @@ function makeRunStubs(
     hasStopIntent: async () => false,
     sleep: async () => undefined,
     closeLogFd: async () => undefined,
-    clearStopIntent: async () => undefined,
     // Pin the shared harness to a SINGLE attempt. Every test built on
     // `makeRunStubs` predates the relaunch loop and asserts what one attempt
     // records and exits with; letting them relaunch would silently change what
@@ -1723,6 +1722,11 @@ describe("runHostStart - crash relaunch loop", () => {
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const scripted = withScriptedAttempts(deps, [{ code: 1, signal: null }]);
     let intentChecks = 0;
+    // The stop is requested while the FIRST child is running - the ordinary
+    // shape. Returning `true` from the start would instead exercise the
+    // spawn-boundary guard and never let a child run at all, which is a
+    // different test (see the setup-window cases below).
+    let stopRequested = false;
 
     await runUntilExit(
       () =>
@@ -1731,9 +1735,17 @@ describe("runHostStart - crash relaunch loop", () => {
           {
             ...scripted.deps,
             maxRelaunches: 5,
+            spawn: (command, args, options) => {
+              const child = scripted.deps.spawn?.(command, args, options);
+              stopRequested = true;
+              if (child === undefined) {
+                throw new Error("test spawn dependency missing");
+              }
+              return child;
+            },
             hasStopIntent: async () => {
               intentChecks += 1;
-              return true;
+              return stopRequested;
             },
           },
         ),
@@ -1742,7 +1754,7 @@ describe("runHostStart - crash relaunch loop", () => {
 
     // Both halves matter: the guard was consulted, AND nothing respawned.
     // Asserting only the spawn count would pass if the loop never ran.
-    expect(intentChecks).toBe(1);
+    expect(intentChecks).toBeGreaterThanOrEqual(1);
     expect(recorded.spawnCalls).toHaveLength(1);
     expect(recorded.exited).toBe(1);
   });
@@ -1955,10 +1967,35 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
     // owned by the install/restart lifecycle. A relaunch re-arming it would
     // overwrite that verdict with the outcome of unrelated recovery work.
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const scripted = withScriptedAttempts(deps, [
-      { code: 2, signal: null },
-      { code: 0, signal: null },
-    ]);
+    const markerWrites: ProbeMarker[] = [];
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    // Every attempt gets a child with a READABLE fd 3. Without one the probe
+    // observer has nothing to attach to and writes no marker at all - which is
+    // why the earlier version of this test could assert nothing about
+    // verdicts and passed with the observer reading the wrong context.
+    let spawns = 0;
+    const scripted = {
+      deps: {
+        ...deps,
+        spawn: (command: string, args: readonly string[], options: object) => {
+          spawns += 1;
+          originalSpawn(command, args, options);
+          const child = makeStubChild();
+          Object.assign(child, {
+            stdio: [null, null, null, new PassThrough()],
+          });
+          const code = spawns === 1 ? 2 : 0;
+          setImmediate(() => {
+            child.emit("exit", code, null);
+          });
+          const asUnknown: unknown = child;
+          return asUnknown as ChildProcess;
+        },
+      },
+    };
 
     await runUntilExit(
       () =>
@@ -1988,6 +2025,23 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
               supervisorPid: process.pid,
               capturedAt: "2026-08-05T00:00:00.000Z",
             }),
+            writeProbeMarker: async (_environment, marker) => {
+              markerWrites.push(marker);
+            },
+            // Answer with a frame for whichever attempt is being observed
+            // right now. `observeProbeStatus` discards a frame whose
+            // `attemptId` does not match, so a fixed id here would make the
+            // test vacuous in exactly the direction that hides the bug.
+            readLayer0Frame: async () => {
+              const ids = startingAttemptIds(recorded);
+              return {
+                kind: "frame" as const,
+                frame: {
+                  attemptId: ids[ids.length - 1] ?? "",
+                  layer0: "acquired" as const,
+                },
+              };
+            },
           },
         ),
       recorded,
@@ -2003,6 +2057,20 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
     expect(second?.args).not.toContain("--layer0-status-fd");
     expect((first?.stdio as unknown[]).length).toBe(4);
     expect((second?.stdio as unknown[]).length).toBe(3);
+    // THE LOAD-BEARING ASSERTIONS. argv and stdio alone are satisfied by the
+    // spawn sites using the per-attempt context while the OBSERVER still reads
+    // the outer one - exactly the defect this test is named for, and it passed
+    // that way.
+    //
+    // Two writes belong to the PROBE attempt: the observation
+    // (`awaiting-readiness`, from its Layer-0 frame) and the finalization that
+    // resolves it once the child's fate is known. Attempt 2 observing as well
+    // would make it four, and would resolve a second terminal verdict over the
+    // first - which is what "one-shot" forbids.
+    expect(markerWrites).toHaveLength(2);
+    expect(
+      markerWrites.filter((m) => m.outcome.kind === "terminal"),
+    ).toHaveLength(1);
   });
 
   it("releases the supervisor's log descriptor for every attempt", async () => {
@@ -2036,6 +2104,124 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
     );
 
     expect(opened).toHaveLength(3);
+    expect(closed).toEqual(opened);
+  });
+
+  // The test above exercises ordinary child EXITS only, which is why removing
+  // the close on the synchronous-throw path left it green. Each attempt-end
+  // route gets its own case: an fd is a per-attempt resource, and "some paths
+  // close it" is the shape of a leak, not the absence of one.
+  const FD_RELEASE_CASES: ReadonlyArray<{
+    readonly name: string;
+    readonly arrange: (
+      deps: Partial<RunHostStartDeps>,
+      recorded: Recorded,
+    ) => Partial<RunHostStartDeps>;
+  }> = [
+    {
+      name: "a synchronous spawn throw",
+      arrange: (deps) => {
+        const originalSpawn = deps.spawn;
+        if (originalSpawn === undefined) {
+          throw new Error("test spawn dependency missing");
+        }
+        return {
+          ...deps,
+          spawn: (command, args, options) => {
+            originalSpawn(command, args, options);
+            throw new Error("EBUSY: install swap in progress");
+          },
+        };
+      },
+    },
+    {
+      name: "an asynchronous child spawn error",
+      arrange: (deps) => {
+        const originalSpawn = deps.spawn;
+        if (originalSpawn === undefined) {
+          throw new Error("test spawn dependency missing");
+        }
+        return {
+          ...deps,
+          spawn: (command, args, options) => {
+            originalSpawn(command, args, options);
+            const child = makeStubChild();
+            setImmediate(() => {
+              child.emit("error", new Error("ENOENT: no such file"));
+            });
+            const asUnknown: unknown = child;
+            return asUnknown as ChildProcess;
+          },
+        };
+      },
+    },
+  ];
+
+  for (const testCase of FD_RELEASE_CASES) {
+    it(`releases the supervisor's log descriptor after ${testCase.name}`, async () => {
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const opened: number[] = [];
+      const closed: number[] = [];
+      let nextFd = 200;
+      const arranged = testCase.arrange(deps, recorded);
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...arranged,
+              maxRelaunches: 0,
+              openLogFd: async () => {
+                nextFd += 1;
+                opened.push(nextFd);
+                return nextFd;
+              },
+              closeLogFd: async (fd) => {
+                closed.push(fd);
+              },
+            },
+          ),
+        recorded,
+      );
+
+      expect(opened).toHaveLength(1);
+      expect(closed).toEqual(opened);
+    });
+  }
+
+  it("releases the supervisor's log descriptor when a stop preempts the spawn", async () => {
+    // The pre-spawn guard returns without ever reaching the child, so it owns
+    // the fd it just opened.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 0, signal: null }]);
+    const opened: number[] = [];
+    const closed: number[] = [];
+    let nextFd = 300;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 0,
+            openLogFd: async () => {
+              nextFd += 1;
+              opened.push(nextFd);
+              return nextFd;
+            },
+            closeLogFd: async (fd) => {
+              closed.push(fd);
+            },
+            hasStopIntent: async () => true,
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(opened).toHaveLength(1);
     expect(closed).toEqual(opened);
   });
 });
@@ -2116,6 +2302,139 @@ describe("runHostStart - relaunch loop, spawn-failure policy", () => {
     expect(failed).toHaveLength(1);
     expect(String(failed[0]?.fields.error)).toContain("HOST_NOT_INSTALLED");
   });
+
+  it("retries a FIRST-attempt spawn failure when the service manager started it", async () => {
+    // The Windows hole an attempt-number gate left open: a Scheduled Task
+    // action that hits a transient EBUSY mid-swap on its very first spawn
+    // exits, handing the machine back to the `RestartOnFailure` mechanism this
+    // loop exists precisely because it cannot be relied on. Nothing is
+    // listening to a service start, so it spends the budget instead.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let calls = 0;
+    const child = makeStubChild();
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          {
+            ...deps,
+            maxRelaunches: 3,
+            spawn: (command, args, options) => {
+              calls += 1;
+              originalSpawn(command, args, options);
+              if (calls === 1) {
+                throw new Error("EBUSY: install swap in progress");
+              }
+              setImmediate(() => {
+                child.emit("exit", 0, null);
+              });
+              const asUnknown: unknown = child;
+              return asUnknown as ChildProcess;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(calls).toBe(2);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("surfaces a FIRST-attempt spawn failure immediately for an interactive start", async () => {
+    // The other half of the same decision. A person - or Desktop, which parses
+    // the result envelope and is waiting on it - must not sit through the full
+    // backoff ladder before being told the install is broken.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let calls = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 3,
+            spawn: (command, args, options) => {
+              calls += 1;
+              originalSpawn(command, args, options);
+              throw new Error("EBUSY: install swap in progress");
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(calls).toBe(1);
+    expect(recorded.exited).toBe(66);
+  });
+
+  it("retries a FIRST-attempt target-resolution failure only for a service start", async () => {
+    // Same split, on the other failure route: a task action whose install
+    // record is momentarily absent mid-swap retries, an interactive start
+    // reports E_HOST_NOT_INSTALLED now.
+    const serviceRun = makeRunStubs(sampleRecord(exec), null);
+    const serviceScripted = withScriptedAttempts(serviceRun.deps, [
+      { code: 0, signal: null },
+    ]);
+    let serviceReads = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          {
+            ...serviceScripted.deps,
+            maxRelaunches: 2,
+            readInstallRecord: async () => {
+              serviceReads += 1;
+              return serviceReads === 1 ? null : sampleRecord(exec);
+            },
+          },
+        ),
+      serviceRun.recorded,
+    );
+
+    expect(serviceRun.recorded.spawnCalls).toHaveLength(1);
+    expect(serviceRun.recorded.exited).toBe(0);
+
+    const interactiveRun = makeRunStubs(sampleRecord(exec), null);
+    const interactiveScripted = withScriptedAttempts(interactiveRun.deps, [
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...interactiveScripted.deps,
+            maxRelaunches: 2,
+            readInstallRecord: async () => null,
+          },
+        ),
+      interactiveRun.recorded,
+    );
+
+    expect(interactiveRun.recorded.spawnCalls).toHaveLength(0);
+    expect(interactiveRun.recorded.exited).toBe(69);
+  });
 });
 
 describe("runHostStart - production defaults", () => {
@@ -2180,17 +2499,22 @@ describe("runHostStart - stop signals outside the child-running window", () => {
     expect(recorded.exited).toBe(0);
   });
 
-  it("serves a stale stop intent on a fresh supervisor start so the next crash is recoverable", async () => {
+  it("ignores a stop intent that predates this supervisor, so the next crash is recoverable", async () => {
     // Stop the host, log back in inside the sentinel's freshness window, and
-    // the new supervisor would otherwise read the previous stop as still in
-    // progress and refuse to recover its OWN child's first crash. Clearing
-    // beats refusing to start: the costly failure is a hostless machine.
+    // the new supervisor must not read the previous stop as still in progress
+    // and refuse to recover its OWN child's first crash.
+    //
+    // The intent is FILTERED by invocation time, never deleted: an earlier
+    // version cleared the file at startup, which erased any stop that landed
+    // between this invocation and the clear. The stub below models the real
+    // `hasActionableStopIntent` contract rather than a boolean, so it fails if
+    // the cutoff argument stops being honoured.
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const scripted = withScriptedAttempts(deps, [
       { code: 5, signal: null },
       { code: 0, signal: null },
     ]);
-    let intentCleared = false;
+    let cutoffSeen: number | null = null;
 
     await runUntilExit(
       () =>
@@ -2199,19 +2523,90 @@ describe("runHostStart - stop signals outside the child-running window", () => {
           {
             ...scripted.deps,
             maxRelaunches: 5,
-            clearStopIntent: async () => {
-              intentCleared = true;
+            hasStopIntent: async (_environment, nowMs, ignoreBeforeMs) => {
+              cutoffSeen = ignoreBeforeMs;
+              // Requested a minute before this supervisor was invoked: still
+              // FRESH, but already served by the start that produced us.
+              const requestedAtMs = ignoreBeforeMs - 60_000;
+              const fresh = nowMs - requestedAtMs < 300_000;
+              return fresh && requestedAtMs >= ignoreBeforeMs;
             },
-            // The file is only "fresh" until this invocation serves it.
-            hasStopIntent: async () => !intentCleared,
           },
         ),
       recorded,
     );
 
-    expect(intentCleared).toBe(true);
+    // The supervisor actually passed a cutoff rather than defaulting to 0,
+    // which would make every pre-invocation intent look actionable.
+    expect(cutoffSeen).not.toBeNull();
+    expect(cutoffSeen ?? 0).toBeGreaterThan(0);
     // The crash WAS recovered rather than misread as part of the old stop.
     expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("does not spawn when stop intent lands during the FIRST attempt's setup", async () => {
+    // The Windows shape, and the one a POSIX-only latch cannot see: `schtasks
+    // /End` never signals this process, so `shuttingDown` stays false forever.
+    // The stopper writes intent and scans for a child while the supervisor is
+    // still opening its log - finding nothing to kill, because nothing has
+    // been spawned yet. Without an intent read at the spawn boundary the
+    // supervisor then starts a host after `host stop` already returned.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 0, signal: null }]);
+    let stopRequested = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            openLogFd: async () => {
+              stopRequested = true;
+              return 42;
+            },
+            hasStopIntent: async () => stopRequested,
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("does not spawn when stop intent lands during a RELAUNCH's setup", async () => {
+    // Same hole one attempt later: `decideRelaunch` re-reads intent around the
+    // backoff, but per-attempt setup is a chain of awaits AFTER that read, and
+    // a stop can complete inside it.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 9, signal: null }]);
+    let attempts = 0;
+    let stopRequested = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            openLogFd: async () => {
+              attempts += 1;
+              // Lands while attempt 2 is setting up - after the post-backoff
+              // re-read has already passed.
+              if (attempts === 2) stopRequested = true;
+              return 42;
+            },
+            hasStopIntent: async () => stopRequested,
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
     expect(recorded.exited).toBe(0);
   });
 });

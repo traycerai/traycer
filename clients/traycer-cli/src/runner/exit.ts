@@ -7,13 +7,16 @@ import { flushStdio } from "./std-write";
 // How the CLI ends. Every command exit routes through `finishAndExit` instead
 // of calling `process.exit()` itself. (One deliberate exception: the host
 // bootstrap's injected `exit` dependency in commands/host-start.ts. That
-// process is the host SUPERVISOR - it outlives the children it spawns and
-// deliberately holds live handles: the child's stderr pipe, the tee's queued
-// `appendFile` writes, and its own signal handlers. Draining is the wrong
-// bound for it, because "wait for the loop to empty" is indistinguishable
-// from "never exit" when the handles are the point. It ends synchronously
-// instead, after writing its terminal marker and closing what it owns; see
-// the exit note in host-start.ts.)
+// process is the host SUPERVISOR, and its exit is a LATENCY choice, not an
+// unboundedness one - draining here is bounded, by `DRAIN_WATCHDOG_MS` below.
+// The supervisor spawns children that inherit its stderr; a grandchild can
+// hold that pipe open past the supervisor's own bounded stderr/tee drains, at
+// which point routing through this terminator would add up to a further 15s
+// before the watchdog forced the exit. Its exit code is what the service
+// manager reads to decide whether to relaunch, so it reports synchronously
+// after writing its terminal marker and closing what it owns; see the exit
+// note in host-start.ts. NOT because signal listeners hold the loop open -
+// they do not.)
 //
 // Why: on win32 the SEA aborted during exit teardown AFTER completing its work
 // (int#4840; field OSS #955 and #995, both 1.1.9):

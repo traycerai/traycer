@@ -43,7 +43,7 @@ import {
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
-import { clearStopIntent, hasFreshStopIntent } from "../host/stop-intent";
+import { hasActionableStopIntent } from "../host/stop-intent";
 import {
   attestLaunchdSupervisorPid,
   readLayer0Frame,
@@ -322,11 +322,15 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // tests (a five-attempt run would otherwise cost ~110s and make the suite
   // load-sensitive); `hasStopIntent` is the "was this death asked for?" check.
   readonly sleep: (ms: number) => Promise<void>;
+  // `ignoreRequestedBeforeMs` is this supervisor's invocation time: intent
+  // older than that was served by our own start. Filtering rather than
+  // deleting is what lets attempt one be guarded without a logon-started
+  // supervisor refusing to start. See `host/stop-intent.ts`.
   readonly hasStopIntent: (
     environment: Environment,
     nowMs: number,
+    ignoreRequestedBeforeMs: number,
   ) => Promise<boolean>;
-  readonly clearStopIntent: (environment: Environment) => Promise<void>;
   // Consecutive relaunches allowed before the supervisor gives up and hands
   // the machine back to launchd / systemd / the next logon. A dependency
   // rather than a bare constant so a test can state which behaviour it is
@@ -368,8 +372,7 @@ const defaultRunDeps: RunHostStartDeps = {
       const timer = setTimeout(resolve, ms);
       timer.unref?.();
     }),
-  hasStopIntent: hasFreshStopIntent,
-  clearStopIntent,
+  hasStopIntent: hasActionableStopIntent,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
 };
 
@@ -391,6 +394,10 @@ export async function runHostStart(
   // on a pre-action log baseline (Finding F evidence identity).
   const attemptId = randomUUID();
   const supervisorPid = process.pid;
+  // Captured before anything can await: every stop-intent read is relative to
+  // "when was this supervisor asked to start". Intent older than this instant
+  // was already answered by that request; intent newer than it is aimed at us.
+  const supervisorStartedAtMs = Date.now();
   const requestedProbe = "probe" in opts ? opts.probe : null;
   const serviceLabel = "serviceLabel" in opts ? opts.serviceLabel : null;
   const probeRead: LiveProbeContextRead | null =
@@ -411,6 +418,31 @@ export async function runHostStart(
     probeRead !== null && probeRead.kind === "authorised"
       ? probeRead.context
       : null;
+
+  // Was this supervisor started BY the service manager (launchd / systemd /
+  // the Windows Scheduled Task), rather than by a person or by Desktop running
+  // `traycer host start` and waiting on the result?
+  //
+  // It decides who gets to spend the relaunch budget on a FIRST-attempt target
+  // or spawn failure. A service start has no caller listening: exiting hands
+  // the machine back to the very restart mechanism this loop exists because it
+  // cannot be trusted, which on Windows means the host stays down until the
+  // next logon. An interactive or Desktop-driven start does have a caller, and
+  // making it wait out the full ladder before reporting a genuinely broken
+  // install would be a regression in a path that works today.
+  //
+  // Derived AFTER `probeContext`, and that placement is the substance rather
+  // than style: a probe is a ONE-SHOT verdict owned by the install/restart
+  // lifecycle and must never retry. Testing `serviceLabel` alone reads as
+  // service-started for a LABEL-DERIVED probe too - a `--service-label` start
+  // that picks up authority from a live transition journal - and would turn
+  // its single honest answer into a retry loop.
+  //
+  // KNOWN LIMIT: the Windows launcher falls back to an UNLABELLED `host start`
+  // if it cannot even ask the CLI whether it understands `--service-label`
+  // (see `buildHiddenHostLauncher`). A start arriving through that degraded
+  // path is indistinguishable from an interactive one and does not retry.
+  const serviceStarted = serviceLabel !== null && probeContext === null;
 
   logger.info("Host supervisor starting", {
     environment: opts.environment,
@@ -517,19 +549,6 @@ export async function runHostStart(
     return deps.exit(0);
   }
 
-  // Reaching here means a start was REQUESTED - by the service manager, a
-  // logon trigger, or a person - so any stop intent still on disk has been
-  // served and must not outlive this invocation. Without this, stopping the
-  // host and logging back in within the sentinel's freshness window would
-  // leave the new supervisor unable to recover its own child's first crash,
-  // because it would read the previous stop as still in progress.
-  //
-  // Clearing here rather than refusing to start is the safe direction: the
-  // costly failure is a machine left hostless. A stop that arrives AFTER this
-  // point still wins - `decideRelaunch` re-reads the file immediately before
-  // every relaunch, including after the backoff.
-  await deps.clearStopIntent(opts.environment);
-
   // ---- Relaunch loop ------------------------------------------------------
   //
   // Everything above this point is a GATE and runs exactly once: probe
@@ -630,11 +649,16 @@ export async function runHostStart(
     try {
       target = await resolveHostStartTarget(opts, deps);
     } catch (err) {
-      // On a RELAUNCH the failure is usually transient (mid-swap, or a
-      // still-settling install), and no other layer is watching while the app
-      // is closed - so it costs an attempt from the budget and retries.
-      // The FIRST attempt keeps today's contract exactly: surface and exit.
-      if (!isFirstAttempt) {
+      // Usually transient - mid-swap, or a still-settling install - so it
+      // costs an attempt from the budget and retries.
+      //
+      // The first attempt retries only when nothing is waiting on the answer
+      // (`serviceStarted`). A person or Desktop running `traycer host start`
+      // against a genuinely broken install must still get the error now rather
+      // than after the full ladder; a Scheduled Task action that exits here
+      // instead leaves the machine hostless until the next logon, which is the
+      // exact failure this loop exists to end.
+      if (!isFirstAttempt || serviceStarted) {
         // Evidence first: a relaunch that could not resolve its target used to
         // retry silently, leaving `host.log` with a `starting` marker for an
         // attempt that never spawned and nothing to say why. int #4839 reads
@@ -666,6 +690,7 @@ export async function runHostStart(
           reason: "target-resolution-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          supervisorStartedAtMs,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -825,20 +850,38 @@ export async function runHostStart(
     // the executable directly.
     const launch = resolveSpawnInvocation(target.executable, hostArgs);
 
-    // Last look before committing to a child.
+    // Last look before committing to a child. BOTH halves of the
+    // deliberate-stop guard are asked here, on EVERY attempt including the
+    // first, because the two platforms deliver a stop by different channels
+    // and this is the only point that dominates all of them.
     //
-    // Registering the signal handlers up front (once, for the loop's whole
-    // life) SUPPRESSES Node's default "die on SIGTERM" behaviour, which the
-    // single-shot supervisor used to rely on: it installed its handler only
-    // after spawning, so a signal during setup simply killed the process.
-    // Per-attempt setup is a chain of awaits - incumbent probe, target
+    // POSIX (`shuttingDown`): registering the signal handlers up front (once,
+    // for the loop's whole life) SUPPRESSES Node's default "die on SIGTERM"
+    // behaviour, which the single-shot supervisor used to rely on - it
+    // installed its handler only after spawning, so a signal during setup
+    // simply killed the process.
+    //
+    // Windows (stop intent): `schtasks /End` never signals this process at
+    // all, so `shuttingDown` is ALWAYS false there. A latch-only check would
+    // therefore be inert on the single platform this whole feature exists for.
+    // `decideRelaunch` reads intent around the backoff, but per-attempt setup
+    // is a chain of awaits AFTER that read - incumbent probe, target
     // resolution, env overrides, log rotation, crash-report pruning, marker
-    // write, fd open - and a stop landing anywhere in it would otherwise be
-    // swallowed and followed by a brand-new child that never received it.
-    if (shuttingDown) {
-      logger.info("Host supervisor not spawning - shutting down", {
+    // write, fd open - and `host stop` can complete inside it, having found no
+    // child to kill because none exists yet.
+    if (
+      shuttingDown ||
+      (await deps.hasStopIntent(
+        opts.environment,
+        Date.now(),
+        supervisorStartedAtMs,
+      ))
+    ) {
+      logger.info("Host supervisor not spawning - a stop was requested", {
         environment: opts.environment,
         attemptId,
+        attemptNumber,
+        viaSignal: shuttingDown,
       });
       await deps.closeLogFd(logFd);
       return deps.exit(0);
@@ -909,7 +952,11 @@ export async function runHostStart(
       // detail, not a difference in what the machine needs. Leaving the two
       // paths to disagree is how a transient EBUSY mid-swap could still exit a
       // supervisor that had budget left and nothing else watching.
-      if (!isFirstAttempt) {
+      //
+      // "Nothing else watching" is exactly what `serviceStarted` names, which
+      // is why it also lifts the first-attempt exception here: gating on
+      // attempt number alone reintroduced the same hole one attempt earlier.
+      if (!isFirstAttempt || serviceStarted) {
         const decision = await decideRelaunch({
           deps,
           logger,
@@ -917,6 +964,7 @@ export async function runHostStart(
           reason: "spawn-threw",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          supervisorStartedAtMs,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -1032,10 +1080,10 @@ export async function runHostStart(
         bundle: target.executable,
         probeContext: attemptProbeContext,
       });
-      // Same reasoning as a failed re-resolve: on a relaunch this is usually
-      // transient and nothing else is watching, so it spends budget and
-      // retries. The first attempt keeps today's contract - surface and exit.
-      if (!isFirstAttempt) {
+      // Same reasoning as a failed re-resolve: usually transient, so it spends
+      // budget and retries, and a first attempt does so only when nothing is
+      // waiting on the answer.
+      if (!isFirstAttempt || serviceStarted) {
         const decision = await decideRelaunch({
           deps,
           logger,
@@ -1043,6 +1091,7 @@ export async function runHostStart(
           reason: "spawn-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          supervisorStartedAtMs,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -1099,6 +1148,7 @@ export async function runHostStart(
       reason: ending.signal !== null ? "fatal-signal" : "crashed",
       consecutiveRelaunches,
       isShuttingDown: () => shuttingDown,
+      supervisorStartedAtMs,
     });
     if (decision.kind !== "relaunch") {
       return deps.exit(outcome.exitCode);
@@ -1155,6 +1205,7 @@ async function decideRelaunch(input: {
   readonly reason: string;
   readonly consecutiveRelaunches: number;
   readonly isShuttingDown: () => boolean;
+  readonly supervisorStartedAtMs: number;
 }): Promise<RelaunchDecision> {
   const { deps, logger, environment, reason } = input;
   const refused = async (when: "before" | "after"): Promise<boolean> => {
@@ -1166,7 +1217,13 @@ async function decideRelaunch(input: {
       });
       return true;
     }
-    if (await deps.hasStopIntent(environment, Date.now())) {
+    if (
+      await deps.hasStopIntent(
+        environment,
+        Date.now(),
+        input.supervisorStartedAtMs,
+      )
+    ) {
       logger.info("Host supervisor not relaunching - a stop was requested", {
         environment,
         reason,
