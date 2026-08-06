@@ -194,11 +194,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     skillMocks.skills = [];
     renderTab();
 
-    expect(
-      screen.getByText(
-        "No skills yet. Create one or import from a git URL / folder.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("No skills yet")).toBeDefined();
     expect(
       screen.getByRole("textbox", { name: "Search skills" }),
     ).toBeDefined();
