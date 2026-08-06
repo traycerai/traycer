@@ -21,6 +21,21 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+const hostScopeMocks = vi.hoisted(() => ({
+  client: null as unknown,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } = await import(
+    "@/components/settings/host-scope/host-scope-fixture"
+  );
+  return {
+    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+    isHostScopeUsable: () => true,
+  };
+});
 
 type NotificationConfig = ResponseOfMethod<
   HostRpcRegistry,
@@ -77,7 +92,7 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
 
     expect(
       within(policy).getByRole("heading", {
-        name: "In-app notifications · Current host",
+        name: "In-app notifications",
       }),
     ).toBeTruthy();
     expect(needsAction.getAttribute("data-state")).toBe("checked");
@@ -231,7 +246,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
 
     expect(
       within(policy).getByRole("heading", {
-        name: "In-app notifications · Current host",
+        name: "In-app notifications",
       }),
     ).toBeTruthy();
     expect(
@@ -267,7 +282,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     ).toBeTruthy();
     expect(
       screen.getByRole("heading", {
-        name: "In-app notifications · Current host",
+        name: "In-app notifications",
       }),
     ).toBeTruthy();
     const manager = screen.getByTestId("notification-hooks-manager");

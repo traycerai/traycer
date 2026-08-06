@@ -19,6 +19,22 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
+const hostScopeMocks = vi.hoisted(() => ({
+  client: null as unknown,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } = await import(
+    "@/components/settings/host-scope/host-scope-fixture"
+  );
+  return {
+    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+    isHostScopeUsable: () => true,
+  };
+});
+
 
 interface ManagementMock {
   readonly management: IHostManagement;

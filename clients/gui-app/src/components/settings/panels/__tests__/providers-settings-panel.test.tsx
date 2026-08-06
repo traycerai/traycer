@@ -587,6 +587,22 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
+const hostScopeMocks = vi.hoisted(() => ({
+  client: null as unknown,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } = await import(
+    "@/components/settings/host-scope/host-scope-fixture"
+  );
+  return {
+    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+    isHostScopeUsable: () => true,
+  };
+});
+
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
@@ -1630,14 +1646,21 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
-  it("renders the host picker in the header (like Worktrees)", () => {
+  // The panel used to carry its own host `Select` in the header - one of four
+  // near-identical dropdowns doing one job. The single control now lives in the
+  // settings sidebar and heads the group it scopes, so this panel must render
+  // an inert READOUT of the scoped machine and no picker of its own. Asserting
+  // the absence is the point: a second control reappearing here is the exact
+  // regression the unification exists to prevent.
+  it("names the scoped machine without offering its own host picker", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("combobox", { name: "Host" })).toBeDefined();
+    expect(screen.getByTestId("host-scope-line")).toBeDefined();
+    expect(screen.queryByRole("combobox", { name: "Host" })).toBeNull();
   });
 
   it("blocks disabling the last enabled provider", () => {

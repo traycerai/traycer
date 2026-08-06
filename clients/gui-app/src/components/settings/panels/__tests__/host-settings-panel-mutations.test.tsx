@@ -38,6 +38,22 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
+const hostScopeMocks = vi.hoisted(() => ({
+  client: null as unknown,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } = await import(
+    "@/components/settings/host-scope/host-scope-fixture"
+  );
+  return {
+    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+    isHostScopeUsable: () => true,
+  };
+});
+
 
 afterEach(() => {
   cleanup();
@@ -48,19 +64,21 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> - mutation flows", () => {
-  it("labels lifecycle management as applying to this machine", async () => {
+  // The page is now titled for whichever machine the sidebar has scoped, and
+  // the local service console renders only when that machine is this device.
+  // The old "This machine" heading existed to separate the local card from a
+  // "My Hosts" list that ALSO contained the local machine; the duplication it
+  // was disambiguating is gone, so the heading went with it.
+  it("titles the page for the scoped machine and keeps the local service console", async () => {
     const { management } = makeManagement({});
 
     renderPanel(makeHost(management, makeLocalHostSnapshot()));
 
-    expect(
-      await screen.findByRole("heading", { name: "This machine" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Install, update, restart, register, deregister, and rename the Traycer host service running on this machine.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByTestId("settings-host-identity")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "This machine" })).toBeNull();
+    // The machine is the subject of the page, so it must not also appear in
+    // the "other machines" strip below it.
+    expect(screen.queryByTestId("other-machines-row-host-a")).toBeNull();
   });
 
   it("opens a confirmation dialog before restarting the host", async () => {
