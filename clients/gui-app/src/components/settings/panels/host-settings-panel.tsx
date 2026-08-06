@@ -104,8 +104,12 @@ function HostSettingsPanelWithoutManagement() {
   const scope = useHostScope();
   return (
     <SettingsPanelShell
-      title={scope.host?.name ?? "Host"}
-      description="Status and maintenance for the selected host."
+      title="Overview"
+      description={
+        scope.host === null
+          ? "Status and maintenance for the selected host."
+          : `Status and maintenance for ${scope.host.name}.`
+      }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className="flex flex-col gap-5">
@@ -540,8 +544,15 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
 
   return (
     <SettingsPanelShell
-      title={scope.host?.name ?? "Host"}
-      description="Status, updates and maintenance for the selected host."
+      title="Overview"
+      // The card below names the host, in bigger type, next to its status and
+      // its Rename control. Repeating it as the page title printed the same
+      // string twice, two lines apart, and made the header look like a bug.
+      description={
+        scope.host === null
+          ? "Status, updates and maintenance for the selected host."
+          : `Status, updates and maintenance for ${scope.host.name}.`
+      }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>

@@ -104,10 +104,15 @@ export function HostSwitcher(props: {
             className={undefined}
           />
         </span>
+        {/* No ACTIVE chip here. Host names are long and this row is narrow, so
+            a chip that is present in the common case bought one word and cost
+            the name — and it was never the row's job: the rail says what you
+            are VIEWING. Which host is active is stated where it has room and
+            where it matters, on the dropdown rows and on Overview, and its
+            absence is called out by the "Viewing —" note below. */}
         <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
           {selected.name}
         </span>
-        {selected.hostId === props.activeHostId ? <ActiveTag /> : null}
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent
