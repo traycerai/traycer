@@ -90,11 +90,12 @@ describe("<ProviderListSearch />", () => {
 describe("<ProviderListSearchEmptyState />", () => {
   it("quotes the trimmed query in the unmatched-list copy", () => {
     render(
-      <ProviderListSearchEmptyState query="  contxt  " resourceLabel="servers" />,
+      <ProviderListSearchEmptyState
+        query="  contxt  "
+        resourceLabel="servers"
+      />,
     );
 
-    expect(
-      screen.getByText('No servers match “contxt”.'),
-    ).toBeDefined();
+    expect(screen.getByText("No servers match “contxt”.")).toBeDefined();
   });
 });

@@ -49,7 +49,9 @@ export interface SkillAuthoring {
   readonly canAuthor: boolean;
 }
 
-export function skillAuthoring(caps: ProviderSkillsCapabilities): SkillAuthoring {
+export function skillAuthoring(
+  caps: ProviderSkillsCapabilities,
+): SkillAuthoring {
   const canWrite = hasGlobal(caps.actionScopes.create);
   const canImport = hasGlobal(caps.actionScopes.import);
   return { canWrite, canImport, canAuthor: canWrite || canImport };

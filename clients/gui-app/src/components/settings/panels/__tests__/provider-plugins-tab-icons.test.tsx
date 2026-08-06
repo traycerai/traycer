@@ -282,7 +282,7 @@ describe("<ProviderPluginsTab /> icons and manifest labels", () => {
     expect(screen.queryByText("PDF tools")).toBeNull();
     expect(screen.queryByText("slides")).toBeNull();
     expect(screen.queryByText("No plugins installed.")).toBeNull();
-    expect(screen.getByText('No plugins match “zzzz-nope”.')).toBeDefined();
+    expect(screen.getByText("No plugins match “zzzz-nope”.")).toBeDefined();
     expect(screen.getByRole("status").textContent).toBe("No plugins match.");
   });
 });
