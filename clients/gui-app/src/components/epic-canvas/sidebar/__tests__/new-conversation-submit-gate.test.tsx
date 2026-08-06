@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { createRef, useRef, useState } from "react";
 import {
   act,

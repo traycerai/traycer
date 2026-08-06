@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

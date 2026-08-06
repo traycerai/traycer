@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { act, StrictMode, useState } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {

@@ -55,7 +55,6 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import "../../../../__tests__/test-browser-apis";
 
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({

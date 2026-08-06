@@ -5,7 +5,6 @@
  * selection-only `selectionUpdate`. Selection must never call `getJSON()`
  * (documents can carry multi-megabyte inline images).
  */
-import "../../../../../__tests__/test-browser-apis";
 import { useState } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -13,7 +13,6 @@
  * stream mount and canvas store; frames and triggers are authored through the
  * wire/persistence schemas so every fixture is one a host could have sent.
  */
-import "../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,

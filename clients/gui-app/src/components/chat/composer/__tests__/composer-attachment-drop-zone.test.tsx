@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

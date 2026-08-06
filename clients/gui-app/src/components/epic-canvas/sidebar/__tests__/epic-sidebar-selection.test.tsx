@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { describe, expect, it } from "vitest";

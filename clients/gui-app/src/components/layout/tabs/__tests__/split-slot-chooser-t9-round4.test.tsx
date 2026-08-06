@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 
 const chooserHistoryItem = vi.hoisted<HistoryItem>(() => ({
