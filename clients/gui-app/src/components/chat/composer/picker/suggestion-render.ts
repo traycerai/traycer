@@ -56,13 +56,14 @@ export function createComposerSuggestionRender<
     // departing plugin's teardown from writing over another plugin's state.
     nextSessionId += 1;
     const sessionId = nextSessionId;
-    // Trigger position of the occurrence a dismissal applied to. One renderer
-    // spans occurrences (see above), and after a dismissal the matcher can
-    // land on a DIFFERENT trigger without ever going inactive - synchronous
-    // transactions outrun the queued exit below - so `onUpdate` has to tell
-    // "still the dismissed occurrence" (stay closed) from "a new occurrence
-    // took over" (start fresh) by the trigger's position.
-    let dismissedFrom: number | null = null;
+    // True while a dismissal is pending inside a still-active plugin
+    // session. One renderer spans occurrences (see above), and synchronous
+    // transactions can outrun the queued exit below, so a valid-query
+    // `onUpdate` can arrive after a dismissal with no `onStart` ever coming -
+    // whether the matcher moved to a new trigger or this occurrence's query
+    // was restored (a saved-selection restore, deletes). That update is a
+    // start. Cleared on start and exit.
+    let dismissed = false;
     // Epoch guarding queued exits. A queued exit belongs to the occurrence it
     // was queued for; any legitimate start (or a newer dismissal) bumps the
     // epoch so a stale exit cannot fire and dismiss the occurrence that
@@ -89,16 +90,16 @@ export function createComposerSuggestionRender<
       });
     };
 
-    // Full dismissal of the CURRENT occurrence: remember which trigger it
-    // was, close the picker now, end the plugin session (deferred).
-    const dismissOccurrence = (editor: Editor, from: number): void => {
-      dismissedFrom = from;
+    // Full dismissal of the CURRENT occurrence: close the picker now, end
+    // the plugin session (deferred).
+    const dismissOccurrence = (editor: Editor): void => {
+      dismissed = true;
       args.pickerStore.getState().closeSession(sessionId);
       exitPluginSession(editor);
     };
 
     const startSession = (props: SuggestionProps<unknown, TItem>): void => {
-      dismissedFrom = null;
+      dismissed = false;
       // Cancel any exit still queued for a previous occurrence - it must not
       // fire into the session that starts here.
       exitEpoch += 1;
@@ -120,7 +121,7 @@ export function createComposerSuggestionRender<
         // next `@` occurrence.
         dismiss: () => {
           if (latestProps === null) return;
-          dismissOccurrence(latestProps.editor, latestProps.range.from);
+          dismissOccurrence(latestProps.editor);
         },
         clientRect: props.clientRect ?? null,
       });
@@ -132,7 +133,7 @@ export function createComposerSuggestionRender<
         // A pasted "@ ..." or "@x, y" is already prose; never open for it,
         // and end the plugin session so a later `@` elsewhere can start over.
         if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
-          dismissedFrom = props.range.from;
+          dismissed = true;
           exitPluginSession(props.editor);
           return;
         }
@@ -146,16 +147,15 @@ export function createComposerSuggestionRender<
         // records the dismissed range, so this `@` occurrence stays dismissed
         // while a new `@` elsewhere opens fresh.
         if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
-          dismissOccurrence(props.editor, props.range.from);
+          dismissOccurrence(props.editor);
           return;
         }
-        if (dismissedFrom !== null) {
-          // Still the dismissed occurrence: stay closed until the queued
-          // plugin exit lands (or the matcher moves).
-          if (props.range.from === dismissedFrom) return;
-          // A DIFFERENT trigger took over before the queued exit could run -
-          // the plugin never went inactive, so no `onStart` will come. This
-          // update is that occurrence's start.
+        if (dismissed) {
+          // The query is valid again while a dismissal is still pending (the
+          // branch above re-dismisses every still-prose update): the matcher
+          // moved to a new trigger, or this occurrence's query was restored
+          // before the queued exit could land. The plugin never went
+          // inactive, so no `onStart` is coming - this update is a start.
           startSession(props);
           return;
         }
@@ -171,7 +171,7 @@ export function createComposerSuggestionRender<
 
       onExit() {
         latestProps = null;
-        dismissedFrom = null;
+        dismissed = false;
         // The plugin session is over; a queued exit has nothing left to end,
         // and letting it fire could dismiss whatever session opens next.
         exitEpoch += 1;

@@ -240,6 +240,37 @@ describe("mention menu dismissal", () => {
     expect(pickerStore.getState().query).toBe("lib");
   });
 
+  it("reopens the SAME @ when a selection restore makes its query valid again", async () => {
+    const { editor, pickerStore } = makeFixture();
+    // Literal applyContent shape: setContent leaves the caret at the end, so
+    // tiptap sees the dismissed prose query "lib, trailing" on the @ at
+    // from=1 and the dismissal exit is queued; the synchronous selection
+    // restore then truncates the SAME occurrence's query to a valid "lib"
+    // before the microtask drains.
+    editor.commands.setContent("@lib, trailing");
+    editor.commands.setTextSelection(5);
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().query).toBe("lib");
+  });
+
+  it("reopens after a same-origin content replacement makes the query valid", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@auth");
+    await flush();
+    expect(pickerStore.getState().open).toBe(true);
+
+    // No flush between: the comma queues the exit, and the replacement's @
+    // sits at the same document position as the dismissed one.
+    editor.commands.insertContent(",");
+    editor.commands.setContent("@x");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().query).toBe("x");
+  });
+
   it("closes on a double space but keeps single-space queries open", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("@release notes");
